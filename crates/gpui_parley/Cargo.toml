@@ -26,6 +26,6 @@ parking_lot.workspace = true
 profiling.workspace = true
 smallvec.workspace = true
 unicode-segmentation.workspace = true
-swash = { version = "0.2.6", default-features = false }
+swash = { version = "0.2.6", default-features = false, features = ["scale", "render"] }
 parley = { version = "0.10", default-features = false }
 skrifa = { version = "0.42.1", default-features = false }

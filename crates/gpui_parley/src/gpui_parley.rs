@@ -2,8 +2,9 @@ use anyhow::{Context as _, Result};
 use collections::HashMap;
 use gpui::{
     Bounds, DevicePixels, Font, FontFallbacks, FontFeatures, FontId, FontMetrics, FontRun, GlyphId,
-    Hsla, LineLayout, Pixels, PlatformTextSystem, RenderGlyphParams, ShapedGlyph, ShapedRun,
-    SharedString, Size, TextRenderingMode, point,
+    Hsla, LineLayout, Pixels, PlatformTextSystem, RenderGlyphParams, SUBPIXEL_VARIANTS_X,
+    SUBPIXEL_VARIANTS_Y, ShapedGlyph, ShapedRun, SharedString, Size, TextRenderingMode, point,
+    size,
 };
 use parking_lot::RwLock;
 use parley::fontique::{self, Collection, CollectionOptions, FamilyInfo, FontInfo, SourceCache};
@@ -18,7 +19,11 @@ use skrifa::{
 };
 use smallvec::SmallVec;
 use std::{borrow::Cow, sync::Arc};
-use swash::{FontRef as SwashFontRef, StringId};
+use swash::{
+    FontRef as SwashFontRef, StringId,
+    scale::{Render, ScaleContext, Source, StrikeWith},
+    zeno::{Format, Vector},
+};
 use unicode_segmentation::UnicodeSegmentation;
 
 pub struct ParleyTextSystem {
@@ -46,6 +51,7 @@ struct ParleyTextSystemState {
     fallback_family: String,
     font_context: FontContext,
     layout_context: LayoutContext,
+    swash_scale_context: ScaleContext,
     noop: gpui::NoopTextSystem,
     loaded_fonts: Vec<LoadedFont>,
     font_ids_by_font: HashMap<Font, Option<FontId>>,
@@ -67,6 +73,13 @@ struct LoadedFont {
     is_known_emoji_font: bool,
     user_fallback_chain: Arc<[(FontId, SharedString)]>,
     fontique_handle: FontiqueHandleKey,
+}
+
+impl LoadedFont {
+    fn as_swash(&self) -> Result<SwashFontRef<'_>> {
+        SwashFontRef::from_index(self.font_data.data.as_ref(), self.font_data.index as usize)
+            .context("could not read font data loaded from Fontique")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -105,6 +118,7 @@ impl ParleyTextSystem {
                 fallback_family: system_font_fallback.to_string(),
                 font_context,
                 layout_context: LayoutContext::new(),
+                swash_scale_context: ScaleContext::new(),
                 noop: gpui::NoopTextSystem::new(),
                 loaded_fonts: Vec::new(),
                 font_ids_by_font: HashMap::default(),
@@ -175,7 +189,7 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn glyph_raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
-        self.state.read().noop.glyph_raster_bounds(params)
+        self.state.write().raster_bounds(params)
     }
 
     fn rasterize_glyph(
@@ -183,10 +197,7 @@ impl PlatformTextSystem for ParleyTextSystem {
         params: &RenderGlyphParams,
         raster_bounds: Bounds<DevicePixels>,
     ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
-        self.state
-            .read()
-            .noop
-            .rasterize_glyph(params, raster_bounds)
+        self.state.write().rasterize_glyph(params, raster_bounds)
     }
 
     fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout {
@@ -194,14 +205,17 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn recommended_rendering_mode(&self, font_id: FontId, font_size: Pixels) -> TextRenderingMode {
-        self.state
-            .read()
-            .noop
-            .recommended_rendering_mode(font_id, font_size)
+        let _ = (font_id, font_size);
+        if cfg!(target_os = "macos") {
+            TextRenderingMode::Grayscale
+        } else {
+            TextRenderingMode::Subpixel
+        }
     }
 
     fn glyph_dilation_for_color(&self, color: Hsla) -> u8 {
-        self.state.read().noop.glyph_dilation_for_color(color)
+        let _ = color;
+        0
     }
 }
 
@@ -489,6 +503,94 @@ impl ParleyTextSystemState {
         let font_ref = self.font_ref(font_id).ok()?;
         let glyph_id = font_ref.charmap().map(ch)?;
         (glyph_id != SkrifaGlyphId::NOTDEF).then_some(GlyphId(glyph_id.to_u32()))
+    }
+
+    fn raster_bounds(&mut self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
+        let image = self.render_glyph_image(params)?;
+        Ok(Bounds {
+            origin: point(image.placement.left.into(), (-image.placement.top).into()),
+            size: size(image.placement.width.into(), image.placement.height.into()),
+        })
+    }
+
+    #[profiling::function]
+    fn rasterize_glyph(
+        &mut self,
+        params: &RenderGlyphParams,
+        glyph_bounds: Bounds<DevicePixels>,
+    ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
+        if glyph_bounds.size.width.0 == 0 || glyph_bounds.size.height.0 == 0 {
+            anyhow::bail!("glyph bounds are empty");
+        }
+
+        let mut image = self.render_glyph_image(params)?;
+        let bitmap_size = glyph_bounds.size;
+        match image.content {
+            swash::scale::image::Content::Color | swash::scale::image::Content::SubpixelMask => {
+                // GPUI's atlas upload path expects BGRA for color and subpixel glyph data.
+                for pixel in image.data.chunks_exact_mut(4) {
+                    pixel.swap(0, 2);
+                }
+                Ok((bitmap_size, image.data))
+            }
+            swash::scale::image::Content::Mask => {
+                if params.subpixel_rendering {
+                    let expanded = image.data.iter().flat_map(|&a| [a, a, a, a]).collect();
+                    Ok((bitmap_size, expanded))
+                } else {
+                    Ok((bitmap_size, image.data))
+                }
+            }
+        }
+    }
+
+    fn render_glyph_image(
+        &mut self,
+        params: &RenderGlyphParams,
+    ) -> Result<swash::scale::image::Image> {
+        let loaded_font = self
+            .loaded_fonts
+            .get(params.font_id.0)
+            .with_context(|| format!("font id {} was not loaded", params.font_id.0))?;
+        let font_ref = loaded_font.as_swash()?;
+        let pixel_size = f32::from(params.font_size);
+
+        let subpixel_offset = Vector::new(
+            params.subpixel_variant.x as f32 / SUBPIXEL_VARIANTS_X as f32 / params.scale_factor,
+            params.subpixel_variant.y as f32 / SUBPIXEL_VARIANTS_Y as f32 / params.scale_factor,
+        );
+
+        let mut scaler = self
+            .swash_scale_context
+            .builder(font_ref)
+            .size(pixel_size * params.scale_factor)
+            .hint(true)
+            .build();
+
+        let sources: &[Source] = if params.is_emoji {
+            &[
+                Source::ColorOutline(0),
+                Source::ColorBitmap(StrikeWith::BestFit),
+                Source::Outline,
+            ]
+        } else {
+            &[Source::Bitmap(StrikeWith::ExactSize), Source::Outline]
+        };
+
+        let mut renderer = Render::new(sources);
+        if params.subpixel_rendering {
+            // Keep parity with the existing Cosmic backend and shader expectations.
+            renderer
+                .format(Format::subpixel_bgra())
+                .offset(subpixel_offset);
+        } else {
+            renderer.format(Format::Alpha).offset(subpixel_offset);
+        }
+
+        let glyph_id: u16 = params.glyph_id.0.try_into()?;
+        renderer
+            .render(&mut scaler, glyph_id)
+            .with_context(|| format!("unable to render glyph via swash for {params:?}"))
     }
 
     #[profiling::function]
@@ -1097,6 +1199,91 @@ mod tests {
     }
 
     #[test]
+    fn rasterizes_latin_glyph_with_alpha_mask() {
+        let text_system = text_system_with_memory_fonts();
+        let font_id = text_system.font_id(&font("Lilex")).unwrap();
+        let glyph_id = text_system.glyph_for_char(font_id, 'm').unwrap();
+        let params = render_params(font_id, glyph_id, false);
+
+        let bounds = text_system.glyph_raster_bounds(&params).unwrap();
+        assert!(bounds.size.width.0 > 0);
+        assert!(bounds.size.height.0 > 0);
+
+        let (bitmap_size, data) = text_system.rasterize_glyph(&params, bounds).unwrap();
+        let pixel_count = usize::from(bitmap_size.width) * usize::from(bitmap_size.height);
+        assert_eq!(data.len(), pixel_count);
+        assert!(data.iter().any(|alpha| *alpha > 0));
+    }
+
+    #[test]
+    fn rasterized_glyph_output_is_stable_for_repeated_requests() {
+        let text_system = text_system_with_memory_fonts();
+        let font_id = text_system.font_id(&font("IBM Plex Sans")).unwrap();
+        let glyph_id = text_system.glyph_for_char(font_id, 'A').unwrap();
+        let params = render_params(font_id, glyph_id, false);
+
+        let first_bounds = text_system.glyph_raster_bounds(&params).unwrap();
+        let second_bounds = text_system.glyph_raster_bounds(&params).unwrap();
+        assert_eq!(first_bounds, second_bounds);
+
+        let first = text_system.rasterize_glyph(&params, first_bounds).unwrap();
+        let second = text_system.rasterize_glyph(&params, second_bounds).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn subpixel_rasterization_returns_four_bytes_per_pixel() {
+        let text_system = text_system_with_memory_fonts();
+        let font_id = text_system.font_id(&font("Lilex")).unwrap();
+        let glyph_id = text_system.glyph_for_char(font_id, 'm').unwrap();
+        let mut params = render_params(font_id, glyph_id, true);
+        params.subpixel_variant.x = 1;
+
+        let bounds = text_system.glyph_raster_bounds(&params).unwrap();
+        let (bitmap_size, data) = text_system.rasterize_glyph(&params, bounds).unwrap();
+        let pixel_count = usize::from(bitmap_size.width) * usize::from(bitmap_size.height);
+        assert_eq!(data.len(), pixel_count * 4);
+        assert!(data.iter().any(|channel| *channel > 0));
+    }
+
+    #[test]
+    fn empty_glyph_bounds_return_error() {
+        let text_system = text_system_with_memory_fonts();
+        let font_id = text_system.font_id(&font("Lilex")).unwrap();
+        let glyph_id = text_system.glyph_for_char(font_id, 'm').unwrap();
+        let params = render_params(font_id, glyph_id, false);
+
+        let err = text_system
+            .rasterize_glyph(
+                &params,
+                Bounds {
+                    origin: point(DevicePixels(0), DevicePixels(0)),
+                    size: size(DevicePixels(0), DevicePixels(0)),
+                },
+            )
+            .unwrap_err();
+
+        assert!(err.to_string().contains("glyph bounds are empty"));
+    }
+
+    #[test]
+    fn recommends_target_rendering_mode_without_glyph_dilation() {
+        let text_system = text_system_with_memory_fonts();
+        let font_id = text_system.font_id(&font("Lilex")).unwrap();
+        let expected_mode = if cfg!(target_os = "macos") {
+            TextRenderingMode::Grayscale
+        } else {
+            TextRenderingMode::Subpixel
+        };
+
+        assert_eq!(
+            text_system.recommended_rendering_mode(font_id, px(16.0)),
+            expected_mode
+        );
+        assert_eq!(text_system.glyph_dilation_for_color(Hsla::default()), 0);
+    }
+
+    #[test]
     fn layout_line_shapes_ascii_with_parley() {
         let text_system = text_system_with_memory_fonts();
         let font_id = text_system.font_id(&font("Lilex")).unwrap();
@@ -1144,6 +1331,23 @@ mod tests {
 
         assert!(layout.runs.iter().any(|run| run.font_id == lilex));
         assert!(layout.runs.iter().any(|run| run.font_id == plex));
+    }
+
+    fn render_params(
+        font_id: FontId,
+        glyph_id: GlyphId,
+        subpixel_rendering: bool,
+    ) -> RenderGlyphParams {
+        RenderGlyphParams {
+            font_id,
+            glyph_id,
+            font_size: px(16.0),
+            subpixel_variant: point(0, 0),
+            scale_factor: 1.0,
+            is_emoji: false,
+            subpixel_rendering,
+            dilation: 0,
+        }
     }
 
     fn fid(i: usize) -> FontId {
