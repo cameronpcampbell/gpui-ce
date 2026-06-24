@@ -203,17 +203,11 @@ impl MacPlatform {
     pub fn new(headless: bool) -> Self {
         let dispatcher = Arc::new(MacDispatcher::new());
 
-        #[cfg(feature = "font-kit")]
-        let text_system = Arc::new(crate::MacTextSystem::new());
-
-        #[cfg(not(feature = "font-kit"))]
-        let text_system = {
-            if !headless {
-                log::warn!(
-                    "gpui_macos was compiled without the `font-kit` feature, so no text will be rendered."
-                );
-            }
-            Arc::new(gpui::NoopTextSystem::new())
+        let text_system = if headless {
+            Arc::new(gpui::NoopTextSystem::new()) as Arc<dyn PlatformTextSystem>
+        } else {
+            Arc::new(gpui_parley::ParleyTextSystem::new("IBM Plex Sans"))
+                as Arc<dyn PlatformTextSystem>
         };
 
         let keyboard_layout = MacKeyboardLayout::new();

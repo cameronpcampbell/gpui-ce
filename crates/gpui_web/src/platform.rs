@@ -69,7 +69,7 @@ impl WebPlatform {
         ));
         let background_executor = BackgroundExecutor::new(dispatcher.clone());
         let foreground_executor = ForegroundExecutor::new(dispatcher);
-        let text_system = Arc::new(gpui_wgpu::CosmicTextSystem::new_without_system_fonts(
+        let text_system = Arc::new(gpui_parley::ParleyTextSystem::new_without_system_fonts(
             "IBM Plex Sans",
         ));
         let fonts = BUNDLED_FONTS

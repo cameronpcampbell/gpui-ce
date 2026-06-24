@@ -43,6 +43,7 @@ font-kit = { version = "0.14.1-zed", package = "zed-font-kit", optional = true }
 foreign-types.workspace = true
 futures.workspace = true
 gpui_util.workspace = true
+gpui_parley = { workspace = true, features = ["system-fonts"] }
 image.workspace = true
 itertools.workspace = true
 libc.workspace = true

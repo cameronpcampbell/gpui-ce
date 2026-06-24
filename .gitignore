@@ -34,3 +34,6 @@ xcuserdata/
 .build
 
 /build
+
+# Plans (temp, please remove before merging)
+/.temp/

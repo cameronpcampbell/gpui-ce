@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "./crates/gpui/",
+  "./crates/gpui_parley/",
   "./crates/gpui_web/",
   "./crates/gpui_wgpu/",
   "./crates/gpui_linux/",
@@ -181,6 +182,7 @@ tokio = { version = "1" }
 gpui_util = { path = "crates/gpui_ce_util", version = "0.2.2", package = "gpui_ce_util" }
 
 gpui = { path = "./crates/gpui/", version = "0.2.2" }
+gpui_parley = { path = "./crates/gpui_parley/", version = "0.1.0", default-features = false }
 gpui_platform = { path = "./crates/gpui_platform/", version = "0.1.0" }
 gpui_linux = { path = "./crates/gpui_linux/", version = "0.1.0" }
 gpui_macos = { path = "./crates/gpui_macos/", version = "0.1.0" }

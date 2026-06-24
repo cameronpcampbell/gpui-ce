@@ -1,0 +1,30 @@
+[package]
+name = "gpui_parley"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/gpui_parley.rs"
+
+[features]
+default = ["system-fonts"]
+std = ["parley/std", "swash/std"]
+system-fonts = ["std", "parley/system"]
+
+[dependencies]
+gpui = { path = "../gpui/", default-features = false }
+anyhow.workspace = true
+collections.workspace = true
+itertools.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+profiling.workspace = true
+smallvec.workspace = true
+unicode-segmentation.workspace = true
+swash = { version = "0.2.6", default-features = false }
+parley = { version = "0.10", default-features = false }
