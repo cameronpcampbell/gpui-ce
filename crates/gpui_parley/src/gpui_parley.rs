@@ -2,12 +2,16 @@ use anyhow::{Context as _, Result};
 use collections::HashMap;
 use gpui::{
     Bounds, DevicePixels, Font, FontFallbacks, FontFeatures, FontId, FontMetrics, FontRun, GlyphId,
-    Hsla, LineLayout, Pixels, PlatformTextSystem, RenderGlyphParams, SharedString, Size,
-    TextRenderingMode,
+    Hsla, LineLayout, Pixels, PlatformTextSystem, RenderGlyphParams, ShapedGlyph, ShapedRun,
+    SharedString, Size, TextRenderingMode, point,
 };
 use parking_lot::RwLock;
 use parley::fontique::{self, Collection, CollectionOptions, FamilyInfo, FontInfo, SourceCache};
-use parley::{FontContext, LayoutContext, StyleProperty};
+use parley::layout::PositionedLayoutItem;
+use parley::{
+    FontContext, FontFamily, FontFeature as ParleyFontFeature, FontFeatures as ParleyFontFeatures,
+    LayoutContext, StyleProperty,
+};
 use skrifa::{
     FontRef as SkrifaFontRef, GlyphId as SkrifaGlyphId, MetadataProvider,
     instance::{LocationRef, Size as SkrifaSize},
@@ -15,6 +19,7 @@ use skrifa::{
 use smallvec::SmallVec;
 use std::{borrow::Cow, sync::Arc};
 use swash::{FontRef as SwashFontRef, StringId};
+use unicode_segmentation::UnicodeSegmentation;
 
 pub struct ParleyTextSystem {
     state: RwLock<ParleyTextSystemState>,
@@ -185,18 +190,7 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout {
-        let mut state = self.state.write();
-        let ParleyTextSystemState {
-            font_context,
-            layout_context,
-            noop,
-            ..
-        } = &mut *state;
-        let mut builder = layout_context.ranged_builder(font_context, text, 1.0, true);
-        builder.push_default(StyleProperty::FontSize(f32::from(font_size)));
-        let _layout = builder.build(text);
-
-        noop.layout_line(text, font_size, runs)
+        self.state.write().layout_line(text, font_size, runs)
     }
 
     fn recommended_rendering_mode(&self, font_id: FontId, font_size: Pixels) -> TextRenderingMode {
@@ -496,6 +490,363 @@ impl ParleyTextSystemState {
         let glyph_id = font_ref.charmap().map(ch)?;
         (glyph_id != SkrifaGlyphId::NOTDEF).then_some(GlyphId(glyph_id.to_u32()))
     }
+
+    #[profiling::function]
+    fn layout_line(&mut self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
+        if text.is_empty() {
+            return LineLayout {
+                font_size,
+                width: Pixels::ZERO,
+                ascent: Pixels::ZERO,
+                descent: Pixels::ZERO,
+                runs: Vec::new(),
+                len: 0,
+            };
+        }
+
+        let style_spans = self.layout_style_spans(text, font_runs);
+        let mut builder =
+            self.layout_context
+                .ranged_builder(&mut self.font_context, text, 1.0, true);
+        builder.push_default(StyleProperty::FontSize(f32::from(font_size)));
+        for span in &style_spans {
+            builder.push(
+                FontFamily::named(span.family_name.as_ref()),
+                span.start..span.end,
+            );
+            builder.push(StyleProperty::FontWidth(span.width), span.start..span.end);
+            builder.push(StyleProperty::FontStyle(span.style), span.start..span.end);
+            builder.push(StyleProperty::FontWeight(span.weight), span.start..span.end);
+            if !span.features.is_empty() {
+                builder.push(
+                    ParleyFontFeatures::List(Cow::Borrowed(span.features.as_slice())),
+                    span.start..span.end,
+                );
+            }
+        }
+
+        let mut layout = builder.build(text);
+        layout.break_all_lines(None);
+
+        let Some(line) = layout.lines().next() else {
+            return LineLayout {
+                font_size,
+                width: Pixels::ZERO,
+                ascent: Pixels::ZERO,
+                descent: Pixels::ZERO,
+                runs: Vec::new(),
+                len: text.len(),
+            };
+        };
+
+        let mut runs = Vec::new();
+        for item in line.items() {
+            let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                continue;
+            };
+            let font_id = self.font_id_for_parley_run(glyph_run.run());
+            let Some(loaded_font) = self.loaded_font(font_id) else {
+                continue;
+            };
+            let is_emoji = loaded_font.is_known_emoji_font;
+
+            let glyph_indices = glyph_run.run().visual_clusters().flat_map(|cluster| {
+                let index = cluster.text_range().start;
+                cluster.glyphs().map(move |_| index)
+            });
+            for (glyph, index) in glyph_run.positioned_glyphs().zip(glyph_indices) {
+                let shaped_glyph = ShapedGlyph {
+                    id: GlyphId(glyph.id),
+                    position: point(glyph.x.into(), glyph.y.into()),
+                    index,
+                    is_emoji,
+                };
+
+                if let Some(last_run) = runs
+                    .last_mut()
+                    .filter(|last_run: &&mut ShapedRun| last_run.font_id == font_id)
+                {
+                    last_run.glyphs.push(shaped_glyph);
+                } else {
+                    runs.push(ShapedRun {
+                        font_id,
+                        glyphs: vec![shaped_glyph],
+                    });
+                }
+            }
+        }
+
+        LineLayout {
+            font_size,
+            width: line.metrics().advance.into(),
+            ascent: line.metrics().ascent.into(),
+            descent: line.metrics().descent.into(),
+            runs,
+            len: text.len(),
+        }
+    }
+
+    fn layout_style_spans(&self, text: &str, font_runs: &[FontRun]) -> Vec<LayoutStyleSpan> {
+        let mut result = Vec::new();
+        let mut offs = 0;
+        for run in font_runs {
+            let run_end = (offs + run.len).min(text.len());
+            let Some(loaded_font) = self.loaded_font(run.font_id) else {
+                offs = run_end;
+                continue;
+            };
+            let fallback_chain = Arc::clone(&loaded_font.user_fallback_chain);
+            let spans = if fallback_chain.is_empty() {
+                let mut spans = SmallVec::<[RunSpan; 4]>::new();
+                spans.push(RunSpan {
+                    start: offs,
+                    end: run_end,
+                    slot: None,
+                    font_id: run.font_id,
+                });
+                spans
+            } else {
+                let covers = |id: FontId, ch: char| charmap_covers(&self.loaded_fonts, id, ch);
+                compute_run_spans(
+                    text,
+                    offs,
+                    run_end - offs,
+                    run.font_id,
+                    &fallback_chain,
+                    &covers,
+                )
+            };
+
+            for span in spans {
+                let Some(font) = self.loaded_font(span.font_id) else {
+                    continue;
+                };
+                result.push(LayoutStyleSpan {
+                    start: span.start,
+                    end: span.end,
+                    family_name: font.family_name.clone(),
+                    width: font.stretch,
+                    style: font.style,
+                    weight: font.weight,
+                    features: parley_font_features(&font.features),
+                });
+            }
+            offs = run_end;
+        }
+
+        if result.is_empty() && !text.is_empty() {
+            if let Some(run) = font_runs
+                .first()
+                .and_then(|run| self.loaded_font(run.font_id))
+                .or_else(|| self.loaded_fonts.first())
+            {
+                result.push(LayoutStyleSpan {
+                    start: 0,
+                    end: text.len(),
+                    family_name: run.family_name.clone(),
+                    width: run.stretch,
+                    style: run.style,
+                    weight: run.weight,
+                    features: parley_font_features(&run.features),
+                });
+            }
+        }
+
+        result
+    }
+
+    fn font_id_for_parley_run(&mut self, run: &parley::layout::Run<'_, [u8; 4]>) -> FontId {
+        if let Some(loaded_font) = self
+            .loaded_fonts
+            .iter()
+            .find(|loaded| loaded.font_data == *run.font())
+        {
+            return loaded_font.id;
+        }
+
+        let font_data = run.font().clone();
+        let postscript_name =
+            SwashFontRef::from_index(font_data.data.as_ref(), font_data.index as usize).and_then(
+                |font_ref| {
+                    font_ref
+                        .localized_strings()
+                        .find_by_id(StringId::PostScript, None)
+                        .map(|name| name.chars().collect::<String>())
+                },
+            );
+        let family_name = postscript_name
+            .clone()
+            .map(SharedString::from)
+            .unwrap_or_else(|| SharedString::from("Parley Fallback"));
+        let font_id = FontId(self.loaded_fonts.len());
+        let attrs = *run.font_attrs();
+        let is_known_emoji_font = postscript_name
+            .as_deref()
+            .is_some_and(check_is_known_emoji_font)
+            || check_is_known_emoji_font(family_name.as_ref());
+        self.loaded_fonts.push(LoadedFont {
+            id: font_id,
+            family_name,
+            postscript_name,
+            style: attrs.style,
+            weight: attrs.weight,
+            stretch: attrs.width,
+            font_data,
+            features: FontFeatures::default(),
+            is_known_emoji_font,
+            user_fallback_chain: Arc::from(Vec::new()),
+            fontique_handle: FontiqueHandleKey {
+                family_id: u64::MAX,
+                family_index: font_id.0,
+            },
+        });
+
+        font_id
+    }
+}
+
+struct LayoutStyleSpan {
+    start: usize,
+    end: usize,
+    family_name: SharedString,
+    width: fontique::FontWidth,
+    style: fontique::FontStyle,
+    weight: fontique::FontWeight,
+    features: Vec<ParleyFontFeature>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RunSpan {
+    start: usize,
+    end: usize,
+    slot: Option<usize>,
+    font_id: FontId,
+}
+
+fn compute_run_spans(
+    text: &str,
+    run_offset: usize,
+    run_len: usize,
+    primary: FontId,
+    fallback_chain: &[(FontId, SharedString)],
+    covers: &impl Fn(FontId, char) -> bool,
+) -> SmallVec<[RunSpan; 4]> {
+    let mut spans = SmallVec::new();
+    let run_end = run_offset + run_len;
+    if run_end <= run_offset {
+        return spans;
+    }
+    if fallback_chain.is_empty() {
+        spans.push(RunSpan {
+            start: run_offset,
+            end: run_end,
+            slot: None,
+            font_id: primary,
+        });
+        return spans;
+    }
+
+    let run_text = &text[run_offset..run_end];
+    let mut span_start = run_offset;
+    let mut span_slot = None;
+    let mut span_font_id = primary;
+    for (grapheme_idx, grapheme) in run_text.grapheme_indices(true) {
+        let abs = run_offset + grapheme_idx;
+        let ch = grapheme.chars().next().unwrap_or('\0');
+        let next_slot = pick_covering_slot(ch, span_slot, primary, fallback_chain, covers);
+        if next_slot == span_slot {
+            continue;
+        }
+        if abs > span_start {
+            spans.push(RunSpan {
+                start: span_start,
+                end: abs,
+                slot: span_slot,
+                font_id: span_font_id,
+            });
+        }
+        span_start = abs;
+        span_slot = next_slot;
+        span_font_id = slot_font_id(next_slot, primary, fallback_chain);
+    }
+    if span_start < run_end {
+        spans.push(RunSpan {
+            start: span_start,
+            end: run_end,
+            slot: span_slot,
+            font_id: span_font_id,
+        });
+    }
+    spans
+}
+
+fn pick_covering_slot(
+    ch: char,
+    current: Option<usize>,
+    primary: FontId,
+    fallback_chain: &[(FontId, SharedString)],
+    covers: &impl Fn(FontId, char) -> bool,
+) -> Option<usize> {
+    if (ch as u32) <= 0x7F {
+        return None;
+    }
+    if covers(primary, ch) {
+        return None;
+    }
+    let current_id = slot_font_id(current, primary, fallback_chain);
+    if covers(current_id, ch) {
+        return current;
+    }
+    for (ix, (fb_id, _)) in fallback_chain.iter().enumerate() {
+        if covers(*fb_id, ch) {
+            return Some(ix);
+        }
+    }
+    None
+}
+
+fn slot_font_id(
+    slot: Option<usize>,
+    primary: FontId,
+    fallback_chain: &[(FontId, SharedString)],
+) -> FontId {
+    match slot {
+        None => primary,
+        Some(ix) => fallback_chain[ix].0,
+    }
+}
+
+fn charmap_covers(loaded_fonts: &[LoadedFont], id: FontId, ch: char) -> bool {
+    loaded_fonts
+        .get(id.0)
+        .and_then(|font| {
+            SkrifaFontRef::from_index(font.font_data.data.as_ref(), font.font_data.index).ok()
+        })
+        .and_then(|font_ref| font_ref.charmap().map(ch))
+        .is_some_and(|glyph_id| glyph_id != SkrifaGlyphId::NOTDEF)
+}
+
+fn parley_font_features(features: &FontFeatures) -> Vec<ParleyFontFeature> {
+    features
+        .tag_value_list()
+        .iter()
+        .filter_map(|(tag, value)| {
+            let Ok(value) = u16::try_from(*value) else {
+                log::warn!("ignoring OpenType feature {tag} with out-of-range value {value}");
+                return None;
+            };
+            let source = format!("\"{tag}\" {value}");
+            ParleyFontFeature::parse_css_list(&source)
+                .next()
+                .and_then(|feature| match feature {
+                    Ok(feature) => Some(feature),
+                    Err(error) => {
+                        log::warn!("ignoring invalid OpenType feature {tag:?}: {error}");
+                        None
+                    }
+                })
+        })
+        .collect()
 }
 
 fn bounds_from_skrifa(bounds: skrifa::metrics::BoundingBox) -> Bounds<f32> {
@@ -580,7 +931,7 @@ fn check_is_known_emoji_font(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{FontWeight, font};
+    use gpui::{FontWeight, font, px};
 
     const LILEX_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf");
     const LILEX_BOLD: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Bold.ttf");
@@ -743,5 +1094,109 @@ mod tests {
         assert_eq!(advance.height, 0.0);
         assert!(bounds.size.width > 0.0);
         assert!(bounds.size.height > 0.0);
+    }
+
+    #[test]
+    fn layout_line_shapes_ascii_with_parley() {
+        let text_system = text_system_with_memory_fonts();
+        let font_id = text_system.font_id(&font("Lilex")).unwrap();
+        let text = "hello";
+        let layout = text_system.layout_line(
+            text,
+            px(16.0),
+            &[FontRun {
+                len: text.len(),
+                font_id,
+            }],
+        );
+
+        assert_eq!(layout.len, text.len());
+        assert!(layout.width > Pixels::ZERO);
+        assert!(layout.ascent > Pixels::ZERO);
+        assert!(!layout.runs.is_empty());
+        assert_eq!(layout.runs[0].font_id, font_id);
+        assert!(layout.runs.iter().flat_map(|run| &run.glyphs).all(|glyph| {
+            glyph.index <= text.len()
+                && (glyph.index == text.len() || text.is_char_boundary(glyph.index))
+        }));
+    }
+
+    #[test]
+    fn layout_line_preserves_multiple_font_runs() {
+        let text_system = text_system_with_memory_fonts();
+        let lilex = text_system.font_id(&font("Lilex")).unwrap();
+        let plex = text_system.font_id(&font("IBM Plex Sans")).unwrap();
+        let text = "helloworld";
+        let layout = text_system.layout_line(
+            text,
+            px(16.0),
+            &[
+                FontRun {
+                    len: 5,
+                    font_id: lilex,
+                },
+                FontRun {
+                    len: 5,
+                    font_id: plex,
+                },
+            ],
+        );
+
+        assert!(layout.runs.iter().any(|run| run.font_id == lilex));
+        assert!(layout.runs.iter().any(|run| run.font_id == plex));
+    }
+
+    fn fid(i: usize) -> FontId {
+        FontId(i)
+    }
+
+    fn chain(ids: &[usize]) -> SmallVec<[(FontId, SharedString); 4]> {
+        ids.iter()
+            .map(|&i| (fid(i), SharedString::from(format!("fb{i}"))))
+            .collect()
+    }
+
+    fn span(start: usize, end: usize, slot: Option<usize>, font_id: FontId) -> RunSpan {
+        RunSpan {
+            start,
+            end,
+            slot,
+            font_id,
+        }
+    }
+
+    #[test]
+    fn run_spans_use_byte_offsets_for_multibyte_chars() {
+        let primary = fid(0);
+        let fb = chain(&[1]);
+        let covers = |id: FontId, ch: char| {
+            if id == primary {
+                ch.is_ascii()
+            } else {
+                !ch.is_ascii()
+            }
+        };
+        let text = "a字b";
+        let spans = compute_run_spans(text, 0, text.len(), primary, &fb, &covers);
+
+        assert_eq!(
+            spans.as_slice(),
+            &[
+                span(0, 1, None, primary),
+                span(1, 4, Some(0), fid(1)),
+                span(4, 5, None, primary),
+            ]
+        );
+    }
+
+    #[test]
+    fn run_spans_keep_zwj_inside_emoji_cluster() {
+        let primary = fid(0);
+        let fb = chain(&[1]);
+        let covers = |id: FontId, ch: char| id == fid(1) && ch != '\u{200D}';
+        let text = "\u{1F469}\u{200D}\u{1F467}";
+        let spans = compute_run_spans(text, 0, text.len(), primary, &fb, &covers);
+
+        assert_eq!(spans.as_slice(), &[span(0, text.len(), Some(0), fid(1))]);
     }
 }
