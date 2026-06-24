@@ -8,9 +8,13 @@ use gpui::{
 use parking_lot::RwLock;
 use parley::fontique::{self, Collection, CollectionOptions, FamilyInfo, FontInfo, SourceCache};
 use parley::{FontContext, LayoutContext, StyleProperty};
+use skrifa::{
+    FontRef as SkrifaFontRef, GlyphId as SkrifaGlyphId, MetadataProvider,
+    instance::{LocationRef, Size as SkrifaSize},
+};
 use smallvec::SmallVec;
 use std::{borrow::Cow, sync::Arc};
-use swash::{FontRef, StringId};
+use swash::{FontRef as SwashFontRef, StringId};
 
 pub struct ParleyTextSystem {
     state: RwLock<ParleyTextSystemState>,
@@ -132,15 +136,28 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn font_metrics(&self, font_id: FontId) -> FontMetrics {
-        self.state.read().noop.font_metrics(font_id)
+        let state = self.state.read();
+        state
+            .font_metrics(font_id)
+            .unwrap_or_else(|| state.noop.font_metrics(font_id))
     }
 
     fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
-        self.state.read().noop.typographic_bounds(font_id, glyph_id)
+        let state = self.state.read();
+        if state.loaded_font(font_id).is_some() {
+            state.typographic_bounds(font_id, glyph_id)
+        } else {
+            state.noop.typographic_bounds(font_id, glyph_id)
+        }
     }
 
     fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
-        self.state.read().noop.advance(font_id, glyph_id)
+        let state = self.state.read();
+        if state.loaded_font(font_id).is_some() {
+            state.advance(font_id, glyph_id)
+        } else {
+            state.noop.advance(font_id, glyph_id)
+        }
     }
 
     fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId> {
@@ -343,7 +360,7 @@ impl ParleyTextSystemState {
         let blob = font_info
             .load(Some(&mut self.font_context.source_cache))
             .context("could not load font data from Fontique")?;
-        let font_ref = FontRef::from_index(blob.as_ref(), font_info.index() as usize)
+        let font_ref = SwashFontRef::from_index(blob.as_ref(), font_info.index() as usize)
             .context("could not read font data loaded from Fontique")?;
         let postscript_name = font_ref
             .localized_strings()
@@ -392,14 +409,105 @@ impl ParleyTextSystemState {
         self.loaded_fonts.get(font_id.0)
     }
 
+    fn font_ref(&self, font_id: FontId) -> Result<SkrifaFontRef<'_>> {
+        let loaded = self
+            .loaded_font(font_id)
+            .with_context(|| format!("font id {} was not loaded", font_id.0))?;
+        SkrifaFontRef::from_index(loaded.font_data.data.as_ref(), loaded.font_data.index)
+            .context("could not read font data loaded from Fontique")
+    }
+
+    fn font_metrics(&self, font_id: FontId) -> Option<FontMetrics> {
+        let font_ref = self.font_ref(font_id).ok()?;
+        let metrics = font_ref.metrics(SkrifaSize::unscaled(), LocationRef::default());
+        let units_per_em = if metrics.units_per_em == 0 {
+            1000
+        } else {
+            u32::from(metrics.units_per_em)
+        };
+        let fallback_height = units_per_em as f32;
+        let (ascent, descent) = if metrics.ascent == 0.0 && metrics.descent == 0.0 {
+            (fallback_height * 0.8, -(fallback_height * 0.2))
+        } else {
+            (metrics.ascent, metrics.descent)
+        };
+        let cap_height = metrics.cap_height.unwrap_or(ascent);
+        let x_height = metrics.x_height.unwrap_or(cap_height * 0.7);
+        let underline = metrics.underline.unwrap_or(skrifa::metrics::Decoration {
+            offset: -(fallback_height * 0.1),
+            thickness: fallback_height * 0.05,
+        });
+        let bounding_box = metrics.bounds.map(bounds_from_skrifa).unwrap_or(Bounds {
+            origin: gpui::Point { x: 0.0, y: descent },
+            size: Size {
+                width: metrics
+                    .max_width
+                    .or(metrics.average_width)
+                    .unwrap_or(fallback_height),
+                height: ascent - descent,
+            },
+        });
+
+        Some(FontMetrics {
+            units_per_em,
+            ascent,
+            descent,
+            line_gap: metrics.leading,
+            underline_position: underline.offset,
+            underline_thickness: underline.thickness,
+            cap_height,
+            x_height,
+            bounding_box,
+        })
+    }
+
+    fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
+        let font_ref = self.font_ref(font_id)?;
+        let glyph_metrics = font_ref.glyph_metrics(SkrifaSize::unscaled(), LocationRef::default());
+        let glyph_id = SkrifaGlyphId::new(glyph_id.0);
+        if let Some(bounds) = glyph_metrics.bounds(glyph_id) {
+            Ok(bounds_from_skrifa(bounds))
+        } else {
+            let advance = self.advance(font_id, GlyphId(glyph_id.to_u32()))?;
+            Ok(Bounds {
+                origin: gpui::Point { x: 0.0, y: 0.0 },
+                size: advance,
+            })
+        }
+    }
+
+    fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
+        let font_ref = self.font_ref(font_id)?;
+        let glyph_metrics = font_ref.glyph_metrics(SkrifaSize::unscaled(), LocationRef::default());
+        let width = glyph_metrics
+            .advance_width(SkrifaGlyphId::new(glyph_id.0))
+            .with_context(|| {
+                format!(
+                    "glyph id {} is outside the glyph range for font id {}",
+                    glyph_id.0, font_id.0
+                )
+            })?;
+
+        Ok(Size { width, height: 0.0 })
+    }
+
     fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId> {
-        let loaded = self.loaded_font(font_id)?;
-        let font_ref = FontRef::from_index(
-            loaded.font_data.data.as_ref(),
-            loaded.font_data.index as usize,
-        )?;
-        let glyph_id = font_ref.charmap().map(ch);
-        (glyph_id != 0).then_some(GlyphId(glyph_id.into()))
+        let font_ref = self.font_ref(font_id).ok()?;
+        let glyph_id = font_ref.charmap().map(ch)?;
+        (glyph_id != SkrifaGlyphId::NOTDEF).then_some(GlyphId(glyph_id.to_u32()))
+    }
+}
+
+fn bounds_from_skrifa(bounds: skrifa::metrics::BoundingBox) -> Bounds<f32> {
+    Bounds {
+        origin: gpui::Point {
+            x: bounds.x_min,
+            y: bounds.y_min,
+        },
+        size: Size {
+            width: bounds.x_max - bounds.x_min,
+            height: bounds.y_max - bounds.y_min,
+        },
     }
 }
 
@@ -572,5 +680,68 @@ mod tests {
                 .user_fallback_chain
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn font_metrics_are_read_from_loaded_font_data() {
+        let text_system = text_system_with_memory_fonts();
+        let font_id = text_system.font_id(&font("Lilex")).unwrap();
+        let metrics = text_system.font_metrics(font_id);
+
+        assert!(metrics.units_per_em > 0);
+        assert!(metrics.ascent > 0.0);
+        assert!(metrics.descent < 0.0);
+        assert!(metrics.cap_height > 0.0);
+        assert!(metrics.x_height > 0.0);
+        assert!(metrics.bounding_box.size.width > 0.0);
+        assert!(metrics.bounding_box.size.height > 0.0);
+    }
+
+    #[test]
+    fn font_metrics_are_deterministic() {
+        let text_system = text_system_with_memory_fonts();
+        let font_id = text_system.font_id(&font("IBM Plex Sans")).unwrap();
+        let first = text_system.font_metrics(font_id);
+        let second = text_system.font_metrics(font_id);
+
+        assert_eq!(first.units_per_em, second.units_per_em);
+        assert_eq!(first.ascent, second.ascent);
+        assert_eq!(first.descent, second.descent);
+        assert_eq!(first.cap_height, second.cap_height);
+        assert_eq!(first.x_height, second.x_height);
+        assert_eq!(first.bounding_box.origin.x, second.bounding_box.origin.x);
+        assert_eq!(first.bounding_box.origin.y, second.bounding_box.origin.y);
+        assert_eq!(
+            first.bounding_box.size.width,
+            second.bounding_box.size.width
+        );
+        assert_eq!(
+            first.bounding_box.size.height,
+            second.bounding_box.size.height
+        );
+    }
+
+    #[test]
+    fn glyph_for_char_uses_loaded_font_charmap() {
+        let text_system = text_system_with_memory_fonts();
+        let font_id = text_system.font_id(&font("Lilex")).unwrap();
+
+        assert!(text_system.glyph_for_char(font_id, 'm').is_some());
+        assert!(text_system.glyph_for_char(font_id, '\u{1f4a9}').is_none());
+    }
+
+    #[test]
+    fn advance_and_typographic_bounds_use_loaded_font_metrics() {
+        let text_system = text_system_with_memory_fonts();
+        let font_id = text_system.font_id(&font("Lilex")).unwrap();
+        let glyph_id = text_system.glyph_for_char(font_id, 'm').unwrap();
+
+        let advance = text_system.advance(font_id, glyph_id).unwrap();
+        let bounds = text_system.typographic_bounds(font_id, glyph_id).unwrap();
+
+        assert!(advance.width > 0.0);
+        assert_eq!(advance.height, 0.0);
+        assert!(bounds.size.width > 0.0);
+        assert!(bounds.size.height > 0.0);
     }
 }

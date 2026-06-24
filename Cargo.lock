@@ -2700,6 +2700,7 @@ dependencies = [
  "parking_lot",
  "parley",
  "profiling",
+ "skrifa 0.42.1",
  "smallvec",
  "swash",
  "unicode-segmentation",
