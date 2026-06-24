@@ -18,7 +18,7 @@ use skrifa::{
     instance::{LocationRef, Size as SkrifaSize},
 };
 use smallvec::SmallVec;
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, ops::Range, sync::Arc};
 use swash::{
     FontRef as SwashFontRef, StringId,
     scale::{Render, ScaleContext, Source, StrikeWith},
@@ -614,15 +614,15 @@ impl ParleyTextSystemState {
         for span in &style_spans {
             builder.push(
                 FontFamily::named(span.family_name.as_ref()),
-                span.start..span.end,
+                span.range.clone(),
             );
-            builder.push(StyleProperty::FontWidth(span.width), span.start..span.end);
-            builder.push(StyleProperty::FontStyle(span.style), span.start..span.end);
-            builder.push(StyleProperty::FontWeight(span.weight), span.start..span.end);
-            if !span.features.is_empty() {
+            builder.push(StyleProperty::FontWidth(span.width), span.range.clone());
+            builder.push(StyleProperty::FontStyle(span.style), span.range.clone());
+            builder.push(StyleProperty::FontWeight(span.weight), span.range.clone());
+            if !span.parley_features.is_empty() {
                 builder.push(
-                    ParleyFontFeatures::List(Cow::Borrowed(span.features.as_slice())),
-                    span.start..span.end,
+                    ParleyFontFeatures::List(Cow::Borrowed(span.parley_features.as_slice())),
+                    span.range.clone(),
                 );
             }
         }
@@ -720,18 +720,10 @@ impl ParleyTextSystemState {
             };
 
             for span in spans {
-                let Some(font) = self.loaded_font(span.font_id) else {
-                    continue;
-                };
-                result.push(LayoutStyleSpan {
-                    start: span.start,
-                    end: span.end,
-                    family_name: font.family_name.clone(),
-                    width: font.stretch,
-                    style: font.style,
-                    weight: font.weight,
-                    features: parley_font_features(&font.features),
-                });
+                if let Some(style_span) = self.layout_style_span(span.start..span.end, span.font_id)
+                {
+                    result.push(style_span);
+                }
             }
             offs = run_end;
         }
@@ -742,19 +734,20 @@ impl ParleyTextSystemState {
                 .and_then(|run| self.loaded_font(run.font_id))
                 .or_else(|| self.loaded_fonts.first())
             {
-                result.push(LayoutStyleSpan {
-                    start: 0,
-                    end: text.len(),
-                    family_name: run.family_name.clone(),
-                    width: run.stretch,
-                    style: run.style,
-                    weight: run.weight,
-                    features: parley_font_features(&run.features),
-                });
+                result.push(LayoutStyleSpan::from_loaded_font(
+                    0..text.len(),
+                    run.id,
+                    run,
+                ));
             }
         }
 
         result
+    }
+
+    fn layout_style_span(&self, range: Range<usize>, font_id: FontId) -> Option<LayoutStyleSpan> {
+        let font = self.loaded_font(font_id)?;
+        Some(LayoutStyleSpan::from_loaded_font(range, font_id, font))
     }
 
     fn font_id_for_parley_run(&mut self, run: &parley::layout::Run<'_, [u8; 4]>) -> FontId {
@@ -808,13 +801,36 @@ impl ParleyTextSystemState {
 }
 
 struct LayoutStyleSpan {
-    start: usize,
-    end: usize,
+    range: Range<usize>,
+    #[cfg(test)]
+    font_id: FontId,
     family_name: SharedString,
     width: fontique::FontWidth,
     style: fontique::FontStyle,
     weight: fontique::FontWeight,
-    features: Vec<ParleyFontFeature>,
+    #[cfg(test)]
+    gpui_features: FontFeatures,
+    parley_features: Vec<ParleyFontFeature>,
+}
+
+impl LayoutStyleSpan {
+    fn from_loaded_font(range: Range<usize>, font_id: FontId, font: &LoadedFont) -> Self {
+        #[cfg(not(test))]
+        let _ = font_id;
+
+        Self {
+            range,
+            #[cfg(test)]
+            font_id,
+            family_name: font.family_name.clone(),
+            width: font.stretch,
+            style: font.style,
+            weight: font.weight,
+            #[cfg(test)]
+            gpui_features: font.features.clone(),
+            parley_features: parley_font_features(&font.features),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1333,6 +1349,103 @@ mod tests {
         assert!(layout.runs.iter().any(|run| run.font_id == plex));
     }
 
+    #[test]
+    fn layout_style_spans_preserve_gpui_byte_ranges_and_features() {
+        let text_system = text_system_with_memory_fonts();
+        let plain_font = font("Lilex");
+        let mut feature_font = font("Lilex");
+        feature_font.features = FontFeatures(Arc::new(vec![
+            ("calt".to_string(), 0),
+            ("ss01".to_string(), 1),
+        ]));
+        let plain_id = text_system.font_id(&plain_font).unwrap();
+        let feature_id = text_system.font_id(&feature_font).unwrap();
+        let text = "abcde";
+
+        let state = text_system.state.read();
+        let spans = state.layout_style_spans(
+            text,
+            &[
+                FontRun {
+                    len: 2,
+                    font_id: plain_id,
+                },
+                FontRun {
+                    len: 3,
+                    font_id: feature_id,
+                },
+            ],
+        );
+
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].range, 0..2);
+        assert_eq!(spans[0].font_id, plain_id);
+        assert!(spans[0].gpui_features.tag_value_list().is_empty());
+        assert!(spans[0].parley_features.is_empty());
+
+        assert_eq!(spans[1].range, 2..5);
+        assert_eq!(spans[1].font_id, feature_id);
+        assert_eq!(
+            spans[1].gpui_features.tag_value_list(),
+            &[("calt".to_string(), 0), ("ss01".to_string(), 1)]
+        );
+        assert_eq!(
+            parley_feature_tags(&spans[1].parley_features),
+            vec![("calt".to_string(), 0), ("ss01".to_string(), 1)]
+        );
+    }
+
+    #[test]
+    fn layout_style_spans_clamp_runs_to_text_len() {
+        let text_system = text_system_with_memory_fonts();
+        let font_id = text_system.font_id(&font("Lilex")).unwrap();
+        let state = text_system.state.read();
+        let spans = state.layout_style_spans("abc", &[FontRun { len: 99, font_id }]);
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].range, 0..3);
+    }
+
+    #[test]
+    fn layout_line_keeps_cursor_indices_on_char_boundaries() {
+        let text_system = text_system_with_memory_fonts();
+        let font_id = text_system.font_id(&font("Lilex")).unwrap();
+        let text = "office e\u{301}";
+        let layout = text_system.layout_line(
+            text,
+            px(16.0),
+            &[FontRun {
+                len: text.len(),
+                font_id,
+            }],
+        );
+
+        assert!(layout.width > Pixels::ZERO);
+        assert_eq!(layout.x_for_index(0), Pixels::ZERO);
+        assert_eq!(layout.x_for_index(text.len()), layout.width);
+        for glyph in layout.runs.iter().flat_map(|run| &run.glyphs) {
+            assert!(text.is_char_boundary(glyph.index));
+        }
+    }
+
+    #[test]
+    fn gpui_parley_does_not_depend_directly_on_lower_parley_workspace_crates() {
+        let manifest = include_str!("../Cargo.toml");
+
+        for crate_name in [
+            "attributed_text",
+            "parley_core",
+            "parlance",
+            "parley_data",
+            "parley_data_gen",
+        ] {
+            assert!(
+                !manifest.contains(&format!("{crate_name} =")),
+                "gpui_parley should not depend directly on {crate_name}"
+            );
+        }
+    }
+
     fn render_params(
         font_id: FontId,
         glyph_id: GlyphId,
@@ -1367,6 +1480,13 @@ mod tests {
             slot,
             font_id,
         }
+    }
+
+    fn parley_feature_tags(features: &[ParleyFontFeature]) -> Vec<(String, u16)> {
+        features
+            .iter()
+            .map(|feature| (feature.tag.to_string(), feature.value))
+            .collect()
     }
 
     #[test]
