@@ -19,7 +19,7 @@ wgpu = ["dep:gpui_wgpu"]
 
 [dependencies]
 gpui.workspace = true
-gpui_wgpu = { workspace = true, optional = true, features = ["font-kit"] }
+gpui_wgpu = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 accesskit.workspace = true

@@ -1,6 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use gpui::{FontFallbacks, FontRun, PlatformTextSystem, font, px};
-use gpui_wgpu::CosmicTextSystem;
+use gpui_parley::ParleyTextSystem;
 use std::borrow::Cow;
 
 const LILEX: &[u8] = include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf");
@@ -47,7 +47,7 @@ fn code_text() -> String {
 }
 
 fn bench_layout_line(c: &mut Criterion) {
-    let system = CosmicTextSystem::new_without_system_fonts("Lilex");
+    let system = ParleyTextSystem::new_without_system_fonts("Lilex");
     system
         .add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])
         .unwrap();
@@ -86,7 +86,7 @@ fn bench_layout_line(c: &mut Criterion) {
         letter_spacing: None,
     }];
 
-    let mut group = c.benchmark_group("layout_line");
+    let mut group = c.benchmark_group("parley_layout_line");
 
     group.bench_function("no_fallback", |b| {
         b.iter(|| system.layout_line(&text, px(14.0), &runs_no_fallback))

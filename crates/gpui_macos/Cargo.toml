@@ -15,7 +15,7 @@ path = "src/gpui_macos.rs"
 default = ["gpui/default"]
 test-support = ["gpui/test-support"]
 runtime_shaders = []
-font-kit = ["dep:font-kit"]
+font-kit = []
 screen-capture = ["gpui/screen-capture"]
 
 [dependencies]
@@ -33,13 +33,11 @@ collections.workspace = true
 core-foundation.workspace = true
 core-foundation-sys.workspace = true
 core-graphics.workspace = true
-core-text.workspace = true
 core-video.workspace = true
 ctor.workspace = true
 derive_more.workspace = true
 dispatch2 = "0.3.1"
 etagere.workspace = true
-font-kit = { version = "0.14.1-zed", package = "zed-font-kit", optional = true }
 foreign-types.workspace = true
 futures.workspace = true
 gpui_util.workspace = true
@@ -58,7 +56,6 @@ objc2-foundation.workspace = true
 objc2-user-notifications.workspace = true
 palette.workspace = true
 parking_lot.workspace = true
-pathfinder_geometry.workspace = true
 raw-window-handle.workspace = true
 semver.workspace = true
 smallvec.workspace = true
