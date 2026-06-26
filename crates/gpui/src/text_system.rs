@@ -151,7 +151,11 @@ impl TextSystem {
             return font_id;
         }
         for fallback in &self.fallback_font_stack {
-            if let Ok(font_id) = self.font_id(fallback) {
+            let mut fallback = fallback.clone();
+            fallback.features = font.features.clone();
+            fallback.weight = font.weight;
+            fallback.style = font.style;
+            if let Ok(font_id) = self.font_id(&fallback) {
                 return font_id;
             }
         }
@@ -1237,5 +1241,97 @@ pub fn font_name_with_fallbacks_shared<'a>(
         ".ZedSans" | "Zed Plex Sans" => const { &SharedString::new_static("IBM Plex Sans") },
         ".ZedMono" | "Zed Plex Mono" => const { &SharedString::new_static("Lilex") },
         _ => name,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{FontStyle, FontWeight, NoopTextSystem, RenderGlyphParams};
+    use anyhow::bail;
+    use std::borrow::Cow;
+
+    struct StyledFallbackTextSystem {
+        resolved: Font,
+        noop: NoopTextSystem,
+    }
+
+    impl PlatformTextSystem for StyledFallbackTextSystem {
+        fn add_fonts(&self, _fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
+            Ok(())
+        }
+
+        fn all_font_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn font_id(&self, descriptor: &Font) -> Result<FontId> {
+            if descriptor == &self.resolved {
+                Ok(FontId(42))
+            } else {
+                bail!("unavailable font")
+            }
+        }
+
+        fn font_metrics(&self, font_id: FontId) -> FontMetrics {
+            self.noop.font_metrics(font_id)
+        }
+
+        fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
+            self.noop.typographic_bounds(font_id, glyph_id)
+        }
+
+        fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
+            self.noop.advance(font_id, glyph_id)
+        }
+
+        fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId> {
+            self.noop.glyph_for_char(font_id, ch)
+        }
+
+        fn glyph_raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
+            self.noop.glyph_raster_bounds(params)
+        }
+
+        fn rasterize_glyph(
+            &self,
+            params: &RenderGlyphParams,
+            raster_bounds: Bounds<DevicePixels>,
+        ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
+            self.noop.rasterize_glyph(params, raster_bounds)
+        }
+
+        fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout {
+            self.noop.layout_line(text, font_size, runs)
+        }
+
+        fn recommended_rendering_mode(
+            &self,
+            font_id: FontId,
+            font_size: Pixels,
+        ) -> TextRenderingMode {
+            self.noop.recommended_rendering_mode(font_id, font_size)
+        }
+    }
+
+    #[test]
+    fn fallback_resolution_preserves_requested_font_style() {
+        let features = FontFeatures(Arc::new(vec![("ss01".to_string(), 1)]));
+        let mut requested = font("Missing Family");
+        requested.features = features.clone();
+        requested.weight = FontWeight::BOLD;
+        requested.style = FontStyle::Italic;
+
+        let mut resolved = font("Helvetica");
+        resolved.features = features;
+        resolved.weight = FontWeight::BOLD;
+        resolved.style = FontStyle::Italic;
+
+        let text_system = TextSystem::new(Arc::new(StyledFallbackTextSystem {
+            resolved,
+            noop: NoopTextSystem::new(),
+        }));
+
+        assert_eq!(text_system.resolve_font(&requested), FontId(42));
     }
 }

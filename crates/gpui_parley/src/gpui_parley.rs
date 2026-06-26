@@ -26,8 +26,50 @@ use swash::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
+pub static DEFAULT_BUNDLED_FONTS: &[&[u8]] = &[
+    include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf"),
+    include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Italic.ttf"),
+    include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBold.ttf"),
+    include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBoldItalic.ttf"),
+    include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf"),
+    include_bytes!("../../../assets/fonts/lilex/Lilex-Bold.ttf"),
+    include_bytes!("../../../assets/fonts/lilex/Lilex-Italic.ttf"),
+    include_bytes!("../../../assets/fonts/lilex/Lilex-BoldItalic.ttf"),
+];
+
+pub fn default_bundled_fonts() -> Vec<Cow<'static, [u8]>> {
+    DEFAULT_BUNDLED_FONTS
+        .iter()
+        .map(|bytes| Cow::Borrowed(*bytes))
+        .collect()
+}
+
 pub struct ParleyTextSystem {
     state: RwLock<ParleyTextSystemState>,
+}
+
+pub struct ParleyTextSystemOptions {
+    pub system_font_fallback: String,
+    pub use_system_fonts: bool,
+    pub bundled_fonts: Option<Vec<Cow<'static, [u8]>>>,
+}
+
+impl ParleyTextSystemOptions {
+    pub fn new(system_font_fallback: impl Into<String>) -> Self {
+        Self {
+            system_font_fallback: system_font_fallback.into(),
+            use_system_fonts: true,
+            bundled_fonts: None,
+        }
+    }
+
+    pub fn without_system_fonts(system_font_fallback: impl Into<String>) -> Self {
+        Self {
+            system_font_fallback: system_font_fallback.into(),
+            use_system_fonts: false,
+            bundled_fonts: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -49,6 +91,7 @@ impl FontKey {
 
 struct ParleyTextSystemState {
     fallback_family: String,
+    use_system_fonts: bool,
     font_context: FontContext,
     layout_context: LayoutContext,
     swash_scale_context: ScaleContext,
@@ -97,35 +140,45 @@ struct FontiqueHandleKey {
 
 impl ParleyTextSystem {
     pub fn new(system_font_fallback: &str) -> Self {
-        Self::with_system_fonts(system_font_fallback, true)
+        Self::with_options(ParleyTextSystemOptions::new(system_font_fallback))
     }
 
     pub fn new_without_system_fonts(system_font_fallback: &str) -> Self {
-        Self::with_system_fonts(system_font_fallback, false)
+        Self::with_options(ParleyTextSystemOptions::without_system_fonts(
+            system_font_fallback,
+        ))
     }
 
-    fn with_system_fonts(system_font_fallback: &str, use_system_fonts: bool) -> Self {
+    pub fn with_options(options: ParleyTextSystemOptions) -> Self {
         let font_context = FontContext {
             collection: Collection::new(CollectionOptions {
                 shared: false,
-                system_fonts: use_system_fonts,
+                system_fonts: options.use_system_fonts,
             }),
             source_cache: SourceCache::default(),
         };
 
+        let mut state = ParleyTextSystemState {
+            fallback_family: options.system_font_fallback,
+            use_system_fonts: options.use_system_fonts,
+            font_context,
+            layout_context: LayoutContext::new(),
+            swash_scale_context: ScaleContext::new(),
+            noop: gpui::NoopTextSystem::new(),
+            loaded_fonts: Vec::new(),
+            font_ids_by_font: HashMap::default(),
+            font_ids_by_family_key: HashMap::default(),
+            font_ids_by_loaded_font_key: HashMap::default(),
+            font_id_by_fontique_handle: HashMap::default(),
+        };
+        if let Some(bundled_fonts) = options.bundled_fonts
+            && let Err(error) = state.add_fonts(bundled_fonts)
+        {
+            log::error!("failed to load bundled fonts: {error:#}");
+        }
+
         Self {
-            state: RwLock::new(ParleyTextSystemState {
-                fallback_family: system_font_fallback.to_string(),
-                font_context,
-                layout_context: LayoutContext::new(),
-                swash_scale_context: ScaleContext::new(),
-                noop: gpui::NoopTextSystem::new(),
-                loaded_fonts: Vec::new(),
-                font_ids_by_font: HashMap::default(),
-                font_ids_by_family_key: HashMap::default(),
-                font_ids_by_loaded_font_key: HashMap::default(),
-                font_id_by_fontique_handle: HashMap::default(),
-            }),
+            state: RwLock::new(state),
         }
     }
 }
@@ -285,15 +338,58 @@ impl ParleyTextSystemState {
         fallbacks: Option<&FontFallbacks>,
     ) -> Result<SmallVec<[FontId; 4]>> {
         let user_fallback_chain = self.resolve_user_fallback_chain(features, fallbacks)?;
+        if name == ".SystemUIFont" && self.use_system_fonts {
+            let family_ids = self
+                .font_context
+                .collection
+                .generic_families(fontique::GenericFamily::SystemUi)
+                .collect::<SmallVec<[_; 2]>>();
+            let mut loaded_font_ids = SmallVec::new();
+            for family_id in family_ids {
+                let Some(family) = self.font_context.collection.family(family_id) else {
+                    continue;
+                };
+                self.load_family_fonts(
+                    &family,
+                    features,
+                    fallbacks,
+                    Arc::clone(&user_fallback_chain),
+                    &mut loaded_font_ids,
+                )?;
+            }
+            if !loaded_font_ids.is_empty() {
+                return Ok(loaded_font_ids);
+            }
+        }
+
         let resolved_name = gpui::font_name_with_fallbacks(name, &self.fallback_family);
         let Some(family) = self.font_context.collection.family_by_name(resolved_name) else {
             return Ok(SmallVec::new());
         };
 
         let mut loaded_font_ids = SmallVec::new();
+        self.load_family_fonts(
+            &family,
+            features,
+            fallbacks,
+            user_fallback_chain,
+            &mut loaded_font_ids,
+        )?;
+
+        Ok(loaded_font_ids)
+    }
+
+    fn load_family_fonts(
+        &mut self,
+        family: &FamilyInfo,
+        features: &FontFeatures,
+        fallbacks: Option<&FontFallbacks>,
+        user_fallback_chain: Arc<[(FontId, SharedString)]>,
+        loaded_font_ids: &mut SmallVec<[FontId; 4]>,
+    ) -> Result<()> {
         for (family_index, font_info) in family.fonts().iter().enumerate() {
             if let Some(font_id) = self.load_font(
-                &family,
+                family,
                 family_index,
                 font_info,
                 features,
@@ -304,7 +400,7 @@ impl ParleyTextSystemState {
             }
         }
 
-        Ok(loaded_font_ids)
+        Ok(())
     }
 
     fn resolve_user_fallback_chain(
@@ -646,7 +742,7 @@ impl ParleyTextSystemState {
             let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
                 continue;
             };
-            let font_id = self.font_id_for_parley_run(glyph_run.run());
+            let font_id = self.font_id_for_parley_run(glyph_run.run(), &style_spans);
             let Some(loaded_font) = self.loaded_font(font_id) else {
                 continue;
             };
@@ -656,10 +752,13 @@ impl ParleyTextSystemState {
                 let index = cluster.text_range().start;
                 cluster.glyphs().map(move |_| index)
             });
+            let baseline = glyph_run.baseline();
             for (glyph, index) in glyph_run.positioned_glyphs().zip(glyph_indices) {
                 let shaped_glyph = ShapedGlyph {
                     id: GlyphId(glyph.id),
-                    position: point(glyph.x.into(), glyph.y.into()),
+                    // GPUI paints shaped glyphs relative to its own computed baseline.
+                    // Parley's positioned glyphs are line-relative and already include it.
+                    position: point(glyph.x.into(), (glyph.y - baseline).into()),
                     index,
                     is_emoji,
                 };
@@ -750,7 +849,22 @@ impl ParleyTextSystemState {
         Some(LayoutStyleSpan::from_loaded_font(range, font_id, font))
     }
 
-    fn font_id_for_parley_run(&mut self, run: &parley::layout::Run<'_, [u8; 4]>) -> FontId {
+    fn font_id_for_parley_run(
+        &mut self,
+        run: &parley::layout::Run<'_, [u8; 4]>,
+        style_spans: &[LayoutStyleSpan],
+    ) -> FontId {
+        let run_range = run.text_range();
+        if let Some(span) = style_spans.iter().find(|span| {
+            span.range.start <= run_range.start
+                && run_range.end <= span.range.end
+                && self
+                    .loaded_font(span.font_id)
+                    .is_some_and(|loaded| loaded.font_data == *run.font())
+        }) {
+            return span.font_id;
+        }
+
         if let Some(loaded_font) = self
             .loaded_fonts
             .iter()
@@ -802,7 +916,6 @@ impl ParleyTextSystemState {
 
 struct LayoutStyleSpan {
     range: Range<usize>,
-    #[cfg(test)]
     font_id: FontId,
     family_name: SharedString,
     width: fontique::FontWidth,
@@ -815,12 +928,8 @@ struct LayoutStyleSpan {
 
 impl LayoutStyleSpan {
     fn from_loaded_font(range: Range<usize>, font_id: FontId, font: &LoadedFont) -> Self {
-        #[cfg(not(test))]
-        let _ = font_id;
-
         Self {
             range,
-            #[cfg(test)]
             font_id,
             family_name: font.family_name.clone(),
             width: font.stretch,
@@ -1080,6 +1189,64 @@ mod tests {
     }
 
     #[test]
+    fn bundled_fonts_are_not_registered_by_default() {
+        let text_system = ParleyTextSystem::new_without_system_fonts("IBM Plex Sans");
+        let names = text_system.all_font_names();
+
+        assert!(!names.iter().any(|name| name == "Lilex"));
+        assert!(!names.iter().any(|name| name == "IBM Plex Sans"));
+        assert!(text_system.font_id(&font(".SystemUIFont")).is_err());
+    }
+
+    #[test]
+    fn bundled_fonts_can_be_registered_at_construction() {
+        let text_system = ParleyTextSystem::with_options(ParleyTextSystemOptions {
+            system_font_fallback: "IBM Plex Sans".to_string(),
+            use_system_fonts: false,
+            bundled_fonts: Some(default_bundled_fonts()),
+        });
+        let names = text_system.all_font_names();
+        let regular = text_system.font_id(&font(".SystemUIFont")).unwrap();
+        let mut semibold = font(".SystemUIFont");
+        semibold.weight = FontWeight::SEMIBOLD;
+        let italic = font(".SystemUIFont").italic();
+
+        assert!(names.iter().any(|name| name == "Lilex"));
+        assert!(names.iter().any(|name| name == "IBM Plex Sans"));
+        assert!(text_system.font_id(&font("IBM Plex Sans")).is_ok());
+        assert!(text_system.font_id(&font("Lilex")).is_ok());
+        assert_ne!(regular, text_system.font_id(&semibold).unwrap());
+        assert_ne!(regular, text_system.font_id(&italic).unwrap());
+    }
+
+    #[test]
+    fn system_ui_font_prefers_fontique_generic_family() {
+        let text_system = ParleyTextSystem::with_options(ParleyTextSystemOptions {
+            system_font_fallback: "IBM Plex Sans".to_string(),
+            use_system_fonts: false,
+            bundled_fonts: Some(default_bundled_fonts()),
+        });
+        {
+            let mut state = text_system.state.write();
+            let family = state
+                .font_context
+                .collection
+                .family_by_name("Lilex")
+                .unwrap();
+            state.use_system_fonts = true;
+            state
+                .font_context
+                .collection
+                .set_generic_families(fontique::GenericFamily::SystemUi, [family.id()].into_iter());
+        }
+        let lilex_id = text_system.font_id(&font(".SystemUIFont")).unwrap();
+        let state = text_system.state.read();
+        let loaded = state.loaded_font(lilex_id).unwrap();
+
+        assert_eq!(loaded.family_name.as_ref(), "Lilex");
+    }
+
+    #[test]
     fn same_font_descriptor_returns_stable_font_id() {
         let text_system = text_system_with_memory_fonts();
         let descriptor = font("Lilex");
@@ -1310,6 +1477,7 @@ mod tests {
             &[FontRun {
                 len: text.len(),
                 font_id,
+                letter_spacing: None,
             }],
         );
 
@@ -1318,6 +1486,13 @@ mod tests {
         assert!(layout.ascent > Pixels::ZERO);
         assert!(!layout.runs.is_empty());
         assert_eq!(layout.runs[0].font_id, font_id);
+        assert!(
+            layout
+                .runs
+                .iter()
+                .flat_map(|run| &run.glyphs)
+                .all(|glyph| glyph.position.y.abs() < px(0.001))
+        );
         assert!(layout.runs.iter().flat_map(|run| &run.glyphs).all(|glyph| {
             glyph.index <= text.len()
                 && (glyph.index == text.len() || text.is_char_boundary(glyph.index))
@@ -1337,16 +1512,51 @@ mod tests {
                 FontRun {
                     len: 5,
                     font_id: lilex,
+                    letter_spacing: None,
                 },
                 FontRun {
                     len: 5,
                     font_id: plex,
+                    letter_spacing: None,
                 },
             ],
         );
 
         assert!(layout.runs.iter().any(|run| run.font_id == lilex));
         assert!(layout.runs.iter().any(|run| run.font_id == plex));
+    }
+
+    #[test]
+    fn layout_line_preserves_feature_styled_font_runs() {
+        let text_system = text_system_with_memory_fonts();
+        let plain_font = font("Lilex");
+        let mut feature_font = font("Lilex");
+        feature_font.features = FontFeatures(Arc::new(vec![("ss01".to_string(), 1)]));
+        let plain_id = text_system.font_id(&plain_font).unwrap();
+        let feature_id = text_system.font_id(&feature_font).unwrap();
+        let text = "abcdef";
+        let layout = text_system.layout_line(
+            text,
+            px(16.0),
+            &[
+                FontRun {
+                    len: 3,
+                    font_id: plain_id,
+                    letter_spacing: None,
+                },
+                FontRun {
+                    len: 3,
+                    font_id: feature_id,
+                    letter_spacing: None,
+                },
+            ],
+        );
+
+        assert_ne!(plain_id, feature_id);
+        assert_eq!(layout.font_id_for_index(0), Some(plain_id));
+        assert_eq!(layout.font_id_for_index(3), Some(feature_id));
+        assert!(layout.runs.iter().any(|run| run.font_id == plain_id));
+        assert!(layout.runs.iter().any(|run| run.font_id == feature_id));
     }
 
     #[test]
@@ -1369,10 +1579,12 @@ mod tests {
                 FontRun {
                     len: 2,
                     font_id: plain_id,
+                    letter_spacing: None,
                 },
                 FontRun {
                     len: 3,
                     font_id: feature_id,
+                    letter_spacing: None,
                 },
             ],
         );
@@ -1400,7 +1612,14 @@ mod tests {
         let text_system = text_system_with_memory_fonts();
         let font_id = text_system.font_id(&font("Lilex")).unwrap();
         let state = text_system.state.read();
-        let spans = state.layout_style_spans("abc", &[FontRun { len: 99, font_id }]);
+        let spans = state.layout_style_spans(
+            "abc",
+            &[FontRun {
+                len: 99,
+                font_id,
+                letter_spacing: None,
+            }],
+        );
 
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].range, 0..3);
@@ -1417,6 +1636,7 @@ mod tests {
             &[FontRun {
                 len: text.len(),
                 font_id,
+                letter_spacing: None,
             }],
         );
 

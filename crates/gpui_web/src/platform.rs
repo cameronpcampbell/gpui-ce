@@ -12,26 +12,15 @@ use gpui::{
     PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, Task,
     ThermalState, WindowAppearance, WindowKind, WindowParams, popup::PopupNotSupportedError,
 };
+use gpui_parley::{ParleyTextSystem, ParleyTextSystemOptions};
 use gpui_wgpu::WgpuContext;
 use std::{
-    borrow::Cow,
     cell::{Cell, RefCell},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
 };
 use wasm_bindgen::prelude::*;
-
-static BUNDLED_FONTS: &[&[u8]] = &[
-    include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf"),
-    include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Italic.ttf"),
-    include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBold.ttf"),
-    include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBoldItalic.ttf"),
-    include_bytes!("../../../assets/fonts/lilex/Lilex-Regular.ttf"),
-    include_bytes!("../../../assets/fonts/lilex/Lilex-Bold.ttf"),
-    include_bytes!("../../../assets/fonts/lilex/Lilex-Italic.ttf"),
-    include_bytes!("../../../assets/fonts/lilex/Lilex-BoldItalic.ttf"),
-];
 
 pub struct WebPlatform {
     browser_window: web_sys::Window,
@@ -69,16 +58,11 @@ impl WebPlatform {
         ));
         let background_executor = BackgroundExecutor::new(dispatcher.clone());
         let foreground_executor = ForegroundExecutor::new(dispatcher);
-        let text_system = Arc::new(gpui_parley::ParleyTextSystem::new_without_system_fonts(
-            "IBM Plex Sans",
-        ));
-        let fonts = BUNDLED_FONTS
-            .iter()
-            .map(|bytes| Cow::Borrowed(*bytes))
-            .collect();
-        if let Err(error) = text_system.add_fonts(fonts) {
-            log::error!("failed to load bundled fonts: {error:#}");
-        }
+        let text_system = Arc::new(ParleyTextSystem::with_options(ParleyTextSystemOptions {
+            system_font_fallback: "IBM Plex Sans".to_string(),
+            use_system_fonts: false,
+            bundled_fonts: Some(gpui_parley::default_bundled_fonts()),
+        }));
         let text_system: Arc<dyn PlatformTextSystem> = text_system;
         let active_display: Rc<dyn PlatformDisplay> =
             Rc::new(WebDisplay::new(browser_window.clone()));
