@@ -2710,92 +2710,125 @@ mod tests {
     }
 
     #[derive(Clone, Copy, Debug)]
-    struct FigmaCornerParams {
-        radius: f32,
-        p: f32,
-        smoothing: f32,
+    struct FigmaAxisParams {
         a: f32,
         b: f32,
+        p: f32,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct FigmaCornerParams {
+        radius: f32,
+        smoothing: f32,
+        arc_sweep: f32,
         c: f32,
         d: f32,
+        horizontal: FigmaAxisParams,
+        vertical: FigmaAxisParams,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct FigmaCornerLayout {
+        horizontal_budgets: [f32; 4],
+        vertical_budgets: [f32; 4],
     }
 
     fn figma_corner_params(
         corner_radius: f32,
-        corner_budget: f32,
+        horizontal_budget: f32,
+        vertical_budget: f32,
         corner_smoothing: f32,
     ) -> FigmaCornerParams {
-        let budget = corner_budget.max(0.0);
-        let radius = corner_radius.max(0.0).min(budget);
-        let requested_smoothing = corner_smoothing.clamp(0.0, 1.0);
-        let p = (radius * (1.0 + requested_smoothing)).min(budget);
+        let horizontal_budget = horizontal_budget.max(0.0);
+        let vertical_budget = vertical_budget.max(0.0);
+        let radius = corner_radius
+            .max(0.0)
+            .min(horizontal_budget.min(vertical_budget));
         let smoothing = if radius > EPSILON {
-            (p / radius - 1.0).clamp(0.0, requested_smoothing)
+            corner_smoothing.clamp(0.0, 1.0)
         } else {
             0.0
         };
+        let desired_reach = radius * (1.0 + smoothing);
+        let horizontal_reach = desired_reach.min(horizontal_budget);
+        let vertical_reach = desired_reach.min(vertical_budget);
         let arc_sweep = std::f32::consts::FRAC_PI_2 * (1.0 - smoothing);
         let arc_delta = (0.5 * arc_sweep).sin() * radius * std::f32::consts::SQRT_2;
         let beta = std::f32::consts::FRAC_PI_4 * smoothing;
         let join_handle = radius * (0.5 * beta).tan();
         let c = join_handle * beta.cos();
         let d = join_handle * beta.sin();
-        let b = ((p - arc_delta - c - d) / 3.0).max(0.0);
+        let core_length = arc_delta + c + d;
+        let ideal_b = ((desired_reach - core_length) / 3.0).max(0.0);
+        let horizontal_available = (horizontal_reach - core_length).max(0.0);
+        let vertical_available = (vertical_reach - core_length).max(0.0);
+        let shared_b = ideal_b
+            .min(horizontal_available * (5.0 / 6.0))
+            .min(vertical_available * (5.0 / 6.0));
 
         FigmaCornerParams {
             radius,
-            p,
             smoothing,
-            a: 2.0 * b,
-            b,
+            arc_sweep,
             c,
             d,
+            horizontal: FigmaAxisParams {
+                a: horizontal_available - shared_b,
+                b: shared_b,
+                p: horizontal_reach,
+            },
+            vertical: FigmaAxisParams {
+                a: vertical_available - shared_b,
+                b: shared_b,
+                p: vertical_reach,
+            },
         }
     }
 
-    fn control_points(params: FigmaCornerParams) -> [Vec2; 4] {
+    fn control_points(params: FigmaCornerParams, axis: FigmaAxisParams) -> [Vec2; 4] {
         [
             Vec2 { x: 0.0, y: 0.0 },
+            Vec2 { x: axis.a, y: 0.0 },
             Vec2 {
-                x: params.a,
+                x: axis.a + axis.b,
                 y: 0.0,
             },
             Vec2 {
-                x: params.a + params.b,
-                y: 0.0,
-            },
-            Vec2 {
-                x: params.a + params.b + params.c,
+                x: axis.a + axis.b + params.c,
                 y: params.d,
             },
         ]
     }
 
-    fn cubic_point(params: FigmaCornerParams, t: f32) -> Vec2 {
-        let [p0, p1, p2, p3] = control_points(params);
+    fn cubic_point(params: FigmaCornerParams, axis: FigmaAxisParams, t: f32) -> Vec2 {
+        let [p0, p1, p2, p3] = control_points(params, axis);
         let u = 1.0 - t;
         p0 * (u * u * u) + p1 * (3.0 * u * u * t) + p2 * (3.0 * u * t * t) + p3 * (t * t * t)
     }
 
-    fn cubic_derivative(params: FigmaCornerParams, t: f32) -> Vec2 {
-        let [p0, p1, p2, p3] = control_points(params);
+    fn cubic_derivative(params: FigmaCornerParams, axis: FigmaAxisParams, t: f32) -> Vec2 {
+        let [p0, p1, p2, p3] = control_points(params, axis);
         let u = 1.0 - t;
         (p1 - p0) * (3.0 * u * u) + (p2 - p1) * (6.0 * u * t) + (p3 - p2) * (3.0 * t * t)
     }
 
-    fn cubic_second_derivative(params: FigmaCornerParams, t: f32) -> Vec2 {
-        let [p0, p1, p2, p3] = control_points(params);
+    fn cubic_second_derivative(params: FigmaCornerParams, axis: FigmaAxisParams, t: f32) -> Vec2 {
+        let [p0, p1, p2, p3] = control_points(params, axis);
         (p2 - p1 * 2.0 + p0) * (6.0 * (1.0 - t)) + (p3 - p2 * 2.0 + p1) * (6.0 * t)
     }
 
-    fn closest_cubic_distance(point: Vec2, params: FigmaCornerParams) -> f32 {
+    fn closest_cubic_distance(
+        point: Vec2,
+        params: FigmaCornerParams,
+        axis: FigmaAxisParams,
+    ) -> f32 {
         let y_seed = (point.y / params.d.max(1e-5))
             .clamp(0.0, 1.0)
             .powf(1.0 / 3.0);
-        let chord = cubic_point(params, 1.0);
+        let chord = cubic_point(params, axis, 1.0);
         let chord_seed = (point.dot(chord) / chord.dot(chord).max(EPSILON)).clamp(0.0, 1.0);
-        let y_delta = cubic_point(params, y_seed) - point;
-        let chord_delta = cubic_point(params, chord_seed) - point;
+        let y_delta = cubic_point(params, axis, y_seed) - point;
+        let chord_delta = cubic_point(params, axis, chord_seed) - point;
         let mut t = if chord_delta.dot(chord_delta) < y_delta.dot(y_delta) {
             chord_seed
         } else {
@@ -2803,9 +2836,9 @@ mod tests {
         };
 
         for _ in 0..4 {
-            let curve = cubic_point(params, t);
-            let tangent = cubic_derivative(params, t);
-            let acceleration = cubic_second_derivative(params, t);
+            let curve = cubic_point(params, axis, t);
+            let tangent = cubic_derivative(params, axis, t);
+            let acceleration = cubic_second_derivative(params, axis, t);
             let delta = curve - point;
             let denominator = tangent.dot(tangent) + delta.dot(acceleration);
             if denominator.abs() > EPSILON {
@@ -2815,22 +2848,36 @@ mod tests {
 
         [0.0, t, 1.0]
             .into_iter()
-            .map(|candidate| (cubic_point(params, candidate) - point).length())
+            .map(|candidate| (cubic_point(params, axis, candidate) - point).length())
             .fold(f32::INFINITY, f32::min)
     }
 
-    fn dense_cubic_distance(point: Vec2, params: FigmaCornerParams, steps: u32) -> f32 {
+    fn dense_cubic_distance(
+        point: Vec2,
+        params: FigmaCornerParams,
+        axis: FigmaAxisParams,
+        steps: u32,
+    ) -> f32 {
         let mut distance = f32::INFINITY;
         for step in 0..=steps {
             let t = step as f32 / steps as f32;
-            distance = distance.min((cubic_point(params, t) - point).length());
+            distance = distance.min((cubic_point(params, axis, t) - point).length());
         }
         distance
     }
 
+    fn split_side(length: f32, first_radius: f32, second_radius: f32) -> [f32; 2] {
+        let total_radius = first_radius + second_radius;
+        if total_radius == 0.0 {
+            return [0.0, 0.0];
+        }
+        let first_budget = length * first_radius / total_radius;
+        [first_budget, length - first_budget]
+    }
+
     // Input and output order is TL, TR, BR, BL. Equal radii are assigned in
     // Figma's stable TL, TR, BL, BR order.
-    fn figma_corner_budgets(size: Vec2, mut radii: [f32; 4]) -> [f32; 4] {
+    fn figma_corner_layout(size: Vec2, mut radii: [f32; 4]) -> FigmaCornerLayout {
         radii
             .iter_mut()
             .for_each(|radius| *radius = radius.max(0.0));
@@ -2873,7 +2920,15 @@ mod tests {
             radii[corner] = radii[corner].min(budget);
         }
 
-        budgets
+        let top = split_side(size.x, radii[0], radii[1]);
+        let bottom = split_side(size.x, radii[3], radii[2]);
+        let left = split_side(size.y, radii[0], radii[3]);
+        let right = split_side(size.y, radii[1], radii[2]);
+
+        FigmaCornerLayout {
+            horizontal_budgets: [top[0], top[1], bottom[1], bottom[0]],
+            vertical_budgets: [left[0], right[0], right[1], left[1]],
+        }
     }
 
     fn assert_close(actual: f32, expected: f32) {
@@ -2912,29 +2967,37 @@ mod tests {
         ];
 
         for (smoothing, expected) in cases {
-            let params = figma_corner_params(40.0, 80.0, smoothing);
-            let [_, p1, p2, p3] = control_points(params);
-            for (actual, expected) in [params.p, p1.x, p2.x, p3.x, p3.y].into_iter().zip(expected) {
+            let params = figma_corner_params(40.0, 80.0, 80.0, smoothing);
+            let [_, p1, p2, p3] = control_points(params, params.horizontal);
+            for (actual, expected) in [params.horizontal.p, p1.x, p2.x, p3.x, p3.y]
+                .into_iter()
+                .zip(expected)
+            {
                 assert_close(actual, expected);
             }
         }
     }
 
     #[test]
-    fn figma_smoothing_clamps_to_budget_and_preserves_the_apex() {
-        let budgets = figma_corner_budgets(Vec2 { x: 150.0, y: 150.0 }, [40.0; 4]);
-        for budget in budgets {
+    fn figma_smoothing_is_preserved_when_reach_is_constrained() {
+        let layout = figma_corner_layout(Vec2 { x: 150.0, y: 150.0 }, [40.0; 4]);
+        for budget in layout.horizontal_budgets {
             assert_close(budget, 75.0);
         }
-        let tight = figma_corner_params(40.0, budgets[0], 1.0);
-        assert_close(tight.p, 75.0);
-        assert_close(tight.smoothing, 0.875);
+        for budget in layout.vertical_budgets {
+            assert_close(budget, 75.0);
+        }
+        let tight = figma_corner_params(40.0, 75.0, 75.0, 1.0);
+        assert_close(tight.horizontal.p, 75.0);
+        assert_close(tight.vertical.p, 75.0);
+        assert_close(tight.smoothing, 1.0);
+        assert_close(tight.arc_sweep, 0.0);
 
         let expected_inset = 40.0 * (1.0 - 1.0 / std::f32::consts::SQRT_2);
         for smoothing in [0.0, 0.3, 0.6, 1.0] {
-            let params = figma_corner_params(40.0, 80.0, smoothing);
+            let params = figma_corner_params(40.0, 80.0, 80.0, smoothing);
             let circle_center = Vec2 {
-                x: params.p - params.radius,
+                x: params.horizontal.p - params.radius,
                 y: params.radius,
             };
             let apex = circle_center
@@ -2942,34 +3005,116 @@ mod tests {
                     x: params.radius / std::f32::consts::SQRT_2,
                     y: -params.radius / std::f32::consts::SQRT_2,
                 };
-            assert_close(params.p - apex.x, expected_inset);
+            assert_close(params.horizontal.p - apex.x, expected_inset);
             assert_close(apex.y, expected_inset);
         }
     }
 
     #[test]
-    fn figma_corner_budgets_match_stable_unequal_allocation() {
-        let budgets = figma_corner_budgets(Vec2 { x: 120.0, y: 80.0 }, [50.0, 50.0, 20.0, 10.0]);
-        for (actual, expected) in budgets.into_iter().zip([60.0, 57.142857, 22.857143, 20.0]) {
+    fn figma_corner_layout_matches_axis_aware_allocation() {
+        let layout = figma_corner_layout(Vec2 { x: 120.0, y: 80.0 }, [50.0, 50.0, 20.0, 10.0]);
+        for (actual, expected) in layout
+            .horizontal_budgets
+            .into_iter()
+            .zip([60.0, 60.0, 80.0, 40.0])
+        {
+            assert_close(actual, expected);
+        }
+        for (actual, expected) in layout
+            .vertical_budgets
+            .into_iter()
+            .zip([66.666664, 57.142857, 22.857143, 13.333336])
+        {
             assert_close(actual, expected);
         }
 
-        let single_large = figma_corner_budgets(Vec2 { x: 150.0, y: 100.0 }, [80.0, 0.0, 0.0, 0.0]);
-        for (actual, expected) in single_large.into_iter().zip([100.0, 0.0, 0.0, 0.0]) {
-            assert_close(actual, expected);
+        let single_large = figma_corner_layout(Vec2 { x: 150.0, y: 100.0 }, [80.0, 0.0, 0.0, 0.0]);
+        assert_eq!(single_large.horizontal_budgets, [150.0, 0.0, 0.0, 0.0]);
+        assert_eq!(single_large.vertical_budgets, [100.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn figma_preserves_smoothing_reach_on_the_long_axis() {
+        let layout = figma_corner_layout(Vec2 { x: 80.0, y: 34.0 }, [17.0; 4]);
+        let params = figma_corner_params(
+            17.0,
+            layout.horizontal_budgets[0],
+            layout.vertical_budgets[0],
+            0.6,
+        );
+        assert_close(params.horizontal.p, 27.2);
+        assert_close(params.vertical.p, 17.0);
+        assert_close(params.horizontal.b, 3.4011);
+        assert_close(params.vertical.b, 3.4011);
+        assert_close(params.smoothing, 0.6);
+
+        let rotated = figma_corner_layout(Vec2 { x: 34.0, y: 80.0 }, [17.0; 4]);
+        let rotated_params = figma_corner_params(
+            17.0,
+            rotated.horizontal_budgets[0],
+            rotated.vertical_budgets[0],
+            0.6,
+        );
+        assert_close(rotated_params.horizontal.p, 17.0);
+        assert_close(rotated_params.vertical.p, 27.2);
+        assert_close(rotated_params.horizontal.b, rotated_params.vertical.b);
+    }
+
+    #[test]
+    fn figma_axis_fitting_is_continuous_at_reach_limits() {
+        let widths = [54.399, 54.4, 54.401];
+        let expected_moves = [27.1995, 27.2, 27.201];
+        let expected_controls = [[10.8797, 14.2808], [10.8802, 14.2813], [10.8802, 14.2813]];
+
+        for ((width, expected_move), expected_control) in widths
+            .into_iter()
+            .zip(expected_moves)
+            .zip(expected_controls)
+        {
+            let layout = figma_corner_layout(Vec2 { x: width, y: 34.0 }, [17.0; 4]);
+            let params = figma_corner_params(
+                17.0,
+                layout.horizontal_budgets[0],
+                layout.vertical_budgets[0],
+                0.6,
+            );
+            assert_close(width - params.horizontal.p, expected_move);
+            assert_close(params.horizontal.a, expected_control[0]);
+            assert_close(
+                params.horizontal.a + params.horizontal.b,
+                expected_control[1],
+            );
+        }
+
+        for (height, expected_b) in [(37.261393, 4.76), (37.262393, 4.7604), (37.263393, 4.7604)] {
+            let layout = figma_corner_layout(Vec2 { x: 80.0, y: height }, [17.0; 4]);
+            let params = figma_corner_params(
+                17.0,
+                layout.horizontal_budgets[0],
+                layout.vertical_budgets[0],
+                0.6,
+            );
+            assert_close(params.horizontal.b, expected_b);
+            assert_close(params.vertical.b, expected_b);
         }
     }
 
     #[test]
-    fn figma_large_unequal_corner_can_own_across_the_center_split() {
+    fn figma_large_unequal_corner_keeps_requested_smoothing() {
         let size = Vec2 { x: 120.0, y: 80.0 };
-        let budgets = figma_corner_budgets(size, [0.0, 0.0, 0.0, 80.0]);
-        let params = figma_corner_params(80.0, budgets[3], 1.0);
-        assert_close(params.p, 80.0);
-        assert_close(params.smoothing, 0.0);
+        let layout = figma_corner_layout(size, [0.0, 0.0, 0.0, 80.0]);
+        let params = figma_corner_params(
+            80.0,
+            layout.horizontal_budgets[3],
+            layout.vertical_budgets[3],
+            1.0,
+        );
+        assert_close(params.horizontal.p, 120.0);
+        assert_close(params.vertical.p, 80.0);
+        assert_close(params.smoothing, 1.0);
 
         let point = Vec2 { x: 40.0, y: 40.0 };
-        assert!(point.x <= params.p && size.y - point.y <= params.p);
+        assert!(point.x <= params.horizontal.p && size.y - point.y <= params.vertical.p);
 
         let circle_center = Vec2 {
             x: params.radius,
@@ -2984,25 +3129,25 @@ mod tests {
     #[test]
     fn figma_corner_joins_have_continuous_position_and_normal() {
         for smoothing in [0.3, 0.6, 1.0] {
-            let params = figma_corner_params(40.0, 80.0, smoothing);
+            let params = figma_corner_params(40.0, 80.0, 80.0, smoothing);
             let beta = std::f32::consts::FRAC_PI_4 * params.smoothing;
             let center = Vec2 {
-                x: params.p - params.radius,
+                x: params.horizontal.p - params.radius,
                 y: params.radius,
             };
 
-            let start_tangent = cubic_derivative(params, 0.0).normalized();
+            let start_tangent = cubic_derivative(params, params.horizontal, 0.0).normalized();
             let start_normal = Vec2 {
                 x: start_tangent.y,
                 y: -start_tangent.x,
             };
             assert_vec_close(start_tangent, Vec2 { x: 1.0, y: 0.0 });
             assert_vec_close(start_normal, Vec2 { x: 0.0, y: -1.0 });
-            let start_curvature_numerator =
-                cubic_derivative(params, 0.0).cross(cubic_second_derivative(params, 0.0));
+            let start_curvature_numerator = cubic_derivative(params, params.horizontal, 0.0)
+                .cross(cubic_second_derivative(params, params.horizontal, 0.0));
             assert_close(start_curvature_numerator, 0.0);
 
-            let cubic_join = cubic_point(params, 1.0);
+            let cubic_join = cubic_point(params, params.horizontal, 1.0);
             let arc_join = center
                 + Vec2 {
                     x: params.radius * beta.sin(),
@@ -3011,7 +3156,7 @@ mod tests {
             assert_vec_close(cubic_join, arc_join);
             assert_close((arc_join - center).length(), params.radius);
 
-            let cubic_tangent = cubic_derivative(params, 1.0).normalized();
+            let cubic_tangent = cubic_derivative(params, params.horizontal, 1.0).normalized();
             let arc_tangent = Vec2 {
                 x: beta.cos(),
                 y: beta.sin(),
@@ -3029,8 +3174,8 @@ mod tests {
                     y: -params.radius / std::f32::consts::SQRT_2,
                 };
             let mirrored_apex = Vec2 {
-                x: params.p - apex.y,
-                y: params.p - apex.x,
+                x: params.horizontal.p - apex.y,
+                y: params.vertical.p - apex.x,
             };
             assert_vec_close(apex, mirrored_apex);
             let apex_normal = (apex - center).normalized();
@@ -3045,56 +3190,58 @@ mod tests {
     #[test]
     fn figma_newton_distance_stays_within_quarter_pixel_of_dense_reference() {
         let cases = [
-            (figma_corner_params(40.0, 80.0, 0.3), 2_048),
-            (figma_corner_params(40.0, 80.0, 0.6), 2_048),
-            (figma_corner_params(40.0, 75.0, 1.0), 2_048),
-            (figma_corner_params(1_024.0, 2_048.0, 0.99), 16_384),
+            (figma_corner_params(40.0, 80.0, 80.0, 0.3), 2_048),
+            (figma_corner_params(40.0, 80.0, 50.0, 0.6), 2_048),
+            (figma_corner_params(40.0, 75.0, 75.0, 1.0), 2_048),
+            (figma_corner_params(1_024.0, 2_048.0, 1_400.0, 0.99), 16_384),
         ];
         let mut worst_error = 0.0_f32;
         let mut worst_point = Vec2 { x: 0.0, y: 0.0 };
         let mut worst_smoothing = 0.0;
 
         for (params, dense_steps) in cases {
-            let divisions = 16;
-            for y_index in 0..=divisions {
-                for x_index in 0..=divisions - y_index {
-                    let point = Vec2 {
-                        x: params.p * x_index as f32 / divisions as f32,
-                        y: params.p * y_index as f32 / divisions as f32,
-                    };
-                    let error = (closest_cubic_distance(point, params)
-                        - dense_cubic_distance(point, params, dense_steps))
-                    .abs();
-                    if error > worst_error {
-                        worst_error = error;
-                        worst_point = point;
-                        worst_smoothing = params.smoothing;
+            for axis in [params.horizontal, params.vertical] {
+                let divisions = 16;
+                for y_index in 0..=divisions {
+                    for x_index in 0..=divisions - y_index {
+                        let point = Vec2 {
+                            x: axis.p * x_index as f32 / divisions as f32,
+                            y: axis.p * y_index as f32 / divisions as f32,
+                        };
+                        let error = (closest_cubic_distance(point, params, axis)
+                            - dense_cubic_distance(point, params, axis, dense_steps))
+                        .abs();
+                        if error > worst_error {
+                            worst_error = error;
+                            worst_point = point;
+                            worst_smoothing = params.smoothing;
+                        }
                     }
                 }
-            }
 
-            for t_index in 0..=64 {
-                let t = t_index as f32 / 64.0;
-                let curve = cubic_point(params, t);
-                let tangent = cubic_derivative(params, t);
-                let normal = if tangent.length() > EPSILON {
-                    Vec2 {
-                        x: tangent.y,
-                        y: -tangent.x,
-                    }
-                    .normalized()
-                } else {
-                    Vec2 { x: 0.0, y: -1.0 }
-                };
-                for offset in [-0.5, -0.1, 0.0, 0.1, 0.5] {
-                    let point = curve + normal * (params.radius * offset);
-                    let error = (closest_cubic_distance(point, params)
-                        - dense_cubic_distance(point, params, dense_steps))
-                    .abs();
-                    if error > worst_error {
-                        worst_error = error;
-                        worst_point = point;
-                        worst_smoothing = params.smoothing;
+                for t_index in 0..=64 {
+                    let t = t_index as f32 / 64.0;
+                    let curve = cubic_point(params, axis, t);
+                    let tangent = cubic_derivative(params, axis, t);
+                    let normal = if tangent.length() > EPSILON {
+                        Vec2 {
+                            x: tangent.y,
+                            y: -tangent.x,
+                        }
+                        .normalized()
+                    } else {
+                        Vec2 { x: 0.0, y: -1.0 }
+                    };
+                    for offset in [-0.5, -0.1, 0.0, 0.1, 0.5] {
+                        let point = curve + normal * (params.radius * offset);
+                        let error = (closest_cubic_distance(point, params, axis)
+                            - dense_cubic_distance(point, params, axis, dense_steps))
+                        .abs();
+                        if error > worst_error {
+                            worst_error = error;
+                            worst_point = point;
+                            worst_smoothing = params.smoothing;
+                        }
                     }
                 }
             }
