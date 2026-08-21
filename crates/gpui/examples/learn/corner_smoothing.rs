@@ -52,7 +52,8 @@ impl Render for CornerSmoothingExample {
                             .w(px(self.width))
                             .h(px(self.height))
                             .rounded(px(self.corner_radius))
-                            .rounded_smoothing(self.corner_smoothing)
+                            //.rounded_smoothing(self.corner_smoothing)
+                            .rounded_smoothing_0p1()
                             .shadow(vec![
                                 BoxShadow::new(px(0.), px(18.), gpui::blue())
                                     .blur_radius(px(3.))

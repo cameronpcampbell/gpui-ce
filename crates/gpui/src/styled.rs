@@ -969,83 +969,15 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets Figma-style rounded corner smoothing.
-    ///
-    /// `0.0` keeps circular corners and `1.0` requests maximum smoothing.
+    /// Sets rounded corner smoothing to the specified amount.
     fn rounded_smoothing(mut self, amount: f32) -> Self {
         self.style().corner_smoothing = Some(amount.clamp(0.0, 1.0));
         self
     }
 
-    /// Keeps circular corners by setting rounded corner smoothing to `0.0`.
-    fn rounded_smoothing_0(mut self) -> Self {
-        self.style().corner_smoothing = Some(0.0);
-        self
-    }
-
-    /// Keeps circular corners by setting rounded corner smoothing to `0.1`.
-    fn rounded_smoothing_p1(mut self) -> Self {
-        self.style().corner_smoothing = Some(0.1);
-        self
-    }
-
-    /// Sets rounded corner smoothing to `0.2`.
-    fn rounded_smoothing_p2(mut self) -> Self {
-        self.style().corner_smoothing = Some(0.2);
-        self
-    }
-
-    /// Sets rounded corner smoothing to `0.3`.
-    fn rounded_smoothing_p3(mut self) -> Self {
-        self.style().corner_smoothing = Some(0.3);
-        self
-    }
-
-    /// Sets rounded corner smoothing to `0.4`.
-    fn rounded_smoothing_p4(mut self) -> Self {
-        self.style().corner_smoothing = Some(0.4);
-        self
-    }
-
-    /// Sets rounded corner smoothing to `0.5`.
-    fn rounded_smoothing_p5(mut self) -> Self {
-        self.style().corner_smoothing = Some(0.5);
-        self
-    }
-
-    /// Sets rounded corner smoothing to `0.6`.
-    fn rounded_smoothing_p6(mut self) -> Self {
-        self.style().corner_smoothing = Some(0.6);
-        self
-    }
-
-    /// Sets rounded corner smoothing to Figma's documented iOS value.
+    /// Sets rounded corner smoothing to IOS's squircle value (0.6).
     fn rounded_smoothing_ios(mut self) -> Self {
         self.style().corner_smoothing = Some(0.6);
-        self
-    }
-
-    /// Sets rounded corner smoothing to `0.7`.
-    fn rounded_smoothing_p7(mut self) -> Self {
-        self.style().corner_smoothing = Some(0.7);
-        self
-    }
-
-    /// Sets rounded corner smoothing to `0.8`.
-    fn rounded_smoothing_p8(mut self) -> Self {
-        self.style().corner_smoothing = Some(0.8);
-        self
-    }
-
-    /// Sets rounded corner smoothing to `0.9`.
-    fn rounded_smoothing_p9(mut self) -> Self {
-        self.style().corner_smoothing = Some(0.9);
-        self
-    }
-
-    /// Requests maximum rounded corner smoothing by setting it to `1.0`.
-    fn rounded_smoothing_1(mut self) -> Self {
-        self.style().corner_smoothing = Some(1.0);
         self
     }
 }
