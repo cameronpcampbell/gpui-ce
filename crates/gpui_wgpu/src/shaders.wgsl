@@ -395,6 +395,12 @@ fn corner_values(corner_radii: Corners) -> vec4<f32> {
     );
 }
 
+// The Figma-style corner construction below is derived from
+// Tien Pham's figma-squircle implementation:
+// https://github.com/phamfoo/figma-squircle
+// Copyright (c) 2021 Tien Pham
+// Licensed under the MIT License. See ../THIRD_PARTY_NOTICES.md.
+
 struct FigmaCornerLayout {
     horizontal_budgets: vec4<f32>,
     vertical_budgets: vec4<f32>,
