@@ -983,9 +983,63 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Keeps circular corners by setting rounded corner smoothing to `0.1`.
+    fn rounded_smoothing_p1(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.1);
+        self
+    }
+
+    /// Sets rounded corner smoothing to `0.2`.
+    fn rounded_smoothing_p2(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.2);
+        self
+    }
+
+    /// Sets rounded corner smoothing to `0.3`.
+    fn rounded_smoothing_p3(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.3);
+        self
+    }
+
+    /// Sets rounded corner smoothing to `0.4`.
+    fn rounded_smoothing_p4(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.4);
+        self
+    }
+
+    /// Sets rounded corner smoothing to `0.5`.
+    fn rounded_smoothing_p5(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.5);
+        self
+    }
+
+    /// Sets rounded corner smoothing to `0.6`.
+    fn rounded_smoothing_p6(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.6);
+        self
+    }
+
     /// Sets rounded corner smoothing to Figma's documented iOS value.
     fn rounded_smoothing_ios(mut self) -> Self {
         self.style().corner_smoothing = Some(0.6);
+        self
+    }
+
+    /// Sets rounded corner smoothing to `0.7`.
+    fn rounded_smoothing_p7(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.7);
+        self
+    }
+
+    /// Sets rounded corner smoothing to `0.8`.
+    fn rounded_smoothing_p8(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.8);
+        self
+    }
+
+    /// Sets rounded corner smoothing to `0.9`.
+    fn rounded_smoothing_p9(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.9);
         self
     }
 
