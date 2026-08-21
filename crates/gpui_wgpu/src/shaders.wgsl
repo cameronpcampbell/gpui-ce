@@ -1127,6 +1127,34 @@ fn figma_smooth_rect_sdf(
     ).sdf.distance;
 }
 
+fn styled_rect_sdf(
+    point: vec2<f32>,
+    bounds: Bounds,
+    corner_radii: Corners,
+    horizontal_budgets: vec4<f32>,
+    vertical_budgets: vec4<f32>,
+    corner_smoothing: f32,
+) -> f32 {
+    if corner_smoothing <= 0.0 ||
+            all(corner_values(corner_radii) <= vec4<f32>(0.0)) {
+        return quad_sdf(point, bounds, corner_radii);
+    }
+
+    return figma_smooth_rect_sdf(
+        point,
+        bounds,
+        corner_radii,
+        horizontal_budgets,
+        vertical_budgets,
+        corner_smoothing,
+    );
+}
+
+fn gaussian_sdf_coverage(distance: f32, sigma: f32) -> f32 {
+    let normalized = distance / (sqrt(2.0) * sigma);
+    return saturate(0.5 - 0.5 * erf(vec2<f32>(normalized)).x);
+}
+
 // Abstract away the final color transformation based on the
 // target alpha compositing mode.
 fn blend_color(color: vec4<f32>, alpha_factor: f32) -> vec4<f32> {
@@ -1894,7 +1922,7 @@ struct Shadow {
     element_corner_radii: Corners,
     // 0 = drop shadow, 1 = inset shadow.
     inset: u32,
-    pad: u32, // align to 8 bytes
+    corner_smoothing: f32,
 }
 @group(1) @binding(0) var<storage, read> b_shadows: array<Shadow>;
 
@@ -1904,6 +1932,10 @@ struct ShadowVarying {
     @location(1) @interpolate(flat) shadow_id: u32,
     //TODO: use `clip_distance` once Naga supports it
     @location(3) clip_distances: vec4<f32>,
+    @location(4) @interpolate(flat) horizontal_corner_budgets: vec4<f32>,
+    @location(5) @interpolate(flat) vertical_corner_budgets: vec4<f32>,
+    @location(6) @interpolate(flat) element_horizontal_corner_budgets: vec4<f32>,
+    @location(7) @interpolate(flat) element_vertical_corner_budgets: vec4<f32>,
 }
 
 @vertex
@@ -1927,6 +1959,22 @@ fn vs_shadow(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) ins
     out.color = hsla_to_rgba(shadow.color);
     out.shadow_id = instance_id;
     out.clip_distances = distance_from_clip_rect(unit_vertex, geometry, shadow.content_mask);
+    out.horizontal_corner_budgets = corner_values(shadow.corner_radii);
+    out.vertical_corner_budgets = corner_values(shadow.corner_radii);
+    out.element_horizontal_corner_budgets = corner_values(shadow.element_corner_radii);
+    out.element_vertical_corner_budgets = corner_values(shadow.element_corner_radii);
+    if (shadow.corner_smoothing > 0.0) {
+        let corner_layout = figma_corner_layout(shadow.bounds.size, shadow.corner_radii);
+        out.horizontal_corner_budgets = corner_layout.horizontal_budgets;
+        out.vertical_corner_budgets = corner_layout.vertical_budgets;
+
+        let element_layout = figma_corner_layout(
+            shadow.element_bounds.size,
+            shadow.element_corner_radii,
+        );
+        out.element_horizontal_corner_budgets = element_layout.horizontal_budgets;
+        out.element_vertical_corner_budgets = element_layout.vertical_budgets;
+    }
     return out;
 }
 
@@ -1943,11 +1991,30 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
     let center_to_point = input.position.xy - center;
 
     let corner_radius = pick_corner_radius(center_to_point, shadow.corner_radii);
+    let has_smoothed_corners = shadow.corner_smoothing > 0.0 &&
+        any(corner_values(shadow.corner_radii) > vec4<f32>(0.0));
 
     var alpha: f32;
     if (shadow.blur_radius == 0.0) {
-        let distance = quad_sdf(input.position.xy, shadow.bounds, shadow.corner_radii);
+        let distance = styled_rect_sdf(
+            input.position.xy,
+            shadow.bounds,
+            shadow.corner_radii,
+            input.horizontal_corner_budgets,
+            input.vertical_corner_budgets,
+            shadow.corner_smoothing,
+        );
         alpha = saturate(0.5 - distance);
+    } else if (has_smoothed_corners) {
+        let distance = styled_rect_sdf(
+            input.position.xy,
+            shadow.bounds,
+            shadow.corner_radii,
+            input.horizontal_corner_budgets,
+            input.vertical_corner_budgets,
+            shadow.corner_smoothing,
+        );
+        alpha = gaussian_sdf_coverage(distance, shadow.blur_radius);
     } else {
         // The signal is only non-zero in a limited range, so don't waste samples
         let low = center_to_point.y - half_size.y;
@@ -1971,8 +2038,14 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
         // The inset shadow is the complement of the (blurred) hole rect, clipped to the element.
         // `saturate(0.5 - d)` gives a 1-pixel antialiased edge: d <= -0.5 -> 1, d >= 0.5 -> 0.
         alpha = 1.0 - alpha;
-        let element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
-                                        shadow.element_corner_radii);
+        let element_distance = styled_rect_sdf(
+            input.position.xy,
+            shadow.element_bounds,
+            shadow.element_corner_radii,
+            input.element_horizontal_corner_budgets,
+            input.element_vertical_corner_budgets,
+            shadow.corner_smoothing,
+        );
         alpha *= saturate(0.5 - element_distance);
     }
 
@@ -2340,6 +2413,10 @@ struct BlurParams {
     // 1.0 = snapped 2:1 box downsample (anchor the half-res grid to a fixed 2px grid at the origin
     // so a stationary element blurs identically at every window size); 0.0 = 1:1 copy (scene blit).
     downsample: f32,
+    corner_smoothing: f32,
+    pad0: f32,
+    pad1: f32,
+    pad2: f32,
 }
 
 @group(1) @binding(0) var<uniform> blur_locals: BlurParams;
@@ -2349,6 +2426,8 @@ struct BlurParams {
 struct BlurVarying {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
+    @location(1) @interpolate(flat) horizontal_corner_budgets: vec4<f32>,
+    @location(2) @interpolate(flat) vertical_corner_budgets: vec4<f32>,
     @location(3) clip_distances: vec4<f32>,
 }
 
@@ -2359,6 +2438,8 @@ fn vs_blur_fullscreen(@builtin(vertex_index) vertex_id: u32) -> BlurVarying {
     var out = BlurVarying();
     out.uv = uv;
     out.position = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    out.horizontal_corner_budgets = vec4<f32>(0.0);
+    out.vertical_corner_budgets = vec4<f32>(0.0);
     out.clip_distances = vec4<f32>(1.0);
     return out;
 }
@@ -2402,6 +2483,19 @@ fn vs_blur_composite(@builtin(vertex_index) vertex_id: u32) -> BlurVarying {
     var out = BlurVarying();
     out.position = to_device_position(unit_vertex, blur_locals.bounds);
     out.uv = unit_vertex;
+    out.horizontal_corner_budgets = blur_locals.corner_radii;
+    out.vertical_corner_budgets = blur_locals.corner_radii;
+    if (blur_locals.clip_rounded > 0.5 && blur_locals.corner_smoothing > 0.0) {
+        let corner_radii = Corners(
+            blur_locals.corner_radii.x,
+            blur_locals.corner_radii.y,
+            blur_locals.corner_radii.z,
+            blur_locals.corner_radii.w,
+        );
+        let corner_layout = figma_corner_layout(blur_locals.bounds.size, corner_radii);
+        out.horizontal_corner_budgets = corner_layout.horizontal_budgets;
+        out.vertical_corner_budgets = corner_layout.vertical_budgets;
+    }
     out.clip_distances = distance_from_clip_rect(unit_vertex, blur_locals.bounds, blur_locals.content_mask);
     return out;
 }
@@ -2429,8 +2523,18 @@ fn fs_blur_composite(input: BlurVarying) -> @location(0) vec4<f32> {
     // Backdrop blur clips to the rounded rect (the frosted panel has a defined shape). Content
     // blur does not — it bleeds past the element box like CSS `filter: blur`, so the soft fade
     // isn't sharply truncated at the edge; its shape comes from the blurred group's own alpha.
-    let distance = quad_sdf(input.position.xy, blur_locals.bounds, corner_radii);
-    let coverage = select(1.0, saturate(0.5 - distance), blur_locals.clip_rounded > 0.5);
+    var coverage = 1.0;
+    if (blur_locals.clip_rounded > 0.5) {
+        let distance = styled_rect_sdf(
+            input.position.xy,
+            blur_locals.bounds,
+            corner_radii,
+            input.horizontal_corner_budgets,
+            input.vertical_corner_budgets,
+            blur_locals.corner_smoothing,
+        );
+        coverage = saturate(0.5 - distance);
+    }
 
     // The blurred sample is premultiplied (blurring against the transparent, rgb=0 surround scales
     // rgb with the fading alpha), so output premultiplied and let the pipeline blend premultiplied.

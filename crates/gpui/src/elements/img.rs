@@ -490,14 +490,14 @@ impl Element for Img {
                         .get_bounds(bounds, data.size(layout_state.frame_index));
                     let corner_radii = style.corner_radii.to_pixels(window.rem_size());
                     window
-                        .paint_image_with_rounded_smoothing(
+                        .paint_image(
                             bounds,
                             new_bounds,
                             corner_radii,
+                            style.corner_smoothing,
                             data,
                             layout_state.frame_index,
                             self.style.grayscale,
-                            style.corner_smoothing.unwrap_or(0.0),
                         )
                         .log_err();
                 } else if let Some(replacement) = &mut layout_state.replacement {
