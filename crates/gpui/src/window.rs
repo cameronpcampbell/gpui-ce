@@ -4539,8 +4539,9 @@ impl Window {
         )
     }
 
-    /// Paints an image with rounded corner smoothing.
-    /// amount: 0.0 = circular corners, 0.5 = squircle, 1.0 = square-ish corners.
+    /// Paints an image with Figma-style rounded corner smoothing.
+    ///
+    /// An `amount` of `0.0` keeps circular corners and `1.0` requests maximum smoothing.
     pub fn paint_image_with_rounded_smoothing(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -6876,7 +6877,8 @@ pub struct PaintQuad {
     pub border_color: Hsla,
     /// The style of the quad's borders.
     pub border_style: BorderStyle,
-    /// The corner smoothing (0.0 = circle, 0.5 = squircle, 1.0 = square).
+    /// Figma-style corner smoothing. `0.0` keeps circular corners and `1.0` requests maximum
+    /// smoothing.
     pub corner_smoothing: f32,
 }
 
@@ -6913,7 +6915,9 @@ impl PaintQuad {
         }
     }
 
-    /// Sets rounded corner smoothing (0.0 = circular, 0.5 = squircle, 1.0 = square-ish).
+    /// Sets Figma-style rounded corner smoothing.
+    ///
+    /// An `amount` of `0.0` keeps circular corners and `1.0` requests maximum smoothing.
     pub fn rounded_smoothing(self, amount: f32) -> Self {
         PaintQuad {
             corner_smoothing: amount.clamp(0.0, 1.0),

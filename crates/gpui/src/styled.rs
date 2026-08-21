@@ -969,25 +969,27 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets rounded corner smoothing (0.0 = no smoothing, 1.0 = maximum squircle smoothing).
+    /// Sets Figma-style rounded corner smoothing.
+    ///
+    /// `0.0` keeps circular corners and `1.0` requests maximum smoothing.
     fn rounded_smoothing(mut self, amount: f32) -> Self {
         self.style().corner_smoothing = Some(amount.clamp(0.0, 1.0));
         self
     }
 
-    /// Sets rounded corner smoothing to 0.0 (no smoothing).
+    /// Keeps circular corners by setting rounded corner smoothing to `0.0`.
     fn rounded_smoothing_0(mut self) -> Self {
         self.style().corner_smoothing = Some(0.0);
         self
     }
 
-    /// Sets rounded smoothing to IOS's corner smoothing.
+    /// Sets rounded corner smoothing to Figma's documented iOS value.
     fn rounded_smoothing_ios(mut self) -> Self {
-        self.style().corner_smoothing = Some(0.5522847498307936);
+        self.style().corner_smoothing = Some(0.6);
         self
     }
 
-    /// Sets rounded corner smoothing to 1.0 (maximum squircle smoothing).
+    /// Requests maximum rounded corner smoothing by setting it to `1.0`.
     fn rounded_smoothing_1(mut self) -> Self {
         self.style().corner_smoothing = Some(1.0);
         self
