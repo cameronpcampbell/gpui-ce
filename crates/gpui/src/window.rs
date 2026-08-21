@@ -4113,7 +4113,7 @@ impl Window {
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
-            smoothness: quad.smoothness.clamp(0.0, 1.0),
+            corner_smoothing: quad.corner_smoothing.clamp(0.0, 1.0),
             pad: 0,
         };
 
@@ -4435,7 +4435,7 @@ impl Window {
                 content_mask,
                 tile,
                 opacity,
-                smoothness: 0.0, // Emojis use circular corners
+                corner_smoothing: 0.0, // Emojis use circular corners
                 pad2: 0,
                 pad3: 0,
                 pad4: 0,
@@ -4526,7 +4526,7 @@ impl Window {
         frame_index: usize,
         grayscale: bool,
     ) -> Result<()> {
-        self.paint_image_with_corner_superellipse(
+        self.paint_image_with_rounded_smoothing(
             bounds,
             image_bounds,
             corner_radii,
@@ -4537,9 +4537,9 @@ impl Window {
         )
     }
 
-    /// Paint an image with superellipse corners.
+    /// Paints an image with rounded corner smoothing.
     /// amount: 0.0 = circular corners, 0.5 = squircle, 1.0 = square-ish corners.
-    pub fn paint_image_with_corner_superellipse(
+    pub fn paint_image_with_rounded_smoothing(
         &mut self,
         bounds: Bounds<Pixels>,
         image_bounds: Bounds<Pixels>,
@@ -4634,7 +4634,7 @@ impl Window {
             corner_radii,
             tile: sub_tile,
             opacity,
-            smoothness: amount.clamp(0.0, 1.0),
+            corner_smoothing: amount.clamp(0.0, 1.0),
             pad2: 0,
             pad3: 0,
             pad4: 0,
@@ -6874,8 +6874,8 @@ pub struct PaintQuad {
     pub border_color: Hsla,
     /// The style of the quad's borders.
     pub border_style: BorderStyle,
-    /// The smoothness of the corners (0.0 = circle, 0.5 = squircle, 1.0 = square).
-    pub smoothness: f32,
+    /// The corner smoothing (0.0 = circle, 0.5 = squircle, 1.0 = square).
+    pub corner_smoothing: f32,
 }
 
 impl PaintQuad {
@@ -6911,10 +6911,10 @@ impl PaintQuad {
         }
     }
 
-    /// Sets superellipse corner amount (0.0 = circular, 0.5 = squircle, 1.0 = square-ish).
-    pub fn corner_superellipse(self, amount: f32) -> Self {
+    /// Sets rounded corner smoothing (0.0 = circular, 0.5 = squircle, 1.0 = square-ish).
+    pub fn rounded_smoothing(self, amount: f32) -> Self {
         PaintQuad {
-            smoothness: amount.clamp(0.0, 1.0),
+            corner_smoothing: amount.clamp(0.0, 1.0),
             ..self
         }
     }
@@ -6936,7 +6936,7 @@ pub fn quad(
         border_widths: border_widths.into(),
         border_color: border_color.into_color(),
         border_style,
-        smoothness: 0.0,
+        corner_smoothing: 0.0,
     }
 }
 
@@ -6949,7 +6949,7 @@ pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>
         border_widths: (0.).into(),
         border_color: transparent_black(),
         border_style: BorderStyle::default(),
-        smoothness: 0.0,
+        corner_smoothing: 0.0,
     }
 }
 
@@ -6966,7 +6966,7 @@ pub fn outline(
         border_widths: (1.).into(),
         border_color: border_color.into_color(),
         border_style,
-        smoothness: 0.0,
+        corner_smoothing: 0.0,
     }
 }
 

@@ -309,8 +309,8 @@ float quad_sdf(float2 pt, Bounds bounds, Corners corner_radii) {
     return quad_sdf_impl(corner_center_to_point, corner_radius);
 }
 
-// Squircle SDF: smoothness 0.0 = circle, 0.5 = squircle, 1.0 = square
-float squircle_sdf(float2 pt, Bounds bounds, Corners corner_radii, float smoothness) {
+// Squircle SDF: corner_smoothing 0.0 = circle, 0.5 = squircle, 1.0 = square
+float squircle_sdf(float2 pt, Bounds bounds, Corners corner_radii, float corner_smoothing) {
     float2 half_size = bounds.size / 2.;
     float2 center = bounds.origin + half_size;
     float2 center_to_point = pt - center;
@@ -323,7 +323,7 @@ float squircle_sdf(float2 pt, Bounds bounds, Corners corner_radii, float smoothn
     }
 
     // Power factor: 2 = circle, 4 = squircle, 8+ = square
-    float p = pow(2.0, 1.0 + smoothness * 2.0);
+    float p = pow(2.0, 1.0 + corner_smoothing * 2.0);
 
     float2 corner_to_point = abs(center_to_point) - half_size + corner_radius;
     float2 corner_max = max(corner_to_point, float2(0.0, 0.0));
@@ -527,7 +527,7 @@ struct Quad {
     Hsla border_color;
     Corners corner_radii;
     Edges border_widths;
-    float smoothness;
+    float corner_smoothing;
     uint pad;
 };
 
@@ -657,8 +657,8 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
 
     // Signed distance of the point to the outside edge of the quad's border
     float outer_sdf;
-    if (quad.smoothness > 0.0) {
-        outer_sdf = squircle_sdf(input.position.xy, quad.bounds, quad.corner_radii, quad.smoothness);
+    if (quad.corner_smoothing > 0.0) {
+        outer_sdf = squircle_sdf(input.position.xy, quad.bounds, quad.corner_radii, quad.corner_smoothing);
     } else {
         outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radius);
     }
@@ -1242,7 +1242,7 @@ struct PolychromeSprite {
     Bounds content_mask;
     Corners corner_radii;
     AtlasTile tile;
-    float smoothness;
+    float corner_smoothing;
     uint pad2;
     uint pad3;
     uint pad4;
@@ -1283,8 +1283,8 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
     PolychromeSprite sprite = poly_sprites[input.sprite_id];
     float4 sample = t_sprite.Sample(s_sprite, input.tile_position);
     float distance;
-    if (sprite.smoothness > 0.0) {
-        distance = squircle_sdf(input.position.xy, sprite.bounds, sprite.corner_radii, sprite.smoothness);
+    if (sprite.corner_smoothing > 0.0) {
+        distance = squircle_sdf(input.position.xy, sprite.bounds, sprite.corner_radii, sprite.corner_smoothing);
     } else {
         distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
     }

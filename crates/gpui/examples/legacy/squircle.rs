@@ -51,10 +51,10 @@ impl Render for SquircleDemo {
                     .font_weight(FontWeight::BOLD)
                     .child("Squircle Corner Rendering"),
                 div().flex().gap_4().children([
-                    example_card("Circular", ".corner_superellipse(0.0)", 0.0, rgb(0x3b82f6)),
-                    example_card("Subtle", ".corner_superellipse(0.3)", 0.3, rgb(0x06b6d4)),
-                    example_card("Squircle", ".corner_superellipse(0.5)", 0.5, rgb(0x8b5cf6)),
-                    example_card("Rounded", ".corner_superellipse(0.7)", 0.7, rgb(0xec4899)),
+                    example_card("Circular", ".rounded_smoothing(0.0)", 0.0, rgb(0x3b82f6)),
+                    example_card("Subtle", ".rounded_smoothing(0.3)", 0.3, rgb(0x06b6d4)),
+                    example_card("Squircle", ".rounded_smoothing(0.5)", 0.5, rgb(0x8b5cf6)),
+                    example_card("Rounded", ".rounded_smoothing(0.7)", 0.7, rgb(0xec4899)),
                 ]),
                 div()
                     .text_lg()
@@ -89,12 +89,12 @@ impl Render for SquircleDemo {
                     .child(
                         r#"// Usage Examples
 div()
-    .corner_superellipse(0.5)  // Squircle corners
+    .rounded_smoothing(0.5)  // Squircle corners
     .rounded(px(40.0))
     .bg(blue())
 
 div()
-    .corner_superellipse(0.7)  // Custom value
+    .rounded_smoothing(0.7)  // Custom value
     .rounded(px(40.0))
     .bg(green())"#,
                     ),
@@ -113,7 +113,7 @@ fn example_card(
             .w(px(150.0))
             .h(px(150.0))
             .rounded(px(40.0))
-            .corner_superellipse(amount)
+            .rounded_smoothing(amount)
             .bg(color)
             .shadow_lg(),
         div().font_weight(FontWeight::BOLD).child(title),
@@ -126,7 +126,7 @@ fn gradient_example(amount: f32, color: impl Clone + Into<Fill>) -> Div {
         .w(px(60.0))
         .h(px(60.0))
         .rounded(px(15.0))
-        .corner_superellipse(amount)
+        .rounded_smoothing(amount)
         .bg(color)
         .flex()
         .items_center()
@@ -147,7 +147,7 @@ fn image_example(label: &'static str, amount: f32) -> Div {
                 .w(px(150.0))
                 .h(px(150.0))
                 .rounded(px(40.0))
-                .corner_superellipse(amount)
+                .rounded_smoothing(amount)
                 .object_fit(ObjectFit::Cover),
         )
         .child(div().text_sm().text_color(rgb(0x6b7280)).child(label))

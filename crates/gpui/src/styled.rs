@@ -969,75 +969,27 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets superellipse corner amount (0.0 = circular, 0.5 = squircle, 1.0 = square-ish).
-    fn corner_superellipse(mut self, amount: f32) -> Self {
-        self.style().smoothness = Some(amount.clamp(0.0, 1.0));
+    /// Sets rounded corner smoothing (0.0 = no smoothing, 1.0 = maximum squircle smoothing).
+    fn rounded_smoothing(mut self, amount: f32) -> Self {
+        self.style().corner_smoothing = Some(amount.clamp(0.0, 1.0));
         self
     }
 
-    /// Sets corner superellipse amount to 0.0 (circular).
-    fn corner_superellipse_0(mut self) -> Self {
-        self.style().smoothness = Some(0.0);
+    /// Sets rounded corner smoothing to 0.0 (no smoothing).
+    fn rounded_smoothing_0(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.0);
         self
     }
 
-    /// Sets corner superellipse amount to 0.1.
-    fn corner_superellipse_0p1(mut self) -> Self {
-        self.style().smoothness = Some(0.1);
+    /// Sets rounded smoothing to IOS's corner smoothing.
+    fn rounded_smoothing_ios(mut self) -> Self {
+        self.style().corner_smoothing = Some(0.5522847498307936);
         self
     }
 
-    /// Sets corner superellipse amount to 0.2.
-    fn corner_superellipse_0p2(mut self) -> Self {
-        self.style().smoothness = Some(0.2);
-        self
-    }
-
-    /// Sets corner superellipse amount to 0.3.
-    fn corner_superellipse_0p3(mut self) -> Self {
-        self.style().smoothness = Some(0.3);
-        self
-    }
-
-    /// Sets corner superellipse amount to 0.4.
-    fn corner_superellipse_0p4(mut self) -> Self {
-        self.style().smoothness = Some(0.4);
-        self
-    }
-
-    /// Sets corner superellipse amount to 0.5 (squircle).
-    fn corner_superellipse_0p5(mut self) -> Self {
-        self.style().smoothness = Some(0.5);
-        self
-    }
-
-    /// Sets corner superellipse amount to 0.6.
-    fn corner_superellipse_0p6(mut self) -> Self {
-        self.style().smoothness = Some(0.6);
-        self
-    }
-
-    /// Sets corner superellipse amount to 0.7.
-    fn corner_superellipse_0p7(mut self) -> Self {
-        self.style().smoothness = Some(0.7);
-        self
-    }
-
-    /// Sets corner superellipse amount to 0.8.
-    fn corner_superellipse_0p8(mut self) -> Self {
-        self.style().smoothness = Some(0.8);
-        self
-    }
-
-    /// Sets corner superellipse amount to 0.9.
-    fn corner_superellipse_0p9(mut self) -> Self {
-        self.style().smoothness = Some(0.9);
-        self
-    }
-
-    /// Sets corner superellipse amount to 1.0 (square-ish).
-    fn corner_superellipse_1(mut self) -> Self {
-        self.style().smoothness = Some(1.0);
+    /// Sets rounded corner smoothing to 1.0 (maximum squircle smoothing).
+    fn rounded_smoothing_1(mut self) -> Self {
+        self.style().corner_smoothing = Some(1.0);
         self
     }
 }

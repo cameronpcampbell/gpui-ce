@@ -284,8 +284,8 @@ pub struct Style {
     #[refineable]
     pub corner_radii: Corners<AbsoluteLength>,
 
-    /// The smoothness of corners (0.0 = circle, 0.5 = squircle, 1.0 = square)
-    pub smoothness: Option<f32>,
+    /// The corner smoothing (0.0 = circle, 0.5 = squircle, 1.0 = square)
+    pub corner_smoothing: Option<f32>,
 
     /// Box shadow of the element
     pub box_shadow: Vec<BoxShadow>,
@@ -819,7 +819,7 @@ impl Style {
                         border_color,
                         self.border_style,
                     )
-                    .corner_superellipse(self.smoothness.unwrap_or(0.0)),
+                    .rounded_smoothing(self.corner_smoothing.unwrap_or(0.0)),
                 );
             }
 
@@ -840,7 +840,7 @@ impl Style {
                         self.border_color.unwrap_or_default(),
                         self.border_style,
                     )
-                    .corner_superellipse(self.smoothness.unwrap_or(0.0)),
+                    .rounded_smoothing(self.corner_smoothing.unwrap_or(0.0)),
                 );
             }
         };
@@ -902,7 +902,7 @@ impl Default for Style {
             border_color: None,
             border_style: BorderStyle::default(),
             corner_radii: Corners::default(),
-            smoothness: None,
+            corner_smoothing: None,
             box_shadow: Default::default(),
             filter: Default::default(),
             backdrop_filter: Default::default(),
