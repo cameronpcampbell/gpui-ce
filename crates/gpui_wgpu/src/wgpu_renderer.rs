@@ -2676,3 +2676,20 @@ impl RenderingParameters {
         }
     }
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod tests {
+    #[test]
+    fn base_shader_is_valid_wgsl() {
+        use wgpu::naga::{
+            front::wgsl,
+            valid::{Capabilities, ValidationFlags, Validator},
+        };
+
+        let module = wgsl::parse_str(include_str!("shaders.wgsl"))
+            .expect("base shader should parse as WGSL");
+        Validator::new(ValidationFlags::all(), Capabilities::all())
+            .validate(&module)
+            .expect("base shader should pass Naga validation");
+    }
+}

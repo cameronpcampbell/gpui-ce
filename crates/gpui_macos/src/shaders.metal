@@ -28,6 +28,10 @@ float pick_corner_radius(float2 center_to_point, Corners_ScaledPixels corner_rad
 float quad_sdf(float2 point, Bounds_ScaledPixels bounds,
                Corners_ScaledPixels corner_radii);
 float quad_sdf_impl(float2 center_to_point, float corner_radius);
+float2 squircle_params(float corner_radius, float2 half_size,
+                       float corner_smoothing);
+float squircle_sdf_impl(float2 corner_center_to_point, float power,
+                        float corner_extent);
 float squircle_sdf(float2 point, Bounds_ScaledPixels bounds,
                    Corners_ScaledPixels corner_radii, float corner_smoothing);
 float gaussian(float x, float sigma);
@@ -131,6 +135,13 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
 
   // Radius of the nearest corner
   float corner_radius = pick_corner_radius(center_to_point, quad.corner_radii);
+  float2 corner_params = float2(2.0, corner_radius);
+  if (quad.corner_smoothing > 0.0) {
+    corner_params = squircle_params(corner_radius, half_size,
+                                    quad.corner_smoothing);
+  }
+  float corner_power = corner_params.x;
+  float corner_extent = corner_params.y;
 
   // Width of the nearest borders
   float2 border = float2(
@@ -148,9 +159,9 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
   // the point into the bottom right quadrant. Both components are <= 0.
   float2 corner_to_point = fabs(center_to_point) - half_size;
 
-  // Vector from the point to the center of the rounded corner's circle, also
-  // mirrored into bottom right quadrant.
-  float2 corner_center_to_point = corner_to_point + corner_radius;
+  // Vector from the point to the start of the rounded corner, also mirrored
+  // into the bottom-right quadrant.
+  float2 corner_center_to_point = corner_to_point + corner_extent;
 
   // Whether the nearest point on the border is rounded
   bool is_near_rounded_corner =
@@ -183,7 +194,8 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
   // Signed distance of the point to the outside edge of the quad's border
   float outer_sdf;
   if (quad.corner_smoothing > 0.0) {
-    outer_sdf = squircle_sdf(input.position.xy, quad.bounds, quad.corner_radii, quad.corner_smoothing);
+    outer_sdf = squircle_sdf_impl(corner_center_to_point, corner_power,
+                                  corner_extent);
   } else {
     outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radius);
   }
@@ -205,10 +217,11 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
     // Fast path for points that must be outside the inner edge
     inner_sdf = -1.0;
   } else if (reduced_border.x == reduced_border.y) {
-    // Fast path for circular inner edge.
+    // Fast path for a uniform-width inner edge.
     inner_sdf = -(outer_sdf + reduced_border.x);
   } else {
-    float2 ellipse_radii = max(float2(0.0), float2(corner_radius) - reduced_border);
+    float2 ellipse_radii =
+      max(float2(0.0), float2(corner_extent) - reduced_border);
     inner_sdf = quarter_ellipse_sdf(corner_center_to_point, ellipse_radii);
   }
 
@@ -270,10 +283,17 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
         // When corners are rounded, the dashes are laid out clockwise
         // around the whole perimeter.
 
-        float r_tr = quad.corner_radii.top_right;
-        float r_br = quad.corner_radii.bottom_right;
-        float r_bl = quad.corner_radii.bottom_left;
-        float r_tl = quad.corner_radii.top_left;
+        float e_tr = quad.corner_radii.top_right;
+        float e_br = quad.corner_radii.bottom_right;
+        float e_bl = quad.corner_radii.bottom_left;
+        float e_tl = quad.corner_radii.top_left;
+
+        if (quad.corner_smoothing > 0.0) {
+          e_tr = squircle_params(e_tr, half_size, quad.corner_smoothing).y;
+          e_br = squircle_params(e_br, half_size, quad.corner_smoothing).y;
+          e_bl = squircle_params(e_bl, half_size, quad.corner_smoothing).y;
+          e_tl = squircle_params(e_tl, half_size, quad.corner_smoothing).y;
+        }
 
         float w_t = quad.border_widths.top;
         float w_r = quad.border_widths.right;
@@ -287,10 +307,10 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
         float dv_l = w_l <= 0.0 ? 0.0 : dv_numerator / w_l;
 
         // Straight side lengths in dash space
-        float s_t = (size.x - r_tl - r_tr) * dv_t;
-        float s_r = (size.y - r_tr - r_br) * dv_r;
-        float s_b = (size.x - r_br - r_bl) * dv_b;
-        float s_l = (size.y - r_bl - r_tl) * dv_l;
+        float s_t = (size.x - e_tl - e_tr) * dv_t;
+        float s_r = (size.y - e_tr - e_br) * dv_r;
+        float s_b = (size.x - e_br - e_bl) * dv_b;
+        float s_l = (size.y - e_bl - e_tl) * dv_l;
 
         float corner_dash_velocity_tr = corner_dash_velocity(dv_t, dv_r);
         float corner_dash_velocity_br = corner_dash_velocity(dv_b, dv_r);
@@ -298,10 +318,10 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
         float corner_dash_velocity_tl = corner_dash_velocity(dv_t, dv_l);
 
         // Corner lengths in dash space
-        float c_tr = r_tr * (M_PI_F / 2.0) * corner_dash_velocity_tr;
-        float c_br = r_br * (M_PI_F / 2.0) * corner_dash_velocity_br;
-        float c_bl = r_bl * (M_PI_F / 2.0) * corner_dash_velocity_bl;
-        float c_tl = r_tl * (M_PI_F / 2.0) * corner_dash_velocity_tl;
+        float c_tr = e_tr * (M_PI_F / 2.0) * corner_dash_velocity_tr;
+        float c_br = e_br * (M_PI_F / 2.0) * corner_dash_velocity_br;
+        float c_bl = e_bl * (M_PI_F / 2.0) * corner_dash_velocity_bl;
+        float c_tl = e_tl * (M_PI_F / 2.0) * corner_dash_velocity_tl;
 
         // Cumulative dash space upto each segment
         float upto_tr = s_t;
@@ -315,7 +335,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
 
         if (is_near_rounded_corner) {
           float radians = atan2(corner_center_to_point.y, corner_center_to_point.x);
-          float corner_t = radians * corner_radius;
+          float corner_t = radians * corner_extent;
 
           if (center_to_point.x >= 0.0) {
             if (center_to_point.y < 0.0) {
@@ -351,18 +371,18 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
           if (is_horizontal) {
             if (center_to_point.y < 0.0) {
               dash_velocity = dv_t;
-              t = (point.x - r_tl) * dash_velocity;
+              t = (point.x - e_tl) * dash_velocity;
             } else {
               dash_velocity = dv_b;
-              t = upto_bl - (point.x - r_bl) * dash_velocity;
+              t = upto_bl - (point.x - e_bl) * dash_velocity;
             }
           } else {
             if (center_to_point.x < 0.0) {
               dash_velocity = dv_l;
-              t = upto_tl - (point.y - r_tl) * dash_velocity;
+              t = upto_tl - (point.y - e_tl) * dash_velocity;
             } else {
               dash_velocity = dv_r;
-              t = upto_r + (point.y - r_tr) * dash_velocity;
+              t = upto_r + (point.y - e_tr) * dash_velocity;
             }
           }
         }
@@ -1100,30 +1120,69 @@ float quad_sdf_impl(float2 corner_center_to_point, float corner_radius) {
     }
 }
 
-// Squircle SDF: corner_smoothing 0.0 = circle, 0.5 = squircle, 1.0 = square
+// Returns the superellipse power and its edge extent. The public radius
+// remains the circle-equivalent radius at the 45-degree point. Smoothing only
+// extends the curve along the straight edges.
+float2 squircle_params(float corner_radius, float2 half_size,
+                       float corner_smoothing) {
+    if (corner_radius <= 0.0 || corner_smoothing <= 0.0) {
+        return float2(2.0, max(0.0, corner_radius));
+    }
+
+    float corner_budget = min(half_size.x, half_size.y);
+    if (corner_budget <= corner_radius) {
+        return float2(2.0, corner_radius);
+    }
+
+    const float circle_diagonal_inset = 0.2928932188134524;
+    const float ln_2 = 0.6931471805599453;
+
+    // Power factor: 2 = circle, 4 = squircle, 8 = strongly smoothed.
+    float power = exp2(1.0 + 2.0 * clamp(corner_smoothing, 0.0, 1.0));
+    float target_inset = corner_radius * circle_diagonal_inset;
+    float corner_extent = target_inset / (1.0 - exp2(-1.0 / power));
+
+    // Adjacent corners must not overlap. Reduce the effective power when the
+    // requested smoothing needs more edge length than the quad has available.
+    if (corner_extent > corner_budget) {
+        corner_extent = corner_budget;
+        power = -ln_2 / log(1.0 - target_inset / corner_extent);
+    }
+
+    return float2(power, corner_extent);
+}
+
+// Superellipse SDF approximation using precomputed power and edge extent.
+float squircle_sdf_impl(float2 corner_center_to_point, float power,
+                        float corner_extent) {
+    if (corner_extent == 0.0) {
+        return max(corner_center_to_point.x, corner_center_to_point.y);
+    }
+
+    // Straight-edge regions do not need either power operation.
+    if (corner_center_to_point.x <= 0.0 ||
+        corner_center_to_point.y <= 0.0) {
+        return max(corner_center_to_point.x, corner_center_to_point.y) -
+               corner_extent;
+    }
+
+    float distance = pow(pow(corner_center_to_point.x, power) +
+                         pow(corner_center_to_point.y, power),
+                         1.0 / power);
+    return distance - corner_extent;
+}
+
+// Squircle SDF: corner_smoothing 0.0 = circle, 0.5 = squircle, 1.0 = square.
 float squircle_sdf(float2 point, Bounds_ScaledPixels bounds,
                    Corners_ScaledPixels corner_radii, float corner_smoothing) {
     float2 half_size = float2(bounds.size.width, bounds.size.height) / 2.0;
     float2 center = float2(bounds.origin.x, bounds.origin.y) + half_size;
     float2 center_to_point = point - center;
     float corner_radius = pick_corner_radius(center_to_point, corner_radii);
-
-    if (corner_radius == 0.0) {
-        // No corner radius, use sharp corners
-        float2 corner_to_point = abs(center_to_point) - half_size;
-        return max(corner_to_point.x, corner_to_point.y);
-    }
-
-    // Power factor: 2 = circle, 4 = squircle, 8+ = square
-    float p = pow(2.0, 1.0 + corner_smoothing * 2.0);
-
-    float2 corner_to_point = abs(center_to_point) - half_size + corner_radius;
-    float2 corner_max = max(corner_to_point, float2(0.0));
-
-    // Superellipse SDF approximation
-    float dist = pow(pow(abs(corner_max.x), p) + pow(abs(corner_max.y), p), 1.0 / p);
-
-    return dist + min(0.0, max(corner_to_point.x, corner_to_point.y)) - corner_radius;
+    float2 params = squircle_params(corner_radius, half_size,
+                                    corner_smoothing);
+    float2 corner_center_to_point = abs(center_to_point) - half_size + params.y;
+    return squircle_sdf_impl(corner_center_to_point, params.x, params.y);
 }
 
 // A standard gaussian function, used for weighting samples
