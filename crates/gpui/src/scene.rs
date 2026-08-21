@@ -957,17 +957,14 @@ impl From<SubpixelSprite> for Primitive {
 #[expect(missing_docs)]
 pub struct PolychromeSprite {
     pub order: DrawOrder,
-    pub pad: u32,
     pub grayscale: PaddedBool32,
     pub opacity: f32,
+    pub corner_smoothing: f32,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
     pub tile: AtlasTile,
-    pub corner_smoothing: f32,
-    pub pad2: u32,
-    pub pad3: u32,
-    pub pad4: u32,
+    pub padding: Edges<u32>,
 }
 
 impl From<PolychromeSprite> for Primitive {
