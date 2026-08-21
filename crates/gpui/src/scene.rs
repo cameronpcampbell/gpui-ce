@@ -693,6 +693,8 @@ pub struct Quad {
     pub border_color: SceneHsla,
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
+    pub smoothness: f32,
+    pub pad: u32,
 }
 
 impl From<Quad> for Primitive {
@@ -960,6 +962,10 @@ pub struct PolychromeSprite {
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
     pub tile: AtlasTile,
+    pub smoothness: f32,
+    pub pad2: u32,
+    pub pad3: u32,
+    pub pad4: u32,
 }
 
 impl From<PolychromeSprite> for Primitive {

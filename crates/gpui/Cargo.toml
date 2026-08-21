@@ -284,6 +284,10 @@ name = "scrollable"
 path = "examples/legacy/scrollable.rs"
 
 [[example]]
+name = "squircle"
+path = "examples/legacy/squircle.rs"
+
+[[example]]
 name = "svg"
 path = "examples/legacy/svg/svg.rs"
 
