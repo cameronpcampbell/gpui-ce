@@ -386,8 +386,8 @@ fn quad_sdf_impl(corner_center_to_point: vec2<f32>, corner_radius: f32) -> f32 {
     }
 }
 
-// Squircle SDF: smoothness 0.0 = circle, 0.5 = squircle, 1.0 = square
-fn squircle_sdf(point: vec2<f32>, bounds: Bounds, corner_radii: Corners, smoothness: f32) -> f32 {
+// Squircle SDF: corner_smoothing 0.0 = circle, 0.5 = squircle, 1.0 = square
+fn squircle_sdf(point: vec2<f32>, bounds: Bounds, corner_radii: Corners, corner_smoothing: f32) -> f32 {
     let half_size = bounds.size / 2.0;
     let center = bounds.origin + half_size;
     let center_to_point = point - center;
@@ -400,7 +400,7 @@ fn squircle_sdf(point: vec2<f32>, bounds: Bounds, corner_radii: Corners, smoothn
     }
 
     // Power factor: 2 = circle, 4 = squircle, 8+ = square
-    let p = pow(2.0, 1.0 + smoothness * 2.0);
+    let p = pow(2.0, 1.0 + corner_smoothing * 2.0);
 
     let corner_to_point = abs(center_to_point) - half_size + corner_radius;
     let corner_max = max(corner_to_point, vec2<f32>(0.0));
@@ -550,7 +550,7 @@ struct Quad {
     border_color: Hsla,
     corner_radii: Corners,
     border_widths: Edges,
-    smoothness: f32,
+    corner_smoothing: f32,
     pad: u32,
 }
 @group(1) @binding(0) var<storage, read> b_quads: array<Quad>;
@@ -684,8 +684,8 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // Signed distance of the point to the outside edge of the quad's border. It
     // is positive outside this edge, and negative inside.
     var outer_sdf: f32;
-    if (quad.smoothness > 0.0) {
-        outer_sdf = squircle_sdf(input.position.xy, quad.bounds, quad.corner_radii, quad.smoothness);
+    if (quad.corner_smoothing > 0.0) {
+        outer_sdf = squircle_sdf(input.position.xy, quad.bounds, quad.corner_radii, quad.corner_smoothing);
     } else {
         outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radius);
     }
@@ -1302,7 +1302,7 @@ struct PolychromeSprite {
     content_mask: Bounds,
     corner_radii: Corners,
     tile: AtlasTile,
-    smoothness: f32,
+    corner_smoothing: f32,
     pad2: u32,
     pad3: u32,
     pad4: u32,
@@ -1340,8 +1340,8 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
     let sprite = b_poly_sprites[input.sprite_id];
 
     var distance: f32;
-    if (sprite.smoothness > 0.0) {
-        distance = squircle_sdf(input.position.xy, sprite.bounds, sprite.corner_radii, sprite.smoothness);
+    if (sprite.corner_smoothing > 0.0) {
+        distance = squircle_sdf(input.position.xy, sprite.bounds, sprite.corner_radii, sprite.corner_smoothing);
     } else {
         distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
     }

@@ -29,7 +29,7 @@ float quad_sdf(float2 point, Bounds_ScaledPixels bounds,
                Corners_ScaledPixels corner_radii);
 float quad_sdf_impl(float2 center_to_point, float corner_radius);
 float squircle_sdf(float2 point, Bounds_ScaledPixels bounds,
-                   Corners_ScaledPixels corner_radii, float smoothness);
+                   Corners_ScaledPixels corner_radii, float corner_smoothing);
 float gaussian(float x, float sigma);
 float2 erf(float2 x);
 float blur_along_x(float x, float y, float sigma, float corner,
@@ -182,8 +182,8 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
 
   // Signed distance of the point to the outside edge of the quad's border
   float outer_sdf;
-  if (quad.smoothness > 0.0) {
-    outer_sdf = squircle_sdf(input.position.xy, quad.bounds, quad.corner_radii, quad.smoothness);
+  if (quad.corner_smoothing > 0.0) {
+    outer_sdf = squircle_sdf(input.position.xy, quad.bounds, quad.corner_radii, quad.corner_smoothing);
   } else {
     outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radius);
   }
@@ -725,8 +725,8 @@ fragment float4 polychrome_sprite_fragment(
   float4 sample =
       atlas_texture.sample(atlas_texture_sampler, input.tile_position);
   float distance;
-  if (sprite.smoothness > 0.0) {
-    distance = squircle_sdf(input.position.xy, sprite.bounds, sprite.corner_radii, sprite.smoothness);
+  if (sprite.corner_smoothing > 0.0) {
+    distance = squircle_sdf(input.position.xy, sprite.bounds, sprite.corner_radii, sprite.corner_smoothing);
   } else {
     distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
   }
@@ -1100,9 +1100,9 @@ float quad_sdf_impl(float2 corner_center_to_point, float corner_radius) {
     }
 }
 
-// Squircle SDF: smoothness 0.0 = circle, 0.5 = squircle, 1.0 = square
+// Squircle SDF: corner_smoothing 0.0 = circle, 0.5 = squircle, 1.0 = square
 float squircle_sdf(float2 point, Bounds_ScaledPixels bounds,
-                   Corners_ScaledPixels corner_radii, float smoothness) {
+                   Corners_ScaledPixels corner_radii, float corner_smoothing) {
     float2 half_size = float2(bounds.size.width, bounds.size.height) / 2.0;
     float2 center = float2(bounds.origin.x, bounds.origin.y) + half_size;
     float2 center_to_point = point - center;
@@ -1115,7 +1115,7 @@ float squircle_sdf(float2 point, Bounds_ScaledPixels bounds,
     }
 
     // Power factor: 2 = circle, 4 = squircle, 8+ = square
-    float p = pow(2.0, 1.0 + smoothness * 2.0);
+    float p = pow(2.0, 1.0 + corner_smoothing * 2.0);
 
     float2 corner_to_point = abs(center_to_point) - half_size + corner_radius;
     float2 corner_max = max(corner_to_point, float2(0.0));

@@ -490,14 +490,14 @@ impl Element for Img {
                         .get_bounds(bounds, data.size(layout_state.frame_index));
                     let corner_radii = style.corner_radii.to_pixels(window.rem_size());
                     window
-                        .paint_image_with_corner_superellipse(
+                        .paint_image_with_rounded_smoothing(
                             bounds,
                             new_bounds,
                             corner_radii,
                             data,
                             layout_state.frame_index,
                             self.style.grayscale,
-                            style.smoothness.unwrap_or(0.0),
+                            style.corner_smoothing.unwrap_or(0.0),
                         )
                         .log_err();
                 } else if let Some(replacement) = &mut layout_state.replacement {
