@@ -49,17 +49,17 @@ impl Render for SquircleDemo {
                 div()
                     .text_xl()
                     .font_weight(FontWeight::BOLD)
-                    .child("Squircle Corner Rendering"),
+                    .child("Figma Corner Smoothing"),
                 div().flex().gap_4().children([
-                    example_card("Circular", ".rounded_smoothing(0.0)", 0.0, rgb(0x3b82f6)),
-                    example_card("Subtle", ".rounded_smoothing(0.3)", 0.3, rgb(0x06b6d4)),
-                    example_card("Squircle", ".rounded_smoothing(0.5)", 0.5, rgb(0x8b5cf6)),
-                    example_card("Rounded", ".rounded_smoothing(0.7)", 0.7, rgb(0xec4899)),
+                    example_card("0", ".rounded_smoothing(0.0)", 0.0, rgb(0x3b82f6)),
+                    example_card("0.3", ".rounded_smoothing(0.3)", 0.3, rgb(0x06b6d4)),
+                    example_card("0.6", ".rounded_smoothing(0.6)", 0.6, rgb(0x8b5cf6)),
+                    example_card("1.0", ".rounded_smoothing(1.0)", 1.0, rgb(0xec4899)),
                 ]),
                 div()
                     .text_lg()
                     .font_weight(FontWeight::BOLD)
-                    .child("Superellipse Gradient"),
+                    .child("Smoothing Gradient"),
                 div().flex().gap_2().children(
                     (0..=10)
                         .map(|i| {
@@ -71,12 +71,12 @@ impl Render for SquircleDemo {
                 div()
                     .text_lg()
                     .font_weight(FontWeight::BOLD)
-                    .child("Image with Squircle Corners"),
+                    .child("Images with Smoothed Corners"),
                 div().flex().gap_4().children([
-                    image_example("Circular", 0.0),
-                    image_example("Subtle", 0.3),
-                    image_example("Squircle", 0.5),
-                    image_example("Rounded", 0.7),
+                    image_example("0", 0.0),
+                    image_example("0.3", 0.3),
+                    image_example("0.6", 0.6),
+                    image_example("1.0", 1.0),
                 ]),
                 div()
                     .mt_4()
@@ -89,12 +89,12 @@ impl Render for SquircleDemo {
                     .child(
                         r#"// Usage Examples
 div()
-    .rounded_smoothing(0.5)  // Squircle corners
+    .rounded_smoothing(0.6)  // Figma's documented iOS smoothing
     .rounded(px(40.0))
     .bg(blue())
 
 div()
-    .rounded_smoothing(0.7)  // Custom value
+    .rounded_smoothing(1.0)  // Maximum smoothing
     .rounded(px(40.0))
     .bg(green())"#,
                     ),

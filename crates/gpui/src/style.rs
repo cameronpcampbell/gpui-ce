@@ -284,7 +284,8 @@ pub struct Style {
     #[refineable]
     pub corner_radii: Corners<AbsoluteLength>,
 
-    /// The corner smoothing (0.0 = circle, 0.5 = squircle, 1.0 = square)
+    /// Figma-style corner smoothing. `0.0` keeps circular corners and `1.0` requests maximum
+    /// smoothing.
     pub corner_smoothing: Option<f32>,
 
     /// Box shadow of the element
