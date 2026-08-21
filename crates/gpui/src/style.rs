@@ -1623,4 +1623,46 @@ mod tests {
             style.text_style().unwrap().font_weight
         );
     }
+
+    #[test]
+    fn test_rounded_smoothing_style_helpers() {
+        let amounts = [
+            StyleRefinement::default().rounded_smoothing_0(),
+            StyleRefinement::default().rounded_smoothing_0p1(),
+            StyleRefinement::default().rounded_smoothing_0p2(),
+            StyleRefinement::default().rounded_smoothing_0p3(),
+            StyleRefinement::default().rounded_smoothing_0p4(),
+            StyleRefinement::default().rounded_smoothing_0p5(),
+            StyleRefinement::default().rounded_smoothing_0p6(),
+            StyleRefinement::default().rounded_smoothing_0p7(),
+            StyleRefinement::default().rounded_smoothing_0p8(),
+            StyleRefinement::default().rounded_smoothing_0p9(),
+            StyleRefinement::default().rounded_smoothing_1(),
+        ]
+        .map(|style| style.corner_smoothing);
+
+        assert_eq!(
+            amounts,
+            [
+                Some(0.0),
+                Some(0.1),
+                Some(0.2),
+                Some(0.3),
+                Some(0.4),
+                Some(0.5),
+                Some(0.6),
+                Some(0.7),
+                Some(0.8),
+                Some(0.9),
+                Some(1.0),
+            ]
+        );
+
+        assert_eq!(
+            StyleRefinement::default()
+                .rounded_smoothing(2.0)
+                .corner_smoothing,
+            Some(1.0)
+        );
+    }
 }
