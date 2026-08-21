@@ -6,8 +6,8 @@
 mod example_prelude;
 
 use gpui::{
-    App, Bounds, BoxShadow, Context, Window, WindowBounds, WindowOptions, actions, div, hsla,
-    pattern_slash, prelude::*, px, rgb, rgba, size,
+    App, Bounds, BoxShadow, Context, Window, WindowBounds, WindowOptions, actions, div, prelude::*,
+    px, rgb, rgba, size,
 };
 use palette::WithAlpha;
 use slider::Slider;
@@ -39,12 +39,6 @@ impl Render for CornerSmoothingExample {
             .relative()
             .size_full()
             .bg(rgb(0x110f15))
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .bg(pattern_slash(rgba(0xffffff24), 2., 14.)),
-            )
             .child(
                 div()
                     .absolute()
