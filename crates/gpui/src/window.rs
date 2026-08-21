@@ -3917,15 +3917,26 @@ impl Window {
     /// Paint the drop (non-inset) shadows from `shadows` into the scene at the current
     /// z-index. Inset shadows are skipped; paint those with [`Self::paint_inset_shadows`]
     /// after the element's background so they layer on top of the fill.
-    /// `corner_smoothing` applies Figma-style smoothing to the shadow shape; `None` keeps
-    /// circular corners.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn paint_drop_shadows(
         &mut self,
         bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
-        corner_smoothing: Option<f32>,
+        shadows: &[BoxShadow],
+    ) {
+        self.paint_drop_shadows_with_corner_smoothing(bounds, corner_radii, 0.0, shadows);
+    }
+
+    /// Paint the drop (non-inset) shadows from `shadows` with Figma-style corner smoothing.
+    /// Inset shadows are skipped.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_drop_shadows_with_corner_smoothing(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
         shadows: &[BoxShadow],
     ) {
         self.invalidator.debug_assert_paint();
@@ -3935,7 +3946,7 @@ impl Window {
         let opacity = self.element_opacity();
         let element_bounds = self.cover_bounds(bounds);
         let element_corner_radii = corner_radii.scale(scale_factor);
-        let corner_smoothing = corner_smoothing.unwrap_or_default().clamp(0.0, 1.0);
+        let corner_smoothing = corner_smoothing.clamp(0.0, 1.0);
         for shadow in shadows {
             if shadow.inset {
                 continue;
@@ -3959,13 +3970,22 @@ impl Window {
     /// Paint the inset shadows from `shadows` into the scene at the current z-index. Should
     /// be called after the element's background so the shadow layers on top of the fill.
     /// Drop shadows are skipped; paint those with [`Self::paint_drop_shadows`] before the background.
-    /// `corner_smoothing` applies Figma-style smoothing to the inset hole and element clip;
-    /// `None` keeps circular corners.
     pub fn paint_inset_shadows(
         &mut self,
         bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
-        corner_smoothing: Option<f32>,
+        shadows: &[BoxShadow],
+    ) {
+        self.paint_inset_shadows_with_corner_smoothing(bounds, corner_radii, 0.0, shadows);
+    }
+
+    /// Paint the inset shadows from `shadows` with Figma-style corner smoothing. Drop shadows
+    /// are skipped.
+    pub fn paint_inset_shadows_with_corner_smoothing(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
         shadows: &[BoxShadow],
     ) {
         self.invalidator.debug_assert_paint();
@@ -3975,7 +3995,7 @@ impl Window {
         let opacity = self.element_opacity();
         let element_bounds = self.cover_bounds(bounds);
         let element_corner_radii = corner_radii.scale(scale_factor);
-        let corner_smoothing = corner_smoothing.unwrap_or_default().clamp(0.0, 1.0);
+        let corner_smoothing = corner_smoothing.clamp(0.0, 1.0);
         for shadow in shadows {
             if !shadow.inset {
                 continue;
@@ -4010,8 +4030,6 @@ impl Window {
     /// into the rounded rectangle described by `bounds` and `corner_radii` — the CSS
     /// `backdrop-filter` effect (frosted glass). Typically the element then paints a translucent
     /// background quad on top so its color tints the blurred backdrop.
-    /// `corner_smoothing` controls the shape of the rounded composite mask; `None` keeps
-    /// circular corners.
     ///
     /// Does nothing when `filters` produce no visible blur.
     ///
@@ -4020,7 +4038,22 @@ impl Window {
         &mut self,
         bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
-        corner_smoothing: Option<f32>,
+        filters: &[Filter],
+    ) {
+        self.paint_backdrop_filter_with_corner_smoothing(bounds, corner_radii, 0.0, filters);
+    }
+
+    /// Paint a backdrop filter with Figma-style corner smoothing into the scene for the next
+    /// frame at the current z-index.
+    ///
+    /// Does nothing when `filters` produce no visible blur.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_backdrop_filter_with_corner_smoothing(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
         filters: &[Filter],
     ) {
         self.invalidator.debug_assert_paint();
@@ -4040,7 +4073,7 @@ impl Window {
             bounds: self.snap_bounds(bounds),
             content_mask: self.snapped_content_mask(),
             corner_radii: corner_radii.scale(scale_factor),
-            corner_smoothing: corner_smoothing.unwrap_or_default().clamp(0.0, 1.0),
+            corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
             filters,
             opacity: self.element_opacity(),
         });
@@ -4050,7 +4083,6 @@ impl Window {
     /// everything `f` paints into an offscreen target, blurs it as a single layer, and
     /// composites the result back into the rounded rectangle described by `bounds` and
     /// `corner_radii` — the CSS `filter` effect (e.g. blurring an element and its children).
-    /// `corner_smoothing` is retained with the layer shape; `None` keeps circular corners.
     ///
     /// When `filters` produce no visible blur this simply runs `f` with no offscreen
     /// indirection.
@@ -4060,7 +4092,24 @@ impl Window {
         &mut self,
         bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
-        corner_smoothing: Option<f32>,
+        filters: &[Filter],
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.with_filter_layer_with_corner_smoothing(bounds, corner_radii, 0.0, filters, f)
+    }
+
+    /// Isolate the painting performed by `f` into a content-filter group with Figma-style
+    /// corner smoothing.
+    ///
+    /// When `filters` produce no visible blur this simply runs `f` with no offscreen
+    /// indirection.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn with_filter_layer_with_corner_smoothing<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
         filters: &[Filter],
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
@@ -4088,7 +4137,7 @@ impl Window {
             bounds: self.snap_bounds(bounds),
             content_mask: self.snapped_content_mask(),
             corner_radii: corner_radii.scale(scale_factor),
-            corner_smoothing: corner_smoothing.unwrap_or_default().clamp(0.0, 1.0),
+            corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
             filters,
             opacity: 1.0,
             is_start: true,
@@ -4114,6 +4163,14 @@ impl Window {
     /// where the circular arcs meet. This will not display well when combined with dashed borders.
     /// Use `Corners::clamp_radii_for_quad_size` if the radii should fit within the bounds.
     pub fn paint_quad(&mut self, quad: PaintQuad) {
+        self.paint_quad_with_corner_smoothing(quad, 0.0);
+    }
+
+    /// Paint one or more quads with Figma-style corner smoothing into the scene for the next
+    /// frame at the current stacking context.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_quad_with_corner_smoothing(&mut self, quad: PaintQuad, corner_smoothing: f32) {
         self.invalidator.debug_assert_paint();
 
         let opacity = self.element_opacity();
@@ -4128,7 +4185,7 @@ impl Window {
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
-            corner_smoothing: quad.corner_smoothing.clamp(0.0, 1.0),
+            corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
             pad: 0,
         };
 
@@ -4530,13 +4587,37 @@ impl Window {
     /// Paint an image into `bounds`, positioning and scaling it according to `image_bounds`.
     ///
     /// The visible region rendered is `bounds.intersect(&image_bounds)`, with `corner_radii`
-    /// and optional Figma-style `corner_smoothing` applied to `bounds`.
+    /// applied to `bounds`.
     pub fn paint_image(
         &mut self,
         bounds: Bounds<Pixels>,
         image_bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
-        corner_smoothing: Option<f32>,
+        data: Arc<RenderImage>,
+        frame_index: usize,
+        grayscale: bool,
+    ) -> Result<()> {
+        self.paint_image_with_corner_smoothing(
+            bounds,
+            image_bounds,
+            corner_radii,
+            0.0,
+            data,
+            frame_index,
+            grayscale,
+        )
+    }
+
+    /// Paint an image with Figma-style corner smoothing into the scene for the next frame at the
+    /// current z-index.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_image_with_corner_smoothing(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        image_bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        corner_smoothing: f32,
         data: Arc<RenderImage>,
         frame_index: usize,
         grayscale: bool,
@@ -4621,7 +4702,7 @@ impl Window {
             order: 0,
             grayscale: grayscale.into(),
             opacity,
-            corner_smoothing: corner_smoothing.unwrap_or_default().clamp(0.0, 1.0),
+            corner_smoothing: corner_smoothing.clamp(0.0, 1.0),
             bounds: visible_bounds_snapped,
             content_mask,
             corner_radii,
@@ -6863,9 +6944,6 @@ pub struct PaintQuad {
     pub border_color: Hsla,
     /// The style of the quad's borders.
     pub border_style: BorderStyle,
-    /// Figma-style corner smoothing. `0.0` keeps circular corners and `1.0` requests maximum
-    /// smoothing.
-    pub corner_smoothing: f32,
 }
 
 impl PaintQuad {
@@ -6900,16 +6978,6 @@ impl PaintQuad {
             ..self
         }
     }
-
-    /// Sets Figma-style rounded corner smoothing.
-    ///
-    /// An `amount` of `0.0` keeps circular corners and `1.0` requests maximum smoothing.
-    pub fn rounded_smoothing(self, amount: f32) -> Self {
-        PaintQuad {
-            corner_smoothing: amount.clamp(0.0, 1.0),
-            ..self
-        }
-    }
 }
 
 /// Creates a quad with the given parameters.
@@ -6928,7 +6996,6 @@ pub fn quad(
         border_widths: border_widths.into(),
         border_color: border_color.into_color(),
         border_style,
-        corner_smoothing: 0.0,
     }
 }
 
@@ -6941,7 +7008,6 @@ pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>
         border_widths: (0.).into(),
         border_color: transparent_black(),
         border_style: BorderStyle::default(),
-        corner_smoothing: 0.0,
     }
 }
 
@@ -6958,7 +7024,6 @@ pub fn outline(
         border_widths: (1.).into(),
         border_color: border_color.into_color(),
         border_style,
-        corner_smoothing: 0.0,
     }
 }
 
