@@ -318,6 +318,12 @@ float4 corner_values(Corners corner_radii) {
     );
 }
 
+// The Figma-style corner construction below is derived from
+// Tien Pham's figma-squircle implementation:
+// https://github.com/phamfoo/figma-squircle
+// Copyright (c) 2021 Tien Pham
+// Licensed under the MIT License. See ../THIRD_PARTY_NOTICES.md.
+
 struct FigmaCornerLayout {
     float4 horizontal_budgets;
     float4 vertical_budgets;

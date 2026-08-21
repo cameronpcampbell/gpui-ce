@@ -45,6 +45,7 @@ impl Render for CornerSmoothingExample {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .pb(px(200.))
                     .child(
                         div()
                             .w(px(self.width))
