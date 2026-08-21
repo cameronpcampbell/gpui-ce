@@ -781,14 +781,19 @@ impl Style {
             .corner_radii
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
-        let corner_smoothing = self.corner_smoothing;
+        let corner_smoothing = self.corner_smoothing.unwrap_or_default();
 
-        window.paint_drop_shadows(bounds, corner_radii, corner_smoothing, &self.box_shadow);
+        window.paint_drop_shadows_with_corner_smoothing(
+            bounds,
+            corner_radii,
+            corner_smoothing,
+            &self.box_shadow,
+        );
 
         // Blur the content behind this element before its (typically translucent) background
         // is painted on top, so the background tints the frosted backdrop (CSS `backdrop-filter`).
         if !self.backdrop_filter.is_empty() {
-            window.paint_backdrop_filter(
+            window.paint_backdrop_filter_with_corner_smoothing(
                 bounds,
                 corner_radii,
                 corner_smoothing,
@@ -817,7 +822,7 @@ impl Style {
                     None => Hsla::default(),
                 };
                 border_color.alpha = 0.;
-                window.paint_quad(
+                window.paint_quad_with_corner_smoothing(
                     quad(
                         bounds,
                         corner_radii,
@@ -825,12 +830,17 @@ impl Style {
                         Edges::default(),
                         border_color,
                         self.border_style,
-                    )
-                    .rounded_smoothing(self.corner_smoothing.unwrap_or(0.0)),
+                    ),
+                    corner_smoothing,
                 );
             }
 
-            window.paint_inset_shadows(bounds, corner_radii, corner_smoothing, &self.box_shadow);
+            window.paint_inset_shadows_with_corner_smoothing(
+                bounds,
+                corner_radii,
+                corner_smoothing,
+                &self.box_shadow,
+            );
 
             continuation(window, cx);
 
@@ -838,7 +848,7 @@ impl Style {
                 let border_widths = self.border_widths.to_pixels(rem_size);
                 let mut background = self.border_color.unwrap_or_default();
                 background.alpha = 0.;
-                window.paint_quad(
+                window.paint_quad_with_corner_smoothing(
                     quad(
                         bounds,
                         corner_radii,
@@ -846,8 +856,8 @@ impl Style {
                         border_widths,
                         self.border_color.unwrap_or_default(),
                         self.border_style,
-                    )
-                    .rounded_smoothing(self.corner_smoothing.unwrap_or(0.0)),
+                    ),
+                    corner_smoothing,
                 );
             }
         };
@@ -855,7 +865,7 @@ impl Style {
         if self.filter.is_empty() {
             paint_box(window, cx);
         } else {
-            window.with_filter_layer(
+            window.with_filter_layer_with_corner_smoothing(
                 bounds,
                 corner_radii,
                 corner_smoothing,
