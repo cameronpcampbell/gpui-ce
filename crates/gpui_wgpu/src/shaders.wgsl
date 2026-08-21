@@ -2268,17 +2268,14 @@ fn fs_mono_sprite(input: MonoSpriteVarying) -> @location(0) vec4<f32> {
 
 struct PolychromeSprite {
     order: u32,
-    pad: u32,
     grayscale: u32,
     opacity: f32,
+    corner_smoothing: f32,
     bounds: Bounds,
     content_mask: Bounds,
     corner_radii: Corners,
     tile: AtlasTile,
-    corner_smoothing: f32,
-    pad2: u32,
-    pad3: u32,
-    pad4: u32,
+    padding: vec4<u32>,
 }
 @group(1) @binding(0) var<storage, read> b_poly_sprites: array<PolychromeSprite>;
 

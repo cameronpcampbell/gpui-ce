@@ -4445,17 +4445,14 @@ impl Window {
 
             self.next_frame.scene.insert_primitive(PolychromeSprite {
                 order: 0,
-                pad: 0,
                 grayscale: false.into(),
+                opacity,
+                corner_smoothing: 0.0, // Emojis use circular corners
                 bounds,
                 corner_radii: Default::default(),
                 content_mask,
                 tile,
-                opacity,
-                corner_smoothing: 0.0, // Emojis use circular corners
-                pad2: 0,
-                pad3: 0,
-                pad4: 0,
+                padding: Edges::default(),
             });
         }
         Ok(())
@@ -4622,17 +4619,14 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
             order: 0,
-            pad: 0,
             grayscale: grayscale.into(),
+            opacity,
+            corner_smoothing: corner_smoothing.unwrap_or_default().clamp(0.0, 1.0),
             bounds: visible_bounds_snapped,
             content_mask,
             corner_radii,
             tile: sub_tile,
-            opacity,
-            corner_smoothing: corner_smoothing.unwrap_or_default().clamp(0.0, 1.0),
-            pad2: 0,
-            pad3: 0,
-            pad4: 0,
+            padding: Edges::default(),
         });
         Ok(())
     }

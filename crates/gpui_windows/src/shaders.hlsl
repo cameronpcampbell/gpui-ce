@@ -2191,17 +2191,14 @@ SubpixelSpriteFragmentOutput subpixel_sprite_fragment(MonochromeSpriteFragmentIn
 
 struct PolychromeSprite {
     uint order;
-    uint pad;
     uint grayscale;
     float opacity;
+    float corner_smoothing;
     Bounds bounds;
     Bounds content_mask;
     Corners corner_radii;
     AtlasTile tile;
-    float corner_smoothing;
-    uint pad2;
-    uint pad3;
-    uint pad4;
+    uint4 padding;
 };
 
 struct PolychromeSpriteVertexOutput {
