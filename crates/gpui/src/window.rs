@@ -4117,7 +4117,9 @@ impl Window {
             pad: 0,
         };
 
-        if !quad.background.is_transparent() {
+        // Smoothed corners can extend beyond the circular radius used to size the border strips
+        // below. Submit the full quad so the fragment shader can clip the complete curve.
+        if !quad.background.is_transparent() || quad.corner_smoothing > 0.0 {
             self.next_frame.scene.insert_primitive(quad);
             return;
         }

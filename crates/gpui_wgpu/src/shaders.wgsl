@@ -386,29 +386,59 @@ fn quad_sdf_impl(corner_center_to_point: vec2<f32>, corner_radius: f32) -> f32 {
     }
 }
 
-// Squircle SDF: corner_smoothing 0.0 = circle, 0.5 = squircle, 1.0 = square
+// Returns the superellipse power and extent for a corner. Smoothing extends
+// the curve along the edges while keeping the circular corner's diagonal
+// inset fixed, so changing smoothing does not change the visual radius.
+fn squircle_params(corner_radius: f32, half_size: vec2<f32>, corner_smoothing: f32) -> vec2<f32> {
+    if (corner_radius <= 0.0 || corner_smoothing <= 0.0) {
+        return vec2<f32>(2.0, max(corner_radius, 0.0));
+    }
+
+    let extent_budget = min(half_size.x, half_size.y);
+    if (extent_budget <= corner_radius) {
+        return vec2<f32>(2.0, corner_radius);
+    }
+
+    let circle_diagonal_inset = corner_radius * 0.2928932188134524;
+    var power = exp2(1.0 + 2.0 * clamp(corner_smoothing, 0.0, 1.0));
+    var extent = circle_diagonal_inset / (1.0 - exp2(-1.0 / power));
+
+    // Adjacent corners must not overlap. If the requested smoothing needs more
+    // room than the quad has, keep the radius fixed and saturate the power.
+    if (extent > extent_budget) {
+        extent = extent_budget;
+        power = -0.6931471805599453 / log(1.0 - circle_diagonal_inset / extent);
+    }
+
+    return vec2<f32>(power, extent);
+}
+
+fn squircle_sdf_impl(corner_center_to_point: vec2<f32>, power: f32, extent: f32) -> f32 {
+    if (extent == 0.0) {
+        return max(corner_center_to_point.x, corner_center_to_point.y);
+    }
+
+    if (corner_center_to_point.x <= 0.0 || corner_center_to_point.y <= 0.0) {
+        return max(corner_center_to_point.x, corner_center_to_point.y) - extent;
+    }
+
+    let distance = pow(
+        pow(corner_center_to_point.x, power) + pow(corner_center_to_point.y, power),
+        1.0 / power,
+    );
+    return distance - extent;
+}
+
+// Squircle SDF. A smoothing value of 0.0 is circular; higher values increase
+// the superellipse power.
 fn squircle_sdf(point: vec2<f32>, bounds: Bounds, corner_radii: Corners, corner_smoothing: f32) -> f32 {
     let half_size = bounds.size / 2.0;
     let center = bounds.origin + half_size;
     let center_to_point = point - center;
     let corner_radius = pick_corner_radius(center_to_point, corner_radii);
-
-    if (corner_radius == 0.0) {
-        // No corner radius, use sharp corners
-        let corner_to_point = abs(center_to_point) - half_size;
-        return max(corner_to_point.x, corner_to_point.y);
-    }
-
-    // Power factor: 2 = circle, 4 = squircle, 8+ = square
-    let p = pow(2.0, 1.0 + corner_smoothing * 2.0);
-
-    let corner_to_point = abs(center_to_point) - half_size + corner_radius;
-    let corner_max = max(corner_to_point, vec2<f32>(0.0));
-
-    // Superellipse SDF approximation
-    let dist = pow(pow(abs(corner_max.x), p) + pow(abs(corner_max.y), p), 1.0 / p);
-
-    return dist + min(0.0, max(corner_to_point.x, corner_to_point.y)) - corner_radius;
+    let params = squircle_params(corner_radius, half_size, corner_smoothing);
+    let corner_center_to_point = abs(center_to_point) - half_size + params.y;
+    return squircle_sdf_impl(corner_center_to_point, params.x, params.y);
 }
 
 // Abstract away the final color transformation based on the
@@ -626,6 +656,12 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
 
     // Radius of the nearest corner
     let corner_radius = pick_corner_radius(center_to_point, quad.corner_radii);
+    var corner_params = vec2<f32>(2.0, corner_radius);
+    if (quad.corner_smoothing > 0.0) {
+        corner_params = squircle_params(corner_radius, half_size, quad.corner_smoothing);
+    }
+    let corner_power = corner_params.x;
+    let corner_extent = corner_params.y;
 
     // Width of the nearest borders
     let border = vec2<f32>(
@@ -648,9 +684,9 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // the point into the bottom right quadrant. Both components are <= 0.
     let corner_to_point = abs(center_to_point) - half_size;
 
-    // Vector from the point to the center of the rounded corner's circle, also
-    // mirrored into bottom right quadrant.
-    let corner_center_to_point = corner_to_point + corner_radius;
+    // Vector from the point to the start of the corner curve, also mirrored
+    // into the bottom right quadrant.
+    let corner_center_to_point = corner_to_point + corner_extent;
 
     // Whether the nearest point on the border is rounded
     let is_near_rounded_corner =
@@ -685,7 +721,11 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // is positive outside this edge, and negative inside.
     var outer_sdf: f32;
     if (quad.corner_smoothing > 0.0) {
-        outer_sdf = squircle_sdf(input.position.xy, quad.bounds, quad.corner_radii, quad.corner_smoothing);
+        outer_sdf = squircle_sdf_impl(
+            corner_center_to_point,
+            corner_power,
+            corner_extent,
+        );
     } else {
         outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radius);
     }
@@ -707,10 +747,10 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
         // Fast path for points that must be outside the inner edge.
         inner_sdf = -1.0;
     } else if (reduced_border.x == reduced_border.y) {
-        // Fast path for circular inner edge.
+        // Fast path for a uniform-width inner edge.
         inner_sdf = -(outer_sdf + reduced_border.x);
     } else {
-        let ellipse_radii = max(vec2<f32>(0.0), corner_radius - reduced_border);
+        let ellipse_radii = max(vec2<f32>(0.0), corner_extent - reduced_border);
         inner_sdf = quarter_ellipse_sdf(corner_center_to_point, ellipse_radii);
     }
 
@@ -781,10 +821,16 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                 // When corners are rounded, the dashes are laid out clockwise
                 // around the whole perimeter.
 
-                let r_tr = quad.corner_radii.top_right;
-                let r_br = quad.corner_radii.bottom_right;
-                let r_bl = quad.corner_radii.bottom_left;
-                let r_tl = quad.corner_radii.top_left;
+                var e_tr = quad.corner_radii.top_right;
+                var e_br = quad.corner_radii.bottom_right;
+                var e_bl = quad.corner_radii.bottom_left;
+                var e_tl = quad.corner_radii.top_left;
+                if (quad.corner_smoothing > 0.0) {
+                    e_tr = squircle_params(e_tr, half_size, quad.corner_smoothing).y;
+                    e_br = squircle_params(e_br, half_size, quad.corner_smoothing).y;
+                    e_bl = squircle_params(e_bl, half_size, quad.corner_smoothing).y;
+                    e_tl = squircle_params(e_tl, half_size, quad.corner_smoothing).y;
+                }
 
                 let w_t = quad.border_widths.top;
                 let w_r = quad.border_widths.right;
@@ -798,10 +844,10 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                 let dv_l = select(dv_numerator / w_l, 0.0, w_l <= 0.0);
 
                 // Straight side lengths in dash space
-                let s_t = (size.x - r_tl - r_tr) * dv_t;
-                let s_r = (size.y - r_tr - r_br) * dv_r;
-                let s_b = (size.x - r_br - r_bl) * dv_b;
-                let s_l = (size.y - r_bl - r_tl) * dv_l;
+                let s_t = (size.x - e_tl - e_tr) * dv_t;
+                let s_r = (size.y - e_tr - e_br) * dv_r;
+                let s_b = (size.x - e_br - e_bl) * dv_b;
+                let s_l = (size.y - e_bl - e_tl) * dv_l;
 
                 let corner_dash_velocity_tr = corner_dash_velocity(dv_t, dv_r);
                 let corner_dash_velocity_br = corner_dash_velocity(dv_b, dv_r);
@@ -809,10 +855,10 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                 let corner_dash_velocity_tl = corner_dash_velocity(dv_t, dv_l);
 
                 // Corner lengths in dash space
-                let c_tr = r_tr * (M_PI_F / 2.0) * corner_dash_velocity_tr;
-                let c_br = r_br * (M_PI_F / 2.0) * corner_dash_velocity_br;
-                let c_bl = r_bl * (M_PI_F / 2.0) * corner_dash_velocity_bl;
-                let c_tl = r_tl * (M_PI_F / 2.0) * corner_dash_velocity_tl;
+                let c_tr = e_tr * (M_PI_F / 2.0) * corner_dash_velocity_tr;
+                let c_br = e_br * (M_PI_F / 2.0) * corner_dash_velocity_br;
+                let c_bl = e_bl * (M_PI_F / 2.0) * corner_dash_velocity_bl;
+                let c_tl = e_tl * (M_PI_F / 2.0) * corner_dash_velocity_tl;
 
                 // Cumulative dash space upto each segment
                 let upto_tr = s_t;
@@ -827,7 +873,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                 if (is_near_rounded_corner) {
                     let radians = atan2(corner_center_to_point.y,
                                         corner_center_to_point.x);
-                    let corner_t = radians * corner_radius;
+                    let corner_t = radians * corner_extent;
 
                     if (center_to_point.x >= 0.0) {
                         if (center_to_point.y < 0.0) {
@@ -865,18 +911,18 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                     if (is_horizontal) {
                         if (center_to_point.y < 0.0) {
                             dash_velocity = dv_t;
-                            t = (point.x - r_tl) * dash_velocity;
+                            t = (point.x - e_tl) * dash_velocity;
                         } else {
                             dash_velocity = dv_b;
-                            t = upto_bl - (point.x - r_bl) * dash_velocity;
+                            t = upto_bl - (point.x - e_bl) * dash_velocity;
                         }
                     } else {
                         if (center_to_point.x < 0.0) {
                             dash_velocity = dv_l;
-                            t = upto_tl - (point.y - r_tl) * dash_velocity;
+                            t = upto_tl - (point.y - e_tl) * dash_velocity;
                         } else {
                             dash_velocity = dv_r;
-                            t = upto_r + (point.y - r_tr) * dash_velocity;
+                            t = upto_r + (point.y - e_tr) * dash_velocity;
                         }
                     }
                 }
