@@ -1037,6 +1037,34 @@ float figma_smooth_rect_sdf(
     return sample.sdf.distance;
 }
 
+float styled_rect_sdf(
+    float2 point,
+    Bounds bounds,
+    Corners corner_radii,
+    float4 horizontal_budgets,
+    float4 vertical_budgets,
+    float corner_smoothing
+) {
+    if (corner_smoothing <= 0.0 ||
+        all(corner_values(corner_radii) <= float4(0.0, 0.0, 0.0, 0.0))) {
+        return quad_sdf(point, bounds, corner_radii);
+    }
+
+    return figma_smooth_rect_sdf(
+        point,
+        bounds,
+        corner_radii,
+        horizontal_budgets,
+        vertical_budgets,
+        corner_smoothing
+    );
+}
+
+float gaussian_sdf_coverage(float distance, float sigma) {
+    float normalized = distance / (sqrt(2.0) * sigma);
+    return saturate(0.5 - 0.5 * erf(float2(normalized, normalized)).x);
+}
+
 GradientColor prepare_gradient_color(uint tag, uint color_space, Hsla solid, LinearColorStop colors[2]) {
     GradientColor output;
     if (tag == 0 || tag == 2 || tag == 3) {
@@ -1765,11 +1793,15 @@ struct Shadow {
     Bounds element_bounds;
     Corners element_corner_radii;
     uint inset;
-    uint pad; // align to 8 bytes
+    float corner_smoothing;
 };
 
 struct ShadowVertexOutput {
     nointerpolation uint shadow_id: TEXCOORD0;
+    nointerpolation float4 horizontal_corner_budgets: TEXCOORD1;
+    nointerpolation float4 vertical_corner_budgets: TEXCOORD2;
+    nointerpolation float4 element_horizontal_corner_budgets: TEXCOORD3;
+    nointerpolation float4 element_vertical_corner_budgets: TEXCOORD4;
     float4 position: SV_Position;
     nointerpolation float4 color: COLOR;
     float4 clip_distance: SV_ClipDistance;
@@ -1777,6 +1809,10 @@ struct ShadowVertexOutput {
 
 struct ShadowFragmentInput {
   nointerpolation uint shadow_id: TEXCOORD0;
+  nointerpolation float4 horizontal_corner_budgets: TEXCOORD1;
+  nointerpolation float4 vertical_corner_budgets: TEXCOORD2;
+  nointerpolation float4 element_horizontal_corner_budgets: TEXCOORD3;
+  nointerpolation float4 element_vertical_corner_budgets: TEXCOORD4;
   float4 position: SV_Position;
   nointerpolation float4 color: COLOR;
 };
@@ -1807,6 +1843,25 @@ ShadowVertexOutput shadow_vertex(uint vertex_id: SV_VertexID, uint shadow_id: SV
     output.color = color;
     output.shadow_id = shadow_id;
     output.clip_distance = clip_distance;
+    output.horizontal_corner_budgets = corner_values(shadow.corner_radii);
+    output.vertical_corner_budgets = corner_values(shadow.corner_radii);
+    output.element_horizontal_corner_budgets = corner_values(shadow.element_corner_radii);
+    output.element_vertical_corner_budgets = corner_values(shadow.element_corner_radii);
+    if (shadow.corner_smoothing > 0.0) {
+        FigmaCornerLayout layout = figma_corner_layout(
+            shadow.bounds.size,
+            shadow.corner_radii
+        );
+        output.horizontal_corner_budgets = layout.horizontal_budgets;
+        output.vertical_corner_budgets = layout.vertical_budgets;
+
+        FigmaCornerLayout element_layout = figma_corner_layout(
+            shadow.element_bounds.size,
+            shadow.element_corner_radii
+        );
+        output.element_horizontal_corner_budgets = element_layout.horizontal_budgets;
+        output.element_vertical_corner_budgets = element_layout.vertical_budgets;
+    }
 
     return output;
 }
@@ -1818,11 +1873,30 @@ float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
     float2 center = shadow.bounds.origin + half_size;
     float2 point0 = input.position.xy - center;
     float corner_radius = pick_corner_radius(point0, shadow.corner_radii);
+    bool has_smoothed_corners = shadow.corner_smoothing > 0.0 &&
+        any(corner_values(shadow.corner_radii) > float4(0.0, 0.0, 0.0, 0.0));
 
     float alpha;
     if (shadow.blur_radius == 0.) {
-        float distance = quad_sdf(input.position.xy, shadow.bounds, shadow.corner_radii);
+        float distance = styled_rect_sdf(
+            input.position.xy,
+            shadow.bounds,
+            shadow.corner_radii,
+            input.horizontal_corner_budgets,
+            input.vertical_corner_budgets,
+            shadow.corner_smoothing
+        );
         alpha = saturate(0.5 - distance);
+    } else if (has_smoothed_corners) {
+        float distance = styled_rect_sdf(
+            input.position.xy,
+            shadow.bounds,
+            shadow.corner_radii,
+            input.horizontal_corner_budgets,
+            input.vertical_corner_budgets,
+            shadow.corner_smoothing
+        );
+        alpha = gaussian_sdf_coverage(distance, shadow.blur_radius);
     } else {
         // The signal is only non-zero in a limited range, so don't waste samples
         float low = point0.y - half_size.y;
@@ -1846,8 +1920,14 @@ float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
         // The inset shadow is the complement of the (blurred) hole rect, clipped to the element.
         // `saturate(0.5 - d)` gives a 1-pixel antialiased edge: d <= -0.5 -> 1, d >= 0.5 -> 0.
         alpha = 1.0 - alpha;
-        float element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
-                                          shadow.element_corner_radii);
+        float element_distance = styled_rect_sdf(
+            input.position.xy,
+            shadow.element_bounds,
+            shadow.element_corner_radii,
+            input.element_horizontal_corner_budgets,
+            input.element_vertical_corner_budgets,
+            shadow.corner_smoothing
+        );
         alpha *= saturate(0.5 - element_distance);
     }
 
@@ -2219,11 +2299,17 @@ cbuffer BlurParams: register(b1) {
     // Spacing between taps in pixels (gaussian passes only); >1 lets `blur_tap_count` taps span
     // very large radii without truncating the gaussian.
     float blur_tap_step;
+    float blur_corner_smoothing;
+    float blur_pad0;
+    float blur_pad1;
+    float blur_pad2;
 };
 
 struct BlurVertexOutput {
     float4 position: SV_Position;
     float2 uv: TEXCOORD0;
+    nointerpolation float4 horizontal_corner_budgets: TEXCOORD1;
+    nointerpolation float4 vertical_corner_budgets: TEXCOORD2;
 };
 
 BlurVertexOutput blur_fullscreen(uint vertex_id) {
@@ -2231,6 +2317,8 @@ BlurVertexOutput blur_fullscreen(uint vertex_id) {
     BlurVertexOutput output;
     output.uv = uv;
     output.position = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    output.horizontal_corner_budgets = float4(0.0, 0.0, 0.0, 0.0);
+    output.vertical_corner_budgets = float4(0.0, 0.0, 0.0, 0.0);
     return output;
 }
 
@@ -2274,17 +2362,33 @@ float4 blur_fragment(BlurVertexOutput input): SV_Target {
 
 struct BlurCompositeVertexOutput {
     float4 position: SV_Position;
+    nointerpolation float4 horizontal_corner_budgets: TEXCOORD0;
+    nointerpolation float4 vertical_corner_budgets: TEXCOORD1;
     float4 clip_distance: SV_ClipDistance;
 };
 
 struct BlurCompositeFragmentInput {
     float4 position: SV_Position;
+    nointerpolation float4 horizontal_corner_budgets: TEXCOORD0;
+    nointerpolation float4 vertical_corner_budgets: TEXCOORD1;
 };
 
 BlurCompositeVertexOutput blur_composite_vertex(uint vertex_id: SV_VertexID) {
     float2 unit_vertex = float2(float(vertex_id & 1u), 0.5 * float(vertex_id & 2u));
     BlurCompositeVertexOutput output;
     output.position = to_device_position(unit_vertex, blur_bounds);
+    output.horizontal_corner_budgets = blur_corner_radii;
+    output.vertical_corner_budgets = blur_corner_radii;
+    if (blur_clip_rounded > 0.5 && blur_corner_smoothing > 0.0) {
+        Corners radii;
+        radii.top_left = blur_corner_radii.x;
+        radii.top_right = blur_corner_radii.y;
+        radii.bottom_right = blur_corner_radii.z;
+        radii.bottom_left = blur_corner_radii.w;
+        FigmaCornerLayout layout = figma_corner_layout(blur_bounds.size, radii);
+        output.horizontal_corner_budgets = layout.horizontal_budgets;
+        output.vertical_corner_budgets = layout.vertical_budgets;
+    }
     output.clip_distance = distance_from_clip_rect(unit_vertex, blur_bounds, blur_content_mask);
     return output;
 }
@@ -2302,10 +2406,20 @@ float4 blur_composite_fragment(BlurCompositeFragmentInput input): SV_Target {
     radii.top_right = blur_corner_radii.y;
     radii.bottom_right = blur_corner_radii.z;
     radii.bottom_left = blur_corner_radii.w;
-    float distance = quad_sdf(input.position.xy, blur_bounds, radii);
     // Backdrop clips to the rounded rect (the panel has a defined shape); content blur bleeds past
     // its bounds like CSS `filter: blur`, so its shape comes from the blurred group's own alpha.
-    float coverage = blur_clip_rounded > 0.5 ? saturate(0.5 - distance) : 1.0;
+    float coverage = 1.0;
+    if (blur_clip_rounded > 0.5) {
+        float distance = styled_rect_sdf(
+            input.position.xy,
+            blur_bounds,
+            radii,
+            input.horizontal_corner_budgets,
+            input.vertical_corner_budgets,
+            blur_corner_smoothing
+        );
+        coverage = saturate(0.5 - distance);
+    }
     // The blurred sample is premultiplied (blurring against the transparent surround scales rgb
     // with the fading alpha), so output premultiplied and use a premultiplied-blend state. A
     // backdrop's scene is opaque (so this replaces); a content-filter group is transparent outside

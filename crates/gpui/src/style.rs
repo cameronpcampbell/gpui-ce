@@ -781,13 +781,19 @@ impl Style {
             .corner_radii
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
+        let corner_smoothing = self.corner_smoothing;
 
-        window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
+        window.paint_drop_shadows(bounds, corner_radii, corner_smoothing, &self.box_shadow);
 
         // Blur the content behind this element before its (typically translucent) background
         // is painted on top, so the background tints the frosted backdrop (CSS `backdrop-filter`).
         if !self.backdrop_filter.is_empty() {
-            window.paint_backdrop_filter(bounds, corner_radii, &self.backdrop_filter);
+            window.paint_backdrop_filter(
+                bounds,
+                corner_radii,
+                corner_smoothing,
+                &self.backdrop_filter,
+            );
         }
 
         // The element's own box — background, inset shadows, children, and border — painted as a
@@ -824,7 +830,7 @@ impl Style {
                 );
             }
 
-            window.paint_inset_shadows(bounds, corner_radii, &self.box_shadow);
+            window.paint_inset_shadows(bounds, corner_radii, corner_smoothing, &self.box_shadow);
 
             continuation(window, cx);
 
@@ -849,9 +855,15 @@ impl Style {
         if self.filter.is_empty() {
             paint_box(window, cx);
         } else {
-            window.with_filter_layer(bounds, corner_radii, &self.filter, |window| {
-                paint_box(window, cx);
-            });
+            window.with_filter_layer(
+                bounds,
+                corner_radii,
+                corner_smoothing,
+                &self.filter,
+                |window| {
+                    paint_box(window, cx);
+                },
+            );
         }
 
         #[cfg(debug_assertions)]
