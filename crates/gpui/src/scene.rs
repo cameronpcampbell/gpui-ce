@@ -697,6 +697,74 @@ pub struct Quad {
     pub pad: u32,
 }
 
+impl Quad {
+    /// Returns four non-overlapping strips for a quad that has a border but no background. The
+    /// side strips own the straight vertical edges, while the top and bottom strips own the
+    /// horizontal edges and corners.
+    ///
+    /// Returns `None` when the quad requires full-quad rendering.
+    pub(crate) fn border_only_strip_bounds(&self) -> Option<[Bounds<ScaledPixels>; 4]> {
+        if !self.background.is_transparent() {
+            return None;
+        }
+
+        let radii = &self.corner_radii;
+        let widths = &self.border_widths;
+
+        // The shader's corner extent on either axis cannot exceed this value, even after its
+        // radius and axis-budget clamps. The top and bottom strips own the corners, so only their
+        // depths need to grow with smoothing.
+        #[inline(always)]
+        fn corner_reach(radius: ScaledPixels, corner_smoothing: f32) -> ScaledPixels {
+            radius.max(ScaledPixels(0.0)) * (1.0 + corner_smoothing)
+        }
+
+        let top_corner_reach = corner_reach(radii.top_left, self.corner_smoothing)
+            .max(corner_reach(radii.top_right, self.corner_smoothing));
+
+        let bottom_corner_reach = corner_reach(radii.bottom_left, self.corner_smoothing)
+            .max(corner_reach(radii.bottom_right, self.corner_smoothing));
+
+        let antialias_slack = point(ScaledPixels(1.0), ScaledPixels(1.0));
+        let top_left_inset = point(widths.left, widths.top.max(top_corner_reach)) + antialias_slack;
+        let bottom_right_inset =
+            point(widths.right, widths.bottom.max(bottom_corner_reach)) + antialias_slack;
+
+        let outer_bounds = self.bounds;
+        let inner_bounds = Bounds::from_corners(
+            outer_bounds.origin + top_left_inset,
+            outer_bounds.bottom_right() - bottom_right_inset,
+        );
+
+        if inner_bounds.is_empty() {
+            return None;
+        }
+
+        Some([
+            // Top
+            Bounds::from_corners(
+                outer_bounds.origin,
+                point(outer_bounds.right(), inner_bounds.top()),
+            ),
+            // Bottom
+            Bounds::from_corners(
+                point(outer_bounds.left(), inner_bounds.bottom()),
+                outer_bounds.bottom_right(),
+            ),
+            // Left
+            Bounds::from_corners(
+                point(outer_bounds.left(), inner_bounds.top()),
+                inner_bounds.bottom_left(),
+            ),
+            // Right
+            Bounds::from_corners(
+                inner_bounds.top_right(),
+                point(outer_bounds.right(), inner_bounds.bottom()),
+            ),
+        ])
+    }
+}
+
 impl From<Quad> for Primitive {
     fn from(quad: Quad) -> Self {
         Primitive::Quad(quad)
@@ -1198,6 +1266,47 @@ mod tests {
             content_mask: mask(),
             ..Default::default()
         }
+    }
+
+    fn border_only_quad(corner_smoothing: f32) -> Quad {
+        Quad {
+            bounds: full_bounds(),
+            background: crate::transparent_black().into(),
+            corner_radii: Corners::all(sp(20.0)),
+            border_widths: Edges::all(sp(2.0)),
+            corner_smoothing,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn border_only_strip_bounds_without_corner_smoothing() {
+        let quad = border_only_quad(0.0);
+
+        assert_eq!(
+            quad.border_only_strip_bounds(),
+            Some([
+                Bounds::new(point(sp(0.0), sp(0.0)), Size::new(sp(100.0), sp(21.0))),
+                Bounds::new(point(sp(0.0), sp(79.0)), Size::new(sp(100.0), sp(21.0))),
+                Bounds::new(point(sp(0.0), sp(21.0)), Size::new(sp(3.0), sp(58.0))),
+                Bounds::new(point(sp(97.0), sp(21.0)), Size::new(sp(3.0), sp(58.0))),
+            ])
+        );
+    }
+
+    #[test]
+    fn border_only_strip_bounds_with_corner_smoothing() {
+        let quad = border_only_quad(0.6);
+
+        assert_eq!(
+            quad.border_only_strip_bounds(),
+            Some([
+                Bounds::new(point(sp(0.0), sp(0.0)), Size::new(sp(100.0), sp(33.0))),
+                Bounds::new(point(sp(0.0), sp(67.0)), Size::new(sp(100.0), sp(33.0))),
+                Bounds::new(point(sp(0.0), sp(33.0)), Size::new(sp(3.0), sp(34.0))),
+                Bounds::new(point(sp(97.0), sp(33.0)), Size::new(sp(3.0), sp(34.0))),
+            ])
+        );
     }
 
     /// A 100x100 quad whose bounds don't overlap `full_bounds()` (used to exercise the
