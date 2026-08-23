@@ -3947,11 +3947,14 @@ impl Window {
         let element_bounds = self.cover_bounds(bounds);
         let element_corner_radii = corner_radii.scale(scale_factor);
         let corner_smoothing = corner_smoothing.clamp(0.0, 1.0);
+
         for shadow in shadows {
             if shadow.inset {
                 continue;
             }
+
             let shadow_bounds = (bounds + shadow.offset).dilate(shadow.spread_radius);
+
             self.next_frame.scene.insert_primitive(Shadow {
                 order: 0,
                 blur_radius: shadow.blur_radius.scale(scale_factor),
@@ -3996,10 +3999,12 @@ impl Window {
         let element_bounds = self.cover_bounds(bounds);
         let element_corner_radii = corner_radii.scale(scale_factor);
         let corner_smoothing = corner_smoothing.clamp(0.0, 1.0);
+
         for shadow in shadows {
             if !shadow.inset {
                 continue;
             }
+
             let hole = (bounds + shadow.offset).dilate(-shadow.spread_radius);
             // Clamp at zero so a large spread can't produce negative radii, which would
             // break the SDF in the shader.
@@ -4010,6 +4015,7 @@ impl Window {
                 bottom_right: (corner_radii.bottom_right - shadow.spread_radius).max(zero),
                 bottom_left: (corner_radii.bottom_left - shadow.spread_radius).max(zero),
             };
+
             self.next_frame.scene.insert_primitive(Shadow {
                 order: 0,
                 blur_radius: shadow.blur_radius.scale(scale_factor),
