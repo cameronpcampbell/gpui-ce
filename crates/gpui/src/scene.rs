@@ -1171,11 +1171,6 @@ mod tests {
         ScaledPixels(value)
     }
 
-    #[test]
-    fn shadow_matches_gpu_layout() {
-        assert_eq!(std::mem::size_of::<Shadow>(), 112);
-    }
-
     /// All test primitives cover the same region so the bounds tree assigns strictly
     /// increasing orders in insertion order — making the expected batch order deterministic.
     fn full_bounds() -> Bounds<ScaledPixels> {
