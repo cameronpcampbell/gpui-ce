@@ -61,6 +61,7 @@ impl Render for CornerSmoothingExample {
                             .bg(rgba(0x663399b8).with_alpha(0.5))
                             .backdrop_blur(px(50.))
                             .border_3()
+                            .border_dashed()
                             .border_color(rgba(0xffffff40)),
                     ),
             )

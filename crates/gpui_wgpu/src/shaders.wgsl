@@ -518,7 +518,6 @@ struct FigmaCornerParams {
     radius: f32,
     smoothing: f32,
     arc_sweep: f32,
-    arc_delta: f32,
     c: f32,
     d: f32,
     horizontal: FigmaAxisParams,
@@ -556,15 +555,15 @@ const FIGMA_EPSILON: f32 = 0.000001;
 
 fn figma_corner_params(
     corner_radius: f32,
-    horizontal_budget: f32,
-    vertical_budget: f32,
+    horizontal_reach: f32,
+    vertical_reach: f32,
     corner_smoothing: f32,
 ) -> FigmaCornerParams {
-    let safe_horizontal_budget = max(horizontal_budget, 0.0);
-    let safe_vertical_budget = max(vertical_budget, 0.0);
+    let safe_horizontal_reach = max(horizontal_reach, 0.0);
+    let safe_vertical_reach = max(vertical_reach, 0.0);
     let radius = min(
         max(corner_radius, 0.0),
-        min(safe_horizontal_budget, safe_vertical_budget),
+        min(safe_horizontal_reach, safe_vertical_reach),
     );
     let smoothing = select(
         0.0,
@@ -572,8 +571,6 @@ fn figma_corner_params(
         radius > FIGMA_EPSILON,
     );
     let desired_reach = radius * (1.0 + smoothing);
-    let horizontal_reach = min(desired_reach, safe_horizontal_budget);
-    let vertical_reach = min(desired_reach, safe_vertical_budget);
     let arc_sweep = 0.5 * M_PI_F * (1.0 - smoothing);
     let arc_delta = sin(0.5 * arc_sweep) * radius * sqrt(2.0);
     let beta = (M_PI_F / 4.0) * smoothing;
@@ -582,8 +579,8 @@ fn figma_corner_params(
     let d = join_handle * sin(beta);
     let core_length = arc_delta + c + d;
     let ideal_b = max((desired_reach - core_length) / 3.0, 0.0);
-    let horizontal_available = max(horizontal_reach - core_length, 0.0);
-    let vertical_available = max(vertical_reach - core_length, 0.0);
+    let horizontal_available = max(safe_horizontal_reach - core_length, 0.0);
+    let vertical_available = max(safe_vertical_reach - core_length, 0.0);
     let shared_b = min(
         ideal_b,
         min(horizontal_available * (5.0 / 6.0), vertical_available * (5.0 / 6.0)),
@@ -593,15 +590,14 @@ fn figma_corner_params(
     params.radius = radius;
     params.smoothing = smoothing;
     params.arc_sweep = arc_sweep;
-    params.arc_delta = arc_delta;
     params.c = c;
     params.d = d;
     params.horizontal.a = horizontal_available - shared_b;
     params.horizontal.b = shared_b;
-    params.horizontal.p = horizontal_reach;
+    params.horizontal.p = safe_horizontal_reach;
     params.vertical.a = vertical_available - shared_b;
     params.vertical.b = shared_b;
-    params.vertical.p = vertical_reach;
+    params.vertical.p = safe_vertical_reach;
     return params;
 }
 
@@ -634,15 +630,14 @@ fn figma_cubic_point(
     d: f32,
     t: f32,
 ) -> vec2<f32> {
-    let p0 = vec2<f32>(0.0, 0.0);
-    let p1 = vec2<f32>(axis.a, 0.0);
-    let p2 = vec2<f32>(axis.a + axis.b, 0.0);
-    let p3 = vec2<f32>(axis.a + axis.b + c, d);
-    let u = 1.0 - t;
-    return u * u * u * p0 +
-        3.0 * u * u * t * p1 +
-        3.0 * u * t * t * p2 +
-        t * t * t * p3;
+    let x1 = 3.0 * axis.a;
+    let x2 = 3.0 * (axis.b - axis.a);
+    let x3 = axis.a - 2.0 * axis.b + c;
+    let t2 = t * t;
+    return vec2<f32>(
+        t * (x1 + t * (x2 + t * x3)),
+        d * t2 * t,
+    );
 }
 
 fn figma_cubic_derivative(
@@ -651,14 +646,14 @@ fn figma_cubic_derivative(
     d: f32,
     t: f32,
 ) -> vec2<f32> {
-    let p0 = vec2<f32>(0.0, 0.0);
-    let p1 = vec2<f32>(axis.a, 0.0);
-    let p2 = vec2<f32>(axis.a + axis.b, 0.0);
-    let p3 = vec2<f32>(axis.a + axis.b + c, d);
-    let u = 1.0 - t;
-    return 3.0 * u * u * (p1 - p0) +
-        6.0 * u * t * (p2 - p1) +
-        3.0 * t * t * (p3 - p2);
+    let x1 = 3.0 * axis.a;
+    let x2 = 3.0 * (axis.b - axis.a);
+    let x3 = axis.a - 2.0 * axis.b + c;
+    let t2 = t * t;
+    return vec2<f32>(
+        x1 + 2.0 * x2 * t + 3.0 * x3 * t2,
+        3.0 * d * t2,
+    );
 }
 
 fn figma_cubic_second_derivative(
@@ -667,12 +662,12 @@ fn figma_cubic_second_derivative(
     d: f32,
     t: f32,
 ) -> vec2<f32> {
-    let p0 = vec2<f32>(0.0, 0.0);
-    let p1 = vec2<f32>(axis.a, 0.0);
-    let p2 = vec2<f32>(axis.a + axis.b, 0.0);
-    let p3 = vec2<f32>(axis.a + axis.b + c, d);
-    return 6.0 * (1.0 - t) * (p2 - 2.0 * p1 + p0) +
-        6.0 * t * (p3 - 2.0 * p2 + p1);
+    let x2 = 3.0 * (axis.b - axis.a);
+    let x3 = axis.a - 2.0 * axis.b + c;
+    return vec2<f32>(
+        2.0 * x2 + 6.0 * x3 * t,
+        6.0 * d * t,
+    );
 }
 
 fn closest_figma_cubic(
@@ -902,18 +897,21 @@ fn figma_corner_length(params: FigmaCornerParams) -> f32 {
         figma_cubic_length(params, params.vertical, 1.0);
 }
 
-fn figma_corner_progress(params: FigmaCornerParams, sample: SdfSample) -> f32 {
-    let horizontal_length = figma_cubic_length(params, params.horizontal, 1.0);
-    let vertical_length = figma_cubic_length(params, params.vertical, 1.0);
+fn figma_corner_progress(
+    params: FigmaCornerParams,
+    sample: SdfSample,
+    total_length: f32,
+) -> f32 {
     if (sample.segment == FIGMA_SEGMENT_FIRST_CUBIC) {
         return figma_cubic_length(params, params.horizontal, sample.path_t);
     }
     if (sample.segment == FIGMA_SEGMENT_ARC) {
-        return horizontal_length + params.radius * params.arc_sweep * sample.path_t;
+        return figma_cubic_length(params, params.horizontal, 1.0) +
+            params.radius * params.arc_sweep * sample.path_t;
     }
     if (sample.segment == FIGMA_SEGMENT_SECOND_CUBIC) {
-        return horizontal_length + params.radius * params.arc_sweep +
-            vertical_length - figma_cubic_length(params, params.vertical, sample.path_t);
+        return total_length -
+            figma_cubic_length(params, params.vertical, sample.path_t);
     }
     return 0.0;
 }
@@ -984,110 +982,111 @@ fn figma_orient_corner_normal(normal: vec2<f32>, corner: u32) -> vec2<f32> {
     }
 }
 
-fn figma_line_segment_sample(
-    point: vec2<f32>,
-    start: vec2<f32>,
-    end: vec2<f32>,
-    normal: vec2<f32>,
-) -> SdfSample {
-    let line = end - start;
-    let path_t = clamp(
-        dot(point - start, line) / max(dot(line, line), FIGMA_EPSILON),
-        0.0,
-        1.0,
-    );
-    let closest = mix(start, end, path_t);
-    let delta = point - closest;
-    var sample: SdfSample;
-    sample.distance = figma_signed_distance(delta, normal, length(delta));
-    sample.normal = normal;
-    sample.path_t = path_t;
-    sample.segment = FIGMA_SEGMENT_STRAIGHT;
-    return sample;
-}
-
 fn figma_nearest_straight_sample(
     point: vec2<f32>,
     size: vec2<f32>,
     horizontal_extents: vec4<f32>,
     vertical_extents: vec4<f32>,
 ) -> SdfSample {
-    var nearest = figma_line_segment_sample(
-        point,
-        vec2<f32>(horizontal_extents.x, 0.0),
-        vec2<f32>(size.x - horizontal_extents.y, 0.0),
-        vec2<f32>(0.0, -1.0),
+    var nearest_delta = point - vec2<f32>(
+        clamp(point.x, horizontal_extents.x, size.x - horizontal_extents.y),
+        0.0,
     );
+    var nearest_normal = vec2<f32>(0.0, -1.0);
+    var nearest_distance_squared = dot(nearest_delta, nearest_delta);
 
-    var candidate = figma_line_segment_sample(
-        point,
-        vec2<f32>(size.x, vertical_extents.y),
-        vec2<f32>(size.x, size.y - vertical_extents.z),
-        vec2<f32>(1.0, 0.0),
+    var candidate_delta = point - vec2<f32>(
+        size.x,
+        clamp(point.y, vertical_extents.y, size.y - vertical_extents.z),
     );
-    if (abs(candidate.distance) < abs(nearest.distance)) {
-        nearest = candidate;
+    var candidate_distance_squared = dot(candidate_delta, candidate_delta);
+    if (candidate_distance_squared < nearest_distance_squared) {
+        nearest_delta = candidate_delta;
+        nearest_normal = vec2<f32>(1.0, 0.0);
+        nearest_distance_squared = candidate_distance_squared;
     }
 
-    candidate = figma_line_segment_sample(
-        point,
-        vec2<f32>(horizontal_extents.w, size.y),
-        vec2<f32>(size.x - horizontal_extents.z, size.y),
-        vec2<f32>(0.0, 1.0),
+    candidate_delta = point - vec2<f32>(
+        clamp(point.x, horizontal_extents.w, size.x - horizontal_extents.z),
+        size.y,
     );
-    if (abs(candidate.distance) < abs(nearest.distance)) {
-        nearest = candidate;
+    candidate_distance_squared = dot(candidate_delta, candidate_delta);
+    if (candidate_distance_squared < nearest_distance_squared) {
+        nearest_delta = candidate_delta;
+        nearest_normal = vec2<f32>(0.0, 1.0);
+        nearest_distance_squared = candidate_distance_squared;
     }
 
-    candidate = figma_line_segment_sample(
-        point,
-        vec2<f32>(0.0, vertical_extents.x),
-        vec2<f32>(0.0, size.y - vertical_extents.w),
-        vec2<f32>(-1.0, 0.0),
+    candidate_delta = point - vec2<f32>(
+        0.0,
+        clamp(point.y, vertical_extents.x, size.y - vertical_extents.w),
     );
-    if (abs(candidate.distance) < abs(nearest.distance)) {
-        nearest = candidate;
+    candidate_distance_squared = dot(candidate_delta, candidate_delta);
+    if (candidate_distance_squared < nearest_distance_squared) {
+        nearest_delta = candidate_delta;
+        nearest_normal = vec2<f32>(-1.0, 0.0);
+        nearest_distance_squared = candidate_distance_squared;
     }
-    return nearest;
+
+    var sample: SdfSample;
+    sample.distance = figma_signed_distance(
+        nearest_delta,
+        nearest_normal,
+        sqrt(nearest_distance_squared),
+    );
+    sample.normal = nearest_normal;
+    sample.path_t = 0.0;
+    sample.segment = FIGMA_SEGMENT_STRAIGHT;
+    return sample;
 }
 
 fn figma_smooth_rect_sdf_sample(
     point: vec2<f32>,
     bounds: Bounds,
     corner_radii: Corners,
-    horizontal_budgets: vec4<f32>,
-    vertical_budgets: vec4<f32>,
+    horizontal_reaches: vec4<f32>,
+    vertical_reaches: vec4<f32>,
     corner_smoothing: f32,
 ) -> FigmaRectSample {
     let local_point = point - bounds.origin;
-    let corner_extents = figma_corner_extents(
-        corner_radii,
-        horizontal_budgets,
-        vertical_budgets,
-        corner_smoothing,
-    );
     let radii = corner_values(corner_radii);
     var result: FigmaRectSample;
+    result.corner = FIGMA_NO_CORNER;
+
+    if (!figma_has_corner_candidate(
+        local_point,
+        bounds.size,
+        horizontal_reaches,
+        vertical_reaches,
+    )) {
+        result.sdf = figma_nearest_straight_sample(
+            local_point,
+            bounds.size,
+            horizontal_reaches,
+            vertical_reaches,
+        );
+        return result;
+    }
+
     result.sdf = figma_nearest_straight_sample(
         local_point,
         bounds.size,
-        corner_extents.horizontal,
-        corner_extents.vertical,
+        horizontal_reaches,
+        vertical_reaches,
     );
-    result.corner = FIGMA_NO_CORNER;
 
     for (var corner = 0u; corner < 4u; corner += 1u) {
         if (figma_is_corner_candidate(
             local_point,
             bounds.size,
-            corner_extents.horizontal[corner],
-            corner_extents.vertical[corner],
+            horizontal_reaches[corner],
+            vertical_reaches[corner],
             corner,
         )) {
             let params = figma_corner_params(
                 radii[corner],
-                horizontal_budgets[corner],
-                vertical_budgets[corner],
+                horizontal_reaches[corner],
+                vertical_reaches[corner],
                 corner_smoothing,
             );
             if (params.radius > FIGMA_EPSILON) {
@@ -1113,16 +1112,16 @@ fn figma_smooth_rect_sdf(
     point: vec2<f32>,
     bounds: Bounds,
     corner_radii: Corners,
-    horizontal_budgets: vec4<f32>,
-    vertical_budgets: vec4<f32>,
+    horizontal_reaches: vec4<f32>,
+    vertical_reaches: vec4<f32>,
     corner_smoothing: f32,
 ) -> f32 {
     return figma_smooth_rect_sdf_sample(
         point,
         bounds,
         corner_radii,
-        horizontal_budgets,
-        vertical_budgets,
+        horizontal_reaches,
+        vertical_reaches,
         corner_smoothing,
     ).sdf.distance;
 }
@@ -1131,8 +1130,8 @@ fn styled_rect_sdf(
     point: vec2<f32>,
     bounds: Bounds,
     corner_radii: Corners,
-    horizontal_budgets: vec4<f32>,
-    vertical_budgets: vec4<f32>,
+    horizontal_reaches: vec4<f32>,
+    vertical_reaches: vec4<f32>,
     corner_smoothing: f32,
 ) -> f32 {
     if corner_smoothing <= 0.0 ||
@@ -1144,8 +1143,8 @@ fn styled_rect_sdf(
         point,
         bounds,
         corner_radii,
-        horizontal_budgets,
-        vertical_budgets,
+        horizontal_reaches,
+        vertical_reaches,
         corner_smoothing,
     );
 }
@@ -1308,8 +1307,9 @@ struct QuadVarying {
     @location(3) @interpolate(flat) background_solid: vec4<f32>,
     @location(4) @interpolate(flat) background_color0: vec4<f32>,
     @location(5) @interpolate(flat) background_color1: vec4<f32>,
-    @location(6) @interpolate(flat) horizontal_corner_budgets: vec4<f32>,
-    @location(7) @interpolate(flat) vertical_corner_budgets: vec4<f32>,
+    @location(6) @interpolate(flat) horizontal_corner_reaches: vec4<f32>,
+    @location(7) @interpolate(flat) vertical_corner_reaches: vec4<f32>,
+    @location(8) @interpolate(flat) corner_lengths: vec4<f32>,
 }
 
 @vertex
@@ -1331,13 +1331,33 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     out.background_color1 = gradient.color1;
     out.border_color = hsla_to_rgba(quad.border_color);
     out.quad_id = instance_id;
-    out.horizontal_corner_budgets = corner_values(quad.corner_radii);
-    out.vertical_corner_budgets = corner_values(quad.corner_radii);
+    out.horizontal_corner_reaches = corner_values(quad.corner_radii);
+    out.vertical_corner_reaches = corner_values(quad.corner_radii);
     if (quad.corner_smoothing > 0.0) {
         let corner_layout = figma_corner_layout(quad.bounds.size, quad.corner_radii);
-        out.horizontal_corner_budgets = corner_layout.horizontal_budgets;
-        out.vertical_corner_budgets = corner_layout.vertical_budgets;
+        let corner_extents = figma_corner_extents(
+            quad.corner_radii,
+            corner_layout.horizontal_budgets,
+            corner_layout.vertical_budgets,
+            quad.corner_smoothing,
+        );
+        out.horizontal_corner_reaches = corner_extents.horizontal;
+        out.vertical_corner_reaches = corner_extents.vertical;
     }
+    var corner_lengths = corner_values(quad.corner_radii) * (M_PI_F / 2.0);
+    if (quad.border_style == 1u && quad.corner_smoothing > 0.0) {
+        let radii = corner_values(quad.corner_radii);
+        for (var corner = 0u; corner < 4u; corner += 1u) {
+            let params = figma_corner_params(
+                radii[corner],
+                out.horizontal_corner_reaches[corner],
+                out.vertical_corner_reaches[corner],
+                quad.corner_smoothing,
+            );
+            corner_lengths[corner] = figma_corner_length(params);
+        }
+    }
+    out.corner_lengths = corner_lengths;
     out.clip_distances = distance_from_clip_rect(unit_vertex, quad.bounds, quad.content_mask);
     return out;
 }
@@ -1385,14 +1405,8 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     var smooth_corner = FIGMA_NO_CORNER;
     var has_smooth_corner_candidate = false;
     if (quad.corner_smoothing > 0.0) {
-        let corner_extents = figma_corner_extents(
-            quad.corner_radii,
-            input.horizontal_corner_budgets,
-            input.vertical_corner_budgets,
-            quad.corner_smoothing,
-        );
-        horizontal_corner_extents = corner_extents.horizontal;
-        vertical_corner_extents = corner_extents.vertical;
+        horizontal_corner_extents = input.horizontal_corner_reaches;
+        vertical_corner_extents = input.vertical_corner_reaches;
         has_smooth_corner_candidate = figma_has_corner_candidate(
             point,
             size,
@@ -1465,8 +1479,8 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
             input.position.xy,
             quad.bounds,
             quad.corner_radii,
-            input.horizontal_corner_budgets,
-            input.vertical_corner_budgets,
+            input.horizontal_corner_reaches,
+            input.vertical_corner_reaches,
             quad.corner_smoothing,
         );
         figma_sample = rect_sample.sdf;
@@ -1664,44 +1678,10 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                 let corner_dash_velocity_bl = corner_dash_velocity(dv_b, dv_l);
                 let corner_dash_velocity_tl = corner_dash_velocity(dv_t, dv_l);
 
-                var params_tl: FigmaCornerParams;
-                var params_tr: FigmaCornerParams;
-                var params_br: FigmaCornerParams;
-                var params_bl: FigmaCornerParams;
-                var length_tl = quad.corner_radii.top_left * (M_PI_F / 2.0);
-                var length_tr = quad.corner_radii.top_right * (M_PI_F / 2.0);
-                var length_br = quad.corner_radii.bottom_right * (M_PI_F / 2.0);
-                var length_bl = quad.corner_radii.bottom_left * (M_PI_F / 2.0);
-                if (quad.corner_smoothing > 0.0) {
-                    params_tl = figma_corner_params(
-                        quad.corner_radii.top_left,
-                        input.horizontal_corner_budgets.x,
-                        input.vertical_corner_budgets.x,
-                        quad.corner_smoothing,
-                    );
-                    params_tr = figma_corner_params(
-                        quad.corner_radii.top_right,
-                        input.horizontal_corner_budgets.y,
-                        input.vertical_corner_budgets.y,
-                        quad.corner_smoothing,
-                    );
-                    params_br = figma_corner_params(
-                        quad.corner_radii.bottom_right,
-                        input.horizontal_corner_budgets.z,
-                        input.vertical_corner_budgets.z,
-                        quad.corner_smoothing,
-                    );
-                    params_bl = figma_corner_params(
-                        quad.corner_radii.bottom_left,
-                        input.horizontal_corner_budgets.w,
-                        input.vertical_corner_budgets.w,
-                        quad.corner_smoothing,
-                    );
-                    length_tl = figma_corner_length(params_tl);
-                    length_tr = figma_corner_length(params_tr);
-                    length_br = figma_corner_length(params_br);
-                    length_bl = figma_corner_length(params_bl);
-                }
+                let length_tl = input.corner_lengths.x;
+                let length_tr = input.corner_lengths.y;
+                let length_br = input.corner_lengths.z;
+                let length_bl = input.corner_lengths.w;
 
                 let c_tr = length_tr * corner_dash_velocity_tr;
                 let c_br = length_br * corner_dash_velocity_br;
@@ -1720,26 +1700,41 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
 
                 if (is_near_rounded_corner) {
                     if (quad.corner_smoothing > 0.0) {
-                        var selected_params = params_tl;
+                        var selected_radius = quad.corner_radii.top_left;
+                        var selected_horizontal_reach = input.horizontal_corner_reaches.x;
+                        var selected_vertical_reach = input.vertical_corner_reaches.x;
                         var selected_length = length_tl;
                         switch smooth_corner {
                             case 1u: {
-                                selected_params = params_tr;
+                                selected_radius = quad.corner_radii.top_right;
+                                selected_horizontal_reach = input.horizontal_corner_reaches.y;
+                                selected_vertical_reach = input.vertical_corner_reaches.y;
                                 selected_length = length_tr;
                             }
                             case 2u: {
-                                selected_params = params_br;
+                                selected_radius = quad.corner_radii.bottom_right;
+                                selected_horizontal_reach = input.horizontal_corner_reaches.z;
+                                selected_vertical_reach = input.vertical_corner_reaches.z;
                                 selected_length = length_br;
                             }
                             case 3u: {
-                                selected_params = params_bl;
+                                selected_radius = quad.corner_radii.bottom_left;
+                                selected_horizontal_reach = input.horizontal_corner_reaches.w;
+                                selected_vertical_reach = input.vertical_corner_reaches.w;
                                 selected_length = length_bl;
                             }
                             default: {}
                         }
+                        let selected_params = figma_corner_params(
+                            selected_radius,
+                            selected_horizontal_reach,
+                            selected_vertical_reach,
+                            quad.corner_smoothing,
+                        );
                         let corner_progress = figma_corner_progress(
                             selected_params,
                             figma_sample,
+                            selected_length,
                         );
                         switch smooth_corner {
                             case 0u: {
@@ -1932,10 +1927,10 @@ struct ShadowVarying {
     @location(1) @interpolate(flat) shadow_id: u32,
     //TODO: use `clip_distance` once Naga supports it
     @location(3) clip_distances: vec4<f32>,
-    @location(4) @interpolate(flat) horizontal_corner_budgets: vec4<f32>,
-    @location(5) @interpolate(flat) vertical_corner_budgets: vec4<f32>,
-    @location(6) @interpolate(flat) element_horizontal_corner_budgets: vec4<f32>,
-    @location(7) @interpolate(flat) element_vertical_corner_budgets: vec4<f32>,
+    @location(4) @interpolate(flat) horizontal_corner_reaches: vec4<f32>,
+    @location(5) @interpolate(flat) vertical_corner_reaches: vec4<f32>,
+    @location(6) @interpolate(flat) element_horizontal_corner_reaches: vec4<f32>,
+    @location(7) @interpolate(flat) element_vertical_corner_reaches: vec4<f32>,
 }
 
 @vertex
@@ -1959,21 +1954,33 @@ fn vs_shadow(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) ins
     out.color = hsla_to_rgba(shadow.color);
     out.shadow_id = instance_id;
     out.clip_distances = distance_from_clip_rect(unit_vertex, geometry, shadow.content_mask);
-    out.horizontal_corner_budgets = corner_values(shadow.corner_radii);
-    out.vertical_corner_budgets = corner_values(shadow.corner_radii);
-    out.element_horizontal_corner_budgets = corner_values(shadow.element_corner_radii);
-    out.element_vertical_corner_budgets = corner_values(shadow.element_corner_radii);
+    out.horizontal_corner_reaches = corner_values(shadow.corner_radii);
+    out.vertical_corner_reaches = corner_values(shadow.corner_radii);
+    out.element_horizontal_corner_reaches = corner_values(shadow.element_corner_radii);
+    out.element_vertical_corner_reaches = corner_values(shadow.element_corner_radii);
     if (shadow.corner_smoothing > 0.0) {
         let corner_layout = figma_corner_layout(shadow.bounds.size, shadow.corner_radii);
-        out.horizontal_corner_budgets = corner_layout.horizontal_budgets;
-        out.vertical_corner_budgets = corner_layout.vertical_budgets;
+        let corner_extents = figma_corner_extents(
+            shadow.corner_radii,
+            corner_layout.horizontal_budgets,
+            corner_layout.vertical_budgets,
+            shadow.corner_smoothing,
+        );
+        out.horizontal_corner_reaches = corner_extents.horizontal;
+        out.vertical_corner_reaches = corner_extents.vertical;
 
         let element_layout = figma_corner_layout(
             shadow.element_bounds.size,
             shadow.element_corner_radii,
         );
-        out.element_horizontal_corner_budgets = element_layout.horizontal_budgets;
-        out.element_vertical_corner_budgets = element_layout.vertical_budgets;
+        let element_extents = figma_corner_extents(
+            shadow.element_corner_radii,
+            element_layout.horizontal_budgets,
+            element_layout.vertical_budgets,
+            shadow.corner_smoothing,
+        );
+        out.element_horizontal_corner_reaches = element_extents.horizontal;
+        out.element_vertical_corner_reaches = element_extents.vertical;
     }
     return out;
 }
@@ -1991,7 +1998,7 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
     let center_to_point = input.position.xy - center;
 
     let corner_radius = pick_corner_radius(center_to_point, shadow.corner_radii);
-    let has_smoothed_corners = shadow.corner_smoothing > 0.0 &&
+    let has_rounded_corners =
         any(corner_values(shadow.corner_radii) > vec4<f32>(0.0));
 
     var alpha: f32;
@@ -2000,18 +2007,18 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
             input.position.xy,
             shadow.bounds,
             shadow.corner_radii,
-            input.horizontal_corner_budgets,
-            input.vertical_corner_budgets,
+            input.horizontal_corner_reaches,
+            input.vertical_corner_reaches,
             shadow.corner_smoothing,
         );
         alpha = saturate(0.5 - distance);
-    } else if (has_smoothed_corners) {
+    } else if (has_rounded_corners) {
         let distance = styled_rect_sdf(
             input.position.xy,
             shadow.bounds,
             shadow.corner_radii,
-            input.horizontal_corner_budgets,
-            input.vertical_corner_budgets,
+            input.horizontal_corner_reaches,
+            input.vertical_corner_reaches,
             shadow.corner_smoothing,
         );
         alpha = gaussian_sdf_coverage(distance, shadow.blur_radius);
@@ -2042,8 +2049,8 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
             input.position.xy,
             shadow.element_bounds,
             shadow.element_corner_radii,
-            input.element_horizontal_corner_budgets,
-            input.element_vertical_corner_budgets,
+            input.element_horizontal_corner_reaches,
+            input.element_vertical_corner_reaches,
             shadow.corner_smoothing,
         );
         alpha *= saturate(0.5 - element_distance);
@@ -2283,8 +2290,8 @@ struct PolySpriteVarying {
     @builtin(position) position: vec4<f32>,
     @location(0) tile_position: vec2<f32>,
     @location(1) @interpolate(flat) sprite_id: u32,
-    @location(2) @interpolate(flat) horizontal_corner_budgets: vec4<f32>,
-    @location(3) @interpolate(flat) vertical_corner_budgets: vec4<f32>,
+    @location(2) @interpolate(flat) horizontal_corner_reaches: vec4<f32>,
+    @location(3) @interpolate(flat) vertical_corner_reaches: vec4<f32>,
     @location(4) clip_distances: vec4<f32>,
 }
 
@@ -2297,12 +2304,18 @@ fn vs_poly_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     out.position = to_device_position(unit_vertex, sprite.bounds);
     out.tile_position = to_tile_position(unit_vertex, sprite.tile);
     out.sprite_id = instance_id;
-    out.horizontal_corner_budgets = corner_values(sprite.corner_radii);
-    out.vertical_corner_budgets = corner_values(sprite.corner_radii);
+    out.horizontal_corner_reaches = corner_values(sprite.corner_radii);
+    out.vertical_corner_reaches = corner_values(sprite.corner_radii);
     if (sprite.corner_smoothing > 0.0) {
         let corner_layout = figma_corner_layout(sprite.bounds.size, sprite.corner_radii);
-        out.horizontal_corner_budgets = corner_layout.horizontal_budgets;
-        out.vertical_corner_budgets = corner_layout.vertical_budgets;
+        let corner_extents = figma_corner_extents(
+            sprite.corner_radii,
+            corner_layout.horizontal_budgets,
+            corner_layout.vertical_budgets,
+            sprite.corner_smoothing,
+        );
+        out.horizontal_corner_reaches = corner_extents.horizontal;
+        out.vertical_corner_reaches = corner_extents.vertical;
     }
     out.clip_distances = distance_from_clip_rect(unit_vertex, sprite.bounds, sprite.content_mask);
     return out;
@@ -2324,8 +2337,8 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
             input.position.xy,
             sprite.bounds,
             sprite.corner_radii,
-            input.horizontal_corner_budgets,
-            input.vertical_corner_budgets,
+            input.horizontal_corner_reaches,
+            input.vertical_corner_reaches,
             sprite.corner_smoothing,
         );
     } else {
@@ -2423,8 +2436,8 @@ struct BlurParams {
 struct BlurVarying {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
-    @location(1) @interpolate(flat) horizontal_corner_budgets: vec4<f32>,
-    @location(2) @interpolate(flat) vertical_corner_budgets: vec4<f32>,
+    @location(1) @interpolate(flat) horizontal_corner_reaches: vec4<f32>,
+    @location(2) @interpolate(flat) vertical_corner_reaches: vec4<f32>,
     @location(3) clip_distances: vec4<f32>,
 }
 
@@ -2435,8 +2448,8 @@ fn vs_blur_fullscreen(@builtin(vertex_index) vertex_id: u32) -> BlurVarying {
     var out = BlurVarying();
     out.uv = uv;
     out.position = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
-    out.horizontal_corner_budgets = vec4<f32>(0.0);
-    out.vertical_corner_budgets = vec4<f32>(0.0);
+    out.horizontal_corner_reaches = vec4<f32>(0.0);
+    out.vertical_corner_reaches = vec4<f32>(0.0);
     out.clip_distances = vec4<f32>(1.0);
     return out;
 }
@@ -2480,8 +2493,8 @@ fn vs_blur_composite(@builtin(vertex_index) vertex_id: u32) -> BlurVarying {
     var out = BlurVarying();
     out.position = to_device_position(unit_vertex, blur_locals.bounds);
     out.uv = unit_vertex;
-    out.horizontal_corner_budgets = blur_locals.corner_radii;
-    out.vertical_corner_budgets = blur_locals.corner_radii;
+    out.horizontal_corner_reaches = blur_locals.corner_radii;
+    out.vertical_corner_reaches = blur_locals.corner_radii;
     if (blur_locals.clip_rounded > 0.5 && blur_locals.corner_smoothing > 0.0) {
         let corner_radii = Corners(
             blur_locals.corner_radii.x,
@@ -2490,8 +2503,14 @@ fn vs_blur_composite(@builtin(vertex_index) vertex_id: u32) -> BlurVarying {
             blur_locals.corner_radii.w,
         );
         let corner_layout = figma_corner_layout(blur_locals.bounds.size, corner_radii);
-        out.horizontal_corner_budgets = corner_layout.horizontal_budgets;
-        out.vertical_corner_budgets = corner_layout.vertical_budgets;
+        let corner_extents = figma_corner_extents(
+            corner_radii,
+            corner_layout.horizontal_budgets,
+            corner_layout.vertical_budgets,
+            blur_locals.corner_smoothing,
+        );
+        out.horizontal_corner_reaches = corner_extents.horizontal;
+        out.vertical_corner_reaches = corner_extents.vertical;
     }
     out.clip_distances = distance_from_clip_rect(unit_vertex, blur_locals.bounds, blur_locals.content_mask);
     return out;
@@ -2526,8 +2545,8 @@ fn fs_blur_composite(input: BlurVarying) -> @location(0) vec4<f32> {
             input.position.xy,
             blur_locals.bounds,
             corner_radii,
-            input.horizontal_corner_budgets,
-            input.vertical_corner_budgets,
+            input.horizontal_corner_reaches,
+            input.vertical_corner_reaches,
             blur_locals.corner_smoothing,
         );
         coverage = saturate(0.5 - distance);
