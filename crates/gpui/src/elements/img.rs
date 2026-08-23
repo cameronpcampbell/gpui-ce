@@ -494,7 +494,7 @@ impl Element for Img {
                             bounds,
                             new_bounds,
                             corner_radii,
-                            style.corner_smoothing.unwrap_or_default(),
+                            style.corner_smoothing.unwrap_or_default().0,
                             data,
                             layout_state.frame_index,
                             self.style.grayscale,

@@ -1,9 +1,9 @@
 use crate::{
     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
     DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
-    FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent, Length, Pixels,
-    SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
-    TextStyleRefinement, TextTransform, UnderlineStyle, WhiteSpace, px, relative, rems,
+    FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, JustifyContent, Length,
+    Percentage, Pixels, SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
+    TextStyleRefinement, TextTransform, UnderlineStyle, WhiteSpace, percentage, px, relative, rems,
 };
 pub use gpui_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -970,14 +970,14 @@ pub trait Styled: Sized {
     }
 
     /// Sets rounded corner smoothing to the specified amount.
-    fn rounded_smoothing(mut self, amount: f32) -> Self {
-        self.style().corner_smoothing = Some(amount.clamp(0.0, 1.0));
+    fn rounded_smoothing(mut self, amount: Percentage) -> Self {
+        self.style().corner_smoothing = Some(amount);
         self
     }
 
-    /// Sets rounded corner smoothing to IOS's squircle value (0.6).
+    /// Sets rounded corner smoothing to iOS's squircle value (0.6).
     fn rounded_smoothing_ios(mut self) -> Self {
-        self.style().corner_smoothing = Some(0.6);
+        self.style().corner_smoothing = Some(percentage(0.6));
         self
     }
 }
