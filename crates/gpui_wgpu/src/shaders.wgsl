@@ -524,6 +524,12 @@ struct FigmaCornerParams {
     vertical: FigmaAxisParams,
 }
 
+struct FigmaCubicEvaluation {
+    point: vec2<f32>,
+    derivative: vec2<f32>,
+    second_derivative: vec2<f32>,
+}
+
 struct CubicClosestPoint {
     point: vec2<f32>,
     tangent: vec2<f32>,
@@ -656,18 +662,31 @@ fn figma_cubic_derivative(
     );
 }
 
-fn figma_cubic_second_derivative(
+fn figma_cubic_evaluation(
     axis: FigmaAxisParams,
     c: f32,
     d: f32,
     t: f32,
-) -> vec2<f32> {
+) -> FigmaCubicEvaluation {
+    let x1 = 3.0 * axis.a;
     let x2 = 3.0 * (axis.b - axis.a);
     let x3 = axis.a - 2.0 * axis.b + c;
-    return vec2<f32>(
+    let t2 = t * t;
+
+    var evaluation: FigmaCubicEvaluation;
+    evaluation.point = vec2<f32>(
+        t * (x1 + t * (x2 + t * x3)),
+        d * t2 * t,
+    );
+    evaluation.derivative = vec2<f32>(
+        x1 + 2.0 * x2 * t + 3.0 * x3 * t2,
+        3.0 * d * t2,
+    );
+    evaluation.second_derivative = vec2<f32>(
         2.0 * x2 + 6.0 * x3 * t,
         6.0 * d * t,
     );
+    return evaluation;
 }
 
 fn closest_figma_cubic(
@@ -695,13 +714,16 @@ fn closest_figma_cubic(
     );
 
     for (var iteration = 0u; iteration < 4u; iteration += 1u) {
-        let curve_point = figma_cubic_point(axis, c, d, t);
-        let tangent = figma_cubic_derivative(axis, c, d, t);
-        let second_derivative = figma_cubic_second_derivative(axis, c, d, t);
-        let delta = curve_point - point;
-        let denominator = dot(tangent, tangent) + dot(delta, second_derivative);
+        let evaluation = figma_cubic_evaluation(axis, c, d, t);
+        let delta = evaluation.point - point;
+        let denominator = dot(evaluation.derivative, evaluation.derivative) +
+            dot(delta, evaluation.second_derivative);
         if (abs(denominator) > 0.000001) {
-            t = clamp(t - dot(delta, tangent) / denominator, 0.0, 1.0);
+            t = clamp(
+                t - dot(delta, evaluation.derivative) / denominator,
+                0.0,
+                1.0,
+            );
         }
     }
 

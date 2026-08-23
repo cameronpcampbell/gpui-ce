@@ -62,6 +62,12 @@ struct FigmaCornerParams {
   FigmaAxisParams vertical;
 };
 
+struct FigmaCubicEvaluation {
+  float2 point;
+  float2 derivative;
+  float2 second_derivative;
+};
+
 struct CubicClosestPoint {
   float2 point;
   float2 tangent;
@@ -1644,13 +1650,24 @@ float2 figma_cubic_derivative(FigmaAxisParams axis, float c, float d,
     3.0 * d * t2);
 }
 
-float2 figma_cubic_second_derivative(FigmaAxisParams axis, float c,
-                                     float d, float t) {
+FigmaCubicEvaluation figma_cubic_evaluation(
+    FigmaAxisParams axis, float c, float d, float t) {
+  float x1 = 3.0 * axis.a;
   float x2 = 3.0 * (axis.b - axis.a);
   float x3 = axis.a - 2.0 * axis.b + c;
-  return float2(
+  float t2 = t * t;
+
+  FigmaCubicEvaluation evaluation;
+  evaluation.point = float2(
+    t * (x1 + t * (x2 + t * x3)),
+    d * t2 * t);
+  evaluation.derivative = float2(
+    x1 + 2.0 * x2 * t + 3.0 * x3 * t2,
+    3.0 * d * t2);
+  evaluation.second_derivative = float2(
     2.0 * x2 + 6.0 * x3 * t,
     6.0 * d * t);
+  return evaluation;
 }
 
 CubicClosestPoint closest_figma_cubic(float2 point, FigmaAxisParams axis,
@@ -1668,15 +1685,16 @@ CubicClosestPoint closest_figma_cubic(float2 point, FigmaAxisParams axis,
     ? chord_seed : y_seed;
 
   for (uint iteration = 0u; iteration < 4u; iteration++) {
-    float2 curve_point = figma_cubic_point(axis, c, d, t);
-    float2 tangent = figma_cubic_derivative(axis, c, d, t);
-    float2 second_derivative =
-      figma_cubic_second_derivative(axis, c, d, t);
-    float2 delta = curve_point - point;
+    FigmaCubicEvaluation evaluation =
+      figma_cubic_evaluation(axis, c, d, t);
+    float2 delta = evaluation.point - point;
     float denominator =
-      dot(tangent, tangent) + dot(delta, second_derivative);
+      dot(evaluation.derivative, evaluation.derivative) +
+      dot(delta, evaluation.second_derivative);
     if (abs(denominator) > FIGMA_EPSILON) {
-      t = clamp(t - dot(delta, tangent) / denominator, 0.0, 1.0);
+      t = clamp(
+        t - dot(delta, evaluation.derivative) / denominator,
+        0.0, 1.0);
     }
   }
 
