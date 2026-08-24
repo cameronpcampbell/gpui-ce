@@ -429,6 +429,92 @@ float2 figma_split_side(float length, float first_radius, float second_radius) {
     return float2(first_budget, length - first_budget);
 }
 
+void figma_sort_corner_pair(
+    inout float first_radius,
+    inout int first_corner,
+    inout float second_radius,
+    inout int second_corner
+) {
+    if (second_radius > first_radius) {
+        float temporary_radius = first_radius;
+        first_radius = second_radius;
+        second_radius = temporary_radius;
+
+        int temporary_corner = first_corner;
+        first_corner = second_corner;
+        second_corner = temporary_corner;
+    }
+}
+
+void figma_apply_corner_budget(
+    float2 size,
+    int corner,
+    inout float4 radii,
+    inout float4 budgets
+) {
+    float radius;
+    float horizontal_radius;
+    float horizontal_neighbor_budget;
+    float vertical_radius;
+    float vertical_neighbor_budget;
+
+    if (corner == 0) {
+        radius = radii.x;
+        horizontal_radius = radii.y;
+        horizontal_neighbor_budget = budgets.y;
+        vertical_radius = radii.w;
+        vertical_neighbor_budget = budgets.w;
+    } else if (corner == 1) {
+        radius = radii.y;
+        horizontal_radius = radii.x;
+        horizontal_neighbor_budget = budgets.x;
+        vertical_radius = radii.z;
+        vertical_neighbor_budget = budgets.z;
+    } else if (corner == 2) {
+        radius = radii.z;
+        horizontal_radius = radii.w;
+        horizontal_neighbor_budget = budgets.w;
+        vertical_radius = radii.y;
+        vertical_neighbor_budget = budgets.y;
+    } else {
+        radius = radii.w;
+        horizontal_radius = radii.z;
+        horizontal_neighbor_budget = budgets.z;
+        vertical_radius = radii.x;
+        vertical_neighbor_budget = budgets.x;
+    }
+
+    float horizontal_budget = 0.0;
+    if (radius != 0.0 || horizontal_radius != 0.0) {
+        horizontal_budget = horizontal_neighbor_budget >= 0.0
+            ? size.x - horizontal_neighbor_budget
+            : size.x * radius / (radius + horizontal_radius);
+    }
+
+    float vertical_budget = 0.0;
+    if (radius != 0.0 || vertical_radius != 0.0) {
+        vertical_budget = vertical_neighbor_budget >= 0.0
+            ? size.y - vertical_neighbor_budget
+            : size.y * radius / (radius + vertical_radius);
+    }
+
+    float budget = max(0.0, min(horizontal_budget, vertical_budget));
+    float clamped_radius = min(radius, budget);
+    if (corner == 0) {
+        budgets.x = budget;
+        radii.x = clamped_radius;
+    } else if (corner == 1) {
+        budgets.y = budget;
+        radii.y = clamped_radius;
+    } else if (corner == 2) {
+        budgets.z = budget;
+        radii.z = clamped_radius;
+    } else {
+        budgets.w = budget;
+        radii.w = clamped_radius;
+    }
+}
+
 // Normalizes the radii, then assigns each corner its share of each adjacent
 // edge. The stable radius order is TL, TR, BL, BR. Vectors use TL, TR, BR, BL.
 FigmaCornerLayout figma_corner_layout(float2 size, Corners corner_radii) {
@@ -437,61 +523,58 @@ FigmaCornerLayout figma_corner_layout(float2 size, Corners corner_radii) {
         float4(0.0, 0.0, 0.0, 0.0)
     );
     float4 budgets = float4(-1.0, -1.0, -1.0, -1.0);
-    int4 order = int4(0, 1, 3, 2);
+    // FXC cannot dynamically index a vector used as an l-value. Keep the
+    // stable sort slots scalar and write each budget through a fixed component.
+    float first_radius = radii.x;
+    float second_radius = radii.y;
+    float third_radius = radii.w;
+    float fourth_radius = radii.z;
+    int first_corner = 0;
+    int second_corner = 1;
+    int third_corner = 3;
+    int fourth_corner = 2;
 
-    [unroll]
-    for (int sort_pass = 0; sort_pass < 3; sort_pass++) {
-        [unroll]
-        for (int i = 0; i < 3 - sort_pass; i++) {
-            if (radii[order[i + 1]] > radii[order[i]]) {
-                int temporary = order[i];
-                order[i] = order[i + 1];
-                order[i + 1] = temporary;
-            }
-        }
-    }
+    figma_sort_corner_pair(
+        first_radius,
+        first_corner,
+        second_radius,
+        second_corner
+    );
+    figma_sort_corner_pair(
+        second_radius,
+        second_corner,
+        third_radius,
+        third_corner
+    );
+    figma_sort_corner_pair(
+        third_radius,
+        third_corner,
+        fourth_radius,
+        fourth_corner
+    );
+    figma_sort_corner_pair(
+        first_radius,
+        first_corner,
+        second_radius,
+        second_corner
+    );
+    figma_sort_corner_pair(
+        second_radius,
+        second_corner,
+        third_radius,
+        third_corner
+    );
+    figma_sort_corner_pair(
+        first_radius,
+        first_corner,
+        second_radius,
+        second_corner
+    );
 
-    [unroll]
-    for (int rank = 0; rank < 4; rank++) {
-        int corner = order[rank];
-        float radius = radii[corner];
-        int horizontal_neighbor;
-        int vertical_neighbor;
-
-        if (corner == 0) {
-            horizontal_neighbor = 1;
-            vertical_neighbor = 3;
-        } else if (corner == 1) {
-            horizontal_neighbor = 0;
-            vertical_neighbor = 2;
-        } else if (corner == 2) {
-            horizontal_neighbor = 3;
-            vertical_neighbor = 1;
-        } else {
-            horizontal_neighbor = 2;
-            vertical_neighbor = 0;
-        }
-
-        float horizontal_radius = radii[horizontal_neighbor];
-        float horizontal_budget = 0.0;
-        if (radius != 0.0 || horizontal_radius != 0.0) {
-            horizontal_budget = budgets[horizontal_neighbor] >= 0.0
-                ? size.x - budgets[horizontal_neighbor]
-                : size.x * radius / (radius + horizontal_radius);
-        }
-
-        float vertical_radius = radii[vertical_neighbor];
-        float vertical_budget = 0.0;
-        if (radius != 0.0 || vertical_radius != 0.0) {
-            vertical_budget = budgets[vertical_neighbor] >= 0.0
-                ? size.y - budgets[vertical_neighbor]
-                : size.y * radius / (radius + vertical_radius);
-        }
-
-        float budget = max(0.0, min(horizontal_budget, vertical_budget));
-        budgets[corner] = budget;
-        radii[corner] = min(radius, budget);
-    }
+    figma_apply_corner_budget(size, first_corner, radii, budgets);
+    figma_apply_corner_budget(size, second_corner, radii, budgets);
+    figma_apply_corner_budget(size, third_corner, radii, budgets);
+    figma_apply_corner_budget(size, fourth_corner, radii, budgets);
 
     float2 top = figma_split_side(size.x, radii[0], radii[1]);
     float2 bottom = figma_split_side(size.x, radii[3], radii[2]);
