@@ -65,7 +65,7 @@ impl RenderOnce for Button {
             .pb(px(10.))
             .bg(bg_color)
             .text_color(rgb(0x110F15))
-            .text_size(px(50.))
+            .text_size(px(14.))
             .children(self.children)
             .on_hover(move |hover, _window, cx| {
                 hover_transition.update(cx, |this, cx| {

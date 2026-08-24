@@ -32,7 +32,3 @@ skrifa = { version = "0.42.1", default-features = false }
 
 [dev-dependencies]
 criterion.workspace = true
-
-[[bench]]
-name = "layout_line"
-harness = false
