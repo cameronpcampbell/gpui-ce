@@ -318,6 +318,94 @@ float4 corner_values(Corners corner_radii) {
     );
 }
 
+// Match the superellipse's diagonal inset to that of the public circular
+// radius while its edge reach grows by (1 + smoothing).
+static const float SUPERELLIPSE_DIAGONAL_INSET = 0.2928932188134524;
+
+float normalized_superellipse_power(float corner_smoothing) {
+    float smoothing = clamp(corner_smoothing, 0.0, 1.0);
+    float normalized_diagonal =
+        1.0 - SUPERELLIPSE_DIAGONAL_INSET / (1.0 + smoothing);
+    return -log(2.0) / log(normalized_diagonal);
+}
+
+float4 normalized_superellipse_reaches(
+    Corners corner_radii,
+    float corner_smoothing
+) {
+    return max(corner_values(corner_radii), float4(0.0, 0.0, 0.0, 0.0)) *
+        (1.0 + clamp(corner_smoothing, 0.0, 1.0));
+}
+
+bool can_use_normalized_superellipse(
+    float2 size,
+    Corners corner_radii,
+    float corner_smoothing
+) {
+    float4 radii = max(
+        corner_values(corner_radii),
+        float4(0.0, 0.0, 0.0, 0.0)
+    );
+    float4 reaches = normalized_superellipse_reaches(
+        corner_radii,
+        corner_smoothing
+    );
+    float half_short_side = 0.5 * min(size.x, size.y);
+    return corner_smoothing > 0.0 &&
+        size.x > 0.0 && size.y > 0.0 &&
+        any(radii > float4(0.0, 0.0, 0.0, 0.0)) &&
+        all(reaches <= float4(
+            half_short_side,
+            half_short_side,
+            half_short_side,
+            half_short_side
+        ));
+}
+
+float normalized_superellipse_sdf_impl(
+    float2 corner_to_point,
+    float corner_radius,
+    float corner_smoothing,
+    float power
+) {
+    float extent = max(corner_radius, 0.0) *
+        (1.0 + clamp(corner_smoothing, 0.0, 1.0));
+    float2 corner_center_to_point = corner_to_point + extent;
+    if (extent <= 0.0 ||
+        corner_center_to_point.x <= 0.0 ||
+        corner_center_to_point.y <= 0.0) {
+        return max(corner_to_point.x, corner_to_point.y);
+    }
+
+    float2 normalized = corner_center_to_point / extent;
+    float2 powered = pow(normalized, float2(power, power));
+    float gradient = power * length(pow(
+        normalized,
+        float2(power - 1.0, power - 1.0)
+    ));
+    return extent * (powered.x + powered.y - 1.0) /
+        max(gradient, 0.000001);
+}
+
+float normalized_superellipse_sdf(
+    float2 point,
+    Bounds bounds,
+    Corners corner_radii,
+    float corner_smoothing,
+    float power
+) {
+    float2 half_size = bounds.size / 2.0;
+    float2 center_to_point = point - (bounds.origin + half_size);
+    float corner_radius = pick_corner_radius(center_to_point, corner_radii);
+    float2 corner_to_point = abs(center_to_point) - half_size;
+    return normalized_superellipse_sdf_impl(
+        corner_to_point,
+        corner_radius,
+        corner_smoothing,
+        power
+    );
+}
+
 // The Figma-style corner construction below is derived from
 // Tien Pham's figma-squircle implementation:
 // https://github.com/phamfoo/figma-squircle
@@ -1298,6 +1386,7 @@ struct QuadVertexOutput {
     nointerpolation float4 vertical_corner_reaches: TEXCOORD2;
     nointerpolation float4 corner_lengths: TEXCOORD3;
     nointerpolation float4 smoothing_factors: TEXCOORD4;
+    nointerpolation float superellipse_power: TEXCOORD5;
     float4 position: SV_Position;
     nointerpolation float4 border_color: COLOR0;
     nointerpolation float4 background_solid: COLOR1;
@@ -1312,6 +1401,7 @@ struct QuadFragmentInput {
     nointerpolation float4 vertical_corner_reaches: TEXCOORD2;
     nointerpolation float4 corner_lengths: TEXCOORD3;
     nointerpolation float4 smoothing_factors: TEXCOORD4;
+    nointerpolation float superellipse_power: TEXCOORD5;
     float4 position: SV_Position;
     nointerpolation float4 border_color: COLOR0;
     nointerpolation float4 background_solid: COLOR1;
@@ -1342,20 +1432,41 @@ QuadVertexOutput quad_vertex(uint vertex_id: SV_VertexID, uint quad_id: SV_Insta
     output.horizontal_corner_reaches = corner_values(quad.corner_radii);
     output.vertical_corner_reaches = corner_values(quad.corner_radii);
     output.smoothing_factors = float4(0.0, 1.0, 0.0, 0.0);
+    output.superellipse_power = 0.0;
     if (quad.corner_smoothing > 0.0) {
-        output.smoothing_factors = figma_smoothing_factors(quad.corner_smoothing);
-        FigmaCornerLayout corner_layout = figma_corner_layout(
-            quad.bounds.size,
-            quad.corner_radii
-        );
-        FigmaCornerExtents corner_extents = figma_corner_extents(
-            quad.corner_radii,
-            corner_layout.horizontal_budgets,
-            corner_layout.vertical_budgets,
-            quad.corner_smoothing
-        );
-        output.horizontal_corner_reaches = corner_extents.horizontal;
-        output.vertical_corner_reaches = corner_extents.vertical;
+        bool has_uniform_border =
+            quad.border_widths.top == quad.border_widths.right &&
+            quad.border_widths.top == quad.border_widths.bottom &&
+            quad.border_widths.top == quad.border_widths.left;
+        if (quad.border_style == 0u && has_uniform_border &&
+            can_use_normalized_superellipse(
+                quad.bounds.size,
+                quad.corner_radii,
+                quad.corner_smoothing
+            )) {
+            float4 reaches = normalized_superellipse_reaches(
+                quad.corner_radii,
+                quad.corner_smoothing
+            );
+            output.horizontal_corner_reaches = reaches;
+            output.vertical_corner_reaches = reaches;
+            output.superellipse_power =
+                normalized_superellipse_power(quad.corner_smoothing);
+        } else {
+            output.smoothing_factors = figma_smoothing_factors(quad.corner_smoothing);
+            FigmaCornerLayout corner_layout = figma_corner_layout(
+                quad.bounds.size,
+                quad.corner_radii
+            );
+            FigmaCornerExtents corner_extents = figma_corner_extents(
+                quad.corner_radii,
+                corner_layout.horizontal_budgets,
+                corner_layout.vertical_budgets,
+                quad.corner_smoothing
+            );
+            output.horizontal_corner_reaches = corner_extents.horizontal;
+            output.vertical_corner_reaches = corner_extents.vertical;
+        }
     }
     output.corner_lengths = corner_values(quad.corner_radii) * (M_PI_F / 2.0);
     if (quad.border_style == 1u && quad.corner_smoothing > 0.0) {
@@ -1413,7 +1524,13 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
     float4 vertical_corner_extents = corner_values(quad.corner_radii);
     uint smooth_corner = FIGMA_NO_CORNER;
     bool has_smooth_corner_candidate = false;
-    if (quad.corner_smoothing > 0.0) {
+    if (input.superellipse_power > 0.0) {
+        float corner_reach = corner_radius *
+            (1.0 + clamp(quad.corner_smoothing, 0.0, 1.0));
+        float2 corner_offset = abs(center_to_point) - half_size + corner_reach;
+        has_smooth_corner_candidate =
+            corner_offset.x >= 0.0 && corner_offset.y >= 0.0;
+    } else if (quad.corner_smoothing > 0.0) {
         horizontal_corner_extents = input.horizontal_corner_reaches;
         vertical_corner_extents = input.vertical_corner_reaches;
         has_smooth_corner_candidate = figma_has_corner_candidate(
@@ -1473,7 +1590,19 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
     // Signed distance of the point to the outside edge of the quad's border
     float outer_sdf;
     SdfSample figma_sample;
-    if (quad.corner_smoothing > 0.0) {
+    if (input.superellipse_power > 0.0) {
+        outer_sdf = normalized_superellipse_sdf_impl(
+            corner_to_point,
+            corner_radius,
+            quad.corner_smoothing,
+            input.superellipse_power
+        );
+        float corner_reach = corner_radius *
+            (1.0 + clamp(quad.corner_smoothing, 0.0, 1.0));
+        is_near_rounded_corner =
+            corner_to_point.x + corner_reach > 0.0 &&
+            corner_to_point.y + corner_reach > 0.0;
+    } else if (quad.corner_smoothing > 0.0) {
         FigmaRectSample rect_sample = figma_smooth_rect_sdf_sample(
             input.position.xy,
             quad.bounds,
@@ -1524,6 +1653,8 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
                 straight_border_inner_corner_to_point.x,
                 straight_border_inner_corner_to_point.y
             );
+        } else if (input.superellipse_power > 0.0) {
+            inner_sdf = -(outer_sdf + reduced_border.x);
         } else {
             float effective_border_width = reduced_border.x;
             if (border.x != border.y) {
@@ -2275,6 +2406,7 @@ struct PolychromeSpriteVertexOutput {
     nointerpolation float4 horizontal_corner_reaches: TEXCOORD1;
     nointerpolation float4 vertical_corner_reaches: TEXCOORD2;
     nointerpolation float4 smoothing_factors: TEXCOORD3;
+    nointerpolation float superellipse_power: TEXCOORD4;
     float4 position: SV_Position;
     float2 tile_position: POSITION;
     float4 clip_distance: SV_ClipDistance;
@@ -2285,6 +2417,7 @@ struct PolychromeSpriteFragmentInput {
     nointerpolation float4 horizontal_corner_reaches: TEXCOORD1;
     nointerpolation float4 vertical_corner_reaches: TEXCOORD2;
     nointerpolation float4 smoothing_factors: TEXCOORD3;
+    nointerpolation float superellipse_power: TEXCOORD4;
     float4 position: SV_Position;
     float2 tile_position: POSITION;
 };
@@ -2306,20 +2439,36 @@ PolychromeSpriteVertexOutput polychrome_sprite_vertex(uint vertex_id: SV_VertexI
     output.horizontal_corner_reaches = corner_values(sprite.corner_radii);
     output.vertical_corner_reaches = corner_values(sprite.corner_radii);
     output.smoothing_factors = float4(0.0, 1.0, 0.0, 0.0);
+    output.superellipse_power = 0.0;
     if (sprite.corner_smoothing > 0.0) {
-        output.smoothing_factors = figma_smoothing_factors(sprite.corner_smoothing);
-        FigmaCornerLayout corner_layout = figma_corner_layout(
+        if (can_use_normalized_superellipse(
             sprite.bounds.size,
-            sprite.corner_radii
-        );
-        FigmaCornerExtents corner_extents = figma_corner_extents(
             sprite.corner_radii,
-            corner_layout.horizontal_budgets,
-            corner_layout.vertical_budgets,
             sprite.corner_smoothing
-        );
-        output.horizontal_corner_reaches = corner_extents.horizontal;
-        output.vertical_corner_reaches = corner_extents.vertical;
+        )) {
+            float4 reaches = normalized_superellipse_reaches(
+                sprite.corner_radii,
+                sprite.corner_smoothing
+            );
+            output.horizontal_corner_reaches = reaches;
+            output.vertical_corner_reaches = reaches;
+            output.superellipse_power =
+                normalized_superellipse_power(sprite.corner_smoothing);
+        } else {
+            output.smoothing_factors = figma_smoothing_factors(sprite.corner_smoothing);
+            FigmaCornerLayout corner_layout = figma_corner_layout(
+                sprite.bounds.size,
+                sprite.corner_radii
+            );
+            FigmaCornerExtents corner_extents = figma_corner_extents(
+                sprite.corner_radii,
+                corner_layout.horizontal_budgets,
+                corner_layout.vertical_budgets,
+                sprite.corner_smoothing
+            );
+            output.horizontal_corner_reaches = corner_extents.horizontal;
+            output.vertical_corner_reaches = corner_extents.vertical;
+        }
     }
     output.clip_distance = clip_distance;
     return output;
@@ -2329,7 +2478,15 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
     PolychromeSprite sprite = poly_sprites[input.sprite_id];
     float4 sample = t_sprite.Sample(s_sprite, input.tile_position);
     float distance;
-    if (sprite.corner_smoothing > 0.0) {
+    if (input.superellipse_power > 0.0) {
+        distance = normalized_superellipse_sdf(
+            input.position.xy,
+            sprite.bounds,
+            sprite.corner_radii,
+            sprite.corner_smoothing,
+            input.superellipse_power
+        );
+    } else if (sprite.corner_smoothing > 0.0) {
         distance = figma_smooth_rect_sdf(
             input.position.xy,
             sprite.bounds,
@@ -2387,6 +2544,7 @@ struct BlurVertexOutput {
     nointerpolation float4 horizontal_corner_reaches: TEXCOORD1;
     nointerpolation float4 vertical_corner_reaches: TEXCOORD2;
     nointerpolation float4 smoothing_factors: TEXCOORD3;
+    nointerpolation float superellipse_power: TEXCOORD4;
 };
 
 BlurVertexOutput blur_fullscreen(uint vertex_id) {
@@ -2397,6 +2555,7 @@ BlurVertexOutput blur_fullscreen(uint vertex_id) {
     output.horizontal_corner_reaches = float4(0.0, 0.0, 0.0, 0.0);
     output.vertical_corner_reaches = float4(0.0, 0.0, 0.0, 0.0);
     output.smoothing_factors = float4(0.0, 1.0, 0.0, 0.0);
+    output.superellipse_power = 0.0;
     return output;
 }
 
@@ -2443,6 +2602,7 @@ struct BlurCompositeVertexOutput {
     nointerpolation float4 horizontal_corner_reaches: TEXCOORD0;
     nointerpolation float4 vertical_corner_reaches: TEXCOORD1;
     nointerpolation float4 smoothing_factors: TEXCOORD2;
+    nointerpolation float superellipse_power: TEXCOORD3;
     float4 clip_distance: SV_ClipDistance;
 };
 
@@ -2451,6 +2611,7 @@ struct BlurCompositeFragmentInput {
     nointerpolation float4 horizontal_corner_reaches: TEXCOORD0;
     nointerpolation float4 vertical_corner_reaches: TEXCOORD1;
     nointerpolation float4 smoothing_factors: TEXCOORD2;
+    nointerpolation float superellipse_power: TEXCOORD3;
 };
 
 BlurCompositeVertexOutput blur_composite_vertex(uint vertex_id: SV_VertexID) {
@@ -2460,22 +2621,38 @@ BlurCompositeVertexOutput blur_composite_vertex(uint vertex_id: SV_VertexID) {
     output.horizontal_corner_reaches = blur_corner_radii;
     output.vertical_corner_reaches = blur_corner_radii;
     output.smoothing_factors = float4(0.0, 1.0, 0.0, 0.0);
+    output.superellipse_power = 0.0;
     if (blur_clip_rounded > 0.5 && blur_corner_smoothing > 0.0) {
-        output.smoothing_factors = figma_smoothing_factors(blur_corner_smoothing);
         Corners radii;
         radii.top_left = blur_corner_radii.x;
         radii.top_right = blur_corner_radii.y;
         radii.bottom_right = blur_corner_radii.z;
         radii.bottom_left = blur_corner_radii.w;
-        FigmaCornerLayout layout = figma_corner_layout(blur_bounds.size, radii);
-        FigmaCornerExtents extents = figma_corner_extents(
+        if (can_use_normalized_superellipse(
+            blur_bounds.size,
             radii,
-            layout.horizontal_budgets,
-            layout.vertical_budgets,
             blur_corner_smoothing
-        );
-        output.horizontal_corner_reaches = extents.horizontal;
-        output.vertical_corner_reaches = extents.vertical;
+        )) {
+            float4 reaches = normalized_superellipse_reaches(
+                radii,
+                blur_corner_smoothing
+            );
+            output.horizontal_corner_reaches = reaches;
+            output.vertical_corner_reaches = reaches;
+            output.superellipse_power =
+                normalized_superellipse_power(blur_corner_smoothing);
+        } else {
+            output.smoothing_factors = figma_smoothing_factors(blur_corner_smoothing);
+            FigmaCornerLayout layout = figma_corner_layout(blur_bounds.size, radii);
+            FigmaCornerExtents extents = figma_corner_extents(
+                radii,
+                layout.horizontal_budgets,
+                layout.vertical_budgets,
+                blur_corner_smoothing
+            );
+            output.horizontal_corner_reaches = extents.horizontal;
+            output.vertical_corner_reaches = extents.vertical;
+        }
     }
     output.clip_distance = distance_from_clip_rect(unit_vertex, blur_bounds, blur_content_mask);
     return output;
@@ -2498,14 +2675,25 @@ float4 blur_composite_fragment(BlurCompositeFragmentInput input): SV_Target {
     // its bounds like CSS `filter: blur`, so its shape comes from the blurred group's own alpha.
     float coverage = 1.0;
     if (blur_clip_rounded > 0.5) {
-        float distance = styled_rect_sdf(
-            input.position.xy,
-            blur_bounds,
-            radii,
-            input.horizontal_corner_reaches,
-            input.vertical_corner_reaches,
-            input.smoothing_factors
-        );
+        float distance;
+        if (input.superellipse_power > 0.0) {
+            distance = normalized_superellipse_sdf(
+                input.position.xy,
+                blur_bounds,
+                radii,
+                blur_corner_smoothing,
+                input.superellipse_power
+            );
+        } else {
+            distance = styled_rect_sdf(
+                input.position.xy,
+                blur_bounds,
+                radii,
+                input.horizontal_corner_reaches,
+                input.vertical_corner_reaches,
+                input.smoothing_factors
+            );
+        }
         coverage = saturate(0.5 - distance);
     }
     // The blurred sample is premultiplied (blurring against the transparent surround scales rgb
