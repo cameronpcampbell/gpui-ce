@@ -388,14 +388,14 @@ float normalized_superellipse_sdf_impl(
 }
 
 float normalized_superellipse_sdf(
-    float2 point,
+    float2 sample_position,
     Bounds bounds,
     Corners corner_radii,
     float corner_smoothing,
     float power
 ) {
     float2 half_size = bounds.size / 2.0;
-    float2 center_to_point = point - (bounds.origin + half_size);
+    float2 center_to_point = sample_position - (bounds.origin + half_size);
     float corner_radius = pick_corner_radius(center_to_point, corner_radii);
     float2 corner_to_point = abs(center_to_point) - half_size;
     return normalized_superellipse_sdf_impl(
@@ -521,7 +521,7 @@ struct FigmaCornerParams {
 };
 
 struct CubicClosestPoint {
-    float2 point;
+    float2 position;
     float2 tangent;
     float distance;
     float path_t;
@@ -680,23 +680,26 @@ float2 figma_cubic_second_derivative(
 }
 
 CubicClosestPoint closest_figma_cubic(
-    float2 point,
+    float2 sample_position,
     FigmaAxisParams axis,
     float c,
     float d
 ) {
     float y_seed = pow(
-        clamp(point.y / max(d, 0.00001), 0.0, 1.0),
+        clamp(sample_position.y / max(d, 0.00001), 0.0, 1.0),
         1.0 / 3.0
     );
     float2 chord = figma_cubic_point(axis, c, d, 1.0);
     float chord_seed = clamp(
-        dot(point, chord) / max(dot(chord, chord), FIGMA_EPSILON),
+        dot(sample_position, chord) /
+            max(dot(chord, chord), FIGMA_EPSILON),
         0.0,
         1.0
     );
-    float2 y_delta = figma_cubic_point(axis, c, d, y_seed) - point;
-    float2 chord_delta = figma_cubic_point(axis, c, d, chord_seed) - point;
+    float2 y_delta =
+        figma_cubic_point(axis, c, d, y_seed) - sample_position;
+    float2 chord_delta =
+        figma_cubic_point(axis, c, d, chord_seed) - sample_position;
     float t = dot(chord_delta, chord_delta) < dot(y_delta, y_delta)
         ? chord_seed
         : y_seed;
@@ -706,7 +709,7 @@ CubicClosestPoint closest_figma_cubic(
         float2 curve_point = figma_cubic_point(axis, c, d, t);
         float2 tangent = figma_cubic_derivative(axis, c, d, t);
         float2 second_derivative = figma_cubic_second_derivative(axis, c, d, t);
-        float2 delta = curve_point - point;
+        float2 delta = curve_point - sample_position;
         float denominator =
             dot(tangent, tangent) + dot(delta, second_derivative);
         if (abs(denominator) > FIGMA_EPSILON) {
@@ -716,10 +719,10 @@ CubicClosestPoint closest_figma_cubic(
 
     float closest_t = t;
     float2 closest_point = figma_cubic_point(axis, c, d, t);
-    float closest_distance = length(point - closest_point);
+    float closest_distance = length(sample_position - closest_point);
 
     float2 start = float2(0.0, 0.0);
-    float start_distance = length(point - start);
+    float start_distance = length(sample_position - start);
     if (start_distance < closest_distance) {
         closest_t = 0.0;
         closest_point = start;
@@ -727,7 +730,7 @@ CubicClosestPoint closest_figma_cubic(
     }
 
     float2 end = chord;
-    float end_distance = length(point - end);
+    float end_distance = length(sample_position - end);
     if (end_distance < closest_distance) {
         closest_t = 1.0;
         closest_point = end;
@@ -735,7 +738,7 @@ CubicClosestPoint closest_figma_cubic(
     }
 
     CubicClosestPoint result;
-    result.point = closest_point;
+    result.position = closest_point;
     result.tangent = figma_cubic_derivative(axis, c, d, closest_t);
     result.distance = closest_distance;
     result.path_t = closest_t;
@@ -843,7 +846,7 @@ SdfSample figma_corner_sdf_impl(
                 -horizontal_cubic.tangent.x
             ));
             float horizontal_distance = figma_signed_distance(
-                horizontal_point - horizontal_cubic.point,
+                horizontal_point - horizontal_cubic.position,
                 horizontal_normal,
                 horizontal_cubic.distance
             );
@@ -876,7 +879,7 @@ SdfSample figma_corner_sdf_impl(
                 -vertical_cubic.tangent.x
             ));
             float vertical_distance = figma_signed_distance(
-                vertical_point - vertical_cubic.point,
+                vertical_point - vertical_cubic.position,
                 vertical_normal,
                 vertical_cubic.distance
             );
@@ -955,7 +958,7 @@ float figma_corner_progress(
 }
 
 bool figma_is_corner_candidate(
-    float2 point,
+    float2 sample_position,
     float2 size,
     float horizontal_extent,
     float vertical_extent,
@@ -964,42 +967,49 @@ bool figma_is_corner_candidate(
     if (horizontal_extent <= FIGMA_EPSILON ||
         vertical_extent <= FIGMA_EPSILON) return false;
     if (corner == 0u) {
-        return point.x <= horizontal_extent && point.y <= vertical_extent;
+        return sample_position.x <= horizontal_extent &&
+            sample_position.y <= vertical_extent;
     }
     if (corner == 1u) {
-        return size.x - point.x <= horizontal_extent &&
-            point.y <= vertical_extent;
+        return size.x - sample_position.x <= horizontal_extent &&
+            sample_position.y <= vertical_extent;
     }
     if (corner == 2u) {
-        return size.x - point.x <= horizontal_extent &&
-            size.y - point.y <= vertical_extent;
+        return size.x - sample_position.x <= horizontal_extent &&
+            size.y - sample_position.y <= vertical_extent;
     }
-    return point.x <= horizontal_extent &&
-        size.y - point.y <= vertical_extent;
+    return sample_position.x <= horizontal_extent &&
+        size.y - sample_position.y <= vertical_extent;
 }
 
 bool figma_has_corner_candidate(
-    float2 point,
+    float2 sample_position,
     float2 size,
     float4 horizontal_extents,
     float4 vertical_extents
 ) {
     return figma_is_corner_candidate(
-        point, size, horizontal_extents.x, vertical_extents.x, 0u
+        sample_position, size, horizontal_extents.x, vertical_extents.x, 0u
     ) || figma_is_corner_candidate(
-        point, size, horizontal_extents.y, vertical_extents.y, 1u
+        sample_position, size, horizontal_extents.y, vertical_extents.y, 1u
     ) || figma_is_corner_candidate(
-        point, size, horizontal_extents.z, vertical_extents.z, 2u
+        sample_position, size, horizontal_extents.z, vertical_extents.z, 2u
     ) || figma_is_corner_candidate(
-        point, size, horizontal_extents.w, vertical_extents.w, 3u
+        sample_position, size, horizontal_extents.w, vertical_extents.w, 3u
     );
 }
 
-float2 figma_corner_to_point(float2 point, float2 size, uint corner) {
-    if (corner == 0u) return -point;
-    if (corner == 1u) return float2(point.x - size.x, -point.y);
-    if (corner == 2u) return point - size;
-    return float2(-point.x, point.y - size.y);
+float2 figma_corner_to_point(
+    float2 sample_position,
+    float2 size,
+    uint corner
+) {
+    if (corner == 0u) return -sample_position;
+    if (corner == 1u) {
+        return float2(sample_position.x - size.x, -sample_position.y);
+    }
+    if (corner == 2u) return sample_position - size;
+    return float2(-sample_position.x, sample_position.y - size.y);
 }
 
 float2 figma_orient_corner_normal(float2 normal, uint corner) {
@@ -1010,21 +1020,29 @@ float2 figma_orient_corner_normal(float2 normal, uint corner) {
 }
 
 SdfSample figma_nearest_straight_sample(
-    float2 point,
+    float2 sample_position,
     float2 size,
     float4 horizontal_extents,
     float4 vertical_extents
 ) {
-    float2 nearest_delta = point - float2(
-        clamp(point.x, horizontal_extents.x, size.x - horizontal_extents.y),
+    float2 nearest_delta = sample_position - float2(
+        clamp(
+            sample_position.x,
+            horizontal_extents.x,
+            size.x - horizontal_extents.y
+        ),
         0.0
     );
     float2 nearest_normal = float2(0.0, -1.0);
     float nearest_distance_squared = dot(nearest_delta, nearest_delta);
 
-    float2 candidate_delta = point - float2(
+    float2 candidate_delta = sample_position - float2(
         size.x,
-        clamp(point.y, vertical_extents.y, size.y - vertical_extents.z)
+        clamp(
+            sample_position.y,
+            vertical_extents.y,
+            size.y - vertical_extents.z
+        )
     );
     float candidate_distance_squared = dot(candidate_delta, candidate_delta);
     if (candidate_distance_squared < nearest_distance_squared) {
@@ -1033,8 +1051,12 @@ SdfSample figma_nearest_straight_sample(
         nearest_distance_squared = candidate_distance_squared;
     }
 
-    candidate_delta = point - float2(
-        clamp(point.x, horizontal_extents.w, size.x - horizontal_extents.z),
+    candidate_delta = sample_position - float2(
+        clamp(
+            sample_position.x,
+            horizontal_extents.w,
+            size.x - horizontal_extents.z
+        ),
         size.y
     );
     candidate_distance_squared = dot(candidate_delta, candidate_delta);
@@ -1044,9 +1066,13 @@ SdfSample figma_nearest_straight_sample(
         nearest_distance_squared = candidate_distance_squared;
     }
 
-    candidate_delta = point - float2(
+    candidate_delta = sample_position - float2(
         0.0,
-        clamp(point.y, vertical_extents.x, size.y - vertical_extents.w)
+        clamp(
+            sample_position.y,
+            vertical_extents.x,
+            size.y - vertical_extents.w
+        )
     );
     candidate_distance_squared = dot(candidate_delta, candidate_delta);
     if (candidate_distance_squared < nearest_distance_squared) {
@@ -1068,14 +1094,14 @@ SdfSample figma_nearest_straight_sample(
 }
 
 FigmaRectSample figma_smooth_rect_sdf_sample(
-    float2 point,
+    float2 sample_position,
     Bounds bounds,
     Corners corner_radii,
     float4 horizontal_reaches,
     float4 vertical_reaches,
     float4 smoothing_factors
 ) {
-    float2 local_point = point - bounds.origin;
+    float2 local_point = sample_position - bounds.origin;
     float4 radii = corner_values(corner_radii);
     FigmaRectSample result;
     result.corner = FIGMA_NO_CORNER;
@@ -1137,7 +1163,7 @@ FigmaRectSample figma_smooth_rect_sdf_sample(
 }
 
 float figma_smooth_rect_sdf(
-    float2 point,
+    float2 sample_position,
     Bounds bounds,
     Corners corner_radii,
     float4 horizontal_reaches,
@@ -1145,7 +1171,7 @@ float figma_smooth_rect_sdf(
     float4 smoothing_factors
 ) {
     FigmaRectSample sample = figma_smooth_rect_sdf_sample(
-        point,
+        sample_position,
         bounds,
         corner_radii,
         horizontal_reaches,
@@ -1156,7 +1182,7 @@ float figma_smooth_rect_sdf(
 }
 
 float styled_rect_sdf(
-    float2 point,
+    float2 sample_position,
     Bounds bounds,
     Corners corner_radii,
     float4 horizontal_reaches,
@@ -1165,11 +1191,11 @@ float styled_rect_sdf(
 ) {
     if (smoothing_factors.x <= 0.0 ||
         all(corner_values(corner_radii) <= float4(0.0, 0.0, 0.0, 0.0))) {
-        return quad_sdf(point, bounds, corner_radii);
+        return quad_sdf(sample_position, bounds, corner_radii);
     }
 
     return figma_smooth_rect_sdf(
-        point,
+        sample_position,
         bounds,
         corner_radii,
         horizontal_reaches,
