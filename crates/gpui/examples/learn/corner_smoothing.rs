@@ -6,7 +6,7 @@
 mod example_prelude;
 
 use gpui::{
-    App, Bounds, BoxShadow, Context, Window, WindowBounds, WindowOptions, actions, div, percentage,
+    App, Bounds, Context, Window, WindowBounds, WindowOptions, actions, div, percentage,
     prelude::*, px, rgb, rgba, size,
 };
 use palette::WithAlpha;
@@ -53,16 +53,7 @@ impl Render for CornerSmoothingExample {
                             .h(px(self.height))
                             .rounded(px(self.corner_radius))
                             .rounded_smoothing(percentage(self.corner_smoothing))
-                            /*.shadow(vec![
-                                BoxShadow::new(px(0.), px(18.), gpui::blue())
-                                    .blur_radius(px(3.))
-                                    .spread_radius(px(2.)),
-                            ])*/
-                            .bg(rgba(0x663399b8).with_alpha(0.5))
-                            .backdrop_blur(px(50.))
-                            .border_3()
-                            .border_dashed()
-                            .border_color(rgba(0xffffff40)),
+                            .bg(rgba(0x663399b8).with_alpha(0.5)),
                     ),
             )
             .child(
