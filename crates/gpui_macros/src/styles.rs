@@ -365,13 +365,9 @@ pub fn border_style_methods(input: TokenStream) -> TokenStream {
     }
 
     let output = quote! {
-        /// Sets the border color of the element.
-        #visibility fn border_color<C>(mut self, border_color: C) -> Self
-        where
-            C: palette::IntoColor<palette::Hsla>,
-            Self: Sized,
-        {
-            self.style().border_color = Some(border_color.into_color());
+        /// Sets the background painted into the border of the element.
+        #visibility fn border_color(mut self, border_color: impl Into<gpui::Background>) -> Self {
+            self.style().border_color = Some(border_color.into());
             self
         }
 
