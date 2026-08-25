@@ -166,7 +166,9 @@ GradientColor prepare_fill_color(uint tag, uint color_space, Hsla solid, Hsla co
 struct QuadVertexOutput {
   uint quad_id [[flat]];
   float4 position [[position]];
-  float4 border_color [[flat]];
+  float4 border_solid [[flat]];
+  float4 border_color0 [[flat]];
+  float4 border_color1 [[flat]];
   float4 background_solid [[flat]];
   float4 background_color0 [[flat]];
   float4 background_color1 [[flat]];
@@ -181,7 +183,9 @@ struct QuadVertexOutput {
 struct QuadFragmentInput {
   uint quad_id [[flat]];
   float4 position [[position]];
-  float4 border_color [[flat]];
+  float4 border_solid [[flat]];
+  float4 border_color0 [[flat]];
+  float4 border_color1 [[flat]];
   float4 background_solid [[flat]];
   float4 background_color0 [[flat]];
   float4 background_color1 [[flat]];
@@ -206,7 +210,14 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
       to_device_position(unit_vertex, quad.bounds, viewport_size);
   float4 clip_distance = distance_from_clip_rect(unit_vertex, quad.bounds,
                                                  quad.content_mask.bounds);
-  float4 border_color = hsla_to_rgba(quad.border_color);
+
+  GradientColor border = prepare_fill_color(
+    quad.border_color.tag,
+    quad.border_color.color_space,
+    quad.border_color.solid,
+    quad.border_color.colors[0].color,
+    quad.border_color.colors[1].color
+  );
 
   GradientColor gradient = prepare_fill_color(
     quad.background.tag,
@@ -260,7 +271,9 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
   return QuadVertexOutput{
       quad_id,
       device_position,
-      border_color,
+      border.solid,
+      border.color0,
+      border.color1,
       gradient.solid,
       gradient.color0,
       gradient.color1,
@@ -470,7 +483,8 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
 
   float4 color = background_color;
   if (border_sdf < antialias_threshold) {
-    float4 border_color = input.border_color;
+    float4 border_color = fill_color(quad.border_color, input.position.xy, quad.bounds,
+      input.border_solid, input.border_color0, input.border_color1);
 
     // Dashed border logic when border_style == 1
     if (quad.border_style == 1) {

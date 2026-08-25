@@ -1410,7 +1410,7 @@ struct Quad {
     bounds: Bounds,
     content_mask: Bounds,
     background: Background,
-    border_color: Hsla,
+    border_color: Background,
     corner_radii: Corners,
     border_widths: Edges,
     corner_smoothing: f32,
@@ -1420,18 +1420,20 @@ struct Quad {
 
 struct QuadVarying {
     @builtin(position) position: vec4<f32>,
-    @location(0) @interpolate(flat) border_color: vec4<f32>,
+    @location(0) @interpolate(flat) border_solid: vec4<f32>,
     @location(1) @interpolate(flat) quad_id: u32,
     // TODO: use `clip_distance` once Naga supports it
     @location(2) clip_distances: vec4<f32>,
     @location(3) @interpolate(flat) background_solid: vec4<f32>,
     @location(4) @interpolate(flat) background_color0: vec4<f32>,
     @location(5) @interpolate(flat) background_color1: vec4<f32>,
-    @location(6) @interpolate(flat) horizontal_corner_reaches: vec4<f32>,
-    @location(7) @interpolate(flat) vertical_corner_reaches: vec4<f32>,
-    @location(8) @interpolate(flat) corner_lengths: vec4<f32>,
-    @location(9) @interpolate(flat) smoothing_factors: vec4<f32>,
-    @location(10) @interpolate(flat) superellipse_power: f32,
+    @location(6) @interpolate(flat) border_color0: vec4<f32>,
+    @location(7) @interpolate(flat) border_color1: vec4<f32>,
+    @location(8) @interpolate(flat) horizontal_corner_reaches: vec4<f32>,
+    @location(9) @interpolate(flat) vertical_corner_reaches: vec4<f32>,
+    @location(10) @interpolate(flat) corner_lengths: vec4<f32>,
+    @location(11) @interpolate(flat) smoothing_factors: vec4<f32>,
+    @location(12) @interpolate(flat) superellipse_power: f32,
 }
 
 @vertex
@@ -1451,7 +1453,16 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     out.background_solid = gradient.solid;
     out.background_color0 = gradient.color0;
     out.background_color1 = gradient.color1;
-    out.border_color = hsla_to_rgba(quad.border_color);
+
+    let border = prepare_gradient_color(
+        quad.border_color.tag,
+        quad.border_color.color_space,
+        quad.border_color.solid,
+        quad.border_color.colors
+    );
+    out.border_solid = border.solid;
+    out.border_color0 = border.color0;
+    out.border_color1 = border.color1;
     out.quad_id = instance_id;
     out.horizontal_corner_reaches = corner_values(quad.corner_radii);
     out.vertical_corner_reaches = corner_values(quad.corner_radii);
@@ -1728,7 +1739,8 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
 
     var color = background_color;
     if (border_sdf < antialias_threshold) {
-        var border_color = input.border_color;
+        var border_color = gradient_color(quad.border_color, input.position.xy, quad.bounds,
+            input.border_solid, input.border_color0, input.border_color1);
 
         // Dashed border logic when border_style == 1
         if (quad.border_style == 1) {
