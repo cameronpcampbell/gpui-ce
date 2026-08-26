@@ -296,8 +296,8 @@ mod tests {
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
     use crate::{
-        Animation, Context, InteractiveElement, MotionInfo, Render, TestAppContext, WindowHandle,
-        div, prelude::*, px, size,
+        Animation, Context, InteractiveElement, Render, TestAppContext, WindowHandle, div,
+        prelude::*, px, size,
     };
 
     use super::*;
