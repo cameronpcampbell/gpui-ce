@@ -61,9 +61,9 @@ impl RenderOnce for Button {
     }
 }
 
-struct TransitionExample;
+struct StyleTransitionsExample;
 
-impl Render for TransitionExample {
+impl Render for StyleTransitionsExample {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
@@ -86,7 +86,7 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| TransitionExample),
+            |_, cx| cx.new(|_| StyleTransitionsExample),
         )
         .expect("Failed to open window");
 
