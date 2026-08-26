@@ -64,6 +64,7 @@ struct CanonicalStyleTransitionField {
     path: TokenStream2,
     ty: TokenStream2,
     optional: bool,
+    clamp_to_bounds: bool,
 }
 
 impl StyleTransitionField {
@@ -123,6 +124,7 @@ fn canonical_style_transition_fields(
 
         field_indices.insert(key.clone(), fields.len());
         fields.push(CanonicalStyleTransitionField {
+            clamp_to_bounds: key.starts_with("corner_radii."),
             key,
             config_name,
             path: field.path.clone(),
@@ -186,20 +188,48 @@ pub fn style_transitions(input: TokenStream) -> TokenStream {
             }
         };
 
-        quote! {
-            if let Some(motion) = self.#motion_name.as_ref() {
-                let target = #target;
-                let property = state.property::<#ty>(#state_key, &target);
-                let (property_in_progress, value) = property.evaluate(
-                    target,
-                    motion,
-                    now,
-                    reduce_motion,
-                );
-                #assignment
-                in_progress |= property_in_progress;
-            } else {
-                state.remove(#state_key);
+        let application = quote! {
+            let target = #target;
+            let property = state.property::<#ty>(#state_key, &target);
+            let (property_in_progress, value) = property.evaluate(
+                target,
+                motion,
+                now,
+                reduce_motion,
+            );
+            #assignment
+            in_progress |= property_in_progress;
+        };
+
+        if field.clamp_to_bounds {
+            quote! {
+                if let Some(motion) = self.#motion_name.as_ref() {
+                    if let Some(context) = context {
+                        let target = Some(crate::AbsoluteLength::Pixels(std::cmp::min(
+                            style.#path.to_pixels(context.rem_size),
+                            context.max_corner_radius,
+                        )));
+                        let property = state.property::<#ty>(#state_key, &target);
+                        let (property_in_progress, value) = property.evaluate(
+                            target,
+                            motion,
+                            now,
+                            reduce_motion,
+                        );
+                        #assignment
+                        in_progress |= property_in_progress;
+                    }
+                } else {
+                    state.remove(#state_key);
+                }
+            }
+        } else {
+            quote! {
+                if let Some(motion) = self.#motion_name.as_ref() {
+                    #application
+                } else {
+                    state.remove(#state_key);
+                }
             }
         }
     });
@@ -223,6 +253,7 @@ pub fn style_transitions(input: TokenStream) -> TokenStream {
                 &self,
                 style: &mut crate::Style,
                 state: &mut StyleTransitionState,
+                context: Option<crate::style_transitions::StyleTransitionContext>,
                 now: std::time::Instant,
                 reduce_motion: bool,
             ) -> bool {

@@ -38,15 +38,17 @@ impl ParentElement for Button {
 
 impl RenderOnce for Button {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        const HOVER_STRENGTH: f32 = 0.3;
+        const HOVER_STRENGTH: f32 = 0.2;
+        const ACTIVE_STRENGTH: f32 = 0.3;
 
         let base_color: Rgba = rgb(0x663399);
         let hover_color = base_color.lerp(&rgb(0x000), HOVER_STRENGTH);
+        let active_color = base_color.lerp(&rgb(0x000), ACTIVE_STRENGTH);
 
         div()
             .id(self.id)
             .cursor_pointer()
-            .rounded(px(100.))
+            .rounded(px(99999.))
             .pl(px(14.))
             .pr(px(14.))
             .pt(px(10.))
@@ -58,6 +60,7 @@ impl RenderOnce for Button {
                 transitions.bg(Duration::from_millis(200).with_easing(ease_in_out))
             })
             .hover(|refinement| refinement.bg(hover_color))
+            .active(|refinement| refinement.bg(active_color))
     }
 }
 
