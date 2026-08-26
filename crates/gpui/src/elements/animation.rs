@@ -3,7 +3,7 @@ use std::{rc::Rc, time::Duration};
 
 use crate::{
     AnyElement, App, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
-    ParentElement, Window,
+    MotionInfo, ParentElement, Window,
 };
 
 pub use easing::*;
@@ -22,13 +22,16 @@ pub struct Animation {
 }
 
 impl Animation {
-    /// Create a new animation with the given duration.
-    /// By default the animation will only run once and will use a linear easing function.
-    pub fn new(duration: Duration) -> Self {
+    /// Create a new animation with the given motion.
+    /// The animation runs once unless [`Self::repeat`] is called. Duration inputs
+    /// use linear easing.
+    pub fn new(motion: impl Into<MotionInfo>) -> Self {
+        let motion = motion.into();
+
         Self {
-            duration,
+            duration: motion.duration,
             oneshot: true,
-            easing: Rc::new(linear),
+            easing: motion.easing,
         }
     }
 
@@ -293,8 +296,8 @@ mod tests {
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
     use crate::{
-        Animation, Context, InteractiveElement, Render, TestAppContext, WindowHandle, div,
-        prelude::*, px, size,
+        Animation, Context, InteractiveElement, MotionInfo, Render, TestAppContext, WindowHandle,
+        div, prelude::*, px, size,
     };
 
     use super::*;
