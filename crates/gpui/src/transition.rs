@@ -1,16 +1,15 @@
 use std::{
     borrow::BorrowMut,
     cell::{Ref, RefCell},
-    rc::Rc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
-use crate::{App, Entity, EntityId, Window, lerp::Lerp, linear};
+use crate::{App, Entity, EntityId, MotionInfo, Window, lerp::Lerp};
 
 /// An animated transition between values of type `T`.
 ///
 /// `Transition` manages the interpolation of a value from a start state to a goal
-/// state over a specified duration. It supports customizable easing functions and
+/// state using the supplied motion. It supports customizable easing functions and
 /// can operate in continuous or non-continuous mode.
 ///
 /// # Type Parameters
@@ -43,12 +42,7 @@ use crate::{App, Entity, EntityId, Window, lerp::Lerp, linear};
 /// ```
 #[derive(Clone)]
 pub struct Transition<T: Lerp + Clone + PartialEq + 'static> {
-    /// The amount of time for which this transition should run.
-    duration_secs: f32,
-
-    /// A function that takes a delta between 0 and 1 and returns a new delta
-    /// between 0 and 1 based on the given easing function.
-    easing: Rc<dyn Fn(f32) -> f32>,
+    motion: MotionInfo,
 
     state: Entity<TransitionState<T>>,
 
@@ -62,11 +56,10 @@ pub struct Transition<T: Lerp + Clone + PartialEq + 'static> {
 }
 
 impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
-    /// Create a new transition with the given duration using the specified state.
-    pub fn new(state: Entity<TransitionState<T>>, duration: Duration) -> Self {
+    /// Create a new transition with the given motion using the specified state.
+    pub fn new(state: Entity<TransitionState<T>>, motion: impl Into<MotionInfo>) -> Self {
         Self {
-            duration_secs: duration.as_secs_f32(),
-            easing: Rc::new(linear),
+            motion: motion.into(),
             state,
             cached_value: RefCell::new(None),
             continuous: true,
@@ -77,7 +70,7 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
     /// The easing function will take a time delta between 0 and 1 and return a new delta
     /// between 0 and 1
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
-        self.easing = Rc::new(easing);
+        self.motion = self.motion.with_easing(easing);
         self
     }
 
@@ -91,7 +84,7 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
     }
 
     fn default_goal_updated_at(&self) -> Instant {
-        Instant::now() - Duration::from_secs_f32(self.duration_secs)
+        Instant::now() - self.motion.duration
     }
 
     /// Evaluates the value of the transition without using the cache.
@@ -105,7 +98,8 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
             .unwrap_or_else(|| self.default_goal_updated_at())
             .elapsed()
             .as_secs_f32();
-        let delta = (self.easing)((elapsed_secs / self.duration_secs).min(1.));
+        let duration_secs = self.motion.duration.as_secs_f32();
+        let delta = (self.motion.easing)((elapsed_secs / duration_secs).min(1.));
 
         debug_assert!(
             (0.0..=1.0).contains(&delta),
@@ -165,7 +159,8 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
             .unwrap_or_else(|| self.default_goal_updated_at());
 
         let elapsed_secs = goal_last_updated_at.elapsed().as_secs_f32();
-        (self.easing)((elapsed_secs / self.duration_secs).min(1.))
+        let duration_secs = self.motion.duration.as_secs_f32();
+        (self.motion.easing)((elapsed_secs / duration_secs).min(1.))
     }
 
     /// Updates the goal value for the transition.
@@ -295,21 +290,22 @@ impl<T: Lerp + Clone + PartialEq + 'static> TransitionState<T> {
 
 #[cfg(all(test, feature = "test-support"))]
 mod tests {
+    use std::time::Duration;
+
     use crate::AppContext;
 
     use super::*;
-    use gpui::{Point, TestAppContext, px};
-    use palette::rgb::Rgba;
+    use gpui::TestAppContext;
 
     /// Helper to create a Transition directly without using window hooks.
     /// This bypasses the render-phase restriction of use_transition/use_keyed_transition.
     fn create_transition<T: Lerp + Clone + PartialEq + 'static>(
         cx: &mut App,
-        duration: Duration,
+        motion: impl Into<MotionInfo>,
         initial: T,
     ) -> Transition<T> {
         let state = cx.new(|_| TransitionState::new(initial));
-        Transition::new(state, duration)
+        Transition::new(state, motion)
     }
 
     #[gpui::test]

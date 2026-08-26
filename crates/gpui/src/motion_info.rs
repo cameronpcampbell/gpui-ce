@@ -22,11 +22,11 @@ impl IntoMotionDuration for f32 {
     }
 }
 
-/// Timing and easing configuration for a declarative style transition.
+/// Timing and easing configuration for motion.
 #[derive(Clone)]
 pub struct MotionInfo {
-    duration: Duration,
-    pub(crate) easing: Rc<dyn Fn(f32) -> f32>,
+    pub duration: Duration,
+    pub easing: Rc<dyn Fn(f32) -> f32>,
 }
 
 impl MotionInfo {
@@ -44,11 +44,6 @@ impl MotionInfo {
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
         self.easing = Rc::new(easing);
         self
-    }
-
-    /// Returns the duration of this motion.
-    pub fn duration(&self) -> Duration {
-        self.duration
     }
 }
 
