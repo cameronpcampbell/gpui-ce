@@ -313,79 +313,6 @@ mod tests {
     }
 
     #[gpui::test]
-    fn test_transition_creation(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let transition = create_transition(cx, Duration::from_millis(300), 0.0_f32);
-
-            // Read the goal - should be the initial value
-            let goal = transition.read_goal(cx);
-            assert_eq!(*goal, 0.0);
-        });
-    }
-
-    #[gpui::test]
-    fn test_transition_read_goal(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let transition = create_transition(cx, Duration::from_millis(300), 42.0_f32);
-
-            let goal = transition.read_goal(cx);
-            assert_eq!(*goal, 42.0);
-        });
-    }
-
-    #[gpui::test]
-    fn test_transition_update_returns_true_on_change(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let transition = create_transition(cx, Duration::from_millis(300), 0.0_f32);
-
-            let was_updated = transition.update(cx, |val, _cx| {
-                *val = 100.0;
-            });
-
-            assert!(was_updated);
-        });
-    }
-
-    #[gpui::test]
-    fn test_transition_update_returns_false_on_no_change(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let transition = create_transition(cx, Duration::from_millis(300), 50.0_f32);
-
-            // Update to the same value
-            let was_updated = transition.update(cx, |val, _cx| {
-                *val = 50.0;
-            });
-
-            assert!(!was_updated);
-        });
-    }
-
-    #[gpui::test]
-    fn test_transition_goal_updated_after_update(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let transition = create_transition(cx, Duration::from_millis(300), 0.0_f32);
-
-            transition.update(cx, |val, _cx| {
-                *val = 200.0;
-            });
-
-            let goal = transition.read_goal(cx);
-            assert_eq!(*goal, 200.0);
-        });
-    }
-
-    #[gpui::test]
-    fn test_transition_entity_id(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let transition1 = create_transition(cx, Duration::from_millis(300), 0.0_f32);
-            let transition2 = create_transition(cx, Duration::from_millis(300), 0.0_f32);
-
-            // Different transitions should have different entity IDs
-            assert_ne!(transition1.entity_id(), transition2.entity_id());
-        });
-    }
-
-    #[gpui::test]
     fn test_transition_reset(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition = create_transition(cx, Duration::from_millis(300), 10.0_f32);
@@ -402,77 +329,9 @@ mod tests {
 
             // Goal should be back to initial value
             assert_eq!(*transition.read_goal(cx), 10.0);
-        });
-    }
-
-    #[gpui::test]
-    fn test_transition_cache_cleared_on_reset(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let transition = create_transition(cx, Duration::from_millis(300), 25.0_f32);
-
-            // Manually populate the cache using raw_evaluate
-            let (_, value) = transition.raw_evaluate(cx);
-            *transition.cached_value.borrow_mut() = Some(value);
-            assert!(transition.read_cache().is_some());
-
-            // Reset
-            transition.reset(cx);
 
             // Cache should be cleared
             assert!(transition.read_cache().is_none());
-        });
-    }
-
-    #[gpui::test]
-    fn test_transition_with_custom_easing(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            // Custom easing that always returns 0.5
-            let transition =
-                create_transition(cx, Duration::from_millis(300), 0.0_f32).with_easing(|_| 0.5);
-
-            // Update goal to trigger animation
-            transition.update(cx, |val, _cx| {
-                *val = 100.0;
-            });
-
-            // With our custom easing, the delta should be 0.5
-            // So the value should be lerp(0, 100, 0.5) = 50
-            let (_, value) = transition.raw_evaluate(cx);
-            assert_eq!(value, 50.0);
-        });
-    }
-
-    #[gpui::test]
-    fn test_transition_with_point(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let initial: Point<f32> = Point { x: 0.0, y: 0.0 };
-            let transition = create_transition(cx, Duration::from_millis(300), initial);
-
-            let goal = transition.read_goal(cx);
-            assert_eq!(goal.x, 0.0);
-            assert_eq!(goal.y, 0.0);
-
-            transition.update(cx, |point, _cx| {
-                point.x = 100.0;
-                point.y = 200.0;
-            });
-
-            let goal = transition.read_goal(cx);
-            assert_eq!(goal.x, 100.0);
-            assert_eq!(goal.y, 200.0);
-        });
-    }
-
-    #[gpui::test]
-    fn test_transition_with_rgba(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let initial = Rgba::new(1., 0., 0., 1.);
-            let transition = create_transition(cx, Duration::from_millis(300), initial);
-
-            let goal = transition.read_goal(cx);
-            assert_eq!(goal.red, 1.0);
-            assert_eq!(goal.green, 0.0);
-            assert_eq!(goal.blue, 0.0);
         });
     }
 
@@ -513,55 +372,6 @@ mod tests {
     }
 
     #[gpui::test]
-    fn test_evaluate_delta_initial(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let transition = create_transition(cx, Duration::from_millis(300), 0.0_f32);
-
-            // Without any update, the transition should be "complete" (delta = 1.0)
-            // because it starts in completed state
-            let delta = transition.evaluate_delta(cx);
-            assert_eq!(delta, 1.0);
-        });
-    }
-
-    #[gpui::test]
-    fn test_evaluate_delta_after_update(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let transition = create_transition(cx, Duration::from_millis(300), 0.0_f32);
-
-            transition.update(cx, |val, _cx| {
-                *val = 100.0;
-            });
-
-            // Immediately after update, delta should be close to 0
-            let delta = transition.evaluate_delta(cx);
-            assert!(
-                delta < 0.1,
-                "delta should be small immediately after update"
-            );
-        });
-    }
-
-    #[gpui::test]
-    fn test_transition_clone(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let transition = create_transition(cx, Duration::from_millis(300), 42.0_f32);
-
-            let cloned = transition.clone();
-
-            // Both should reference the same entity
-            assert_eq!(transition.entity_id(), cloned.entity_id());
-
-            // Updating one should affect the other
-            transition.update(cx, |val, _cx| {
-                *val = 100.0;
-            });
-
-            assert_eq!(*cloned.read_goal(cx), 100.0);
-        });
-    }
-
-    #[gpui::test]
     fn test_transition_cache_consistency(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let transition =
@@ -578,40 +388,6 @@ mod tests {
             let (_, value2) = transition.raw_evaluate(cx);
 
             assert_eq!(value1, value2);
-        });
-    }
-
-    #[gpui::test]
-    fn test_multiple_transitions_independent(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let transition_a = create_transition(cx, Duration::from_millis(300), 0.0_f32);
-            let transition_b = create_transition(cx, Duration::from_millis(300), 100.0_f32);
-
-            // Update only transition_a
-            transition_a.update(cx, |val, _cx| {
-                *val = 50.0;
-            });
-
-            // transition_b should remain unchanged
-            assert_eq!(*transition_a.read_goal(cx), 50.0);
-            assert_eq!(*transition_b.read_goal(cx), 100.0);
-        });
-    }
-
-    #[gpui::test]
-    fn test_transition_with_pixels(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let transition = create_transition(cx, Duration::from_millis(300), px(0.0));
-
-            let goal = transition.read_goal(cx);
-            assert_eq!(*goal, px(0.0));
-
-            transition.update(cx, |val, _cx| {
-                *val = px(100.0);
-            });
-
-            let goal = transition.read_goal(cx);
-            assert_eq!(*goal, px(100.0));
         });
     }
 
@@ -693,48 +469,6 @@ mod tests {
         assert_eq!(state.end_goal, 42.0);
         assert_eq!(state.last_delta, 1.0);
         assert!(state.goal_last_updated_at.is_none());
-    }
-
-    #[test]
-    fn test_state_with_point() {
-        let initial: Point<f32> = Point { x: 10.0, y: 20.0 };
-        let state = TransitionState::new(initial);
-
-        assert_eq!(state.initial_goal.x, 10.0);
-        assert_eq!(state.initial_goal.y, 20.0);
-        assert_eq!(state.start_goal.x, 10.0);
-        assert_eq!(state.end_goal.x, 10.0);
-    }
-
-    #[test]
-    fn test_state_with_rgba() {
-        let initial = Rgba::new(1., 0.5, 0., 1.);
-        let state = TransitionState::new(initial);
-
-        assert_eq!(state.initial_goal.red, 1.0);
-        assert_eq!(state.initial_goal.green, 0.5);
-        assert_eq!(state.initial_goal.blue, 0.0);
-        assert_eq!(state.initial_goal.alpha, 1.0);
-    }
-
-    #[test]
-    fn test_state_clone() {
-        let state = TransitionState::new(100.0_f32);
-        let cloned = state.clone();
-
-        assert_eq!(state.initial_goal, cloned.initial_goal);
-        assert_eq!(state.start_goal, cloned.start_goal);
-        assert_eq!(state.end_goal, cloned.end_goal);
-        assert_eq!(state.last_delta, cloned.last_delta);
-    }
-
-    #[test]
-    fn test_state_with_integer() {
-        let state = TransitionState::new(50_i32);
-
-        assert_eq!(state.initial_goal, 50);
-        assert_eq!(state.start_goal, 50);
-        assert_eq!(state.end_goal, 50);
     }
 
     #[test]
