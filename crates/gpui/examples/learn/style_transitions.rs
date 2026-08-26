@@ -8,9 +8,8 @@ mod example_prelude;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, AppContext, Bounds, Context, DurationWithEasing, ElementId, Lerp, MotionInfo,
-    Rgba, Window, WindowBounds, WindowOptions, actions, div, ease_in_out, prelude::*, px, rgb,
-    size,
+    AnyElement, App, AppContext, Bounds, Context, DurationWithEasing, ElementId, Lerp, Rgba,
+    Window, WindowBounds, WindowOptions, actions, div, ease_in_out, prelude::*, px, rgb, size,
 };
 use smallvec::SmallVec;
 
