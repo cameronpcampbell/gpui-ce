@@ -19,7 +19,7 @@ actions!(app, [Quit]);
 const BUTTON_WIDTH: f32 = 120.;
 const BUTTON_HEIGHT: f32 = 44.;
 const BOUNCE_HEIGHT: f32 = 120.;
-const BOUNCE_DURATION: Duration = Duration::from_millis(900);
+const BOUNCE_DURATION: Duration = Duration::from_millis(1200);
 
 fn centered_position(window: &Window) -> Point<Pixels> {
     let viewport = window.viewport_size();
@@ -31,12 +31,12 @@ fn centered_position(window: &Window) -> Point<Pixels> {
 }
 
 #[derive(IntoElement)]
-struct BouncingButton {
+struct Button {
     id: ElementId,
     children: SmallVec<[AnyElement; 2]>,
 }
 
-impl BouncingButton {
+impl Button {
     fn new(id: impl Into<ElementId>) -> Self {
         Self {
             id: id.into(),
@@ -45,29 +45,30 @@ impl BouncingButton {
     }
 }
 
-impl ParentElement for BouncingButton {
+impl ParentElement for Button {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.children.extend(elements);
     }
 }
 
-impl RenderOnce for BouncingButton {
+impl RenderOnce for Button {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let bounce_transition = window.use_keyed_transition(
-            (self.id.clone(), "bounce"),
-            cx,
-            BOUNCE_DURATION,
-            |_window, _cx| 0.,
-        );
+        let bounce_transition = window
+            .use_keyed_transition(
+                (self.id.clone(), "bounce"),
+                cx,
+                BOUNCE_DURATION,
+                |_window, _cx| 0.,
+            )
+            .with_easing(bounce(ease_in_out));
         let progress = *bounce_transition.evaluate(window, cx);
-        let bounce_progress = bounce(ease_in_out)(progress);
         let resting_position = centered_position(window);
 
         div()
             .id(self.id)
             .absolute()
             .left(resting_position.x)
-            .top(resting_position.y - px(BOUNCE_HEIGHT * bounce_progress))
+            .top(resting_position.y - px(BOUNCE_HEIGHT * progress))
             .w(px(BUTTON_WIDTH))
             .h(px(BUTTON_HEIGHT))
             .flex()
@@ -97,7 +98,7 @@ impl Render for TransitionExample {
             .size_full()
             .overflow_hidden()
             .bg(rgb(0x110F15))
-            .child(BouncingButton::new("btn").child("Bounce!"))
+            .child(Button::new("btn").child("Bounce!"))
     }
 }
 
