@@ -25,7 +25,9 @@ impl IntoMotionDuration for f32 {
 /// Timing and easing configuration for motion.
 #[derive(Clone)]
 pub struct MotionInfo {
+    /// How long the motion runs.
     pub duration: Duration,
+    /// Maps linear progress to eased progress.
     pub easing: Rc<dyn Fn(f32) -> f32>,
 }
 
