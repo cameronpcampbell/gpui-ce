@@ -141,6 +141,18 @@ impl Lerp for AbsoluteLength {
         match (*self, *to) {
             (Self::Pixels(from), Self::Pixels(to)) => Self::Pixels(from.lerp(&to, delta)),
             (Self::Rems(from), Self::Rems(to)) => Self::Rems(from.lerp(&to, delta)),
+            (from, Self::Pixels(to)) if from.is_zero() => {
+                Self::Pixels(Pixels::default().lerp(&to, delta))
+            }
+            (from, Self::Rems(to)) if from.is_zero() => {
+                Self::Rems(Rems::default().lerp(&to, delta))
+            }
+            (Self::Pixels(from), to) if to.is_zero() => {
+                Self::Pixels(from.lerp(&Pixels::default(), delta))
+            }
+            (Self::Rems(from), to) if to.is_zero() => {
+                Self::Rems(from.lerp(&Rems::default(), delta))
+            }
             _ if delta >= 1.0 => *to,
             _ => *self,
         }
