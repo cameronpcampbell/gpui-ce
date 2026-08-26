@@ -58,6 +58,14 @@ struct StyleTransitionField {
     optional: bool,
 }
 
+struct CanonicalStyleTransitionField {
+    key: String,
+    config_name: syn::Ident,
+    path: TokenStream2,
+    ty: TokenStream2,
+    optional: bool,
+}
+
 impl StyleTransitionField {
     fn required(path: TokenStream2, ty: TokenStream2) -> Self {
         Self {
@@ -76,6 +84,56 @@ impl StyleTransitionField {
     }
 }
 
+fn style_transition_key(path: &TokenStream2) -> String {
+    path.to_string().split_whitespace().collect()
+}
+
+fn style_transition_config_name(key: &str) -> syn::Ident {
+    format_ident!("transition_{}", key.replace('.', "_"))
+}
+
+fn canonical_style_transition_fields(
+    specs: &[StyleTransitionSpec],
+) -> Vec<CanonicalStyleTransitionField> {
+    let mut fields = Vec::<CanonicalStyleTransitionField>::new();
+    let mut field_indices = std::collections::HashMap::<String, usize>::new();
+    let mut config_names = std::collections::HashMap::<String, String>::new();
+
+    for field in specs.iter().flat_map(|spec| &spec.fields) {
+        let key = style_transition_key(&field.path);
+        if let Some(ix) = field_indices.get(&key).copied() {
+            let canonical = &fields[ix];
+            if canonical.ty.to_string() != field.ty.to_string()
+                || canonical.optional != field.optional
+            {
+                panic!("style transition field `{key}` has conflicting metadata");
+            }
+            continue;
+        }
+
+        let config_name = style_transition_config_name(&key);
+        let config_name_string = config_name.to_string();
+        if let Some(existing_key) = config_names.insert(config_name_string.clone(), key.clone())
+            && existing_key != key
+        {
+            panic!(
+                "style transition fields `{existing_key}` and `{key}` map to the same config field `{config_name_string}`"
+            );
+        }
+
+        field_indices.insert(key.clone(), fields.len());
+        fields.push(CanonicalStyleTransitionField {
+            key,
+            config_name,
+            path: field.path.clone(),
+            ty: field.ty.clone(),
+            optional: field.optional,
+        });
+    }
+
+    fields
+}
+
 /// Generates `StyleTransitions` from the same property descriptions used by the
 /// Tailwind-style setters below. Keeping the field paths here means the public
 /// configuration, its builder methods, and the runtime animation state cannot
@@ -83,64 +141,67 @@ impl StyleTransitionField {
 pub fn style_transitions(input: TokenStream) -> TokenStream {
     let _ = parse_macro_input!(input as StyleableMacroInput);
     let specs = style_transition_specs();
+    let canonical_fields = canonical_style_transition_fields(&specs);
 
-    let config_fields = specs.iter().map(|spec| {
-        let name = format_ident!("{}", spec.name);
+    let config_fields = canonical_fields.iter().map(|field| {
+        let name = &field.config_name;
         quote! {
-            #[doc = concat!("Motion configuration for [`Styled::", stringify!(#name), "`].")]
-            pub #name: Option<crate::MotionInfo>
+            #name: Option<crate::MotionInfo>
         }
     });
 
     let builders = specs.iter().map(|spec| {
         let name = format_ident!("{}", spec.name);
+        let config_names = spec
+            .fields
+            .iter()
+            .map(|field| style_transition_config_name(&style_transition_key(&field.path)));
         quote! {
             #[doc = concat!("Transitions changes made by [`Styled::", stringify!(#name), "`].")]
             pub fn #name(mut self, motion: impl Into<crate::MotionInfo>) -> Self {
-                self.#name = Some(motion.into());
+                let motion = motion.into();
+                #(self.#config_names = Some(motion.clone());)*
                 self
             }
         }
     });
 
-    let applications = specs.iter().flat_map(|spec| {
-        let motion_name = format_ident!("{}", spec.name);
-        spec.fields.iter().enumerate().map(move |(ix, field)| {
-            let state_key = format!("{}.{ix}", spec.name);
-            let path = &field.path;
-            let ty = &field.ty;
-            let target = if field.optional {
-                quote! { style.#path.clone() }
-            } else {
-                quote! { Some(style.#path.clone()) }
-            };
-            let assignment = if field.optional {
-                quote! { style.#path = value; }
-            } else {
-                quote! {
-                    if let Some(value) = value {
-                        style.#path = value;
-                    }
-                }
-            };
-
+    let applications = canonical_fields.iter().map(|field| {
+        let motion_name = &field.config_name;
+        let state_key = &field.key;
+        let path = &field.path;
+        let ty = &field.ty;
+        let target = if field.optional {
+            quote! { style.#path.clone() }
+        } else {
+            quote! { Some(style.#path.clone()) }
+        };
+        let assignment = if field.optional {
+            quote! { style.#path = value; }
+        } else {
             quote! {
-                if let Some(motion) = self.#motion_name.as_ref() {
-                    let target = #target;
-                    let property = state.property::<#ty>(#state_key, &target);
-                    let (property_in_progress, value) = property.evaluate(
-                        target,
-                        motion,
-                        now,
-                        reduce_motion,
-                    );
-                    #assignment
-                    in_progress |= property_in_progress;
-                } else {
-                    state.remove(#state_key);
+                if let Some(value) = value {
+                    style.#path = value;
                 }
             }
-        })
+        };
+
+        quote! {
+            if let Some(motion) = self.#motion_name.as_ref() {
+                let target = #target;
+                let property = state.property::<#ty>(#state_key, &target);
+                let (property_in_progress, value) = property.evaluate(
+                    target,
+                    motion,
+                    now,
+                    reduce_motion,
+                );
+                #assignment
+                in_progress |= property_in_progress;
+            } else {
+                state.remove(#state_key);
+            }
+        }
     });
 
     quote! {

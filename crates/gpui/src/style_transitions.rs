@@ -56,7 +56,7 @@ where
         self.start_goal = current_value;
         self.end_goal = goal;
 
-        if motion.duration().is_zero()
+        if motion.duration.is_zero()
             || self.start_goal.is_none()
             || self.end_goal.is_none()
             || self.start_goal == self.end_goal
@@ -74,7 +74,7 @@ where
             return (false, self.end_goal.clone());
         };
 
-        let duration = motion.duration().as_secs_f32();
+        let duration = motion.duration.as_secs_f32();
         if duration == 0.0 {
             self.jump_to(self.end_goal.clone());
             return (false, self.end_goal.clone());
@@ -115,6 +115,14 @@ mod tests {
     use super::*;
     use crate::{AbsoluteLength, DefiniteLength, Length, Style, px};
     use std::time::Duration;
+
+    fn length(value: f32) -> Length {
+        Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Pixels(px(value))))
+    }
+
+    fn definite_length(value: f32) -> DefiniteLength {
+        DefiniteLength::Absolute(AbsoluteLength::Pixels(px(value)))
+    }
 
     #[test]
     fn interrupted_property_motion_continues_from_its_current_value() {
@@ -170,41 +178,125 @@ mod tests {
 
     #[test]
     fn generated_width_transition_updates_the_resolved_style() {
-        fn width(value: f32) -> Length {
-            Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Pixels(px(value))))
-        }
-
         let transitions = StyleTransitions::new().w(1.0);
         let mut state = StyleTransitionState::default();
         let started_at = Instant::now();
         let mut style = Style {
-            size: crate::size(width(10.0), Length::Auto),
+            size: crate::size(length(10.0), Length::Auto),
             ..Style::default()
         };
 
         assert!(!transitions.apply_at(&mut style, &mut state, started_at, false));
-        assert_eq!(style.size.width, width(10.0));
+        assert_eq!(style.size.width, length(10.0));
 
-        style.size.width = width(20.0);
+        style.size.width = length(20.0);
         assert!(transitions.apply_at(&mut style, &mut state, started_at, false));
-        assert_eq!(style.size.width, width(10.0));
+        assert_eq!(style.size.width, length(10.0));
 
-        style.size.width = width(20.0);
+        style.size.width = length(20.0);
         assert!(transitions.apply_at(
             &mut style,
             &mut state,
             started_at + Duration::from_millis(500),
             false,
         ));
-        assert_eq!(style.size.width, width(15.0));
+        assert_eq!(style.size.width, length(15.0));
 
-        style.size.width = width(20.0);
+        style.size.width = length(20.0);
         assert!(!transitions.apply_at(
             &mut style,
             &mut state,
             started_at + Duration::from_secs(1),
             false,
         ));
-        assert_eq!(style.size.width, width(20.0));
+        assert_eq!(style.size.width, length(20.0));
+    }
+
+    #[test]
+    fn overlapping_transition_builders_share_state_and_last_builder_wins() {
+        let transitions = StyleTransitions::new().size(1.0).w(2.0);
+        let mut state = StyleTransitionState::default();
+        let started_at = Instant::now();
+        let mut style = Style {
+            size: crate::size(length(10.0), length(10.0)),
+            ..Style::default()
+        };
+
+        assert!(!transitions.apply_at(&mut style, &mut state, started_at, false));
+        assert_eq!(state.properties.len(), 2);
+        assert!(state.properties.contains_key("size.width"));
+        assert!(state.properties.contains_key("size.height"));
+
+        style.size = crate::size(length(20.0), length(20.0));
+        assert!(transitions.apply_at(&mut style, &mut state, started_at, false));
+
+        style.size = crate::size(length(20.0), length(20.0));
+        assert!(transitions.apply_at(
+            &mut style,
+            &mut state,
+            started_at + Duration::from_secs(1),
+            false,
+        ));
+        assert_eq!(style.size.width, length(15.0));
+        assert_eq!(style.size.height, length(20.0));
+    }
+
+    #[test]
+    fn composite_builder_overrides_earlier_single_field_builder() {
+        let transitions = StyleTransitions::new().w(2.0).size(1.0);
+        let mut state = StyleTransitionState::default();
+        let started_at = Instant::now();
+        let mut style = Style {
+            size: crate::size(length(10.0), length(10.0)),
+            ..Style::default()
+        };
+
+        assert!(!transitions.apply_at(&mut style, &mut state, started_at, false));
+
+        style.size = crate::size(length(20.0), length(20.0));
+        assert!(transitions.apply_at(&mut style, &mut state, started_at, false));
+
+        style.size = crate::size(length(20.0), length(20.0));
+        assert!(!transitions.apply_at(
+            &mut style,
+            &mut state,
+            started_at + Duration::from_secs(1),
+            false,
+        ));
+        assert_eq!(style.size.width, length(20.0));
+        assert_eq!(style.size.height, length(20.0));
+    }
+
+    #[test]
+    fn padding_aliases_share_canonical_property_state() {
+        let transitions = StyleTransitions::new().p(1.0).pl(2.0);
+        let mut state = StyleTransitionState::default();
+        let started_at = Instant::now();
+        let mut style = Style {
+            padding: crate::Edges::all(definite_length(10.0)),
+            ..Style::default()
+        };
+
+        assert!(!transitions.apply_at(&mut style, &mut state, started_at, false));
+        assert_eq!(state.properties.len(), 4);
+        assert!(state.properties.contains_key("padding.top"));
+        assert!(state.properties.contains_key("padding.right"));
+        assert!(state.properties.contains_key("padding.bottom"));
+        assert!(state.properties.contains_key("padding.left"));
+
+        style.padding = crate::Edges::all(definite_length(20.0));
+        assert!(transitions.apply_at(&mut style, &mut state, started_at, false));
+
+        style.padding = crate::Edges::all(definite_length(20.0));
+        assert!(transitions.apply_at(
+            &mut style,
+            &mut state,
+            started_at + Duration::from_secs(1),
+            false,
+        ));
+        assert_eq!(style.padding.top, definite_length(20.0));
+        assert_eq!(style.padding.right, definite_length(20.0));
+        assert_eq!(style.padding.bottom, definite_length(20.0));
+        assert_eq!(style.padding.left, definite_length(15.0));
     }
 }
