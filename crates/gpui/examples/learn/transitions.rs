@@ -1,6 +1,7 @@
 //! Transition Example
 //!
-//! This example uses a keyed transition to move a button to a random position.
+//! This example uses a keyed transition to bounce a button upward.
+//! Each click resets the transition before starting the same bounce again.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
@@ -9,16 +10,16 @@ use std::time::Duration;
 
 use gpui::{
     AnyElement, App, AppContext, Bounds, Context, ElementId, Pixels, Point, Window, WindowBounds,
-    WindowOptions, actions, div, ease_in_out, point, prelude::*, px, rgb, size,
+    WindowOptions, actions, bounce, div, ease_in_out, point, prelude::*, px, rgb, size,
 };
-use rand::Rng;
 use smallvec::SmallVec;
 
 actions!(app, [Quit]);
 
 const BUTTON_WIDTH: f32 = 120.;
 const BUTTON_HEIGHT: f32 = 44.;
-const WINDOW_PADDING: f32 = 24.;
+const BOUNCE_HEIGHT: f32 = 120.;
+const BOUNCE_DURATION: Duration = Duration::from_millis(900);
 
 fn centered_position(window: &Window) -> Point<Pixels> {
     let viewport = window.viewport_size();
@@ -29,25 +30,13 @@ fn centered_position(window: &Window) -> Point<Pixels> {
     )
 }
 
-fn random_position(window: &Window) -> Point<Pixels> {
-    let viewport = window.viewport_size();
-    let max_x = (f32::from(viewport.width) - BUTTON_WIDTH - WINDOW_PADDING).max(WINDOW_PADDING);
-    let max_y = (f32::from(viewport.height) - BUTTON_HEIGHT - WINDOW_PADDING).max(WINDOW_PADDING);
-    let mut rng = rand::rng();
-
-    point(
-        px(rng.random_range(WINDOW_PADDING..=max_x)),
-        px(rng.random_range(WINDOW_PADDING..=max_y)),
-    )
-}
-
 #[derive(IntoElement)]
-struct Button {
+struct BouncingButton {
     id: ElementId,
     children: SmallVec<[AnyElement; 2]>,
 }
 
-impl Button {
+impl BouncingButton {
     fn new(id: impl Into<ElementId>) -> Self {
         Self {
             id: id.into(),
@@ -56,29 +45,29 @@ impl Button {
     }
 }
 
-impl ParentElement for Button {
+impl ParentElement for BouncingButton {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.children.extend(elements);
     }
 }
 
-impl RenderOnce for Button {
+impl RenderOnce for BouncingButton {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let position_transition = window
-            .use_keyed_transition(
-                (self.id.clone(), "position"),
-                cx,
-                Duration::from_millis(400),
-                |window, _cx| centered_position(window),
-            )
-            .with_easing(ease_in_out);
-        let position = *position_transition.evaluate(window, cx);
+        let bounce_transition = window.use_keyed_transition(
+            (self.id.clone(), "bounce"),
+            cx,
+            BOUNCE_DURATION,
+            |_window, _cx| 0.,
+        );
+        let progress = *bounce_transition.evaluate(window, cx);
+        let bounce_progress = bounce(ease_in_out)(progress);
+        let resting_position = centered_position(window);
 
         div()
             .id(self.id)
             .absolute()
-            .left(position.x)
-            .top(position.y)
+            .left(resting_position.x)
+            .top(resting_position.y - px(BOUNCE_HEIGHT * bounce_progress))
             .w(px(BUTTON_WIDTH))
             .h(px(BUTTON_HEIGHT))
             .flex()
@@ -89,11 +78,10 @@ impl RenderOnce for Button {
             .bg(rgb(0x663399))
             .text_color(rgb(0xffffff))
             .children(self.children)
-            .on_click(move |_, window, cx| {
-                let target = random_position(window);
-
-                position_transition.update(cx, |position, cx| {
-                    *position = target;
+            .on_click(move |_, _window, cx| {
+                bounce_transition.reset(cx);
+                bounce_transition.update(cx, |progress, cx| {
+                    *progress = 1.;
                     cx.notify();
                 });
             })
@@ -109,7 +97,7 @@ impl Render for TransitionExample {
             .size_full()
             .overflow_hidden()
             .bg(rgb(0x110F15))
-            .child(Button::new("btn").child("Click me!"))
+            .child(BouncingButton::new("btn").child("Bounce!"))
     }
 }
 
