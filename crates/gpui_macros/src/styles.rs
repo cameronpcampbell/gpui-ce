@@ -357,7 +357,7 @@ fn style_transition_specs() -> Vec<StyleTransitionSpec> {
             name: "border_color",
             fields: vec![StyleTransitionField::optional(
                 quote! { border_color },
-                quote! { crate::Hsla },
+                quote! { crate::Background },
             )],
         },
         StyleTransitionSpec {
