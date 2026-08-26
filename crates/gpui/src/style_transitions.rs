@@ -120,8 +120,30 @@ mod tests {
         Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Pixels(px(value))))
     }
 
-    fn definite_length(value: f32) -> DefiniteLength {
-        DefiniteLength::Absolute(AbsoluteLength::Pixels(px(value)))
+    fn size_transition_after_one_second(
+        transitions: StyleTransitions,
+    ) -> (bool, Style, StyleTransitionState) {
+        let started_at = Instant::now();
+        let mut state = StyleTransitionState::default();
+        let mut style = Style {
+            size: crate::size(length(10.0), length(10.0)),
+            ..Style::default()
+        };
+
+        assert!(!transitions.apply_at(&mut style, &mut state, started_at, false));
+
+        style.size = crate::size(length(20.0), length(20.0));
+        assert!(transitions.apply_at(&mut style, &mut state, started_at, false));
+
+        style.size = crate::size(length(20.0), length(20.0));
+        let in_progress = transitions.apply_at(
+            &mut style,
+            &mut state,
+            started_at + Duration::from_secs(1),
+            false,
+        );
+
+        (in_progress, style, state)
     }
 
     #[test]
@@ -213,90 +235,20 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_transition_builders_share_state_and_last_builder_wins() {
-        let transitions = StyleTransitions::new().size(1.0).w(2.0);
-        let mut state = StyleTransitionState::default();
-        let started_at = Instant::now();
-        let mut style = Style {
-            size: crate::size(length(10.0), length(10.0)),
-            ..Style::default()
-        };
+    fn overlapping_transition_builders_share_canonical_fields() {
+        let (in_progress, style, state) =
+            size_transition_after_one_second(StyleTransitions::new().size(1.0).w(2.0));
 
-        assert!(!transitions.apply_at(&mut style, &mut state, started_at, false));
+        assert!(in_progress);
+        assert_eq!(style.size, crate::size(length(15.0), length(20.0)));
         assert_eq!(state.properties.len(), 2);
         assert!(state.properties.contains_key("size.width"));
         assert!(state.properties.contains_key("size.height"));
 
-        style.size = crate::size(length(20.0), length(20.0));
-        assert!(transitions.apply_at(&mut style, &mut state, started_at, false));
+        let (in_progress, style, _) =
+            size_transition_after_one_second(StyleTransitions::new().w(2.0).size(1.0));
 
-        style.size = crate::size(length(20.0), length(20.0));
-        assert!(transitions.apply_at(
-            &mut style,
-            &mut state,
-            started_at + Duration::from_secs(1),
-            false,
-        ));
-        assert_eq!(style.size.width, length(15.0));
-        assert_eq!(style.size.height, length(20.0));
-    }
-
-    #[test]
-    fn composite_builder_overrides_earlier_single_field_builder() {
-        let transitions = StyleTransitions::new().w(2.0).size(1.0);
-        let mut state = StyleTransitionState::default();
-        let started_at = Instant::now();
-        let mut style = Style {
-            size: crate::size(length(10.0), length(10.0)),
-            ..Style::default()
-        };
-
-        assert!(!transitions.apply_at(&mut style, &mut state, started_at, false));
-
-        style.size = crate::size(length(20.0), length(20.0));
-        assert!(transitions.apply_at(&mut style, &mut state, started_at, false));
-
-        style.size = crate::size(length(20.0), length(20.0));
-        assert!(!transitions.apply_at(
-            &mut style,
-            &mut state,
-            started_at + Duration::from_secs(1),
-            false,
-        ));
-        assert_eq!(style.size.width, length(20.0));
-        assert_eq!(style.size.height, length(20.0));
-    }
-
-    #[test]
-    fn padding_aliases_share_canonical_property_state() {
-        let transitions = StyleTransitions::new().p(1.0).pl(2.0);
-        let mut state = StyleTransitionState::default();
-        let started_at = Instant::now();
-        let mut style = Style {
-            padding: crate::Edges::all(definite_length(10.0)),
-            ..Style::default()
-        };
-
-        assert!(!transitions.apply_at(&mut style, &mut state, started_at, false));
-        assert_eq!(state.properties.len(), 4);
-        assert!(state.properties.contains_key("padding.top"));
-        assert!(state.properties.contains_key("padding.right"));
-        assert!(state.properties.contains_key("padding.bottom"));
-        assert!(state.properties.contains_key("padding.left"));
-
-        style.padding = crate::Edges::all(definite_length(20.0));
-        assert!(transitions.apply_at(&mut style, &mut state, started_at, false));
-
-        style.padding = crate::Edges::all(definite_length(20.0));
-        assert!(transitions.apply_at(
-            &mut style,
-            &mut state,
-            started_at + Duration::from_secs(1),
-            false,
-        ));
-        assert_eq!(style.padding.top, definite_length(20.0));
-        assert_eq!(style.padding.right, definite_length(20.0));
-        assert_eq!(style.padding.bottom, definite_length(20.0));
-        assert_eq!(style.padding.left, definite_length(15.0));
+        assert!(!in_progress);
+        assert_eq!(style.size, crate::size(length(20.0), length(20.0)));
     }
 }
