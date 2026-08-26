@@ -1,15 +1,13 @@
 //! Transition Example
 //!
-//! This example demonstrates transition capabilities in GPUI via `use_keyed_transition`.
+//! This example demonstrates declarative style transitions in GPUI.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
 
-use std::time::Duration;
-
 use gpui::{
-    AnyElement, App, AppContext, Bounds, Context, ElementId, Lerp, Rgba, Window, WindowBounds,
-    WindowOptions, actions, div, ease_in_out, prelude::*, px, rgb, size,
+    AnyElement, App, AppContext, Bounds, Context, ElementId, Lerp, MotionInfo, Rgba, Window,
+    WindowBounds, WindowOptions, actions, div, ease_in_out, prelude::*, px, rgb, size,
 };
 use smallvec::SmallVec;
 
@@ -37,23 +35,11 @@ impl ParentElement for Button {
 }
 
 impl RenderOnce for Button {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         const HOVER_STRENGTH: f32 = 0.3;
+
         let base_color: Rgba = rgb(0x663399);
-
-        let hover_transition = window
-            .use_keyed_transition(
-                (self.id.clone(), "hover"),
-                cx,
-                Duration::from_millis(300),
-                |_window, _cx| 0.,
-            )
-            .with_easing(ease_in_out);
-
-        let bg_color = base_color.lerp(
-            &rgb(0x000),
-            *hover_transition.evaluate(window, cx) * HOVER_STRENGTH,
-        );
+        let hover_color = base_color.lerp(&rgb(0x000), HOVER_STRENGTH);
 
         div()
             .id(self.id)
@@ -63,15 +49,15 @@ impl RenderOnce for Button {
             .pr(px(14.))
             .pt(px(10.))
             .pb(px(10.))
-            .bg(bg_color)
+            .bg(base_color)
             .text_color(rgb(0x110F15))
             .children(self.children)
-            .on_hover(move |hover, _window, cx| {
-                hover_transition.update(cx, |this, cx| {
-                    *this = *hover as u8 as f32;
-                    cx.notify();
-                });
+            .transitions(|transitions| {
+                transitions
+                    .bg(MotionInfo::new(0.2).with_easing(ease_in_out))
+                    .border_l(0.3)
             })
+            .hover(|refinement| refinement.bg(hover_color).border_l(px(5.)))
     }
 }
 

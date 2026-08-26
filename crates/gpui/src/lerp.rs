@@ -1,9 +1,9 @@
 //! Lerp trait defines behaviour for interpolating between two values of the same type.
 use crate::{
-    Bounds, Corners, DevicePixels, Edges, Percentage, Pixels, Point, Radians, Rems, Size,
-    colors::Colors,
+    AbsoluteLength, Background, Bounds, Corners, DefiniteLength, DevicePixels, Edges, Fill, Length,
+    Percentage, Pixels, Point, Radians, Rems, Size, colors::Colors,
 };
-use palette::rgb::Rgba;
+use palette::{Hsla, IntoColor, rgb::Rgba};
 use std::{
     fmt::Debug,
     ops::{Add, Mul, Sub},
@@ -98,6 +98,79 @@ impl Lerp for palette::rgb::Rgb {
             self.green.lerp(&to.green, delta),
             self.blue.lerp(&to.blue, delta),
         )
+    }
+}
+
+impl Lerp for Hsla {
+    fn lerp(&self, to: &Self, delta: f32) -> Self {
+        if delta <= 0.0 {
+            return *self;
+        }
+        if delta >= 1.0 {
+            return *to;
+        }
+
+        let from: Rgba = (*self).into_color();
+        let to: Rgba = (*to).into_color();
+        from.lerp(&to, delta).into_color()
+    }
+}
+
+impl Lerp for AbsoluteLength {
+    fn lerp(&self, to: &Self, delta: f32) -> Self {
+        match (*self, *to) {
+            (Self::Pixels(from), Self::Pixels(to)) => Self::Pixels(from.lerp(&to, delta)),
+            (Self::Rems(from), Self::Rems(to)) => Self::Rems(from.lerp(&to, delta)),
+            _ if delta >= 1.0 => *to,
+            _ => *self,
+        }
+    }
+}
+
+impl Lerp for DefiniteLength {
+    fn lerp(&self, to: &Self, delta: f32) -> Self {
+        match (*self, *to) {
+            (Self::Absolute(from), Self::Absolute(to)) => Self::Absolute(from.lerp(&to, delta)),
+            (Self::Fraction(from), Self::Fraction(to)) => Self::Fraction(from.lerp(&to, delta)),
+            _ if delta >= 1.0 => *to,
+            _ => *self,
+        }
+    }
+}
+
+impl Lerp for Length {
+    fn lerp(&self, to: &Self, delta: f32) -> Self {
+        match (*self, *to) {
+            (Self::Definite(from), Self::Definite(to)) => Self::Definite(from.lerp(&to, delta)),
+            _ if delta >= 1.0 => *to,
+            _ => *self,
+        }
+    }
+}
+
+impl Lerp for Background {
+    fn lerp(&self, to: &Self, delta: f32) -> Self {
+        if delta <= 0.0 {
+            return *self;
+        }
+        if delta >= 1.0 {
+            return *to;
+        }
+
+        match (self.as_solid(), to.as_solid()) {
+            (Some(from), Some(to_color)) => {
+                Background::from(from.lerp(&to_color, delta)).color_space(to.interpolation_space())
+            }
+            _ => *self,
+        }
+    }
+}
+
+impl Lerp for Fill {
+    fn lerp(&self, to: &Self, delta: f32) -> Self {
+        match (self, to) {
+            (Self::Color(from), Self::Color(to)) => Self::Color(from.lerp(to, delta)),
+        }
     }
 }
 
