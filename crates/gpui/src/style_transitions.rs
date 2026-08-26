@@ -1,6 +1,21 @@
 use std::time::Instant;
 
-use crate::{Lerp, MotionInfo};
+use crate::{Bounds, Lerp, MotionInfo, Pixels};
+
+#[derive(Clone, Copy)]
+pub(crate) struct StyleTransitionContext {
+    pub(crate) rem_size: Pixels,
+    pub(crate) max_corner_radius: Pixels,
+}
+
+impl StyleTransitionContext {
+    pub(crate) fn new(bounds: Bounds<Pixels>, rem_size: Pixels) -> Self {
+        Self {
+            rem_size,
+            max_corner_radius: std::cmp::min(bounds.size.width, bounds.size.height) / 2.0,
+        }
+    }
+}
 
 pub(crate) struct StyleTransitionPropertyState<T> {
     goal_last_updated_at: Option<Instant>,
@@ -131,13 +146,14 @@ mod tests {
             ..Style::default()
         };
 
-        assert!(!transitions.apply_at(&mut style, &mut state, started_at, false));
+        assert!(!transitions.apply_at(&mut style, &mut state, None, started_at, false));
 
         style.size = size(length(20.0), length(20.0));
-        assert!(transitions.apply_at(&mut style, &mut state, started_at, false));
+        assert!(transitions.apply_at(&mut style, &mut state, None, started_at, false));
 
         style.size = size(length(20.0), length(20.0));
-        let in_progress = transitions.apply_at(&mut style, &mut state, started_at + elapsed, false);
+        let in_progress =
+            transitions.apply_at(&mut style, &mut state, None, started_at + elapsed, false);
 
         (in_progress, style, state)
     }

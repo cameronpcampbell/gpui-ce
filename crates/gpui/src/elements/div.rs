@@ -2265,7 +2265,8 @@ impl Interactivity {
                     );
                 }
 
-                let style = self.compute_style_internal(None, element_state.as_mut(), window, cx);
+                let style =
+                    self.compute_style_internal(None, None, element_state.as_mut(), window, cx);
                 let layout_id = f(style, window, cx);
                 (layout_id, element_state)
             },
@@ -2330,7 +2331,13 @@ impl Interactivity {
             |element_state, window| {
                 let mut element_state =
                     element_state.map(|element_state| element_state.unwrap_or_default());
-                let style = self.compute_style_internal(None, element_state.as_mut(), window, cx);
+                let style = self.compute_style_internal(
+                    None,
+                    Some(bounds),
+                    element_state.as_mut(),
+                    window,
+                    cx,
+                );
 
                 if let Some(element_state) = element_state.as_mut() {
                     if let Some(clicked_state) = element_state.clicked_state.as_ref() {
@@ -2482,7 +2489,13 @@ impl Interactivity {
                 let mut element_state =
                     element_state.map(|element_state| element_state.unwrap_or_default());
 
-                let style = self.compute_style_internal(hitbox, element_state.as_mut(), window, cx);
+                let style = self.compute_style_internal(
+                    hitbox,
+                    Some(bounds),
+                    element_state.as_mut(),
+                    window,
+                    cx,
+                );
 
                 #[cfg(any(feature = "test-support", test))]
                 if let Some(debug_selector) = &self.debug_selector {
@@ -3334,7 +3347,13 @@ impl Interactivity {
         window.with_optional_element_state(global_id, |element_state, window| {
             let mut element_state =
                 element_state.map(|element_state| element_state.unwrap_or_default());
-            let style = self.compute_style_internal(hitbox, element_state.as_mut(), window, cx);
+            let style = self.compute_style_internal(
+                hitbox,
+                hitbox.map(|hitbox| hitbox.bounds),
+                element_state.as_mut(),
+                window,
+                cx,
+            );
             (style, element_state)
         })
     }
@@ -3343,6 +3362,7 @@ impl Interactivity {
     fn compute_style_internal(
         &self,
         hitbox: Option<&Hitbox>,
+        bounds: Option<Bounds<Pixels>>,
         mut element_state: Option<&mut InteractiveElementState>,
         window: &mut Window,
         cx: &mut App,
@@ -3466,6 +3486,9 @@ impl Interactivity {
                 element_state
                     .style_transitions
                     .get_or_insert_with(Default::default),
+                bounds.map(|bounds| {
+                    crate::style_transitions::StyleTransitionContext::new(bounds, window.rem_size())
+                }),
                 Instant::now(),
                 cx.reduce_motion(),
             )
