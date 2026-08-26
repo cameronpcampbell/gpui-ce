@@ -126,8 +126,10 @@ pub fn style_transitions(input: TokenStream) -> TokenStream {
 
             quote! {
                 if let Some(motion) = self.#motion_name.as_ref() {
-                    let (value, property_in_progress) = state.property::<#ty>(#state_key).evaluate(
-                        #target,
+                    let target = #target;
+                    let property = state.property::<#ty>(#state_key, &target);
+                    let (property_in_progress, value) = property.evaluate(
+                        target,
                         motion,
                         now,
                         reduce_motion,
@@ -175,14 +177,17 @@ pub fn style_transitions(input: TokenStream) -> TokenStream {
         }
 
         impl StyleTransitionState {
-            fn property<T: 'static>(
+            fn property<T: Clone + 'static>(
                 &mut self,
                 key: &'static str,
+                initial_goal: &Option<T>,
             ) -> &mut crate::style_transitions::StyleTransitionPropertyState<T> {
                 self.properties
                     .entry(key)
                     .or_insert_with(|| Box::new(
-                        crate::style_transitions::StyleTransitionPropertyState::<T>::default()
+                        crate::style_transitions::StyleTransitionPropertyState::<T>::new(
+                            initial_goal.clone()
+                        )
                     ))
                     .downcast_mut()
                     .expect("style transition property changed type")
