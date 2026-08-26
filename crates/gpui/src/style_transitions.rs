@@ -70,20 +70,27 @@ impl From<f32> for MotionInfo {
 }
 
 pub(crate) struct StyleTransitionPropertyState<T> {
-    initialized: bool,
-    start: Option<T>,
-    target: Option<T>,
-    started_at: Option<Instant>,
+    goal_last_updated_at: Option<Instant>,
+    start_goal: Option<T>,
+    end_goal: Option<T>,
+    last_delta: f32,
 }
 
-impl<T> Default for StyleTransitionPropertyState<T> {
-    fn default() -> Self {
+impl<T: Clone> StyleTransitionPropertyState<T> {
+    fn new(initial_goal: Option<T>) -> Self {
         Self {
-            initialized: false,
-            start: None,
-            target: None,
-            started_at: None,
+            goal_last_updated_at: None,
+            start_goal: initial_goal.clone(),
+            end_goal: initial_goal,
+            last_delta: 1.0,
         }
+    }
+
+    fn jump_to(&mut self, goal: Option<T>) {
+        self.start_goal = goal.clone();
+        self.end_goal = goal;
+        self.goal_last_updated_at = None;
+        self.last_delta = 1.0;
     }
 }
 
@@ -93,62 +100,60 @@ where
 {
     pub(crate) fn evaluate(
         &mut self,
-        target: Option<T>,
+        goal: Option<T>,
         motion: &MotionInfo,
         now: Instant,
         reduce_motion: bool,
-    ) -> (Option<T>, bool) {
-        if !self.initialized {
-            self.initialized = true;
-            self.start = target.clone();
-            self.target = target.clone();
-            return (target, false);
-        }
-
+    ) -> (bool, Option<T>) {
         if reduce_motion {
-            self.start = target.clone();
-            self.target = target.clone();
-            self.started_at = None;
-            return (target, false);
+            self.jump_to(goal);
+            return (false, self.end_goal.clone());
         }
 
-        if self.target != target {
-            let current = self.value_at(motion, now).0;
-            self.start = current;
-            self.target = target;
-
-            if motion.duration.is_zero()
-                || self.start.is_none()
-                || self.target.is_none()
-                || self.start == self.target
-            {
-                self.start = self.target.clone();
-                self.started_at = None;
-            } else {
-                self.started_at = Some(now);
-            }
-        }
-
-        self.value_at(motion, now)
+        self.update_goal(goal, motion, now);
+        self.raw_evaluate(motion, now)
     }
 
-    fn value_at(&mut self, motion: &MotionInfo, now: Instant) -> (Option<T>, bool) {
-        let Some(started_at) = self.started_at else {
-            return (self.target.clone(), false);
+    fn update_goal(&mut self, goal: Option<T>, motion: &MotionInfo, now: Instant) {
+        if self.end_goal == goal {
+            return;
+        }
+
+        let (_, current_value) = self.raw_evaluate(motion, now);
+        self.start_goal = current_value;
+        self.end_goal = goal;
+
+        if motion.duration.is_zero()
+            || self.start_goal.is_none()
+            || self.end_goal.is_none()
+            || self.start_goal == self.end_goal
+        {
+            self.jump_to(self.end_goal.clone());
+        } else {
+            self.goal_last_updated_at = Some(now);
+            self.last_delta = 0.0;
+        }
+    }
+
+    fn raw_evaluate(&mut self, motion: &MotionInfo, now: Instant) -> (bool, Option<T>) {
+        let Some(goal_last_updated_at) = self.goal_last_updated_at else {
+            self.last_delta = 1.0;
+            return (false, self.end_goal.clone());
         };
 
         let duration = motion.duration.as_secs_f32();
         if duration == 0.0 {
-            self.start = self.target.clone();
-            self.started_at = None;
-            return (self.target.clone(), false);
+            self.jump_to(self.end_goal.clone());
+            return (false, self.end_goal.clone());
         }
 
-        let linear_delta = now.saturating_duration_since(started_at).as_secs_f32() / duration;
+        let linear_delta = now
+            .saturating_duration_since(goal_last_updated_at)
+            .as_secs_f32()
+            / duration;
         if linear_delta >= 1.0 {
-            self.start = self.target.clone();
-            self.started_at = None;
-            return (self.target.clone(), false);
+            self.jump_to(self.end_goal.clone());
+            return (false, self.end_goal.clone());
         }
 
         let eased_delta = (motion.easing)(linear_delta.clamp(0.0, 1.0));
@@ -157,12 +162,16 @@ where
             "style transition easing must return a value between 0 and 1"
         );
 
-        match (self.start.as_ref(), self.target.as_ref()) {
-            (Some(start), Some(target)) => {
-                (Some(start.lerp(target, eased_delta.clamp(0.0, 1.0))), true)
-            }
-            _ => (self.target.clone(), false),
+        self.last_delta = eased_delta.clamp(0.0, 1.0);
+
+        if let (Some(start_goal), Some(end_goal)) =
+            (self.start_goal.as_ref(), self.end_goal.as_ref())
+        {
+            return (true, Some(start_goal.lerp(end_goal, self.last_delta)));
         }
+
+        self.jump_to(self.end_goal.clone());
+        (false, self.end_goal.clone())
     }
 }
 
@@ -185,15 +194,11 @@ mod tests {
     fn interrupted_property_motion_continues_from_its_current_value() {
         let motion = MotionInfo::new(1.0);
         let started_at = Instant::now();
-        let mut state = StyleTransitionPropertyState::default();
+        let mut state = StyleTransitionPropertyState::new(Some(0.0_f32));
 
         assert_eq!(
-            state.evaluate(Some(0.0_f32), &motion, started_at, false),
-            (Some(0.0), false)
-        );
-        assert_eq!(
             state.evaluate(Some(10.0), &motion, started_at, false),
-            (Some(0.0), true)
+            (true, Some(0.0))
         );
         assert_eq!(
             state.evaluate(
@@ -202,7 +207,7 @@ mod tests {
                 started_at + Duration::from_millis(500),
                 false,
             ),
-            (Some(5.0), true)
+            (true, Some(5.0))
         );
         assert_eq!(
             state.evaluate(
@@ -211,20 +216,29 @@ mod tests {
                 started_at + Duration::from_millis(1_000),
                 false,
             ),
-            (Some(12.5), true)
+            (true, Some(12.5))
         );
     }
 
     #[test]
-    fn reduced_motion_applies_the_target_immediately() {
+    fn non_animating_changes_apply_immediately() {
+        let now = Instant::now();
         let motion = MotionInfo::new(1.0);
-        let started_at = Instant::now();
-        let mut state = StyleTransitionPropertyState::default();
+        let mut optional_state = StyleTransitionPropertyState::new(None::<f32>);
 
-        state.evaluate(Some(0.0_f32), &motion, started_at, false);
         assert_eq!(
-            state.evaluate(Some(10.0), &motion, started_at, true),
-            (Some(10.0), false)
+            optional_state.evaluate(Some(10.0), &motion, now, false),
+            (false, Some(10.0))
+        );
+
+        let mut state = StyleTransitionPropertyState::new(Some(0.0_f32));
+        assert_eq!(
+            state.evaluate(Some(10.0), &MotionInfo::new(Duration::ZERO), now, false),
+            (false, Some(10.0))
+        );
+        assert_eq!(
+            state.evaluate(Some(20.0), &motion, now, true),
+            (false, Some(20.0))
         );
     }
 
