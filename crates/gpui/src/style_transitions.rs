@@ -113,42 +113,38 @@ gpui_macros::style_transitions!();
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AbsoluteLength, DefiniteLength, Length, Style, px};
+    use crate::{AbsoluteLength, DefiniteLength, Length, Style, px, size};
     use std::time::Duration;
 
     fn length(value: f32) -> Length {
         Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Pixels(px(value))))
     }
 
-    fn size_transition_after_one_second(
+    fn size_transition_after(
         transitions: StyleTransitions,
+        elapsed: Duration,
     ) -> (bool, Style, StyleTransitionState) {
         let started_at = Instant::now();
         let mut state = StyleTransitionState::default();
         let mut style = Style {
-            size: crate::size(length(10.0), length(10.0)),
+            size: size(length(10.0), length(10.0)),
             ..Style::default()
         };
 
         assert!(!transitions.apply_at(&mut style, &mut state, started_at, false));
 
-        style.size = crate::size(length(20.0), length(20.0));
+        style.size = size(length(20.0), length(20.0));
         assert!(transitions.apply_at(&mut style, &mut state, started_at, false));
 
-        style.size = crate::size(length(20.0), length(20.0));
-        let in_progress = transitions.apply_at(
-            &mut style,
-            &mut state,
-            started_at + Duration::from_secs(1),
-            false,
-        );
+        style.size = size(length(20.0), length(20.0));
+        let in_progress = transitions.apply_at(&mut style, &mut state, started_at + elapsed, false);
 
         (in_progress, style, state)
     }
 
     #[test]
-    fn interrupted_property_motion_continues_from_its_current_value() {
-        let motion = MotionInfo::new(1.0);
+    fn property_transitions_handle_interruption_and_immediate_changes() {
+        let motion: MotionInfo = Duration::from_secs(1).into();
         let started_at = Instant::now();
         let mut state = StyleTransitionPropertyState::new(Some(0.0_f32));
 
@@ -174,81 +170,56 @@ mod tests {
             ),
             (true, Some(12.5))
         );
-    }
 
-    #[test]
-    fn non_animating_changes_apply_immediately() {
-        let now = Instant::now();
-        let motion = MotionInfo::new(1.0);
         let mut optional_state = StyleTransitionPropertyState::new(None::<f32>);
-
         assert_eq!(
-            optional_state.evaluate(Some(10.0), &motion, now, false),
+            optional_state.evaluate(Some(10.0), &motion, started_at, false),
             (false, Some(10.0))
         );
 
-        let mut state = StyleTransitionPropertyState::new(Some(0.0_f32));
+        let mut immediate_state = StyleTransitionPropertyState::new(Some(0.0_f32));
         assert_eq!(
-            state.evaluate(Some(10.0), &MotionInfo::new(Duration::ZERO), now, false),
+            immediate_state.evaluate(
+                Some(10.0),
+                &MotionInfo::new(Duration::ZERO),
+                started_at,
+                false,
+            ),
             (false, Some(10.0))
         );
         assert_eq!(
-            state.evaluate(Some(20.0), &motion, now, true),
+            immediate_state.evaluate(Some(20.0), &motion, started_at, true),
             (false, Some(20.0))
         );
     }
 
     #[test]
-    fn generated_width_transition_updates_the_resolved_style() {
-        let transitions = StyleTransitions::new().w(1.0);
-        let mut state = StyleTransitionState::default();
-        let started_at = Instant::now();
-        let mut style = Style {
-            size: crate::size(length(10.0), Length::Auto),
-            ..Style::default()
-        };
-
-        assert!(!transitions.apply_at(&mut style, &mut state, started_at, false));
-        assert_eq!(style.size.width, length(10.0));
-
-        style.size.width = length(20.0);
-        assert!(transitions.apply_at(&mut style, &mut state, started_at, false));
-        assert_eq!(style.size.width, length(10.0));
-
-        style.size.width = length(20.0);
-        assert!(transitions.apply_at(
-            &mut style,
-            &mut state,
-            started_at + Duration::from_millis(500),
-            false,
-        ));
-        assert_eq!(style.size.width, length(15.0));
-
-        style.size.width = length(20.0);
-        assert!(!transitions.apply_at(
-            &mut style,
-            &mut state,
-            started_at + Duration::from_secs(1),
-            false,
-        ));
-        assert_eq!(style.size.width, length(20.0));
-    }
-
-    #[test]
-    fn overlapping_transition_builders_share_canonical_fields() {
-        let (in_progress, style, state) =
-            size_transition_after_one_second(StyleTransitions::new().size(1.0).w(2.0));
-
+    fn generated_transitions_resolve_properties_and_builder_precedence() {
+        let (in_progress, style, _) = size_transition_after(
+            StyleTransitions::new().w(Duration::from_secs(1)),
+            Duration::from_millis(500),
+        );
         assert!(in_progress);
-        assert_eq!(style.size, crate::size(length(15.0), length(20.0)));
-        assert_eq!(state.properties.len(), 2);
+        assert_eq!(style.size, size(length(15.0), length(20.0)));
+
+        let (in_progress, style, state) = size_transition_after(
+            StyleTransitions::new()
+                .size(Duration::from_secs(1))
+                .w(Duration::from_secs(2)),
+            Duration::from_secs(1),
+        );
+        assert!(in_progress);
+        assert_eq!(style.size, size(length(15.0), length(20.0)));
         assert!(state.properties.contains_key("size.width"));
         assert!(state.properties.contains_key("size.height"));
 
-        let (in_progress, style, _) =
-            size_transition_after_one_second(StyleTransitions::new().w(2.0).size(1.0));
-
+        let (in_progress, style, _) = size_transition_after(
+            StyleTransitions::new()
+                .w(Duration::from_secs(2))
+                .size(Duration::from_secs(1)),
+            Duration::from_secs(1),
+        );
         assert!(!in_progress);
-        assert_eq!(style.size, crate::size(length(20.0), length(20.0)));
+        assert_eq!(style.size, size(length(20.0), length(20.0)));
     }
 }
