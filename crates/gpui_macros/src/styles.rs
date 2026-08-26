@@ -47,6 +47,307 @@ pub fn style_helpers(input: TokenStream) -> TokenStream {
     output.into()
 }
 
+struct StyleTransitionSpec {
+    name: &'static str,
+    fields: Vec<StyleTransitionField>,
+}
+
+struct StyleTransitionField {
+    path: TokenStream2,
+    ty: TokenStream2,
+    optional: bool,
+}
+
+impl StyleTransitionField {
+    fn required(path: TokenStream2, ty: TokenStream2) -> Self {
+        Self {
+            path,
+            ty,
+            optional: false,
+        }
+    }
+
+    fn optional(path: TokenStream2, ty: TokenStream2) -> Self {
+        Self {
+            path,
+            ty,
+            optional: true,
+        }
+    }
+}
+
+/// Generates `StyleTransitions` from the same property descriptions used by the
+/// Tailwind-style setters below. Keeping the field paths here means the public
+/// configuration, its builder methods, and the runtime animation state cannot
+/// disagree about a property's name or storage location.
+pub fn style_transitions(input: TokenStream) -> TokenStream {
+    let _ = parse_macro_input!(input as StyleableMacroInput);
+    let specs = style_transition_specs();
+
+    let config_fields = specs.iter().map(|spec| {
+        let name = format_ident!("{}", spec.name);
+        quote! {
+            #[doc = concat!("Motion configuration for [`Styled::", stringify!(#name), "`].")]
+            pub #name: Option<crate::MotionInfo>
+        }
+    });
+
+    let builders = specs.iter().map(|spec| {
+        let name = format_ident!("{}", spec.name);
+        quote! {
+            #[doc = concat!("Transitions changes made by [`Styled::", stringify!(#name), "`].")]
+            pub fn #name(mut self, motion: impl Into<crate::MotionInfo>) -> Self {
+                self.#name = Some(motion.into());
+                self
+            }
+        }
+    });
+
+    let applications = specs.iter().flat_map(|spec| {
+        let motion_name = format_ident!("{}", spec.name);
+        spec.fields.iter().enumerate().map(move |(ix, field)| {
+            let state_key = format!("{}.{ix}", spec.name);
+            let path = &field.path;
+            let ty = &field.ty;
+            let target = if field.optional {
+                quote! { style.#path.clone() }
+            } else {
+                quote! { Some(style.#path.clone()) }
+            };
+            let assignment = if field.optional {
+                quote! { style.#path = value; }
+            } else {
+                quote! {
+                    if let Some(value) = value {
+                        style.#path = value;
+                    }
+                }
+            };
+
+            quote! {
+                if let Some(motion) = self.#motion_name.as_ref() {
+                    let (value, property_in_progress) = state.property::<#ty>(#state_key).evaluate(
+                        #target,
+                        motion,
+                        now,
+                        reduce_motion,
+                    );
+                    #assignment
+                    in_progress |= property_in_progress;
+                } else {
+                    state.remove(#state_key);
+                }
+            }
+        })
+    });
+
+    quote! {
+        /// Motion configuration for declarative transitions between resolved element styles.
+        #[derive(Clone, Default)]
+        pub struct StyleTransitions {
+            #(#config_fields,)*
+        }
+
+        impl StyleTransitions {
+            /// Creates an empty set of style transitions.
+            pub fn new() -> Self {
+                Self::default()
+            }
+
+            #(#builders)*
+
+            pub(crate) fn apply_at(
+                &self,
+                style: &mut crate::Style,
+                state: &mut StyleTransitionState,
+                now: std::time::Instant,
+                reduce_motion: bool,
+            ) -> bool {
+                let mut in_progress = false;
+                #(#applications)*
+                in_progress
+            }
+        }
+
+        #[derive(Default)]
+        pub(crate) struct StyleTransitionState {
+            properties: std::collections::HashMap<&'static str, Box<dyn std::any::Any>>,
+        }
+
+        impl StyleTransitionState {
+            fn property<T: 'static>(
+                &mut self,
+                key: &'static str,
+            ) -> &mut crate::style_transitions::StyleTransitionPropertyState<T> {
+                self.properties
+                    .entry(key)
+                    .or_insert_with(|| Box::new(
+                        crate::style_transitions::StyleTransitionPropertyState::<T>::default()
+                    ))
+                    .downcast_mut()
+                    .expect("style transition property changed type")
+            }
+
+            fn remove(&mut self, key: &'static str) {
+                self.properties.remove(key);
+            }
+        }
+    }
+    .into()
+}
+
+fn style_transition_specs() -> Vec<StyleTransitionSpec> {
+    let mut specs = Vec::new();
+
+    for prefix in box_prefixes()
+        .into_iter()
+        .chain(margin_box_style_prefixes())
+        .chain(padding_box_style_prefixes())
+        .chain(position_box_style_prefixes())
+    {
+        let ty = if prefix.auto_allowed {
+            quote! { crate::Length }
+        } else {
+            quote! { crate::DefiniteLength }
+        };
+        specs.push(StyleTransitionSpec {
+            name: prefix.prefix,
+            fields: prefix
+                .fields
+                .into_iter()
+                .map(|path| StyleTransitionField::required(path, ty.clone()))
+                .collect(),
+        });
+    }
+
+    for prefix in corner_prefixes() {
+        specs.push(StyleTransitionSpec {
+            name: prefix.prefix,
+            fields: prefix
+                .fields
+                .into_iter()
+                .map(|path| StyleTransitionField::required(path, quote! { crate::AbsoluteLength }))
+                .collect(),
+        });
+    }
+
+    for prefix in border_prefixes() {
+        specs.push(StyleTransitionSpec {
+            name: prefix.prefix,
+            fields: prefix
+                .fields
+                .into_iter()
+                .map(|path| StyleTransitionField::required(path, quote! { crate::AbsoluteLength }))
+                .collect(),
+        });
+    }
+
+    // These setters are handwritten on `Styled`; their field descriptions join
+    // the generated utility descriptions above before code is emitted.
+    specs.extend([
+        StyleTransitionSpec {
+            name: "scrollbar_width",
+            fields: vec![StyleTransitionField::required(
+                quote! { scrollbar_width },
+                quote! { crate::AbsoluteLength },
+            )],
+        },
+        StyleTransitionSpec {
+            name: "aspect_ratio",
+            fields: vec![StyleTransitionField::optional(
+                quote! { aspect_ratio },
+                quote! { f32 },
+            )],
+        },
+        StyleTransitionSpec {
+            name: "flex_basis",
+            fields: vec![StyleTransitionField::required(
+                quote! { flex_basis },
+                quote! { crate::Length },
+            )],
+        },
+        StyleTransitionSpec {
+            name: "flex_grow",
+            fields: vec![StyleTransitionField::required(
+                quote! { flex_grow },
+                quote! { f32 },
+            )],
+        },
+        StyleTransitionSpec {
+            name: "flex_shrink",
+            fields: vec![StyleTransitionField::required(
+                quote! { flex_shrink },
+                quote! { f32 },
+            )],
+        },
+        StyleTransitionSpec {
+            name: "bg",
+            fields: vec![StyleTransitionField::optional(
+                quote! { background },
+                quote! { crate::Fill },
+            )],
+        },
+        StyleTransitionSpec {
+            name: "border_color",
+            fields: vec![StyleTransitionField::optional(
+                quote! { border_color },
+                quote! { crate::Hsla },
+            )],
+        },
+        StyleTransitionSpec {
+            name: "text_color",
+            fields: vec![StyleTransitionField::optional(
+                quote! { text.color },
+                quote! { crate::Hsla },
+            )],
+        },
+        StyleTransitionSpec {
+            name: "text_bg",
+            fields: vec![StyleTransitionField::optional(
+                quote! { text.background_color },
+                quote! { crate::Hsla },
+            )],
+        },
+        StyleTransitionSpec {
+            name: "text_size",
+            fields: vec![StyleTransitionField::optional(
+                quote! { text.font_size },
+                quote! { crate::AbsoluteLength },
+            )],
+        },
+        StyleTransitionSpec {
+            name: "line_height",
+            fields: vec![StyleTransitionField::optional(
+                quote! { text.line_height },
+                quote! { crate::DefiniteLength },
+            )],
+        },
+        StyleTransitionSpec {
+            name: "letter_spacing",
+            fields: vec![StyleTransitionField::optional(
+                quote! { text.letter_spacing },
+                quote! { crate::Pixels },
+            )],
+        },
+        StyleTransitionSpec {
+            name: "line_clamp",
+            fields: vec![StyleTransitionField::optional(
+                quote! { text.line_clamp },
+                quote! { usize },
+            )],
+        },
+        StyleTransitionSpec {
+            name: "opacity",
+            fields: vec![StyleTransitionField::optional(
+                quote! { opacity },
+                quote! { f32 },
+            )],
+        },
+    ]);
+
+    specs
+}
+
 pub fn visibility_style_methods(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as StyleableMacroInput);
     let visibility = input.method_visibility;
