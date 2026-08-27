@@ -4,7 +4,7 @@ use crate::{
     Percentage, Pixels, Point, Radians, Rems, Size, colors::Colors,
 };
 use palette::{
-    Hsla, IntoColor, Oklab,
+    Hsla, IntoColor, Oklab, Oklaba,
     rgb::{Rgb, Rgba},
 };
 use std::{
@@ -114,15 +114,27 @@ tuple_struct_lerps!(
     Pixels(f32)
 );
 
-impl Lerp for Rgb {
-    fn lerp(&self, to: &Self, delta: f32) -> Self {
-        Self::new(
-            self.red.lerp(&to.red, delta),
-            self.green.lerp(&to.green, delta),
-            self.blue.lerp(&to.blue, delta),
-        )
-    }
+macro_rules! new_constructor_lerps {
+    ( $( $ty:ident $( < $gen:ident > )? ::new ( $( $n:ident ),+ ) ),+ $(,)? ) => {
+        $(
+            impl$(<$gen: Lerp + Clone + Debug + Default + PartialEq>)? Lerp for $ty$(<$gen>)? {
+                fn lerp(&self, to: &Self, delta: f32) -> Self {
+                    $ty$(::<$gen>)?::new(
+                        $(
+                            self.$n.lerp(&to.$n, delta)
+                        ),+
+                    )
+                }
+            }
+        )+
+    };
 }
+
+new_constructor_lerps!(
+    Rgb::new(red, green, blue),
+    Oklab::new(l, a, b),
+    Oklaba::new(l, a, b, a)
+);
 
 impl Lerp for Hsla {
     fn lerp(&self, to: &Self, delta: f32) -> Self {
@@ -136,16 +148,6 @@ impl Lerp for Hsla {
         let from: Rgba = (*self).into_color();
         let to: Rgba = (*to).into_color();
         from.lerp(&to, delta).into_color()
-    }
-}
-
-impl Lerp for Oklab {
-    fn lerp(&self, to: &Self, delta: f32) -> Self {
-        Self::new(
-            self.l.lerp(&to.l, delta),
-            self.a.lerp(&to.a, delta),
-            self.b.lerp(&to.b, delta),
-        )
     }
 }
 
