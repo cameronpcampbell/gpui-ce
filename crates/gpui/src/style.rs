@@ -1,9 +1,9 @@
 use crate::{
     AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ColorExt, ContentMask,
     Corners, CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement,
-    Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length, Percentage,
-    Pixels, Point, PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled,
-    TextRun, Window, black, phi, point, px, quad, rems, size,
+    Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length, Pixels, Point,
+    PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun, Window,
+    black, phi, point, px, quad, rems, size,
 };
 use collections::HashSet;
 use palette::{Hsla, IntoColor, rgb::Rgba};
@@ -284,9 +284,9 @@ pub struct Style {
     #[refineable]
     pub corner_radii: Corners<AbsoluteLength>,
 
-    /// Figma-style corner smoothing. `percentage(0.0)` keeps circular corners and
-    /// `percentage(1.0)` requests maximum smoothing.
-    pub corner_smoothing: Option<Percentage>,
+    /// Figma-style corner smoothing. `0.0` keeps circular corners and `1.0` requests maximum
+    /// smoothing.
+    pub corner_smoothing: Option<f32>,
 
     /// Box shadow of the element
     pub box_shadow: Vec<BoxShadow>,
@@ -781,7 +781,7 @@ impl Style {
             .corner_radii
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
-        let corner_smoothing = self.corner_smoothing.unwrap_or_default().0;
+        let corner_smoothing = self.corner_smoothing.unwrap_or_default();
 
         window.paint_drop_shadows_with_corner_smoothing(
             bounds,
