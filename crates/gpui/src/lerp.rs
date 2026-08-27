@@ -3,7 +3,10 @@ use crate::{
     AbsoluteLength, Background, Bounds, Corners, DefiniteLength, DevicePixels, Edges, Fill, Length,
     Percentage, Pixels, Point, Radians, Rems, Size, colors::Colors,
 };
-use palette::{Hsla, IntoColor, rgb::Rgba};
+use palette::{
+    Hsla, IntoColor, Oklab,
+    rgb::{Rgb, Rgba},
+};
 use std::{
     fmt::Debug,
     ops::{Add, Mul, Sub},
@@ -111,7 +114,7 @@ tuple_struct_lerps!(
     Pixels(f32)
 );
 
-impl Lerp for palette::rgb::Rgb {
+impl Lerp for Rgb {
     fn lerp(&self, to: &Self, delta: f32) -> Self {
         Self::new(
             self.red.lerp(&to.red, delta),
@@ -133,6 +136,16 @@ impl Lerp for Hsla {
         let from: Rgba = (*self).into_color();
         let to: Rgba = (*to).into_color();
         from.lerp(&to, delta).into_color()
+    }
+}
+
+impl Lerp for Oklab {
+    fn lerp(&self, to: &Self, delta: f32) -> Self {
+        Self::new(
+            self.l.lerp(&to.l, delta),
+            self.a.lerp(&to.a, delta),
+            self.b.lerp(&to.b, delta),
+        )
     }
 }
 
