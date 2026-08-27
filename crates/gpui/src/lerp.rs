@@ -133,7 +133,7 @@ macro_rules! new_constructor_lerps {
 new_constructor_lerps!(
     Rgb::new(red, green, blue),
     Oklab::new(l, a, b),
-    Oklaba::new(l, a, b, a)
+    Oklaba::new(l, a, b, alpha)
 );
 
 impl Lerp for Hsla {
