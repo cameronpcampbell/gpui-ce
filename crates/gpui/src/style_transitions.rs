@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use crate::{Bounds, Lerp, MotionInfo, Pixels};
+use crate::{Animated, Bounds, Lerp, Motion, Pixels};
 
 #[derive(Clone, Copy)]
 pub(crate) struct StyleTransitionContext {
@@ -17,109 +17,60 @@ impl StyleTransitionContext {
     }
 }
 
-pub(crate) struct StyleTransitionPropertyState<T> {
-    goal_last_updated_at: Option<Instant>,
-    start_goal: Option<T>,
-    end_goal: Option<T>,
-    last_delta: f32,
-}
-
-impl<T: Clone> StyleTransitionPropertyState<T> {
-    fn new(initial_goal: Option<T>) -> Self {
-        Self {
-            goal_last_updated_at: None,
-            start_goal: initial_goal.clone(),
-            end_goal: initial_goal,
-            last_delta: 1.0,
-        }
-    }
-
-    fn jump_to(&mut self, goal: Option<T>) {
-        self.start_goal = goal.clone();
-        self.end_goal = goal;
-        self.goal_last_updated_at = None;
-        self.last_delta = 1.0;
-    }
+pub(crate) struct StyleTransitionPropertyState<T: Lerp + Clone + PartialEq> {
+    animated: Option<Animated<T, Instant>>,
 }
 
 impl<T> StyleTransitionPropertyState<T>
 where
     T: Lerp + Clone + PartialEq,
 {
+    fn new(initial_goal: Option<T>) -> Self {
+        Self {
+            animated: initial_goal.map(Animated::new),
+        }
+    }
+
+    fn jump_to(&mut self, goal: Option<T>) {
+        match (self.animated.as_mut(), goal) {
+            (Some(animated), Some(goal)) => animated.jump_to(goal),
+            (_, Some(goal)) => {
+                self.animated = Some(Animated::new(goal));
+            }
+            (_, None) => self.animated = None,
+        }
+    }
+
     pub(crate) fn evaluate(
         &mut self,
         goal: Option<T>,
-        motion: &MotionInfo,
+        motion: &Motion,
         now: Instant,
         reduce_motion: bool,
     ) -> (bool, Option<T>) {
         if reduce_motion {
             self.jump_to(goal);
-            return (false, self.end_goal.clone());
+            return (
+                false,
+                self.animated
+                    .as_ref()
+                    .map(|animated| animated.value().clone()),
+            );
         }
 
-        self.update_goal(goal, motion, now);
-        self.raw_evaluate(motion, now)
-    }
-
-    fn update_goal(&mut self, goal: Option<T>, motion: &MotionInfo, now: Instant) {
-        if self.end_goal == goal {
-            return;
-        }
-
-        let (_, current_value) = self.raw_evaluate(motion, now);
-        self.start_goal = current_value;
-        self.end_goal = goal;
-
-        if motion.duration.is_zero()
-            || self.start_goal.is_none()
-            || self.end_goal.is_none()
-            || self.start_goal == self.end_goal
-        {
-            self.jump_to(self.end_goal.clone());
-        } else {
-            self.goal_last_updated_at = Some(now);
-            self.last_delta = 0.0;
-        }
-    }
-
-    fn raw_evaluate(&mut self, motion: &MotionInfo, now: Instant) -> (bool, Option<T>) {
-        let Some(goal_last_updated_at) = self.goal_last_updated_at else {
-            self.last_delta = 1.0;
-            return (false, self.end_goal.clone());
+        let Some(goal) = goal else {
+            self.animated = None;
+            return (false, None);
         };
 
-        let duration = motion.duration.as_secs_f32();
-        if duration == 0.0 {
-            self.jump_to(self.end_goal.clone());
-            return (false, self.end_goal.clone());
-        }
+        let Some(animated) = self.animated.as_mut() else {
+            self.animated = Some(Animated::new(goal.clone()));
+            return (false, Some(goal));
+        };
 
-        let linear_delta = now
-            .saturating_duration_since(goal_last_updated_at)
-            .as_secs_f32()
-            / duration;
-        if linear_delta >= 1.0 {
-            self.jump_to(self.end_goal.clone());
-            return (false, self.end_goal.clone());
-        }
-
-        let eased_delta = (motion.easing)(linear_delta.clamp(0.0, 1.0));
-        debug_assert!(
-            (0.0..=1.0).contains(&eased_delta),
-            "style transition easing must return a value between 0 and 1"
-        );
-
-        self.last_delta = eased_delta.clamp(0.0, 1.0);
-
-        if let (Some(start_goal), Some(end_goal)) =
-            (self.start_goal.as_ref(), self.end_goal.as_ref())
-        {
-            return (true, Some(start_goal.lerp(end_goal, self.last_delta)));
-        }
-
-        self.jump_to(self.end_goal.clone());
-        (false, self.end_goal.clone())
+        animated.set(goal, motion, now);
+        let sample = animated.sample(motion, now);
+        (sample.is_active, Some(sample.value))
     }
 }
 
@@ -128,7 +79,7 @@ gpui_macros::style_transitions!();
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AbsoluteLength, DefiniteLength, Length, Style, px, size};
+    use crate::{AbsoluteLength, Bounds, DefiniteLength, Length, Style, px, rems, size};
     use std::time::Duration;
 
     fn length(value: f32) -> Length {
@@ -159,58 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn property_transitions_handle_interruption_and_immediate_changes() {
-        let motion: MotionInfo = Duration::from_secs(1).into();
-        let started_at = Instant::now();
-        let mut state = StyleTransitionPropertyState::new(Some(0.0_f32));
-
-        assert_eq!(
-            state.evaluate(Some(10.0), &motion, started_at, false),
-            (true, Some(0.0))
-        );
-        assert_eq!(
-            state.evaluate(
-                Some(20.0),
-                &motion,
-                started_at + Duration::from_millis(500),
-                false,
-            ),
-            (true, Some(5.0))
-        );
-        assert_eq!(
-            state.evaluate(
-                Some(20.0),
-                &motion,
-                started_at + Duration::from_millis(1_000),
-                false,
-            ),
-            (true, Some(12.5))
-        );
-
-        let mut optional_state = StyleTransitionPropertyState::new(None::<f32>);
-        assert_eq!(
-            optional_state.evaluate(Some(10.0), &motion, started_at, false),
-            (false, Some(10.0))
-        );
-
-        let mut immediate_state = StyleTransitionPropertyState::new(Some(0.0_f32));
-        assert_eq!(
-            immediate_state.evaluate(
-                Some(10.0),
-                &MotionInfo::new(Duration::ZERO),
-                started_at,
-                false,
-            ),
-            (false, Some(10.0))
-        );
-        assert_eq!(
-            immediate_state.evaluate(Some(20.0), &motion, started_at, true),
-            (false, Some(20.0))
-        );
-    }
-
-    #[test]
-    fn generated_transitions_resolve_properties_and_builder_precedence() {
+    fn generated_transitions_exercise_properties_and_builder_precedence() {
         let (in_progress, style, _) = size_transition_after(
             StyleTransitions::new().w(Duration::from_secs(1)),
             Duration::from_millis(500),
@@ -226,8 +126,9 @@ mod tests {
         );
         assert!(in_progress);
         assert_eq!(style.size, size(length(15.0), length(20.0)));
-        assert!(state.properties.contains_key("size.width"));
-        assert!(state.properties.contains_key("size.height"));
+        let mut property_keys = state.properties.keys().copied().collect::<Vec<_>>();
+        property_keys.sort_unstable();
+        assert_eq!(property_keys, ["size.height", "size.width"]);
 
         let (in_progress, style, _) = size_transition_after(
             StyleTransitions::new()
@@ -237,5 +138,63 @@ mod tests {
         );
         assert!(!in_progress);
         assert_eq!(style.size, size(length(20.0), length(20.0)));
+
+        let started_at = Instant::now();
+        let mut state = StyleTransitionState::default();
+        let mut style = Style {
+            opacity: None,
+            ..Style::default()
+        };
+        let opacity = StyleTransitions::new().opacity(Duration::from_secs(1));
+
+        assert!(!opacity.apply_at(&mut style, &mut state, None, started_at, false));
+        assert!(state.properties.contains_key("opacity"));
+        style.opacity = Some(0.5);
+        assert!(!opacity.apply_at(&mut style, &mut state, None, started_at, false));
+        assert_eq!(style.opacity, Some(0.5));
+        style.opacity = None;
+        assert!(!opacity.apply_at(&mut style, &mut state, None, started_at, false));
+        assert_eq!(style.opacity, None);
+
+        style.opacity = Some(0.25);
+        assert!(!opacity.apply_at(&mut style, &mut state, None, started_at, false));
+        style.opacity = Some(0.75);
+        assert!(!opacity.apply_at(&mut style, &mut state, None, started_at, true));
+        assert_eq!(style.opacity, Some(0.75));
+        style.opacity = Some(1.0);
+        assert!(opacity.apply_at(&mut style, &mut state, None, started_at, false));
+        assert_eq!(style.opacity, Some(0.75));
+
+        StyleTransitions::new().apply_at(&mut style, &mut state, None, started_at, false);
+        assert!(!state.properties.contains_key("opacity"));
+
+        let mut corner_style = Style::default();
+        corner_style.corner_radii.top_left = AbsoluteLength::Rems(rems(2.0));
+        let context = StyleTransitionContext::new(
+            Bounds {
+                origin: Default::default(),
+                size: size(px(40.0), px(20.0)),
+            },
+            px(16.0),
+        );
+        let mut corner_state = StyleTransitionState::default();
+        let corners = StyleTransitions::new().rounded_tl(Duration::from_secs(1));
+
+        assert!(!corners.apply_at(
+            &mut corner_style,
+            &mut corner_state,
+            Some(context),
+            started_at,
+            false,
+        ));
+        assert_eq!(
+            corner_style.corner_radii.top_left,
+            AbsoluteLength::Pixels(px(10.0))
+        );
+        assert!(
+            corner_state
+                .properties
+                .contains_key("corner_radii.top_left")
+        );
     }
 }

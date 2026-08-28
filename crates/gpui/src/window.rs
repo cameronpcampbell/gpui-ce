@@ -8,7 +8,7 @@ use crate::{
     Entity, EntityId, EventEmitter, FileDropEvent, Filter, FilterBoundary, FontId, Global,
     GlobalElementId, GlyphId, GpuSpecs, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent,
     KeyEvent, Keystroke, KeystrokeEvent, LayoutId, Lerp, LineLayoutIndex, Modifiers,
-    ModifiersChangedEvent, MonochromeSprite, MotionInfo, MouseButton, MouseEvent, MouseMoveEvent,
+    ModifiersChangedEvent, MonochromeSprite, Motion, MouseButton, MouseEvent, MouseMoveEvent,
     MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
     PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority, PromptButton,
     PromptLevel, Quad, Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
@@ -3816,7 +3816,7 @@ impl Window {
     pub fn use_transition<T: Lerp + Clone + PartialEq + 'static>(
         &mut self,
         cx: &mut App,
-        motion: impl Into<MotionInfo>,
+        motion: impl Into<Motion>,
         init: impl Fn(&mut Window, &mut Context<TransitionState<T>>) -> T,
     ) -> Transition<T> {
         let state = self.use_state(cx, |window, cx| TransitionState::new(init(window, cx)));
@@ -3836,7 +3836,7 @@ impl Window {
         &mut self,
         key: impl Into<ElementId>,
         cx: &mut App,
-        motion: impl Into<MotionInfo>,
+        motion: impl Into<Motion>,
         init: impl Fn(&mut Window, &mut Context<TransitionState<T>>) -> T,
     ) -> Transition<T> {
         let state =
