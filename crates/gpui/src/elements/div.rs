@@ -23,8 +23,8 @@ use crate::{
     LayoutId, ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseExitEvent,
     MouseMoveEvent, MousePressureEvent, MouseUpEvent, OngoingScroll, Overflow, ParentElement,
     PinchEvent, Pixels, Point, Render, ScrollWheelEvent, SharedString, Size, Style,
-    StyleRefinement, StyleTransitions, Styled, Task, TooltipId, Visibility, Window,
-    WindowControlArea, point, px, size,
+    StyleRefinement, StyleTransitionContext, StyleTransitionState, StyleTransitions, Styled, Task,
+    TooltipId, Visibility, Window, WindowControlArea, point, px, size,
 };
 use collections::HashMap;
 use gpui_util::ResultExt;
@@ -40,7 +40,7 @@ use std::{
     mem,
     rc::Rc,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use super::ImageCacheProvider;
@@ -769,7 +769,7 @@ pub trait InteractiveElement: Sized {
         interactivity
             .element_id
             .get_or_insert_with(|| ElementId::CodeLocation(*core::panic::Location::caller()));
-        interactivity.style_transitions = Some(transitions);
+        interactivity.style_transitions = Some(Box::new(transitions));
         self
     }
 
@@ -2097,7 +2097,7 @@ pub struct Interactivity {
     /// The base style of the element, before any modifications are applied
     /// by focus, active, etc.
     pub base_style: Box<StyleRefinement>,
-    pub(crate) style_transitions: Option<StyleTransitions>,
+    pub(crate) style_transitions: Option<Box<StyleTransitions>>,
     pub(crate) focus_style: Option<Box<StyleRefinement>>,
     pub(crate) in_focus_style: Option<Box<StyleRefinement>>,
     pub(crate) focus_visible_style: Option<Box<StyleRefinement>>,
@@ -3479,21 +3479,22 @@ impl Interactivity {
             }
         }
 
-        if let Some(transitions) = self.style_transitions.as_ref()
-            && let Some(element_state) = element_state
-            && transitions.apply_at(
-                &mut style,
-                element_state
-                    .style_transitions
-                    .get_or_insert_with(Default::default),
-                bounds.map(|bounds| {
-                    crate::style_transitions::StyleTransitionContext::new(bounds, window.rem_size())
-                }),
-                Instant::now(),
-                cx.reduce_motion(),
-            )
-        {
-            window.request_animation_frame();
+        if let Some(element_state) = element_state {
+            if let Some(transitions) = self.style_transitions.as_ref() {
+                if transitions.apply(
+                    &mut style,
+                    element_state
+                        .style_transitions
+                        .get_or_insert_with(Default::default),
+                    bounds.map(|bounds| StyleTransitionContext::new(bounds, window.rem_size())),
+                    cx.background_executor().now(),
+                    cx.reduce_motion(),
+                ) {
+                    window.request_animation_frame();
+                }
+            } else {
+                element_state.style_transitions = None;
+            }
         }
 
         style
@@ -3592,7 +3593,7 @@ pub struct InteractiveElementState {
     pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
     ongoing_scroll: Option<Rc<RefCell<OngoingScroll>>>,
     pub(crate) active_tooltip: Option<Rc<RefCell<Option<ActiveTooltip>>>>,
-    pub(crate) style_transitions: Option<Box<crate::style_transitions::StyleTransitionState>>,
+    pub(crate) style_transitions: Option<Box<StyleTransitionState>>,
 }
 
 /// Whether or not the element or a group that contains it is clicked by the mouse.

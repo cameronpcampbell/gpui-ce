@@ -100,7 +100,7 @@ pub fn style_helpers(input: TokenStream) -> TokenStream {
     styles::style_helpers(input)
 }
 
-/// Generates the named fields and builder methods on `StyleTransitions`.
+/// Generates the style transition builder and application code.
 #[proc_macro]
 #[doc(hidden)]
 pub fn style_transitions(input: TokenStream) -> TokenStream {
