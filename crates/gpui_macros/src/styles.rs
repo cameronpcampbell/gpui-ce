@@ -203,7 +203,7 @@ pub fn style_transitions(input: TokenStream) -> TokenStream {
                 style: &mut crate::Style,
                 state: &mut StyleTransitionState,
                 context: StyleTransitionContext,
-                now: std::time::Instant,
+                now: scheduler::Instant,
                 reduce_motion: bool,
             ) -> bool {
                 let mut in_progress = false;

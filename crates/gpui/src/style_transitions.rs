@@ -1,4 +1,4 @@
-use std::time::Instant;
+use scheduler::Instant;
 
 use crate::{
     AbsoluteLength, Animated, Bounds, DefiniteLength, Fill, Hsla, Length, Lerp, Motion, Pixels,
