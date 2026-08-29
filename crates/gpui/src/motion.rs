@@ -1,5 +1,15 @@
 use std::{ops::Sub, rc::Rc, time::Duration};
 
+/// Creates a duration from a number of whole seconds.
+pub const fn secs(seconds: u64) -> Duration {
+    Duration::from_secs(seconds)
+}
+
+/// Creates a duration from a number of whole milliseconds.
+pub const fn millis(milliseconds: u64) -> Duration {
+    Duration::from_millis(milliseconds)
+}
+
 /// Normalized animation progress.
 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
 pub struct Progress(f32);
@@ -186,6 +196,12 @@ pub type MotionInfo = Motion;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn creates_durations() {
+        assert_eq!(secs(2), Duration::from_secs(2));
+        assert_eq!(millis(250), Duration::from_millis(250));
+    }
 
     #[test]
     fn samples_one_shot_and_eased_motion() {
