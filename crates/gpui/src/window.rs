@@ -3819,7 +3819,10 @@ impl Window {
         motion: impl Into<Motion>,
         init: impl Fn(&mut Window, &mut Context<TransitionState<T>>) -> T,
     ) -> Transition<T> {
-        let state = self.use_state(cx, |window, cx| TransitionState::new(init(window, cx)));
+        let motion = motion.into();
+        let state = self.use_state(cx, |window, cx| {
+            TransitionState::new(init(window, cx), motion.clone())
+        });
 
         Transition::new(state, motion)
     }
@@ -3839,8 +3842,10 @@ impl Window {
         motion: impl Into<Motion>,
         init: impl Fn(&mut Window, &mut Context<TransitionState<T>>) -> T,
     ) -> Transition<T> {
-        let state =
-            self.use_keyed_state(key, cx, |window, cx| TransitionState::new(init(window, cx)));
+        let motion = motion.into();
+        let state = self.use_keyed_state(key, cx, |window, cx| {
+            TransitionState::new(init(window, cx), motion.clone())
+        });
 
         Transition::new(state, motion)
     }
