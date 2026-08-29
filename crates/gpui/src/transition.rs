@@ -107,7 +107,7 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
     fn sample(&self, cx: &mut App) -> Ref<'_, TransitionCache<T>> {
         if self.cache.borrow().value.is_none() {
             let mut state = self.state.as_mut(cx);
-            let sample = state.sample(&self.motion, Instant::now());
+            let sample = state.sample(Instant::now());
 
             *self.cache.borrow_mut() = TransitionCache {
                 value: Some(sample.value),
@@ -161,10 +161,7 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
             return self.cache.borrow().progress.get();
         }
 
-        self.state
-            .read(cx)
-            .progress_at(&self.motion, Instant::now())
-            .get()
+        self.state.read(cx).progress_at(Instant::now()).get()
     }
 
     /// Updates the goal value for the transition.
@@ -266,7 +263,8 @@ mod tests {
         motion: impl Into<Motion>,
         initial: T,
     ) -> Transition<T> {
-        let state = cx.new(|_| TransitionState::new(initial));
+        let motion = motion.into();
+        let state = cx.new(|_| TransitionState::new(initial, motion.clone()));
         Transition::new(state, motion)
     }
 
@@ -314,8 +312,8 @@ mod tests {
 
             let transition = transition.with_easing(|_| 0.75);
             assert!(transition.read_cache().is_none());
-            assert_eq!(*transition.sample(cx).value.as_ref().unwrap(), 162.5);
-            assert_eq!(transition.evaluate_delta(cx), 0.75);
+            assert_eq!(*transition.sample(cx).value.as_ref().unwrap(), 125.0);
+            assert_eq!(transition.evaluate_delta(cx), 0.5);
 
             let motion = Motion::new(Duration::from_secs(1)).with_easing(|_| 0.5);
             let continuous = create_transition(cx, motion.clone(), 0.0_f32);
