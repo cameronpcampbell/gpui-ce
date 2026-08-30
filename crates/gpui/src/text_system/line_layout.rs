@@ -213,6 +213,81 @@ impl CaretPosition {
     }
 }
 
+/// An affinity-aware text selection.
+///
+/// The anchor stays fixed while the focus is the active caret.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CaretSelection {
+    /// The fixed end of the selection.
+    pub anchor: CaretPosition,
+    /// The active end of the selection.
+    pub focus: CaretPosition,
+}
+
+impl From<usize> for CaretSelection {
+    fn from(index: usize) -> Self {
+        Self::collapsed(CaretPosition::new(index, CaretAffinity::Downstream))
+    }
+}
+
+/// Creates a downstream-affinity selection from `(focus, anchor)` byte indices.
+impl From<(usize, usize)> for CaretSelection {
+    fn from((focus, anchor): (usize, usize)) -> Self {
+        Self::from_focus_anchor(
+            CaretPosition::new(focus, CaretAffinity::Downstream),
+            CaretPosition::new(anchor, CaretAffinity::Downstream),
+        )
+    }
+}
+
+/// Creates a downstream-affinity selection whose focus is `start` and anchor is `end`.
+impl From<Range<usize>> for CaretSelection {
+    fn from(range: Range<usize>) -> Self {
+        Self::from((range.start, range.end))
+    }
+}
+
+impl CaretSelection {
+    /// Creates a selection from its fixed anchor and active focus.
+    pub fn new(anchor: CaretPosition, focus: CaretPosition) -> Self {
+        Self { anchor, focus }
+    }
+
+    /// Creates a selection from its active focus and fixed anchor.
+    pub fn from_focus_anchor(focus: CaretPosition, anchor: CaretPosition) -> Self {
+        Self { anchor, focus }
+    }
+
+    /// Creates an empty selection at `caret`.
+    pub fn collapsed(caret: CaretPosition) -> Self {
+        Self::new(caret, caret)
+    }
+
+    /// Returns whether the selection is empty.
+    pub fn is_empty(&self) -> bool {
+        self.anchor.index == self.focus.index
+    }
+
+    /// Returns the selected UTF-8 byte range in logical order.
+    pub fn byte_range(self) -> Range<usize> {
+        self.anchor.index.min(self.focus.index)..self.anchor.index.max(self.focus.index)
+    }
+
+    /// Moves the active end while preserving the anchor.
+    pub fn with_focus(self, focus: CaretPosition) -> Self {
+        Self { focus, ..self }
+    }
+}
+
+/// The result of moving or extending a selection through a laid-out document.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CaretSelectionMove {
+    /// The selection after movement.
+    pub selection: CaretSelection,
+    /// The horizontal position retained by successive vertical movements.
+    pub preferred_x: Option<Pixels>,
+}
+
 /// A document layout with its optional wrapping constraint.
 #[derive(Debug)]
 pub struct WrappedLineLayout {
@@ -394,6 +469,67 @@ impl WrappedLineLayout {
         self.layout
             .platform_layout
             .move_caret(caret, movement, preferred_x)
+    }
+
+    /// Moves or extends an affinity-aware selection using visual text order.
+    ///
+    /// Horizontal movement without extension collapses a non-empty selection toward the requested
+    /// visual edge. Other movement starts at the focus. Extending keeps the anchor fixed.
+    pub fn move_selection(
+        &self,
+        selection: CaretSelection,
+        movement: TextMovement,
+        extend: bool,
+        preferred_x: Option<Pixels>,
+        line_height: Pixels,
+    ) -> CaretSelectionMove {
+        let forward = matches!(
+            movement,
+            TextMovement::VisualRight | TextMovement::VisualWordRight
+        );
+        let horizontal = forward
+            || matches!(
+                movement,
+                TextMovement::VisualLeft | TextMovement::VisualWordLeft
+            );
+
+        if !extend && !selection.is_empty() && horizontal {
+            let focus_position = self.position_for_caret(selection.focus, line_height);
+            let anchor_position = self.position_for_caret(selection.anchor, line_height);
+            let (visual_start, visual_end) = focus_position
+                .zip(anchor_position)
+                .map(|(focus_position, anchor_position)| {
+                    if (focus_position.y, focus_position.x)
+                        <= (anchor_position.y, anchor_position.x)
+                    {
+                        (selection.focus, selection.anchor)
+                    } else {
+                        (selection.anchor, selection.focus)
+                    }
+                })
+                .unwrap_or_else(|| {
+                    if selection.focus.index <= selection.anchor.index {
+                        (selection.focus, selection.anchor)
+                    } else {
+                        (selection.anchor, selection.focus)
+                    }
+                });
+            let caret = if forward { visual_end } else { visual_start };
+            return CaretSelectionMove {
+                selection: CaretSelection::collapsed(caret),
+                preferred_x: None,
+            };
+        }
+
+        let (focus, preferred_x) = self.move_caret(selection.focus, movement, preferred_x);
+        CaretSelectionMove {
+            selection: if extend {
+                selection.with_focus(focus)
+            } else {
+                CaretSelection::collapsed(focus)
+            },
+            preferred_x,
+        }
     }
 
     /// Selects the word or line at a point.

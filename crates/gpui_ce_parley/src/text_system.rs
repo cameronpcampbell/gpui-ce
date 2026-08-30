@@ -923,8 +923,8 @@ impl PlatformTextSystem for ParleyTextSystem {
 mod tests {
     use super::*;
     use gpui::{
-        FontFallbacks, FontFeatures as GpuiFontFeatures, FontStyle, FontWeight, IsZero as _,
-        StrikethroughStyle, TextSystem, UnderlineStyle, WindowTextSystem, font, hsla,
+        CaretSelection, FontFallbacks, FontFeatures as GpuiFontFeatures, FontStyle, FontWeight,
+        IsZero as _, StrikethroughStyle, TextSystem, UnderlineStyle, WindowTextSystem, font, hsla,
     };
     use std::sync::Arc;
 
@@ -1378,12 +1378,55 @@ mod tests {
         let start = layout
             .closest_caret_for_position(point(px(-10.0), px(10.0)), line_height)
             .unwrap_err();
-        let (word, _) = layout.move_caret(start, TextMovement::VisualWordRight, None);
-        assert_ne!(word, start);
-        let (down, preferred_x) = layout.move_caret(word, TextMovement::VisualDown, None);
-        assert!(preferred_x.is_some());
-        let (_, maintained_x) = layout.move_caret(down, TextMovement::VisualDown, preferred_x);
-        assert_eq!(maintained_x, preferred_x);
+        let end = layout
+            .closest_caret_for_position(point(px(10_000.0), px(10.0)), line_height)
+            .unwrap_err();
+        let selection = CaretSelection::new(end, start);
+        let collapsed_left = layout.move_selection(
+            selection,
+            TextMovement::VisualLeft,
+            false,
+            None,
+            line_height,
+        );
+        assert!(collapsed_left.selection.is_empty());
+        assert_eq!(collapsed_left.selection.focus, start);
+        let collapsed_right = layout.move_selection(
+            selection,
+            TextMovement::VisualRight,
+            false,
+            None,
+            line_height,
+        );
+        assert_eq!(collapsed_right.selection.focus, end);
+
+        let word = layout.move_selection(
+            CaretSelection::collapsed(start),
+            TextMovement::VisualWordRight,
+            true,
+            None,
+            line_height,
+        );
+        assert_eq!(word.selection.anchor, start);
+        assert_ne!(word.selection.focus, start);
+        let down = layout.move_selection(
+            CaretSelection::collapsed(word.selection.focus),
+            TextMovement::VisualDown,
+            false,
+            None,
+            line_height,
+        );
+        assert!(down.preferred_x.is_some());
+        let maintained_x = layout
+            .move_selection(
+                down.selection,
+                TextMovement::VisualDown,
+                false,
+                down.preferred_x,
+                line_height,
+            )
+            .preferred_x;
+        assert_eq!(maintained_x, down.preferred_x);
         let selection = layout.selection_from_point(
             point(px(12.0), px(10.0)),
             line_height,
