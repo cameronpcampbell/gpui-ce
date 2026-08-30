@@ -923,10 +923,8 @@ impl PlatformTextSystem for ParleyTextSystem {
 mod tests {
     use super::*;
     use gpui::{
-        AppContext as _, Context, FontFallbacks, FontFeatures as GpuiFontFeatures, FontStyle,
-        FontWeight, HeadlessAppContext, IntoElement, IsZero as _, ParentElement as _, Render,
-        StrikethroughStyle, Styled as _, TextSystem, UnderlineStyle, Window, WindowTextSystem, div,
-        font, hsla, size,
+        FontFallbacks, FontFeatures as GpuiFontFeatures, FontStyle, FontWeight, IsZero as _,
+        StrikethroughStyle, TextSystem, UnderlineStyle, WindowTextSystem, font, hsla,
     };
     use std::sync::Arc;
 
