@@ -2614,7 +2614,6 @@ impl Interactivity {
                         None,
                     )
                     .ok()
-                    .and_then(|mut text| text.pop())
                 {
                     text.paint(hitbox.origin, FONT_SIZE, TextAlign::Left, None, window, cx)
                         .ok();

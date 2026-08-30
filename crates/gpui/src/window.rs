@@ -2437,6 +2437,18 @@ impl Window {
             .render_to_image(&self.rendered_frame.scene)
     }
 
+    /// Returns the current frame's quad and glyph sprite counts.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn rendered_primitive_counts(&self) -> (usize, usize, usize, usize) {
+        let scene = &self.rendered_frame.scene;
+        (
+            scene.quads.len(),
+            scene.monochrome_sprites.len(),
+            scene.subpixel_sprites.len(),
+            scene.polychrome_sprites.len(),
+        )
+    }
+
     /// Set the content size of the window.
     pub fn resize(&mut self, size: Size<Pixels>) {
         self.platform_window.resize(size);
@@ -4305,7 +4317,6 @@ impl Window {
         );
         let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
         let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
-        let dilation = self.text_system().glyph_dilation_for_color(color);
         let params = RenderGlyphParams {
             font_id,
             glyph_id,
@@ -4314,16 +4325,18 @@ impl Window {
             scale_factor,
             is_emoji: false,
             subpixel_rendering,
-            dilation,
         };
 
-        let raster_bounds = self.text_system().raster_bounds(&params)?;
+        let rasterized = self.text_system().rasterize_glyph(&params)?;
+        let raster_bounds = rasterized.bounds;
         if !raster_bounds.is_zero() {
             let tile = self
                 .sprite_atlas
-                .get_or_insert_with(&params.clone().into(), &mut || {
-                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                    Ok(Some((size, Cow::Owned(bytes))))
+                .get_or_insert_with(&params.into(), &mut || {
+                    Ok(Some((
+                        rasterized.size,
+                        Cow::Borrowed(rasterized.pixels.as_slice()),
+                    )))
                 })?
                 .expect("Callback above only errors or returns Some");
             let bounds = Bounds {
@@ -4404,16 +4417,18 @@ impl Window {
             scale_factor,
             is_emoji: true,
             subpixel_rendering: false,
-            dilation: 0,
         };
 
-        let raster_bounds = self.text_system().raster_bounds(&params)?;
+        let rasterized = self.text_system().rasterize_glyph(&params)?;
+        let raster_bounds = rasterized.bounds;
         if !raster_bounds.is_zero() {
             let tile = self
                 .sprite_atlas
-                .get_or_insert_with(&params.clone().into(), &mut || {
-                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                    Ok(Some((size, Cow::Owned(bytes))))
+                .get_or_insert_with(&params.into(), &mut || {
+                    Ok(Some((
+                        rasterized.size,
+                        Cow::Borrowed(rasterized.pixels.as_slice()),
+                    )))
                 })?
                 .expect("Callback above only errors or returns Some");
 

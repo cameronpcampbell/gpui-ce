@@ -3,6 +3,7 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Describes a boundary within a chunk of text.
+#[derive(Clone, Copy)]
 pub enum TextBoundary {
     /// The utf-8 character
     Graphmeme,

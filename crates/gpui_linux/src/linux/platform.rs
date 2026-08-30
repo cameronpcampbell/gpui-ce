@@ -146,10 +146,21 @@ impl LinuxCommon {
         let (main_sender, main_receiver) = PriorityQueueCalloopReceiver::new();
         let (wake_sender, wake_receiver) = calloop::channel::channel();
 
-        #[cfg(any(feature = "wayland", feature = "x11"))]
-        let text_system = Arc::new(crate::linux::CosmicTextSystem::new("IBM Plex Sans"));
-        #[cfg(not(any(feature = "wayland", feature = "x11")))]
-        let text_system = Arc::new(gpui::NoopTextSystem::new());
+        let text_system: Arc<dyn PlatformTextSystem> = Arc::new(
+            gpui_parley::ParleyTextSystem::new_with_system_font(
+                gpui_parley::SystemFonts::Load,
+                "Adwaita Sans",
+            )
+            .with_fallback_families([
+                "Lilex",
+                "IBM Plex Sans",
+                "Ubuntu",
+                "Cantarell",
+                "Noto Sans",
+                "DejaVu Sans",
+                "Arial",
+            ]),
+        );
 
         let callbacks = PlatformHandlers::default();
 

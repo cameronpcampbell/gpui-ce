@@ -4,8 +4,6 @@ mod clipboard;
 mod destination_list;
 mod direct_manipulation;
 #[cfg(not(feature = "wgpu"))]
-mod direct_write;
-#[cfg(not(feature = "wgpu"))]
 mod directx_atlas;
 #[cfg(not(feature = "wgpu"))]
 mod directx_devices;
@@ -25,8 +23,6 @@ mod wrapper;
 
 pub(crate) use clipboard::*;
 pub(crate) use destination_list::*;
-#[cfg(not(feature = "wgpu"))]
-pub(crate) use direct_write::*;
 #[cfg(not(feature = "wgpu"))]
 pub(crate) use directx_atlas::*;
 #[cfg(not(feature = "wgpu"))]

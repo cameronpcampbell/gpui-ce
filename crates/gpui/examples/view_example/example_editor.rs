@@ -421,7 +421,7 @@ impl Element for EditorText {
             vec![
                 window
                     .text_system()
-                    .shape_line(placeholder, font_size, &[run], None),
+                    .shape_line(placeholder, font_size, &[run]),
             ]
         } else {
             content
@@ -438,7 +438,7 @@ impl Element for EditorText {
                     };
                     window
                         .text_system()
-                        .shape_line(text, font_size, &[run], None)
+                        .shape_line(text, font_size, &[run])
                 })
                 .collect()
         };
