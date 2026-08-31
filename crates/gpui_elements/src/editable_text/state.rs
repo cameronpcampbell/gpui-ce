@@ -5,7 +5,8 @@ use crate::editable_text::{
 use gpui::{
     App, Bounds, CaretAffinity, CaretPosition, CaretSelection, ClipboardItem, Context, ElementId,
     Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, NavigationDirection, Pixels,
-    Point, TextMovement, TextSelectionKind, UTF16Selection, Window, point, utf16_to_utf8_offset,
+    Point, TextMovement, TextSelectionKind, UTF16Selection, Window, WrappedLine, point,
+    utf16_to_utf8_offset,
 };
 use std::{borrow::Cow, ops::Range};
 
@@ -244,32 +245,26 @@ impl EditableTextState {
 
 // Screen space (text layout engine output) & String space transformers
 impl EditableTextState {
-    fn cluster_layout_is_current(&self) -> bool {
-        self.layout_data.state.last_seen_storage_version == self.storage.version()
+    fn current_document(&self) -> Option<&WrappedLine> {
+        if self.layout_data.state.last_seen_storage_version != self.storage.version() {
+            return None;
+        }
+        self.layout_data.document.as_deref()
     }
 
     fn point_for_caret(&self, caret: CaretPosition) -> Option<Point<Pixels>> {
-        self.layout_data
-            .document
-            .as_ref()?
+        self.current_document()?
             .position_for_caret(caret, self.layout_data.line_height)
     }
 
     fn cluster_deletion_range(&self, direction: NavigationDirection) -> Option<Range<usize>> {
-        if !self.cluster_layout_is_current() {
-            return None;
-        }
         let range = match direction {
             NavigationDirection::Back => self
-                .layout_data
-                .document
-                .as_ref()?
+                .current_document()?
                 .logical_cluster_before(self.caret()),
-            NavigationDirection::Forward => self
-                .layout_data
-                .document
-                .as_ref()?
-                .logical_cluster_after(self.caret()),
+            NavigationDirection::Forward => {
+                self.current_document()?.logical_cluster_after(self.caret())
+            }
         }?;
         (!range.is_empty() && range.end <= self.as_str().len()).then_some(range)
     }
@@ -281,7 +276,7 @@ impl EditableTextState {
             return CaretPosition::default();
         }
 
-        let Some(document) = &self.layout_data.document else {
+        let Some(document) = self.current_document() else {
             return CaretPosition::new(storage_len_utf8, CaretAffinity::Upstream);
         };
         document
@@ -295,6 +290,32 @@ impl EditableTextState {
 
     fn find_point_for_caret(&self, caret: CaretPosition) -> Point<Pixels> {
         self.point_for_caret(caret).unwrap_or_default()
+    }
+
+    fn line_range_for_cut(&self) -> Range<usize> {
+        use NavigationDirection::*;
+        use TextBoundary::*;
+
+        let caret = self.caret();
+        let range = if let Some(document) = self.current_document() {
+            let [start, end] = [TextMovement::HardLineStart, TextMovement::HardLineEnd]
+                .map(|movement| document.move_caret(caret, movement, None).0.index);
+            start.min(end)..start.max(end)
+        } else {
+            self.storage.offset_from_caret(caret.index, Back, Line)
+                ..self.storage.offset_from_caret(caret.index, Forward, Line)
+        };
+
+        if range.end < self.as_str().len() {
+            range.start
+                ..self
+                    .storage
+                    .offset_from_caret(range.end, Forward, Graphmeme)
+        } else if range.start > 0 {
+            self.storage.offset_from_caret(range.start, Back, Graphmeme)..range.end
+        } else {
+            range
+        }
     }
 }
 
@@ -410,9 +431,7 @@ impl EditableTextState {
                 })
             }
             true if matches!(boundary, TextBoundary::Word | TextBoundary::Line) => self
-                .cluster_layout_is_current()
-                .then(|| self.layout_data.document.as_ref())
-                .flatten()
+                .current_document()
                 .map(|document| {
                     let movement = match (direction, boundary) {
                         (NavigationDirection::Back, TextBoundary::Word) => {
@@ -490,11 +509,7 @@ impl EditableTextState {
     }
 
     fn move_semantic(&mut self, movement: TextMovement, extend: bool, cx: &mut Context<Self>) {
-        if let Some(document) = self
-            .cluster_layout_is_current()
-            .then(|| self.layout_data.document.as_ref())
-            .flatten()
-        {
+        if let Some(document) = self.current_document() {
             let moved = document.move_selection(
                 self.selected_range,
                 movement,
@@ -632,7 +647,7 @@ impl EditableTextState {
         let line_start = self.storage.offset_from_caret(caret_pos, Back, Line);
         let line_end = self.storage.offset_from_caret(caret_pos, Forward, Line);
         let line_end_with_newline = if line_end < self.storage.content_utf8().len() {
-            line_end + 1
+            self.storage.offset_from_caret(line_end, Forward, Graphmeme)
         } else {
             line_end
         };
@@ -648,11 +663,7 @@ impl EditableTextState {
         kind: TextSelectionKind,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(document) = self
-            .cluster_layout_is_current()
-            .then(|| self.layout_data.document.as_ref())
-            .flatten()
-        else {
+        let Some(document) = self.current_document() else {
             return false;
         };
         self.selected_range = document
@@ -838,7 +849,7 @@ impl EntityInputHandler for EditableTextState {
         let range = self.storage.utf_range_16to8(&range_utf16);
         let line_height = window.line_height();
 
-        let document = self.layout_data.document.as_ref()?;
+        let document = self.current_document()?;
         let start = range.start.min(document.text.len());
         let end = range.end.min(document.text.len());
         if start == end {
@@ -1062,34 +1073,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
             // selection is more than a caret, use that range of text
             false => self.selected_range.byte_range(),
             // No selection: cut the entire current line (including newline)
-            true => {
-                use NavigationDirection::*;
-                use TextBoundary::*;
-
-                let caret = self.caret_pos();
-                let line_start = self.storage.offset_from_caret(caret, Back, Line);
-                let line_end = self.storage.offset_from_caret(caret, Forward, Line);
-                let storage_len_utf8 = self.as_str().len();
-
-                // Include the newline character if there is one after the line
-                let cut_end = if line_end < storage_len_utf8 {
-                    line_end + 1 // Include the newline
-                } else if line_start > 0 {
-                    // Last line with no trailing newline - include preceding newline instead
-                    line_end
-                } else {
-                    line_end
-                };
-
-                // For last line, also remove the preceding newline if it exists
-                let cut_start = if line_end >= storage_len_utf8 && line_start > 0 {
-                    line_start - 1 // Include preceding newline for last line
-                } else {
-                    line_start
-                };
-
-                cut_start..cut_end
-            }
+            true => self.line_range_for_cut(),
         };
 
         // Cut selected text
@@ -2503,83 +2487,32 @@ mod tests {
     }
 
     #[gpui::test]
-    fn test_cut_line_with_no_selection(cx: &mut TestAppContext) {
-        // Cursor in middle line, no selection - should cut entire line including newline
-        let view = create_test_input(cx, "line1\nline2\nline3", 8); // cursor in "line2"
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.cut(&Cut, window, cx);
-                assert_eq!(input.as_str(), "line1\nline3");
-            });
-        })
-        .unwrap();
+    fn cut_without_selection_removes_complete_hard_line(cx: &mut TestAppContext) {
+        for (name, text, caret, remaining, expected_clipboard) in [
+            (
+                "middle",
+                "line1\nline2\nline3",
+                8,
+                "line1\nline3",
+                "line2\n",
+            ),
+            ("first CRLF", "line1\r\nline2", 2, "line2", "line1\r\n"),
+            ("last", "line1\nline2", 8, "line1", "\nline2"),
+            ("empty", "line1\n\nline3", 6, "line1\nline3", "\n"),
+            ("only", "hello", 2, "", "hello"),
+        ] {
+            let view = create_test_input(cx, text, caret);
+            view.update(cx, |view, window, cx| {
+                view.input.update(cx, |input, cx| {
+                    input.cut(&Cut, window, cx);
+                    assert_eq!(input.as_str(), remaining, "{name}");
+                });
+            })
+            .unwrap();
 
-        let clipboard = cx.read_from_clipboard();
-        assert_eq!(clipboard.unwrap().text().as_deref(), Some("line2\n"));
-    }
-
-    #[gpui::test]
-    fn test_cut_first_line_with_no_selection(cx: &mut TestAppContext) {
-        // Cursor on first line, no selection
-        let view = create_test_input(cx, "line1\nline2\nline3", 2); // cursor in "line1"
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.cut(&Cut, window, cx);
-                assert_eq!(input.as_str(), "line2\nline3");
-            });
-        })
-        .unwrap();
-
-        let clipboard = cx.read_from_clipboard();
-        assert_eq!(clipboard.unwrap().text().as_deref(), Some("line1\n"));
-    }
-
-    #[gpui::test]
-    fn test_cut_last_line_with_no_selection(cx: &mut TestAppContext) {
-        // Cursor on last line, no selection - should include preceding newline
-        let view = create_test_input(cx, "line1\nline2\nline3", 14); // cursor in "line3"
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.cut(&Cut, window, cx);
-                assert_eq!(input.as_str(), "line1\nline2");
-            });
-        })
-        .unwrap();
-
-        let clipboard = cx.read_from_clipboard();
-        assert_eq!(clipboard.unwrap().text().as_deref(), Some("\nline3"));
-    }
-
-    #[gpui::test]
-    fn test_cut_empty_line(cx: &mut TestAppContext) {
-        // Cursor on empty line - should remove that line
-        let view = create_test_input(cx, "line1\n\nline3", 6); // cursor on empty line
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.cut(&Cut, window, cx);
-                assert_eq!(input.as_str(), "line1\nline3");
-            });
-        })
-        .unwrap();
-
-        let clipboard = cx.read_from_clipboard();
-        assert_eq!(clipboard.unwrap().text().as_deref(), Some("\n"));
-    }
-
-    #[gpui::test]
-    fn test_cut_only_line_with_no_selection(cx: &mut TestAppContext) {
-        // Single line content, no selection - should cut entire content
-        let view = create_test_input(cx, "hello", 2);
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.cut(&Cut, window, cx);
-                assert_eq!(input.as_str(), "");
-            });
-        })
-        .unwrap();
-
-        let clipboard = cx.read_from_clipboard();
-        assert_eq!(clipboard.unwrap().text().as_deref(), Some("hello"));
+            let clipboard = cx.read_from_clipboard().and_then(|item| item.text());
+            assert_eq!(clipboard.as_deref(), Some(expected_clipboard), "{name}");
+        }
     }
 
     #[gpui::test]
