@@ -260,6 +260,37 @@ jobs:
       - uses: extractions/setup-just@v2
       - run: just check-examples
 
+  # Compare against the PR base rather than crates.io. This reports only API
+  # regressions introduced by the PR, including regressions that would break
+  # downstream users such as our gpui-component fork.
+  semver:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          # GitHub otherwise checks out a synthetic merge commit. Checking the
+          # PR head directly makes the comparison exactly base..PR, so API
+          # breaks already present on main are not reported again.
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev libfontconfig-dev
+      - name: Check gpui-ce's public API against the PR base
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          package: gpui-ce
+          baseline-rev: ${{ github.event.pull_request.base.sha }}
+          # This is an API-diff gate, not a release-type waiver. Keep the
+          # patch policy so an incompatibility introduced by this PR is shown
+          # and fails here; the reserved next-major release record does not
+          # make unrelated main-branch breaks part of this PR.
+          release-type: patch
+
   # The components subtree is a separate Cargo workspace and must be checked
   # explicitly; it is intentionally not a member of the root workspace.
   components:
@@ -339,6 +370,7 @@ jobs:
       - test-mac
       - test-windows
       - check-examples
+      - semver
       - components
     runs-on: ubuntu-latest
     steps:
@@ -361,5 +393,6 @@ jobs:
           check_result test-mac       ${{ needs.test-mac.result }}
           check_result test-windows   ${{ needs.test-windows.result }}
           check_result check-examples ${{ needs.check-examples.result }}
+          check_result semver         ${{ needs.semver.result }}
           check_result components     ${{ needs.components.result }}
           exit $EXIT_CODE

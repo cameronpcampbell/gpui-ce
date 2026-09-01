@@ -39,19 +39,19 @@ build-release *flags:
 [group('build')]
 build-linux:
     @echo "🐧 Building Linux crates..."
-    cargo build -p gpui-ce-linux
+    cargo build -p gpui_ce_linux
 
 [doc('Build macOS-specific crates')]
 [group('build')]
 build-mac:
     @echo "🍎 Building macOS crates..."
-    cargo build -p gpui-ce-macos
+    cargo build -p gpui_ce_macos
 
 [doc('Build Windows-specific crates')]
 [group('build')]
 build-windows:
     @echo "🪟 Building Windows crates..."
-    cargo build -p gpui-ce-windows
+    cargo build -p gpui_ce_windows
 
 [doc('Build all GPUI examples')]
 [group('build')]
@@ -63,7 +63,7 @@ build-examples:
 [group('build')]
 check-wasm:
     @echo "🕸️ Checking WASM target (stable)..."
-    cargo check --target wasm32-unknown-unknown --no-default-features -p gpui-ce-platform
+    cargo check --target wasm32-unknown-unknown --no-default-features -p gpui_ce_platform
 
 [doc('Check WASM target with atomics (nightly) — requires nightly + rust-src component')]
 [group('build')]
@@ -75,7 +75,7 @@ check-wasm-atomics:
     }
     print "🕸️ Checking WASM target with atomics (nightly)..."
     with-env {CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: "-C target-feature=+atomics,+bulk-memory,+mutable-globals"} {
-        cargo +nightly -Zbuild-std=std,panic_abort check --target wasm32-unknown-unknown -p gpui-ce-platform
+        cargo +nightly -Zbuild-std=std,panic_abort check --target wasm32-unknown-unknown -p gpui_ce_platform
     }
 
 [doc('Check examples + WASM web package — requires wasm32-unknown-unknown target to be installed')]
@@ -83,7 +83,7 @@ check-wasm-atomics:
 check-examples:
     @echo "📐 Checking examples..."
     cargo build --package gpui-ce --examples
-    cargo check --package gpui-ce-web --target wasm32-unknown-unknown
+    cargo check --package gpui_ce_web --target wasm32-unknown-unknown
 
 
 [doc('Run all workspace unit and integration tests')]
@@ -216,12 +216,12 @@ ci:
         (run-check "cargo test" { cargo test --workspace --no-fail-fast })
         (run-check "doc tests" { cargo test --workspace --doc --no-fail-fast })
         (run-check "WASM stable" {
-            cargo check --target wasm32-unknown-unknown --no-default-features -p gpui-ce-platform
+            cargo check --target wasm32-unknown-unknown --no-default-features -p gpui_ce_platform
         })
         (if (available "rustup") {
             run-check "WASM atomics" {
                 with-env {CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: "-C target-feature=+atomics,+bulk-memory,+mutable-globals"} {
-                    cargo +nightly -Zbuild-std=std,panic_abort check --target wasm32-unknown-unknown -p gpui-ce-platform
+                    cargo +nightly -Zbuild-std=std,panic_abort check --target wasm32-unknown-unknown -p gpui_ce_platform
                 }
             }
         } else {
@@ -229,7 +229,7 @@ ci:
         })
         (run-check "check examples" {
             cargo build --package gpui-ce --examples
-            cargo check --package gpui-ce-web --target wasm32-unknown-unknown
+            cargo check --package gpui_ce_web --target wasm32-unknown-unknown
         })
         (if (available "typos") { run-check "typos" { typos } } else { skip "typos" "not installed" })
         (if (available "taplo") { run-check "taplo" { taplo fmt --check } } else { skip "taplo" "not installed" })
@@ -407,7 +407,7 @@ publish dry="false":
     # then renderers/platform leaves, with gpui_platform LAST (it has
     # target-conditional deps on every platform crate).
     let crates = [
-        "crates/gpui-ce-util/Cargo.toml"
+        "crates/gpui_ce_util/Cargo.toml"
         "crates/gpui_collections/Cargo.toml"
         "crates/gpui_derive_refineable/Cargo.toml"
         "crates/gpui_refineable/Cargo.toml"
@@ -435,13 +435,13 @@ publish dry="false":
 
         # GPUI CE Components. These are a nested workspace because its
         # examples and web demo have their own resolver and lockfile.
-        "crates/gpui-ce-components/crates/macros/Cargo.toml"
-        "crates/gpui-ce-components/crates/assets/Cargo.toml"
-        "crates/gpui-ce-components/crates/base/Cargo.toml"
-        "crates/gpui-ce-components/crates/fps/Cargo.toml"
-        "crates/gpui-ce-components/crates/shell/Cargo.toml"
-        "crates/gpui-ce-components/crates/ui/Cargo.toml"
-        "crates/gpui-ce-components/crates/webview/Cargo.toml"
+        "crates/gpui_ce_components/crates/macros/Cargo.toml"
+        "crates/gpui_ce_components/crates/assets/Cargo.toml"
+        "crates/gpui_ce_components/crates/base/Cargo.toml"
+        "crates/gpui_ce_components/crates/fps/Cargo.toml"
+        "crates/gpui_ce_components/crates/shell/Cargo.toml"
+        "crates/gpui_ce_components/crates/ui/Cargo.toml"
+        "crates/gpui_ce_components/crates/webview/Cargo.toml"
     ]
 
     let dry_flag = if $dry_run { ["--dry-run"] } else { [] }
@@ -454,12 +454,45 @@ publish dry="false":
     # validates the complete local release graph rather than stale registry
     # versions. The patches are passed only to the dry run and are never part
     # of the published manifests.
-    let root_crates = $crates | where { |manifest| not ($manifest | str starts-with "crates/gpui-ce-components/") }
+    let root_crates = $crates | where { |manifest| not ($manifest | str starts-with "crates/gpui_ce_components/") }
 
     for manifest in $crates {
         let name = ($manifest | path dirname | path basename)
+        let metadata = (^cargo metadata --no-deps --format-version 1 --manifest-path $manifest | from json)
+        let manifest_path = ($manifest | path expand)
+        let package = ($metadata.packages | where manifest_path == $manifest_path | first)
+        let package_name = ($package | get name)
+        let package_version = ($package | get version)
+
+        # crates.io versions are immutable. A version-bump PR usually changes
+        # only the affected crates, so leave already-published packages alone
+        # instead of making a later stable release fail at the first one.
+        let already_published = if $dry_run {
+            false
+        } else {
+            let response = (^curl
+                --retry 3
+                --retry-all-errors
+                --silent
+                --show-error
+                --user-agent "gpui-ce release workflow"
+                --output /dev/null
+                --write-out "%{http_code}"
+                $"https://crates.io/api/v1/crates/($package_name)/($package_version)"
+                | complete)
+            let status = ($response.stdout | str trim)
+            if $response.exit_code != 0 or ($status != "200" and $status != "404") {
+                error make {msg: $"Could not check crates.io for ($package_name) ($package_version): ($response.stderr) (HTTP ($status))"}
+            }
+            $status == "200"
+        }
+        if $already_published {
+            print $"\n⏭️  Skipping ($name): ($package_name) ($package_version) is already on crates.io."
+            continue
+        }
+
         print $"\n📦 Publishing ($name)..."
-        let patch_manifests = if ($manifest | str starts-with "crates/gpui-ce-components/") {
+        let patch_manifests = if ($manifest | str starts-with "crates/gpui_ce_components/") {
             $crates
         } else {
             $root_crates
@@ -467,22 +500,22 @@ publish dry="false":
         let patch_flags = if $dry_run {
             $patch_manifests
                 | each { |patch_manifest|
-                    let metadata = (^cargo metadata --no-deps --format-version 1 --manifest-path $patch_manifest | from json)
-                    let manifest_path = ($patch_manifest | path expand)
-                    let package = ($metadata.packages | where manifest_path == $manifest_path | first | get name)
-                    ["--config" $"patch.crates-io.($package).path=\"($patch_manifest | path dirname | path expand)\""]
+                    let patch_metadata = (^cargo metadata --no-deps --format-version 1 --manifest-path $patch_manifest | from json)
+                    let patch_manifest_path = ($patch_manifest | path expand)
+                    let patch_package = ($patch_metadata.packages | where manifest_path == $patch_manifest_path | first | get name)
+                    ["--config" $"patch.crates-io.($patch_package).path=\"($patch_manifest | path dirname | path expand)\""]
                 }
                 | flatten
         } else {
             []
         }
-        # `gpui-ce` has test/example-only edges to `gpui-platform`, while the
+        # `gpui-ce` has test/example-only edges to `gpui_ce_platform`, while the
         # Windows platform implementation has the reciprocal `gpui-ce` edge.
         # Cargo cannot represent the packaged crate and that local cycle in a
         # single verification lockfile. The release CI builds every target in
         # the workspace before this recipe; package the archive here and leave
         # its all-target compilation to that complete workspace check.
-        let no-verify = if $name == "gpui" { ["--no-verify"] } else { [] }
+        let no_verify = if $name == "gpui" { ["--no-verify"] } else { [] }
         run-external "cargo" "publish" "--manifest-path" $manifest "--allow-dirty" ...$dry_flag ...$no_verify ...$patch_flags
         if $env.LAST_EXIT_CODE != 0 {
             error make {msg: $"Failed to publish ($name)"}

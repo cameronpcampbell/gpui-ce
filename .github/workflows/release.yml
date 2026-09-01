@@ -16,6 +16,12 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Stable and alpha uploads share a registry namespace. Do not let a stable tag
+# overtake an alpha allocation (or vice versa).
+concurrency:
+  group: gpui-ce-registry-publish
+  cancel-in-progress: false
+
 jobs:
   # Determine pre-release status
   prerelease:
