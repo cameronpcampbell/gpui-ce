@@ -31,6 +31,7 @@ static BUNDLED_FONTS: &[&[u8]] = &[
     include_bytes!("../../../assets/fonts/lilex/Lilex-Bold.ttf"),
     include_bytes!("../../../assets/fonts/lilex/Lilex-Italic.ttf"),
     include_bytes!("../../../assets/fonts/lilex/Lilex-BoldItalic.ttf"),
+    include_bytes!("../../../assets/fonts/noto-color-emoji/NotoColorEmoji.ttf"),
 ];
 
 pub struct WebPlatform {
@@ -69,9 +70,14 @@ impl WebPlatform {
         ));
         let background_executor = BackgroundExecutor::new(dispatcher.clone());
         let foreground_executor = ForegroundExecutor::new(dispatcher);
-        let text_system = Arc::new(gpui_wgpu::CosmicTextSystem::new_without_system_fonts(
-            "IBM Plex Sans",
-        ));
+        let text_system = Arc::new(
+            gpui_parley::ParleyTextSystem::new_with_rasterizer(
+                gpui_parley::SystemFonts::Skip,
+                "IBM Plex Sans",
+                gpui_parley::SwashGlyphRasterizer::default(),
+            )
+            .with_fallback_families(["Noto Color Emoji"]),
+        );
         let fonts = BUNDLED_FONTS
             .iter()
             .map(|bytes| Cow::Borrowed(*bytes))

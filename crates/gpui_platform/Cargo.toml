@@ -14,7 +14,6 @@ path = "src/gpui_platform.rs"
 
 [features]
 default = []
-font-kit = ["gpui_macos/font-kit"]
 test-support = ["gpui/test-support", "gpui_macos/test-support"]
 screen-capture = [
   "gpui/screen-capture",
@@ -43,3 +42,15 @@ gpui_linux.workspace = true
 [target.'cfg(target_family = "wasm")'.dependencies]
 gpui_web.workspace = true
 console_error_panic_hook.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+gpui_macos = { workspace = true, features = ["test-support"] }
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
+[[test]]
+name = "parley_render"
+path = "tests/parley_render.rs"
+harness = false
