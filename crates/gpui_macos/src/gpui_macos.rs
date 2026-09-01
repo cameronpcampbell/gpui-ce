@@ -8,6 +8,7 @@ mod dispatcher;
 mod display;
 mod display_link;
 mod events;
+mod font_rasterizer;
 mod haptic_feedback;
 mod keyboard;
 mod pasteboard;
@@ -20,12 +21,6 @@ mod metal_atlas;
 pub mod metal_renderer;
 
 use metal_renderer as renderer;
-
-#[cfg(feature = "font-kit")]
-mod open_type;
-
-#[cfg(feature = "font-kit")]
-mod text_system;
 
 mod platform;
 mod window;
@@ -45,12 +40,10 @@ use std::{
 pub(crate) use dispatcher::*;
 pub(crate) use display::*;
 pub(crate) use display_link::*;
+pub(crate) use font_rasterizer::*;
 pub(crate) use keyboard::*;
 pub(crate) use platform::*;
 pub(crate) use window::*;
-
-#[cfg(feature = "font-kit")]
-pub(crate) use text_system::*;
 
 pub use platform::MacPlatform;
 

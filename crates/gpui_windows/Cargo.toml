@@ -20,7 +20,7 @@ wgpu = ["dep:gpui_wgpu"]
 
 [dependencies]
 gpui.workspace = true
-gpui_wgpu = { workspace = true, optional = true, features = ["font-kit"] }
+gpui_wgpu = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 accesskit.workspace = true
@@ -31,6 +31,7 @@ dunce.workspace = true
 etagere.workspace = true
 futures.workspace = true
 gpui_util.workspace = true
+gpui_parley = { workspace = true, features = ["system-fonts"] }
 image.workspace = true
 itertools.workspace = true
 log.workspace = true

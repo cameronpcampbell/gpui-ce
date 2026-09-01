@@ -4,8 +4,6 @@ mod clipboard;
 mod destination_list;
 mod direct_manipulation;
 #[cfg(not(feature = "wgpu"))]
-mod direct_write;
-#[cfg(not(feature = "wgpu"))]
 mod directx_atlas;
 #[cfg(not(feature = "wgpu"))]
 mod directx_devices;
@@ -14,6 +12,7 @@ mod directx_renderer;
 mod dispatcher;
 mod display;
 mod events;
+mod font_rasterizer;
 mod keyboard;
 mod platform;
 mod system_notifications;
@@ -26,8 +25,6 @@ mod wrapper;
 pub(crate) use clipboard::*;
 pub(crate) use destination_list::*;
 #[cfg(not(feature = "wgpu"))]
-pub(crate) use direct_write::*;
-#[cfg(not(feature = "wgpu"))]
 pub(crate) use directx_atlas::*;
 #[cfg(not(feature = "wgpu"))]
 pub(crate) use directx_devices::*;
@@ -36,6 +33,7 @@ pub(crate) use directx_renderer::*;
 pub(crate) use dispatcher::*;
 pub(crate) use display::*;
 pub(crate) use events::*;
+pub(crate) use font_rasterizer::*;
 pub(crate) use keyboard::*;
 pub(crate) use platform::*;
 pub(crate) use system_notifications::*;
