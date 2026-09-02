@@ -859,7 +859,11 @@ impl ParleyTextSystem {
                     strikethrough_offset,
                 });
             }
-            let text_range = line.text_range();
+
+            let parley_text_range = line.text_range();
+            let text_range =
+                parley_text_range.start.min(text.len())..parley_text_range.end.min(text.len());
+            
             visual_lines.push(VisualLine {
                 text_range,
                 fragment_range: fragment_start..paint_fragments.len(),
@@ -1531,6 +1535,10 @@ mod tests {
                 assert!(layout.visual_lines.len() >= minimum_lines, "{name}");
             }
         }
+
+        let layout = layout_line(&system, "", px(18.0), &[]);
+        assert_document_contract("", &layout);
+        assert_eq!(layout.visual_lines[0].text_range, 0..0);
     }
 
     #[test]

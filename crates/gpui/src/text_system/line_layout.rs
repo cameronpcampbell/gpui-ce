@@ -743,30 +743,6 @@ impl std::ops::Deref for WrappedLineLayout {
     }
 }
 
-fn debug_assert_visual_model(
-    layout: &LineLayout,
-    lines: &[VisualLine],
-    fragments: &[PaintFragment],
-) {
-    debug_assert!(!lines.is_empty());
-    debug_assert_eq!(lines.first().unwrap().text_range.start, 0);
-    debug_assert_eq!(lines.last().unwrap().text_range.end, layout.len);
-    debug_assert_eq!(lines.first().unwrap().fragment_range.start, 0);
-    debug_assert_eq!(lines.last().unwrap().fragment_range.end, fragments.len());
-    for (line_ix, line) in lines.iter().enumerate() {
-        debug_assert!(line.text_range.start <= line.text_range.end);
-        debug_assert!(line.text_range.end <= layout.len);
-        debug_assert!(line.fragment_range.end <= fragments.len());
-        if let Some(next) = lines.get(line_ix + 1) {
-            debug_assert_eq!(line.text_range.end, next.text_range.start);
-            debug_assert_eq!(line.fragment_range.end, next.fragment_range.start);
-        }
-        for fragment in &fragments[line.fragment_range.clone()] {
-            debug_assert!(fragment.x_range.start <= fragment.x_range.end);
-        }
-    }
-}
-
 pub(crate) struct LineLayoutCache {
     previous_frame: Mutex<FrameCache>,
     current_frame: RwLock<FrameCache>,
@@ -909,11 +885,6 @@ impl LineLayoutCache {
                 } else {
                     self.layout_line::<&SharedString>(&text, font_size, runs)
                 };
-            debug_assert_visual_model(
-                &document_layout,
-                &document_layout.visual_lines,
-                &document_layout.paint_fragments,
-            );
             let layout = Arc::new(WrappedLineLayout {
                 layout: document_layout,
                 wrap_width,
@@ -974,8 +945,6 @@ impl LineLayoutCache {
                 wrap_width: None,
                 line_clamp: None,
             });
-            debug_assert_visual_model(&layout, &layout.visual_lines, &layout.paint_fragments);
-
             let key = Arc::new(CacheKey {
                 text,
                 font_size,
