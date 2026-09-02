@@ -4403,13 +4403,62 @@ impl ScrollHandle {
 mod tests {
     use super::*;
     use crate::{
-        AnyWindowHandle, Context, InputEvent, Keystroke, MouseMoveEvent, TestAppContext, all,
-        canvas, class, id, util::FluentBuilder as _,
+        AnyWindowHandle, Context, InputEvent, Keystroke, MouseMoveEvent, RenderOnce,
+        TestAppContext, all, canvas, class, id, util::FluentBuilder as _,
     };
     use std::{cell::Cell, rc::Weak};
 
     struct SelectorTestView {
         widths: Rc<Vec<Cell<Pixels>>>,
+    }
+
+    #[derive(IntoElement)]
+    struct SelectorComponentTarget {
+        widths: Rc<Vec<Cell<Pixels>>>,
+    }
+
+    impl RenderOnce for SelectorComponentTarget {
+        fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+            canvas(
+                move |bounds, _, _| self.widths[6].set(bounds.size.width),
+                |_, _, _, _| {},
+            )
+            .class("component-target")
+            .h(px(10.))
+        }
+    }
+
+    struct CachedSelectorTarget {
+        render_count: Rc<Cell<usize>>,
+    }
+
+    impl Render for CachedSelectorTarget {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            self.render_count.set(self.render_count.get() + 1);
+            div().class("cached-selector-target").size_full()
+        }
+    }
+
+    struct CachedSelectorRoot {
+        target: Entity<CachedSelectorTarget>,
+        alternate: bool,
+    }
+
+    impl Render for CachedSelectorRoot {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let root = div().size_full();
+            let root = if self.alternate {
+                root.select_descendants(class("cached-selector-target"), |style| style.opacity(0.5))
+            } else {
+                root.select_descendants(class("cached-selector-target"), |style| style.opacity(1.0))
+            };
+
+            root.child(
+                self.target
+                    .clone()
+                    .cached(StyleRefinement::default().size_full()),
+            )
+        }
     }
 
     impl Render for SelectorTestView {
@@ -4429,6 +4478,7 @@ mod tests {
                 .select_descendants(class("target"), |style| style.w(px(30.)))
                 .select_children(all(), |style| style.w(px(15.)))
                 .select_children(class("target"), |style| style.w(px(20.)))
+                .select_children(class("component-target"), |style| style.w(px(60.)))
                 .child(
                     div()
                         .w(px(10.))
@@ -4476,12 +4526,15 @@ mod tests {
                         ),
                 )
                 .child(div().w(px(10.)).h(px(10.)).class("other").child(measure(5)))
+                .child(SelectorComponentTarget {
+                    widths: self.widths.clone(),
+                })
         }
     }
 
     #[gpui::test]
     fn selector_scopes_match_and_cascade_across_the_element_tree(cx: &mut TestAppContext) {
-        let widths = Rc::new((0..6).map(|_| Cell::new(px(0.))).collect::<Vec<_>>());
+        let widths = Rc::new((0..7).map(|_| Cell::new(px(0.))).collect::<Vec<_>>());
         let window = cx.add_window({
             let widths = widths.clone();
             move |_, _| SelectorTestView { widths }
@@ -4493,8 +4546,38 @@ mod tests {
 
         assert_eq!(
             widths.iter().map(Cell::get).collect::<Vec<_>>(),
-            [px(20.), px(30.), px(40.), px(50.), px(30.), px(15.)]
+            [
+                px(20.),
+                px(30.),
+                px(40.),
+                px(50.),
+                px(30.),
+                px(15.),
+                px(60.)
+            ]
         );
+    }
+
+    #[gpui::test]
+    fn cached_views_are_invalidated_when_their_selector_scope_changes(cx: &mut TestAppContext) {
+        let render_count = Rc::new(Cell::new(0));
+        let window = cx.add_window({
+            let render_count = render_count.clone();
+            move |_, cx| CachedSelectorRoot {
+                target: cx.new(|_| CachedSelectorTarget { render_count }),
+                alternate: false,
+            }
+        });
+
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        assert_eq!(render_count.get(), 1);
+
+        let root = window.root(cx).unwrap();
+        cx.update_entity(&root, |root, _| root.alternate = true);
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        assert_eq!(render_count.get(), 2);
     }
 
     struct GroupHoverTestView {

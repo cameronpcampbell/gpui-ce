@@ -3430,6 +3430,21 @@ impl Window {
         }
     }
 
+    pub(crate) fn with_selector_scope<R>(
+        &mut self,
+        scope: Option<SelectorState>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let Some(scope) = scope else {
+            return f(self);
+        };
+
+        self.selector_scope_stack.push(scope);
+        let result = f(self);
+        self.selector_scope_stack.pop();
+        result
+    }
+
     pub(crate) fn refine_base_style(
         &self,
         style: &mut Style,
@@ -3438,21 +3453,21 @@ impl Window {
     ) {
         style.refine(refinement);
 
-        let Some(current) = self.selector_scope_stack.last() else {
+        let Some((current, ancestors)) = self.selector_scope_stack.split_last() else {
             style.selectors = SelectorState::default();
             return;
         };
         let classes = current.classes();
-        let ancestor_count = self.selector_scope_stack.len().saturating_sub(1);
 
-        for ancestor in &self.selector_scope_stack[..ancestor_count] {
+        // Cascade from the broadest scope toward the element: descendant rules first,
+        // then immediate-child rules, then rules declared on the element itself.
+        for ancestor in ancestors {
             for selector_style in ancestor.matching_descendant_rules(element_id, classes) {
                 style.refine(selector_style);
             }
         }
 
-        if ancestor_count > 0 {
-            let parent = &self.selector_scope_stack[ancestor_count - 1];
+        if let Some(parent) = ancestors.last() {
             for selector_style in parent.matching_child_rules(element_id, classes) {
                 style.refine(selector_style);
             }
