@@ -357,6 +357,28 @@ fn style_transition_specs() -> Vec<StyleTransitionSpec> {
             fields: vec![StyleTransitionField::optional(quote! { border_color })],
         },
         StyleTransitionSpec {
+            name: "ring",
+            fields: vec![
+                StyleTransitionField::required(quote! { ring.width }),
+                StyleTransitionField::required(quote! { ring.color }),
+            ],
+        },
+        StyleTransitionSpec {
+            name: "ring_color",
+            fields: vec![StyleTransitionField::required(quote! { ring.color })],
+        },
+        StyleTransitionSpec {
+            name: "inset_ring",
+            fields: vec![
+                StyleTransitionField::required(quote! { inset_ring.width }),
+                StyleTransitionField::required(quote! { inset_ring.color }),
+            ],
+        },
+        StyleTransitionSpec {
+            name: "inset_ring_color",
+            fields: vec![StyleTransitionField::required(quote! { inset_ring.color })],
+        },
+        StyleTransitionSpec {
             name: "text_color",
             fields: vec![StyleTransitionField::optional(quote! { text.color })],
         },
