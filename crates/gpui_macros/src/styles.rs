@@ -726,6 +726,28 @@ pub fn border_style_methods(input: TokenStream) -> TokenStream {
 pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as StyleableMacroInput);
     let visibility = input.method_visibility;
+    let ring_width_methods = border_suffixes()
+        .into_iter()
+        .filter(|suffix| matches!(suffix.suffix, "0" | "1" | "2" | "4" | "8"))
+        .flat_map(|suffix| {
+            let visibility = visibility.clone();
+            ["ring", "inset_ring"].map(move |prefix| {
+                let visibility = visibility.clone();
+                let width = suffix.width_tokens.clone();
+                let method = format_ident!("{}_{}", prefix, suffix.suffix);
+                let field = format_ident!("{}", prefix);
+                quote! {
+                    #[doc = concat!("Sets the ", #prefix, " width to ", stringify!(#width), ".")]
+                    /// [Docs](https://tailwindcss.com/docs/box-shadow)
+                    #visibility fn #method(mut self) -> Self {
+                        use gpui::px;
+                        self.style().#field.width = Some(#width);
+                        self
+                    }
+                }
+            })
+        });
+
     let output = quote! {
         /// Sets the box shadow of the element.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
@@ -740,6 +762,44 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
             self.style().box_shadow = Some(Default::default());
             self
         }
+
+        /// Sets the outer ring width.
+        /// [Docs](https://tailwindcss.com/docs/box-shadow#using-a-custom-value)
+        #visibility fn ring(mut self, width: impl Into<gpui::Pixels>) -> Self {
+            self.style().ring.width = Some(width.into());
+            self
+        }
+
+        /// Sets the outer ring color.
+        /// [Docs](https://tailwindcss.com/docs/box-shadow#setting-the-ring-color)
+        #visibility fn ring_color<C>(mut self, color: C) -> Self
+        where
+            C: palette::IntoColor<palette::Hsla>,
+            Self: Sized,
+        {
+            self.style().ring.color = Some(gpui::RingColor::Color(color.into_color()));
+            self
+        }
+
+        /// Sets the inset ring width.
+        /// [Docs](https://tailwindcss.com/docs/box-shadow#using-a-custom-value)
+        #visibility fn inset_ring(mut self, width: impl Into<gpui::Pixels>) -> Self {
+            self.style().inset_ring.width = Some(width.into());
+            self
+        }
+
+        /// Sets the inset ring color.
+        /// [Docs](https://tailwindcss.com/docs/box-shadow#setting-the-inset-ring-color)
+        #visibility fn inset_ring_color<C>(mut self, color: C) -> Self
+        where
+            C: palette::IntoColor<palette::Hsla>,
+            Self: Sized,
+        {
+            self.style().inset_ring.color = Some(gpui::RingColor::Color(color.into_color()));
+            self
+        }
+
+        #(#ring_width_methods)*
 
         /// Sets the box shadow of the element.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)

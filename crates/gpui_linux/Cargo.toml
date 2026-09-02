@@ -21,6 +21,7 @@ wayland = [
   "ashpd/wayland",
 
   "calloop-wayland-source",
+  "memfd",
   "wayland-backend",
   "wayland-client",
   "wayland-cursor",
@@ -93,6 +94,7 @@ scap = { workspace = true, optional = true }
 
 # Wayland
 calloop-wayland-source = { version = "0.4.1", optional = true }
+memfd = { version = "0.6.5", optional = true }
 wayland-backend = { version = "0.3.15", features = [
   "client_system",
   "dlopen",
