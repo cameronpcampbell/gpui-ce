@@ -10,7 +10,6 @@ use crate::{
 use crate::{DevicePixels, Size};
 #[cfg(target_os = "macos")]
 use core_video::pixel_buffer::CVPixelBuffer;
-use refineable::Refineable;
 #[cfg(any(
     target_os = "linux",
     target_os = "freebsd",
@@ -116,6 +115,10 @@ impl Element for Surface {
         None
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        Some(&self.style.selectors)
+    }
+
     fn request_layout(
         &mut self,
         _global_id: Option<&GlobalElementId>,
@@ -124,7 +127,7 @@ impl Element for Surface {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
-        style.refine(&self.style);
+        window.refine_base_style(&mut style, &self.style, None);
         let layout_id = window.request_layout(style, [], cx);
         (layout_id, ())
     }

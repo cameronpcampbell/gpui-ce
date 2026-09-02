@@ -6,7 +6,6 @@ use crate::{
 use crate::{Empty, Window};
 use anyhow::Result;
 use collections::FxHashSet;
-use refineable::Refineable;
 use std::mem;
 use std::{any::TypeId, fmt, ops::Range};
 
@@ -311,6 +310,10 @@ impl<V: View> Element for ViewElement<V> {
         return None;
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        self.cached_style.as_ref().map(|style| &style.selectors)
+    }
+
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
@@ -325,7 +328,7 @@ impl<V: View> Element for ViewElement<V> {
                 match self.cached_style.as_ref() {
                     Some(style) if !caching_disabled => {
                         let mut root_style = Style::default();
-                        root_style.refine(style);
+                        window.refine_base_style(&mut root_style, style, None);
                         let layout_id = window.request_layout(root_style, None, cx);
                         (layout_id, None)
                     }

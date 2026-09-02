@@ -1889,6 +1889,10 @@ impl Element for Div {
         self.interactivity.source_location()
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        Some(&self.interactivity.base_style.selectors)
+    }
+
     fn a11y_role(&self) -> Option<accesskit::Role> {
         // Nodes with `GenericContainer` should never be reported to accesskit.
         // Equivalent to an HTML div with no role.
@@ -3421,7 +3425,7 @@ impl Interactivity {
         cx: &mut App,
     ) -> Style {
         let mut style = Style::default();
-        style.refine(&self.base_style);
+        window.refine_base_style(&mut style, &self.base_style, self.element_id.as_ref());
 
         if let Some(focus_handle) = self.tracked_focus_handle.as_ref() {
             if let Some(in_focus_style) = self.in_focus_style.as_ref()
@@ -4064,6 +4068,10 @@ where
         self.element.source_location()
     }
 
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        self.element.selector_state()
+    }
+
     fn a11y_role(&self) -> Option<accesskit::Role> {
         self.element.a11y_role()
     }
@@ -4395,10 +4403,99 @@ impl ScrollHandle {
 mod tests {
     use super::*;
     use crate::{
-        AnyWindowHandle, Context, InputEvent, Keystroke, MouseMoveEvent, TestAppContext, canvas,
-        util::FluentBuilder as _,
+        AnyWindowHandle, Context, InputEvent, Keystroke, MouseMoveEvent, TestAppContext, all,
+        canvas, class, id, util::FluentBuilder as _,
     };
     use std::{cell::Cell, rc::Weak};
+
+    struct SelectorTestView {
+        widths: Rc<Vec<Cell<Pixels>>>,
+    }
+
+    impl Render for SelectorTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let measure = |index: usize| {
+                let widths = self.widths.clone();
+                canvas(
+                    move |bounds, _, _| widths[index].set(bounds.size.width),
+                    |_, _, _, _| {},
+                )
+                .size_full()
+            };
+
+            div()
+                .flex()
+                .flex_col()
+                .select_descendants(class("target"), |style| style.w(px(30.)))
+                .select_children(all(), |style| style.w(px(15.)))
+                .select_children(class("target"), |style| style.w(px(20.)))
+                .child(
+                    div()
+                        .w(px(10.))
+                        .h(px(10.))
+                        .class("target")
+                        .child(measure(0)),
+                )
+                .child(
+                    div().child(
+                        div()
+                            .w(px(10.))
+                            .h(px(10.))
+                            .class("target")
+                            .child(measure(1)),
+                    ),
+                )
+                .child(
+                    div()
+                        .w(px(10.))
+                        .h(px(10.))
+                        .select(class("local"), |style| style.w(px(40.)))
+                        .class("local")
+                        .child(measure(2)),
+                )
+                .child(
+                    div()
+                        .select_children([class("target"), id("compound")], |style| {
+                            style.w(px(50.))
+                        })
+                        .child(
+                            div()
+                                .id("compound")
+                                .class("target")
+                                .w(px(10.))
+                                .h(px(10.))
+                                .child(measure(3)),
+                        )
+                        .child(
+                            div()
+                                .id("other-id")
+                                .class("target")
+                                .w(px(10.))
+                                .h(px(10.))
+                                .child(measure(4)),
+                        ),
+                )
+                .child(div().w(px(10.)).h(px(10.)).class("other").child(measure(5)))
+        }
+    }
+
+    #[gpui::test]
+    fn selector_scopes_match_and_cascade_across_the_element_tree(cx: &mut TestAppContext) {
+        let widths = Rc::new((0..6).map(|_| Cell::new(px(0.))).collect::<Vec<_>>());
+        let window = cx.add_window({
+            let widths = widths.clone();
+            move |_, _| SelectorTestView { widths }
+        });
+        let window = AnyWindowHandle::from(window);
+
+        cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+
+        assert_eq!(
+            widths.iter().map(Cell::get).collect::<Vec<_>>(),
+            [px(20.), px(30.), px(40.), px(50.), px(30.), px(15.)]
+        );
+    }
 
     struct GroupHoverTestView {
         render_count: Rc<Cell<usize>>,
@@ -4434,10 +4531,12 @@ mod tests {
                     .child(
                         div()
                             .id("stateful-group-hover-target")
+                            .class("group-hover-target")
                             .absolute()
                             .top_0()
                             .left_0()
                             .size(px(10.))
+                            .select(class("group-hover-target"), |style| style.size(px(15.)))
                             .group_hover("hover-group", |style| style.size(px(20.)))
                             .child(canvas(
                                 move |bounds, _, _| stateful_width.set(bounds.size.width),
@@ -4468,7 +4567,7 @@ mod tests {
         cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
             .unwrap();
         assert_eq!(anonymous_paint_count.get(), 0);
-        assert_eq!(stateful_width.get(), px(10.));
+        assert_eq!(stateful_width.get(), px(15.));
 
         let move_mouse = |cx: &mut TestAppContext, position| {
             cx.update_window(window, |_, window, cx| {
@@ -4491,12 +4590,12 @@ mod tests {
         move_mouse(cx, point(px(5.), px(5.)));
         assert_eq!(render_count.get(), initial_render_count + 2);
         assert_eq!(anonymous_paint_count.get(), 1);
-        assert_eq!(stateful_width.get(), px(10.));
+        assert_eq!(stateful_width.get(), px(15.));
 
         move_mouse(cx, point(px(10.), px(10.)));
         assert_eq!(render_count.get(), initial_render_count + 2);
         assert_eq!(anonymous_paint_count.get(), 1);
-        assert_eq!(stateful_width.get(), px(10.));
+        assert_eq!(stateful_width.get(), px(15.));
     }
 
     struct TestTooltipView;

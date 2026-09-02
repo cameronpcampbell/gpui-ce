@@ -10,7 +10,209 @@ use palette::{Hsla, IntoColor, rgb::Rgba};
 use refineable::Refineable;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::{iter, mem, ops::Range};
+use std::{iter, mem, ops::Range, sync::Arc};
+
+/// A selector used to conditionally refine an element's style.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Selector {
+    /// Matches every element.
+    All,
+    /// Matches an element with the given named ID.
+    Id(SharedString),
+    /// Matches an element with the given class.
+    Class(SharedString),
+}
+
+/// Creates a selector that matches every element.
+pub const fn all() -> Selector {
+    Selector::All
+}
+
+/// Creates an ID selector.
+pub fn id(value: impl Into<SharedString>) -> Selector {
+    Selector::Id(value.into())
+}
+
+/// Creates a class selector.
+pub fn class(value: impl Into<SharedString>) -> Selector {
+    Selector::Class(value.into())
+}
+
+/// Converts a selector or selector array into a selector set.
+///
+/// All selectors in a set must match the target element.
+pub trait IntoSelectorSet {
+    /// Performs the conversion.
+    fn into_selector_set(self) -> Vec<Selector>;
+}
+
+impl IntoSelectorSet for Selector {
+    fn into_selector_set(self) -> Vec<Selector> {
+        vec![self]
+    }
+}
+
+impl<const N: usize> IntoSelectorSet for [Selector; N] {
+    fn into_selector_set(self) -> Vec<Selector> {
+        assert!(N > 0, "selector sets must not be empty");
+        self.into()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct SelectorRule {
+    pub(crate) selectors: Vec<Selector>,
+    pub(crate) refinement: Arc<StyleRefinement>,
+}
+
+impl SelectorRule {
+    fn matches(
+        &self,
+        element_id: Option<&crate::ElementId>,
+        classes: &HashSet<SharedString>,
+    ) -> bool {
+        self.selectors.iter().all(|selector| match selector {
+            Selector::All => true,
+            Selector::Id(selector_id) => matches!(
+                element_id,
+                Some(crate::ElementId::Name(element_id)) if element_id == selector_id
+            ),
+            Selector::Class(class) => classes.contains(class),
+        })
+    }
+}
+
+/// Selector metadata attached to a styled element.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SelectorState {
+    classes: HashSet<SharedString>,
+    self_rules: Vec<SelectorRule>,
+    child_rules: Vec<SelectorRule>,
+    descendant_rules: Vec<SelectorRule>,
+}
+
+/// The selector state merges rather than replacing earlier declarations.
+pub type SelectorStateRefinement = SelectorState;
+
+impl SelectorState {
+    pub(crate) fn is_some(&self) -> bool {
+        !refineable::IsEmpty::is_empty(self)
+    }
+
+    pub(crate) fn add_class(&mut self, class: SharedString) {
+        self.classes.insert(class);
+    }
+
+    pub(crate) fn classes(&self) -> &HashSet<SharedString> {
+        &self.classes
+    }
+
+    pub(crate) fn push_self_rule(&mut self, rule: SelectorRule) {
+        self.self_rules.push(rule);
+    }
+
+    pub(crate) fn push_child_rule(&mut self, rule: SelectorRule) {
+        self.child_rules.push(rule);
+    }
+
+    pub(crate) fn push_descendant_rule(&mut self, rule: SelectorRule) {
+        self.descendant_rules.push(rule);
+    }
+
+    pub(crate) fn matching_self_rules<'a>(
+        &'a self,
+        element_id: Option<&crate::ElementId>,
+    ) -> impl Iterator<Item = &'a StyleRefinement> {
+        self.self_rules
+            .iter()
+            .filter(move |rule| rule.matches(element_id, &self.classes))
+            .map(|rule| rule.refinement.as_ref())
+    }
+
+    pub(crate) fn matching_child_rules<'a>(
+        &'a self,
+        element_id: Option<&crate::ElementId>,
+        classes: &'a HashSet<SharedString>,
+    ) -> impl Iterator<Item = &'a StyleRefinement> {
+        self.child_rules
+            .iter()
+            .filter(move |rule| rule.matches(element_id, classes))
+            .map(|rule| rule.refinement.as_ref())
+    }
+
+    pub(crate) fn matching_descendant_rules<'a>(
+        &'a self,
+        element_id: Option<&crate::ElementId>,
+        classes: &'a HashSet<SharedString>,
+    ) -> impl Iterator<Item = &'a StyleRefinement> {
+        self.descendant_rules
+            .iter()
+            .filter(move |rule| rule.matches(element_id, classes))
+            .map(|rule| rule.refinement.as_ref())
+    }
+}
+
+impl refineable::IsEmpty for SelectorState {
+    fn is_empty(&self) -> bool {
+        self.classes.is_empty()
+            && self.self_rules.is_empty()
+            && self.child_rules.is_empty()
+            && self.descendant_rules.is_empty()
+    }
+}
+
+impl Refineable for SelectorState {
+    type Refinement = Self;
+
+    fn refine(&mut self, refinement: &Self::Refinement) {
+        self.classes.extend(refinement.classes.iter().cloned());
+        self.self_rules
+            .extend(refinement.self_rules.iter().cloned());
+        self.child_rules
+            .extend(refinement.child_rules.iter().cloned());
+        self.descendant_rules
+            .extend(refinement.descendant_rules.iter().cloned());
+    }
+
+    fn refined(mut self, refinement: Self::Refinement) -> Self {
+        self.refine(&refinement);
+        self
+    }
+
+    fn is_superset_of(&self, refinement: &Self::Refinement) -> bool {
+        refinement.classes.is_subset(&self.classes)
+            && refinement
+                .self_rules
+                .iter()
+                .all(|rule| self.self_rules.contains(rule))
+            && refinement
+                .child_rules
+                .iter()
+                .all(|rule| self.child_rules.contains(rule))
+            && refinement
+                .descendant_rules
+                .iter()
+                .all(|rule| self.descendant_rules.contains(rule))
+    }
+
+    fn subtract(&self, refinement: &Self::Refinement) -> Self::Refinement {
+        let mut result = self.clone();
+        result
+            .classes
+            .retain(|class| !refinement.classes.contains(class));
+        result
+            .self_rules
+            .retain(|rule| !refinement.self_rules.contains(rule));
+        result
+            .child_rules
+            .retain(|rule| !refinement.child_rules.contains(rule));
+        result
+            .descendant_rules
+            .retain(|rule| !refinement.descendant_rules.contains(rule));
+        result
+    }
+}
 
 /// Use this struct for interfacing with the 'debug_below' styling from your own elements.
 /// If a parent element has this style set on it, then this struct will be set as a global in
@@ -174,6 +376,10 @@ pub struct GridTemplate {
 #[derive(Clone, Refineable, Debug)]
 #[refineable(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Style {
+    /// Selector metadata used while resolving this element's style.
+    #[refineable]
+    pub(crate) selectors: SelectorState,
+
     /// What layout strategy should be used?
     pub display: Display,
 
@@ -859,6 +1065,7 @@ impl Style {
 impl Default for Style {
     fn default() -> Self {
         Style {
+            selectors: SelectorState::default(),
             display: Display::Block,
             visibility: Visibility::Visible,
             overflow: Point {
@@ -1598,5 +1805,23 @@ mod tests {
             Some(FontWeight::SEMIBOLD),
             style.text_style().unwrap().font_weight
         );
+    }
+
+    #[test]
+    fn selector_metadata_composes_when_style_refinements_are_merged() {
+        let mut refinement = StyleRefinement::default()
+            .class("first")
+            .select(class("first"), |style| style.w(px(10.)));
+        refinement.refine(
+            &StyleRefinement::default()
+                .class("second")
+                .select_children(class("second"), |style| style.w(px(20.)))
+                .select_descendants(id("named"), |style| style.w(px(30.))),
+        );
+
+        assert_eq!(refinement.selectors.classes.len(), 2);
+        assert_eq!(refinement.selectors.self_rules.len(), 1);
+        assert_eq!(refinement.selectors.child_rules.len(), 1);
+        assert_eq!(refinement.selectors.descendant_rules.len(), 1);
     }
 }
