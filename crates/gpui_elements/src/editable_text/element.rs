@@ -4,17 +4,16 @@ use crate::editable_text::{
     layout::{EditableTextLayoutResult, EditableTextLayoutState},
 };
 use gpui::{
-    A11ySubtreeBuilder, App, Bounds, CursorStyle, DispatchPhase, Display, Element, ElementId,
-    ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla,
+    A11ySubtreeBuilder, App, Bounds, CursorStyle, DefiniteLength, DispatchPhase, Display, Element,
+    ElementId, ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla,
     InteractiveElement, Interactivity, IntoElement, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, NavigationDirection, PaintQuad, Pixels, Point, SharedString,
     Size, StatefulInteractiveElement, Style, StyleRefinement, Styled, TextAlign, TextLayout,
-    WeakEntity, Window, WrappedLine, accesskit, fill, point, px, size,
+    WeakEntity, Window, WrappedLine, accesskit, fill, point, px, relative, size,
 };
+use palette::IntoColor;
 use smallvec::SmallVec;
 use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc, time::Duration};
-
-const CARET_RENDER_WIDTH: f32 = 2.0;
 
 /// Creates a text input element.
 /// See [`EditableTextElement`] for usage.
@@ -30,6 +29,8 @@ pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
         accepts_input: true,
         colors: EditableTextColors::default(),
         caret_blink_interval: None,
+        caret_width: px(2.),
+        caret_height: relative(1.),
     };
     this.interactivity.element_id = Some(id.into());
 
@@ -65,6 +66,8 @@ pub struct EditableTextElement {
     accepts_input: bool,
     colors: EditableTextColors,
     caret_blink_interval: Option<Duration>,
+    caret_width: Pixels,
+    caret_height: DefiniteLength,
 }
 
 /// EditableText styling that goes beyond what Style/StyleRefinement supports
@@ -142,8 +145,23 @@ impl EditableTextElement {
     /// Sets the color of the placeholder text which is rendered when the element's stored text is empty.
     ///
     /// Cannot be refined via [`StyleRefinement`](gpui::StyleRefinement) due to limitations in the fields of [`Style`](gpui::Style).
-    pub fn placeholder_color(mut self, color: Hsla) -> Self {
-        self.colors.placeholder = color;
+    pub fn placeholder_color(mut self, color: impl IntoColor<Hsla>) -> Self {
+        self.colors.placeholder = color.into_color();
+        self
+    }
+
+    /// Sets the width of the caret / text-cursor.
+    pub fn caret_w(mut self, width: impl Into<Pixels>) -> Self {
+        self.caret_width = width.into();
+        self
+    }
+
+    /// Sets the height of the caret / text-cursor.
+    ///
+    /// Relative lengths are resolved against the current line height. The default is
+    /// `relative(1.)`, which makes the caret as tall as the line.
+    pub fn caret_h(mut self, height: impl Into<DefiniteLength>) -> Self {
+        self.caret_height = height.into();
         self
     }
 
@@ -426,7 +444,14 @@ impl Element for EditableTextElement {
         );
 
         let state = request_layout.state.read(cx);
-        let elements = PrepaintElements::build_elements(state, &prepaint, &self.colors, window);
+        let elements = PrepaintElements::build_elements(
+            state,
+            &prepaint,
+            &self.colors,
+            self.caret_width,
+            self.caret_height,
+            window,
+        );
         let accessible_text = state.as_str().to_string();
         let (accessible_anchor, accessible_focus) = accessible_selection(
             &accessible_text,
@@ -753,6 +778,8 @@ impl PrepaintElements {
         state: &EditableTextState,
         prepaint: &InteractivityPrepaint,
         colors: &EditableTextColors,
+        caret_width: Pixels,
+        caret_height: DefiniteLength,
         window: &mut Window,
     ) -> PrepaintElements {
         let InteractivityPrepaint {
@@ -825,11 +852,15 @@ impl PrepaintElements {
             }
         }
 
-        if *caret_visible && let Some(carent_point) = caret_point {
+        if *caret_visible && let Some(caret_point) = caret_point {
             let quad = fill(
-                Bounds::new(
-                    inner_bounds.origin + carent_point,
-                    size(gpui::px(CARET_RENDER_WIDTH), line_height),
+                caret_bounds(
+                    inner_bounds.origin,
+                    caret_point,
+                    line_height,
+                    caret_width,
+                    caret_height,
+                    window.rem_size(),
                 ),
                 colors.caret,
             );
@@ -838,6 +869,23 @@ impl PrepaintElements {
 
         elements
     }
+}
+
+fn caret_bounds(
+    inner_origin: Point<Pixels>,
+    caret_point: Point<Pixels>,
+    line_height: Pixels,
+    width: Pixels,
+    height: DefiniteLength,
+    rem_size: Pixels,
+) -> Bounds<Pixels> {
+    let height = height.to_pixels(line_height.into(), rem_size);
+    let vertical_offset = (line_height - height) / 2.;
+
+    Bounds::new(
+        inner_origin + caret_point + point(Pixels::ZERO, vertical_offset),
+        size(width, height),
+    )
 }
 
 fn build_quad_over_text(
@@ -864,6 +912,7 @@ fn build_quad_over_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::rgba;
 
     #[test]
     fn accessibility_selection_uses_character_offsets_and_preserves_direction() {
@@ -879,5 +928,20 @@ mod tests {
             (1, 4)
         );
         assert_eq!(accessible_selection(text, 5..5, None), (2, 2));
+    }
+
+    #[test]
+    fn custom_placeholder_color_and_caret_size() {
+        let color = rgba(0x33669980);
+        let input = editable_text("i")
+            .placeholder_color(color)
+            .caret_w(px(3.))
+            .caret_h(relative(0.5));
+        assert_eq!(input.colors.placeholder, color.into_color());
+        assert_eq!(input.caret_width, px(3.));
+        assert_eq!(
+            input.caret_height.to_pixels(px(20.).into(), px(16.)),
+            px(10.)
+        );
     }
 }
