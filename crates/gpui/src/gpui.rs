@@ -155,6 +155,10 @@ pub use scene::*;
 pub use shared_uri::*;
 use std::{any::Any, future::Future};
 pub use style::*;
+/// Selector types and helpers used by the [`Styled`] selector APIs.
+pub mod selectors {
+    pub use crate::style::{Selector, all, class, id};
+}
 pub use style_transitions::*;
 pub use styled::*;
 pub use subscription::*;

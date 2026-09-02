@@ -13,9 +13,9 @@ use crate::{
     PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority, PromptButton,
     PromptLevel, Quad, RasterizedGlyphFormat, Render, RenderGlyphParams, RenderImage,
     RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels, Scene, Shadow,
-    SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription,
-    SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels, Scene, SelectorState,
+    Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet,
+    Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
     TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState, TransformationMatrix,
     Transition, TransitionState, Underline, UnderlineStyle, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
@@ -919,6 +919,7 @@ pub(crate) struct DeferredDraw {
     parent_node: DispatchNodeId,
     element_id_stack: SmallVec<[ElementId; 32]>,
     text_style_stack: Vec<TextStyleRefinement>,
+    selector_scope_stack: Vec<SelectorState>,
     content_mask: Option<ContentMask<Pixels>>,
     rem_size: Pixels,
     element: Option<AnyElement>,
@@ -1113,6 +1114,7 @@ pub struct Window {
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
+    pub(crate) selector_scope_stack: Vec<SelectorState>,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
@@ -1862,6 +1864,7 @@ impl Window {
             root: None,
             element_id_stack: SmallVec::default(),
             text_style_stack: Vec::new(),
+            selector_scope_stack: Vec::new(),
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
@@ -3237,6 +3240,8 @@ impl Window {
                         .clone_from(&deferred_draw.element_id_stack);
                     self.text_style_stack
                         .clone_from(&deferred_draw.text_style_stack);
+                    self.selector_scope_stack
+                        .clone_from(&deferred_draw.selector_scope_stack);
                     (
                         deferred_draw.element.take(),
                         deferred_draw.parent_node,
@@ -3268,6 +3273,7 @@ impl Window {
 
             self.element_id_stack.clear();
             self.text_style_stack.clear();
+            self.selector_scope_stack.clear();
             round_start = round_end;
         }
     }
@@ -3292,6 +3298,8 @@ impl Window {
             let mut deferred_draw = &mut deferred_draws[deferred_draw_ix];
             self.element_id_stack
                 .clone_from(&deferred_draw.element_id_stack);
+            self.selector_scope_stack
+                .clone_from(&deferred_draw.selector_scope_stack);
             self.next_frame
                 .dispatch_tree
                 .set_active_node(deferred_draw.parent_node);
@@ -3314,6 +3322,7 @@ impl Window {
         }
         self.next_frame.deferred_draws = deferred_draws;
         self.element_id_stack.clear();
+        self.selector_scope_stack.clear();
     }
 
     fn deferred_draw_traversal_order(&mut self) -> SmallVec<[usize; 8]> {
@@ -3374,6 +3383,7 @@ impl Window {
                     parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
                     element_id_stack: deferred_draw.element_id_stack.clone(),
                     text_style_stack: deferred_draw.text_style_stack.clone(),
+                    selector_scope_stack: deferred_draw.selector_scope_stack.clone(),
                     content_mask: deferred_draw.content_mask,
                     rem_size: deferred_draw.rem_size,
                     priority: deferred_draw.priority,
@@ -3451,6 +3461,43 @@ impl Window {
         } else {
             f(self)
         }
+    }
+
+    pub(crate) fn refine_base_style(
+        &self,
+        style: &mut Style,
+        refinement: &crate::StyleRefinement,
+        element_id: Option<&crate::ElementId>,
+    ) {
+        style.refine(refinement);
+
+        let Some(current) = self.selector_scope_stack.last() else {
+            style.selectors = SelectorState::default();
+            return;
+        };
+        let classes = current.classes();
+        let ancestor_count = self.selector_scope_stack.len().saturating_sub(1);
+
+        for ancestor in &self.selector_scope_stack[..ancestor_count] {
+            for selector_style in ancestor.matching_descendant_rules(element_id, classes) {
+                style.refine(selector_style);
+            }
+        }
+
+        if ancestor_count > 0 {
+            let parent = &self.selector_scope_stack[ancestor_count - 1];
+            for selector_style in parent.matching_child_rules(element_id, classes) {
+                style.refine(selector_style);
+            }
+        }
+
+        for selector_style in current.matching_self_rules(element_id) {
+            style.refine(selector_style);
+        }
+
+        // Selector metadata is only needed while resolving the cascade. Do not carry it into
+        // layout and paint styles, which are cloned and retained by the layout engine.
+        style.selectors = SelectorState::default();
     }
 
     /// Updates the cursor style at the platform level. This method should only be called
@@ -3918,6 +3965,7 @@ impl Window {
             parent_node,
             element_id_stack: self.element_id_stack.clone(),
             text_style_stack: self.text_style_stack.clone(),
+            selector_scope_stack: self.selector_scope_stack.clone(),
             content_mask,
             rem_size: self.rem_size(),
             priority,

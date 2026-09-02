@@ -69,6 +69,12 @@ pub trait Element: 'static + IntoElement {
     /// inspector and navigate to their source code.
     fn source_location(&self) -> Option<&'static panic::Location<'static>>;
 
+    /// Returns selector metadata associated with this element.
+    #[doc(hidden)]
+    fn selector_state(&self) -> Option<&crate::SelectorState> {
+        None
+    }
+
     /// Before an element can be painted, we need to know where it's going to be and how big it is.
     /// Use this method to request a layout from Taffy and initialize the element's state.
     fn request_layout(
@@ -358,12 +364,16 @@ impl<E: Element> Drawable<E> {
                     inspector_id = None;
                 }
 
+                window
+                    .selector_scope_stack
+                    .push(self.element.selector_state().cloned().unwrap_or_default());
                 let (layout_id, request_layout) = self.element.request_layout(
                     global_id.as_ref(),
                     inspector_id.as_ref(),
                     window,
                     cx,
                 );
+                window.selector_scope_stack.pop();
 
                 if global_id.is_some() {
                     window.element_id_stack.pop();
@@ -441,6 +451,9 @@ impl<E: Element> Drawable<E> {
                 }
 
                 let node_id = window.next_frame.dispatch_tree.push_node();
+                window
+                    .selector_scope_stack
+                    .push(self.element.selector_state().cloned().unwrap_or_default());
                 let mut prepaint = self.element.prepaint(
                     global_id.as_ref(),
                     inspector_id.as_ref(),
@@ -449,6 +462,7 @@ impl<E: Element> Drawable<E> {
                     window,
                     cx,
                 );
+                window.selector_scope_stack.pop();
                 window.next_frame.dispatch_tree.pop_node();
 
                 if pushed_a11y_node {
@@ -515,6 +529,9 @@ impl<E: Element> Drawable<E> {
                 }
 
                 window.next_frame.dispatch_tree.set_active_node(node_id);
+                window
+                    .selector_scope_stack
+                    .push(self.element.selector_state().cloned().unwrap_or_default());
                 self.element.paint(
                     global_id.as_ref(),
                     inspector_id.as_ref(),
@@ -524,6 +541,7 @@ impl<E: Element> Drawable<E> {
                     window,
                     cx,
                 );
+                window.selector_scope_stack.pop();
 
                 if global_id.is_some() {
                     window.element_id_stack.pop();
