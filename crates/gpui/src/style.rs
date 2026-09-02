@@ -3,7 +3,7 @@ use crate::{
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length, Pixels, Point,
     PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun, Window,
-    black, hsla_schemar, phi, point, px, quad, rems, size,
+    black, hsla_schemar, phi, point, px, quad, rems, size, transparent_black,
 };
 use collections::HashSet;
 use palette::{Hsla, IntoColor, rgb::Rgba};
@@ -402,11 +402,31 @@ pub struct RingStyle {
 }
 
 impl RingStyle {
-    fn shadow(self, current_color: Hsla, inset: bool) -> Option<BoxShadow> {
+    fn outer_quad(
+        self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        current_color: Hsla,
+    ) -> Option<crate::PaintQuad> {
         (self.width > Pixels::ZERO).then(|| {
-            let shadow = BoxShadow::new(px(0.), px(0.), self.color.resolve(current_color))
-                .spread_radius(self.width);
-            if inset { shadow.inset() } else { shadow }
+            // Quad borders are painted inward, so expanding the quad by the ring width leaves
+            // its transparent interior aligned with the element's original bounds.
+            quad(
+                bounds.dilate(self.width),
+                corner_radii.map(|radius| *radius + self.width),
+                transparent_black(),
+                Edges::all(self.width),
+                self.color.resolve(current_color),
+                BorderStyle::Solid,
+            )
+        })
+    }
+
+    fn inset_shadow(self, current_color: Hsla) -> Option<BoxShadow> {
+        (self.width > Pixels::ZERO).then(|| {
+            BoxShadow::new(px(0.), px(0.), self.color.resolve(current_color))
+                .spread_radius(self.width)
+                .inset()
         })
     }
 }
@@ -1049,13 +1069,8 @@ impl Style {
         );
         let current_color = self.text.color.unwrap_or_else(|| window.text_style().color);
 
-        if let Some(ring) = self.ring.shadow(current_color, false) {
-            window.paint_drop_shadows_with_corner_smoothing(
-                bounds,
-                corner_radii,
-                corner_smoothing,
-                std::slice::from_ref(&ring),
-            );
+        if let Some(ring) = self.ring.outer_quad(bounds, corner_radii, current_color) {
+            window.paint_quad_with_corner_smoothing(ring, corner_smoothing);
         }
 
         // Blur the content behind this element before its (typically translucent) background
@@ -1089,7 +1104,7 @@ impl Style {
                 );
             }
 
-            if let Some(ring) = self.inset_ring.shadow(current_color, true) {
+            if let Some(ring) = self.inset_ring.inset_shadow(current_color) {
                 window.paint_inset_shadows_with_corner_smoothing(
                     bounds,
                     corner_radii,
@@ -1920,7 +1935,7 @@ mod tests {
     }
 
     #[test]
-    fn ring_utility_composes_with_shadows_and_uses_current_color() {
+    fn outer_ring_is_hollow_and_composes_with_shadows() {
         let drop_shadow = BoxShadow::new(px(0.), px(2.), blue()).blur_radius(px(4.));
         let mut style = Style::default();
         style.refine(
@@ -1930,17 +1945,39 @@ mod tests {
         );
         let current_color = hsla(0.7, 0.5, 0.4, 0.8);
         style.refine(&StyleRefinement::default().ring(px(3.5)));
-        let ring = style.ring.shadow(current_color, false).unwrap();
+        let element_bounds = Bounds {
+            origin: point(px(10.), px(20.)),
+            size: size(px(100.), px(40.)),
+        };
+        let element_radii = Corners {
+            top_left: px(0.),
+            top_right: px(4.),
+            bottom_right: px(10.),
+            bottom_left: px(20.),
+        };
+        let ring = style
+            .ring
+            .outer_quad(element_bounds, element_radii, current_color)
+            .unwrap();
 
-        assert_eq!(ring.offset, point(px(0.), px(0.)));
-        assert_eq!(ring.blur_radius, px(0.));
-        assert_eq!(ring.spread_radius, px(3.5));
-        assert_eq!(ring.color, current_color);
-        assert!(!ring.inset);
+        assert_eq!(ring.bounds.dilate(-px(3.5)), element_bounds);
+        assert_eq!(ring.border_widths, Edges::all(px(3.5)));
+        assert_eq!(
+            ring.corner_radii.map(|radius| *radius - px(3.5)),
+            element_radii
+        );
+        assert!(ring.background.is_transparent());
+        assert_eq!(ring.border_color, current_color.into());
+        assert_eq!(ring.border_style, BorderStyle::Solid);
         assert_eq!(style.box_shadow, vec![drop_shadow]);
 
         style.refine(&StyleRefinement::default().ring_0());
-        assert!(style.ring.shadow(current_color, false).is_none());
+        assert!(
+            style
+                .ring
+                .outer_quad(element_bounds, element_radii, current_color)
+                .is_none()
+        );
         assert_eq!(style.box_shadow.len(), 1);
     }
 
@@ -1955,7 +1992,7 @@ mod tests {
         );
         style.refine(&StyleRefinement::default().inset_ring_4());
 
-        let inset = style.inset_ring.shadow(blue(), true).unwrap();
+        let inset = style.inset_ring.inset_shadow(blue()).unwrap();
 
         assert_eq!(inset.offset, point(px(0.), px(0.)));
         assert_eq!(inset.blur_radius, px(0.));
