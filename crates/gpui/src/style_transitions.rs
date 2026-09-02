@@ -2,6 +2,7 @@ use scheduler::Instant;
 
 use crate::{
     AbsoluteLength, Animated, Bounds, DefiniteLength, Fill, Hsla, Length, Lerp, Motion, Pixels,
+    RingColor,
 };
 
 #[derive(Clone, Copy)]
@@ -101,6 +102,12 @@ struct TextStyleTransitionState {
 }
 
 #[derive(Default)]
+struct RingStyleTransitionState {
+    width: Option<StyleTransitionPropertyState<Pixels>>,
+    color: Option<StyleTransitionPropertyState<RingColor>>,
+}
+
+#[derive(Default)]
 pub(crate) struct StyleTransitionState {
     inset: EdgesTransitionState<Length>,
     size: AutoSizeTransitionState,
@@ -118,6 +125,8 @@ pub(crate) struct StyleTransitionState {
     flex_shrink: Option<StyleTransitionPropertyState<f32>>,
     background: Option<StyleTransitionPropertyState<Fill>>,
     border_color: Option<StyleTransitionPropertyState<Hsla>>,
+    ring: RingStyleTransitionState,
+    inset_ring: RingStyleTransitionState,
     text: TextStyleTransitionState,
     opacity: Option<StyleTransitionPropertyState<f32>>,
 }
