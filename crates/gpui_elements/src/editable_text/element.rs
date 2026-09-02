@@ -853,14 +853,12 @@ impl PrepaintElements {
         }
 
         if *caret_visible && let Some(caret_point) = caret_point {
+            let caret_height = caret_height.to_pixels(line_height.into(), window.rem_size());
+            let vertical_offset = (line_height - caret_height) / 2.;
             let quad = fill(
-                caret_bounds(
-                    inner_bounds.origin,
-                    caret_point,
-                    line_height,
-                    caret_width,
-                    caret_height,
-                    window.rem_size(),
+                Bounds::new(
+                    inner_bounds.origin + caret_point + point(Pixels::ZERO, vertical_offset),
+                    size(caret_width, caret_height),
                 ),
                 colors.caret,
             );
@@ -869,23 +867,6 @@ impl PrepaintElements {
 
         elements
     }
-}
-
-fn caret_bounds(
-    inner_origin: Point<Pixels>,
-    caret_point: Point<Pixels>,
-    line_height: Pixels,
-    width: Pixels,
-    height: DefiniteLength,
-    rem_size: Pixels,
-) -> Bounds<Pixels> {
-    let height = height.to_pixels(line_height.into(), rem_size);
-    let vertical_offset = (line_height - height) / 2.;
-
-    Bounds::new(
-        inner_origin + caret_point + point(Pixels::ZERO, vertical_offset),
-        size(width, height),
-    )
 }
 
 fn build_quad_over_text(
