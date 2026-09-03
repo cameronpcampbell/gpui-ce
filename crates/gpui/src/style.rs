@@ -18,13 +18,36 @@ use std::{
 
 /// A selector used to conditionally refine an element's style.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Selector {
+pub struct Selector(SelectorKind);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+enum SelectorKind {
     /// Matches every element.
     All,
     /// Matches an element with the given named ID.
     Id(SharedString),
     /// Matches an element with the given class.
     Class(SharedString),
+    /// Matches an element with the given concrete type.
+    Tag(SharedString),
+}
+
+impl Selector {
+    pub(crate) const fn all() -> Self {
+        Self(SelectorKind::All)
+    }
+
+    pub(crate) fn id(value: SharedString) -> Self {
+        Self(SelectorKind::Id(value))
+    }
+
+    pub(crate) fn class(value: SharedString) -> Self {
+        Self(SelectorKind::Class(value))
+    }
+
+    pub(crate) fn tag<E: crate::Element>() -> Self {
+        Self(SelectorKind::Tag(std::any::type_name::<E>().into()))
+    }
 }
 
 /// Converts a selector or selector array into a selector set.
@@ -82,16 +105,24 @@ impl SelectorRule {
         &self,
         element_id: Option<&crate::ElementId>,
         classes: &HashSet<SharedString>,
+        element_tag: &str,
     ) -> bool {
-        self.selectors.iter().all(|selector| match selector {
-            Selector::All => true,
-            Selector::Id(selector_id) => matches!(
+        self.selectors.iter().all(|selector| match &selector.0 {
+            SelectorKind::All => true,
+            SelectorKind::Id(selector_id) => matches!(
                 element_id,
                 Some(crate::ElementId::Name(element_id)) if element_id == selector_id
             ),
-            Selector::Class(class) => classes.contains(class),
+            SelectorKind::Class(class) => classes.contains(class),
+            SelectorKind::Tag(tag) => tag.as_ref() == element_tag,
         })
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SelectorScope {
+    pub(crate) state: SelectorState,
+    pub(crate) element_tag: &'static str,
 }
 
 /// Selector metadata attached to a styled element.
@@ -150,11 +181,12 @@ impl SelectorState {
     pub(crate) fn matching_self_rules<'a>(
         &'a self,
         element_id: Option<&crate::ElementId>,
+        element_tag: &'a str,
     ) -> impl Iterator<Item = &'a StyleRefinement> {
         self.data()
             .self_rules
             .iter()
-            .filter(move |rule| rule.matches(element_id, self.classes()))
+            .filter(move |rule| rule.matches(element_id, self.classes(), element_tag))
             .map(|rule| rule.refinement.as_ref())
     }
 
@@ -162,11 +194,12 @@ impl SelectorState {
         &'a self,
         element_id: Option<&crate::ElementId>,
         classes: &'a HashSet<SharedString>,
+        element_tag: &'a str,
     ) -> impl Iterator<Item = &'a StyleRefinement> {
         self.data()
             .child_rules
             .iter()
-            .filter(move |rule| rule.matches(element_id, classes))
+            .filter(move |rule| rule.matches(element_id, classes, element_tag))
             .map(|rule| rule.refinement.as_ref())
     }
 
@@ -174,11 +207,12 @@ impl SelectorState {
         &'a self,
         element_id: Option<&crate::ElementId>,
         classes: &'a HashSet<SharedString>,
+        element_tag: &'a str,
     ) -> impl Iterator<Item = &'a StyleRefinement> {
         self.data()
             .descendant_rules
             .iter()
-            .filter(move |rule| rule.matches(element_id, classes))
+            .filter(move |rule| rule.matches(element_id, classes, element_tag))
             .map(|rule| rule.refinement.as_ref())
     }
 }

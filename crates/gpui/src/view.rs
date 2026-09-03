@@ -292,7 +292,7 @@ struct ViewElementCacheKey {
     bounds: Bounds<Pixels>,
     content_mask: ContentMask<Pixels>,
     text_style: TextStyle,
-    selector_scope: Vec<crate::SelectorState>,
+    selector_scope: Vec<crate::SelectorScope>,
 }
 
 impl<V: View> Element for ViewElement<V> {

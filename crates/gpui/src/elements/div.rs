@@ -4403,9 +4403,9 @@ impl ScrollHandle {
 mod tests {
     use super::*;
     use crate::{
-        AnyWindowHandle, Context, InputEvent, Keystroke, MouseMoveEvent, RenderOnce,
+        AnyWindowHandle, Canvas, Context, InputEvent, Keystroke, MouseMoveEvent, RenderOnce,
         TestAppContext, canvas,
-        selectors::{all, class, id},
+        selectors::{class, id, tag},
         util::FluentBuilder as _,
     };
     use std::{cell::Cell, rc::Weak};
@@ -4477,10 +4477,10 @@ mod tests {
             div()
                 .flex()
                 .flex_col()
-                .select_descendants(class("target"), |style| style.w(px(30.)))
-                .select_children(all(), |style| style.w(px(15.)))
+                .select_descendants([tag::<Div>(), class("target")], |style| style.w(px(30.)))
+                .select_children(tag::<Canvas<()>>(), |style| style.w(px(60.)))
+                .select_children(tag::<Div>(), |style| style.w(px(15.)))
                 .select_children(class("target"), |style| style.w(px(20.)))
-                .select_children(class("component-target"), |style| style.w(px(60.)))
                 .child(
                     div()
                         .w(px(10.))
@@ -4501,13 +4501,13 @@ mod tests {
                     div()
                         .w(px(10.))
                         .h(px(10.))
-                        .select(class("local"), |style| style.w(px(40.)))
+                        .select([tag::<Div>(), class("local")], |style| style.w(px(40.)))
                         .class("local")
                         .child(measure(2)),
                 )
                 .child(
                     div()
-                        .select_children([class("target"), id("compound")], |style| {
+                        .select_children([tag::<Div>(), class("target"), id("compound")], |style| {
                             style.w(px(50.))
                         })
                         .child(
