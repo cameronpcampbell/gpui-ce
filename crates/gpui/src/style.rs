@@ -45,10 +45,8 @@ impl Selector {
         Self(SelectorKind::Class(value))
     }
 
-    pub(crate) fn tag<E: crate::IntoElement>() -> Self {
-        Self(SelectorKind::Tag(
-            std::any::type_name::<E::Element>().into(),
-        ))
+    pub(crate) fn tag<E: crate::Element + crate::Styled>() -> Self {
+        Self(SelectorKind::Tag(std::any::type_name::<E>().into()))
     }
 }
 
@@ -724,6 +722,12 @@ impl Styled for StyleRefinement {
 }
 
 impl StyleRefinement {
+    /// Returns the selector metadata carried by this refinement.
+    #[doc(hidden)]
+    pub fn selector_state(&self) -> &SelectorState {
+        &self.selectors
+    }
+
     /// The grid location of this element
     pub fn grid_location_mut(&mut self) -> &mut GridLocation {
         self.grid_location.get_or_insert_default()

@@ -70,7 +70,6 @@ pub trait Element: 'static + IntoElement {
     fn source_location(&self) -> Option<&'static panic::Location<'static>>;
 
     /// Returns selector metadata associated with this element.
-    #[doc(hidden)]
     fn selector_state(&self) -> Option<&crate::SelectorState> {
         None
     }
