@@ -45,8 +45,10 @@ impl Selector {
         Self(SelectorKind::Class(value))
     }
 
-    pub(crate) fn tag<E: crate::Element>() -> Self {
-        Self(SelectorKind::Tag(std::any::type_name::<E>().into()))
+    pub(crate) fn tag<E: crate::IntoElement>() -> Self {
+        Self(SelectorKind::Tag(
+            std::any::type_name::<E::Element>().into(),
+        ))
     }
 }
 

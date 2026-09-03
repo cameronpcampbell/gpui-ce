@@ -4531,6 +4531,16 @@ mod tests {
         widths: Rc<Vec<Cell<Pixels>>>,
     }
 
+    struct DivBuilder;
+
+    impl IntoElement for DivBuilder {
+        type Element = Div;
+
+        fn into_element(self) -> Self::Element {
+            div()
+        }
+    }
+
     #[derive(IntoElement)]
     struct SelectorComponentTarget {
         widths: Rc<Vec<Cell<Pixels>>>,
@@ -4596,7 +4606,7 @@ mod tests {
                 .flex_col()
                 .select_descendants([tag::<Div>(), class("target")], |style| style.w(px(30.)))
                 .select_children(tag::<Canvas<()>>(), |style| style.w(px(60.)))
-                .select_children(tag::<Div>(), |style| style.w(px(15.)))
+                .select_children(tag::<DivBuilder>(), |style| style.w(px(15.)))
                 .select_children(class("target"), |style| style.w(px(20.)))
                 .child(
                     div()
