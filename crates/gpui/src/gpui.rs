@@ -158,7 +158,7 @@ pub use style::*;
 /// Selector types and helpers used by the [`Styled`] selector APIs.
 pub mod selectors {
     pub use crate::style::Selector;
-    use crate::{Element, SharedString};
+    use crate::{IntoElement, SharedString};
 
     /// Creates a selector that matches every element.
     pub const fn all() -> Selector {
@@ -175,8 +175,8 @@ pub mod selectors {
         Selector::class(value.into())
     }
 
-    /// Creates a selector that matches elements with the concrete type `E`.
-    pub fn tag<E: Element>() -> Selector {
+    /// Creates a selector that matches the concrete element type produced by `E`.
+    pub fn tag<E: IntoElement>() -> Selector {
         Selector::tag::<E>()
     }
 }
