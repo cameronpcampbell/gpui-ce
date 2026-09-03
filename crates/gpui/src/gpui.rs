@@ -157,7 +157,23 @@ use std::{any::Any, future::Future};
 pub use style::*;
 /// Selector types and helpers used by the [`Styled`] selector APIs.
 pub mod selectors {
-    pub use crate::style::{Selector, all, class, id};
+    use crate::SharedString;
+    pub use crate::style::Selector;
+
+    /// Creates a selector that matches every element.
+    pub const fn all() -> Selector {
+        Selector::All
+    }
+
+    /// Creates an ID selector.
+    pub fn id(value: impl Into<SharedString>) -> Selector {
+        Selector::Id(value.into())
+    }
+
+    /// Creates a class selector.
+    pub fn class(value: impl Into<SharedString>) -> Selector {
+        Selector::Class(value.into())
+    }
 }
 pub use style_transitions::*;
 pub use styled::*;

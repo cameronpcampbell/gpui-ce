@@ -27,21 +27,6 @@ pub enum Selector {
     Class(SharedString),
 }
 
-/// Creates a selector that matches every element.
-pub const fn all() -> Selector {
-    Selector::All
-}
-
-/// Creates an ID selector.
-pub fn id(value: impl Into<SharedString>) -> Selector {
-    Selector::Id(value.into())
-}
-
-/// Creates a class selector.
-pub fn class(value: impl Into<SharedString>) -> Selector {
-    Selector::Class(value.into())
-}
-
 /// Converts a selector or selector array into a selector set.
 ///
 /// All selectors in a set must match the target element.
@@ -1705,7 +1690,11 @@ impl From<Position> for taffy::style::Position {
 
 #[cfg(test)]
 mod tests {
-    use crate::{blue, green, px, red, yellow};
+    use crate::{
+        blue, green, px, red,
+        selectors::{class, id},
+        yellow,
+    };
     use palette::WithAlpha;
 
     use super::*;

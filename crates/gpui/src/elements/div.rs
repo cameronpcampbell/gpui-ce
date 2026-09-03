@@ -4404,7 +4404,9 @@ mod tests {
     use super::*;
     use crate::{
         AnyWindowHandle, Context, InputEvent, Keystroke, MouseMoveEvent, RenderOnce,
-        TestAppContext, all, canvas, class, id, util::FluentBuilder as _,
+        TestAppContext, canvas,
+        selectors::{all, class, id},
+        util::FluentBuilder as _,
     };
     use std::{cell::Cell, rc::Weak};
 
