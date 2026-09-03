@@ -13,11 +13,11 @@ use crate::{
     PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority, PromptButton,
     PromptLevel, Quad, RasterizedGlyphFormat, Render, RenderGlyphParams, RenderImage,
     RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels, Scene, SelectorState,
-    Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet,
-    Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
-    TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState, TransformationMatrix,
-    Transition, TransitionState, Underline, UnderlineStyle, WindowAppearance,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels, Scene, SelectorScope,
+    SelectorState, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite,
+    SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap,
+    TaffyLayoutEngine, Task, TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState,
+    TransformationMatrix, Transition, TransitionState, Underline, UnderlineStyle, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
     WindowParams, WindowTextSystem, point, prelude::*, profiler, px, rems, size, transparent_black,
     white,
@@ -919,7 +919,7 @@ pub(crate) struct DeferredDraw {
     parent_node: DispatchNodeId,
     element_id_stack: SmallVec<[ElementId; 32]>,
     text_style_stack: Vec<TextStyleRefinement>,
-    selector_scope_stack: Vec<SelectorState>,
+    selector_scope_stack: Vec<SelectorScope>,
     content_mask: Option<ContentMask<Pixels>>,
     rem_size: Pixels,
     element: Option<AnyElement>,
@@ -1114,7 +1114,7 @@ pub struct Window {
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
-    pub(crate) selector_scope_stack: Vec<SelectorState>,
+    pub(crate) selector_scope_stack: Vec<SelectorScope>,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
@@ -3463,6 +3463,25 @@ impl Window {
         }
     }
 
+    pub(crate) fn with_selector_scope<R>(
+        &mut self,
+        scope: Option<SelectorState>,
+        element_tag: &'static str,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let Some(scope) = scope else {
+            return f(self);
+        };
+
+        self.selector_scope_stack.push(SelectorScope {
+            state: scope,
+            element_tag,
+        });
+        let result = f(self);
+        self.selector_scope_stack.pop();
+        result
+    }
+
     pub(crate) fn refine_base_style(
         &self,
         style: &mut Style,
@@ -3471,27 +3490,38 @@ impl Window {
     ) {
         style.refine(refinement);
 
-        let Some(current) = self.selector_scope_stack.last() else {
+        let Some((current, ancestors)) = self.selector_scope_stack.split_last() else {
             style.selectors = SelectorState::default();
             return;
         };
-        let classes = current.classes();
-        let ancestor_count = self.selector_scope_stack.len().saturating_sub(1);
+        let classes = current.state.classes();
 
-        for ancestor in &self.selector_scope_stack[..ancestor_count] {
-            for selector_style in ancestor.matching_descendant_rules(element_id, classes) {
+        // Cascade from the broadest scope toward the element: descendant rules first,
+        // then immediate-child rules, then rules declared on the element itself.
+        for ancestor in ancestors {
+            for selector_style in
+                ancestor
+                    .state
+                    .matching_descendant_rules(element_id, classes, current.element_tag)
+            {
                 style.refine(selector_style);
             }
         }
 
-        if ancestor_count > 0 {
-            let parent = &self.selector_scope_stack[ancestor_count - 1];
-            for selector_style in parent.matching_child_rules(element_id, classes) {
+        if let Some(parent) = ancestors.last() {
+            for selector_style in
+                parent
+                    .state
+                    .matching_child_rules(element_id, classes, current.element_tag)
+            {
                 style.refine(selector_style);
             }
         }
 
-        for selector_style in current.matching_self_rules(element_id) {
+        for selector_style in current
+            .state
+            .matching_self_rules(element_id, current.element_tag)
+        {
             style.refine(selector_style);
         }
 

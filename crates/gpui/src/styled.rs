@@ -2,7 +2,7 @@ use crate::{
     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
     DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
     FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, IntoSelectorSet, JustifyContent,
-    Length, Pixels, SelectorRule, SharedString, StrikethroughStyle, StyleRefinement, TextAlign,
+    Length, Pixels, SelectorRuleKind, SharedString, StrikethroughStyle, StyleRefinement, TextAlign,
     TextOverflow, TextStyleRefinement, TextTransform, UnderlineStyle, VerticalAlign, WhiteSpace,
     px, relative, rems,
 };
@@ -12,7 +12,6 @@ pub use gpui_macros::{
     visibility_style_methods,
 };
 use palette::{Hsla, IntoColor};
-use std::sync::Arc;
 const ELLIPSIS: SharedString = SharedString::new_static("…");
 
 /// A trait for elements that can be styled.
@@ -38,10 +37,11 @@ pub trait Styled: Sized {
         selector: impl IntoSelectorSet,
         build: impl FnOnce(StyleRefinement) -> StyleRefinement,
     ) -> Self {
-        self.style().selectors.push_self_rule(SelectorRule {
-            selectors: selector.into_selector_set(),
-            refinement: Arc::new(build(StyleRefinement::default())),
-        });
+        self.style().selectors.push_rule(
+            SelectorRuleKind::Self_,
+            selector.into_selector_set(),
+            build(StyleRefinement::default()),
+        );
         self
     }
 
@@ -51,10 +51,11 @@ pub trait Styled: Sized {
         selector: impl IntoSelectorSet,
         build: impl FnOnce(StyleRefinement) -> StyleRefinement,
     ) -> Self {
-        self.style().selectors.push_child_rule(SelectorRule {
-            selectors: selector.into_selector_set(),
-            refinement: Arc::new(build(StyleRefinement::default())),
-        });
+        self.style().selectors.push_rule(
+            SelectorRuleKind::Child,
+            selector.into_selector_set(),
+            build(StyleRefinement::default()),
+        );
         self
     }
 
@@ -64,10 +65,11 @@ pub trait Styled: Sized {
         selector: impl IntoSelectorSet,
         build: impl FnOnce(StyleRefinement) -> StyleRefinement,
     ) -> Self {
-        self.style().selectors.push_descendant_rule(SelectorRule {
-            selectors: selector.into_selector_set(),
-            refinement: Arc::new(build(StyleRefinement::default())),
-        });
+        self.style().selectors.push_rule(
+            SelectorRuleKind::Descendant,
+            selector.into_selector_set(),
+            build(StyleRefinement::default()),
+        );
         self
     }
 
