@@ -29,7 +29,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          submodules: recursive
           fetch-depth: ${{ github.ref == 'refs/heads/main' && 2 || 350 }}
       - id: filter
         run: |
@@ -59,8 +58,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt
@@ -73,8 +70,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
@@ -92,8 +87,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - uses: crate-ci/typos@v1.47.2
         with:
           config: typos.toml
@@ -103,38 +96,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - uses: uncenter/setup-taplo@v1
       - run: taplo fmt --check
 
-  # Lockfile freshness
+  # Lockfile freshness is advisory: dependency resolution changes often come
+  # from upstream releases and should be reviewed, not block unrelated work.
   lockfile:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Check workspace lockfiles are up to date
+      - name: Check root lockfile freshness (warning only)
+        shell: bash
         run: |
-          cargo update
-          component_patch_args=(
-            --config 'patch.crates-io.gpui-ce.path="../gpui"'
-            --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
-            --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
-            --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
-          )
-          (cd crates/gpui_ce_components && cargo "${component_patch_args[@]}" update)
-          git diff --exit-code Cargo.lock crates/gpui_ce_components/Cargo.lock
+          warn() {
+            echo "::warning title=Lockfile freshness::$1"
+          }
+
+          if ! cargo update; then
+            warn "Could not refresh Cargo.lock; inspect dependency resolution."
+          elif ! git diff --quiet -- Cargo.lock; then
+            git diff -- Cargo.lock
+            warn "Cargo.lock changed after cargo update; refresh it in a dedicated dependency update."
+          fi
 
   # Unused dependencies
   machete:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-machete
       - uses: hustcer/setup-nu@v3
@@ -147,8 +137,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: 1.92.0
@@ -167,8 +155,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - name: Install nightly toolchain with rust-src and WASM target
         run: rustup toolchain install nightly --component rust-src --target wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
@@ -183,8 +169,6 @@ jobs:
     if: needs.orchestrate.outputs.run_tests == 'true'
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - name: Install system deps
@@ -209,8 +193,6 @@ jobs:
     if: needs.orchestrate.outputs.run_tests == 'true'
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - uses: hustcer/setup-nu@v3
@@ -226,8 +208,6 @@ jobs:
     if: needs.orchestrate.outputs.run_tests == 'true'
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - uses: hustcer/setup-nu@v3
@@ -242,8 +222,6 @@ jobs:
     if: github.event_name == 'pull_request' && needs.orchestrate.outputs.run_tests == 'true'
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - name: Install system deps
@@ -265,7 +243,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          submodules: recursive
           fetch-depth: 0
           # GitHub otherwise checks out a synthetic merge commit. Checking the
           # PR head directly makes the comparison exactly base..PR, so API
@@ -287,16 +264,18 @@ jobs:
           # make unrelated main-branch breaks part of this PR.
           release-type: patch
 
-  # The components subtree is a separate Cargo workspace and must be checked
-  # explicitly; it is intentionally not a member of the root workspace.
+  # Components live in their own repository. Check current main against this
+  # checkout, but make drift visible as annotations rather than a merge gate.
   components:
     runs-on: ubuntu-latest
     needs: [orchestrate]
     if: needs.orchestrate.outputs.run_tests == 'true'
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
-          submodules: recursive
+          repository: gpui-ce/gpui-component
+          path: gpui-component
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - name: Install system deps
@@ -311,24 +290,25 @@ jobs:
             libgtk-3-dev \
             libjavascriptcoregtk-4.1-dev libwebkit2gtk-4.1-dev \
             libsoup-3.0-dev
-      - name: Build components workspace
+      - name: Check component compatibility (warning only)
+        shell: bash
         run: |
+          component_dir="$GITHUB_WORKSPACE/gpui-component"
           component_patch_args=(
-            --config 'patch.crates-io.gpui-ce.path="../gpui"'
-            --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
-            --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
-            --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
+            --config "patch.crates-io.gpui-ce.path=\"$GITHUB_WORKSPACE/crates/gpui\""
+            --config "patch.crates-io.gpui_ce_platform.path=\"$GITHUB_WORKSPACE/crates/gpui_platform\""
+            --config "patch.crates-io.gpui_ce_web.path=\"$GITHUB_WORKSPACE/crates/gpui_web\""
+            --config "patch.crates-io.gpui_ce_macros.path=\"$GITHUB_WORKSPACE/crates/gpui_macros\""
           )
-          (cd crates/gpui_ce_components && cargo "${component_patch_args[@]}" build --workspace --all-targets)
-      - name: Test components workspace
-        run: |
-          component_patch_args=(
-            --config 'patch.crates-io.gpui-ce.path="../gpui"'
-            --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
-            --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
-            --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
-          )
-          (cd crates/gpui_ce_components && cargo "${component_patch_args[@]}" test --workspace --no-fail-fast)
+          warn() {
+            echo "::warning title=Component compatibility::$1"
+          }
+
+          if ! (cd "$component_dir" && cargo "${component_patch_args[@]}" build --workspace --all-targets); then
+            warn "gpui-ce/gpui-component main does not currently build against this GPUI checkout."
+          elif ! (cd "$component_dir" && cargo "${component_patch_args[@]}" test --workspace --no-fail-fast); then
+            warn "gpui-ce/gpui-component tests do not currently pass against this GPUI checkout."
+          fi
 
   # Beta toolchain (scheduled only)
   beta-test:
@@ -337,8 +317,6 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: recursive
       - run: rustup update beta && rustup default beta
       - uses: Swatinem/rust-cache@v2
       - name: Install system deps
