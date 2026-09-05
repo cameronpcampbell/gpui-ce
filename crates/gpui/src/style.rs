@@ -396,8 +396,8 @@ pub enum Visibility {
 /// The possible values of the box-shadow property
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BoxShadow {
-    /// What color should the shadow have?
-    pub color: Hsla,
+    /// The shadow color or gradient.
+    pub color: Background,
     /// How should it be offset from its element?
     pub offset: Point<Pixels>,
     /// How much should the shadow be blurred?
@@ -412,9 +412,9 @@ impl BoxShadow {
     /// Creates a new [`BoxShadow`] with the given offset and color, matching the order
     /// of the CSS `box-shadow` property. Use the builder methods to set blur radius,
     /// spread radius, and inset.
-    pub fn new(offset_x: Pixels, offset_y: Pixels, color: Hsla) -> Self {
+    pub fn new(offset_x: Pixels, offset_y: Pixels, color: impl Into<Background>) -> Self {
         Self {
-            color,
+            color: color.into(),
             offset: point(offset_x, offset_y),
             blur_radius: px(0.),
             spread_radius: px(0.),
@@ -1673,7 +1673,7 @@ mod tests {
         assert_eq!(ring.offset, point(px(0.), px(0.)));
         assert_eq!(ring.blur_radius, px(0.));
         assert_eq!(ring.spread_radius, px(3.5));
-        assert_eq!(ring.color, current_color);
+        assert_eq!(ring.color, current_color.into());
         assert!(!ring.inset);
         assert_eq!(style.box_shadow, vec![drop_shadow]);
 
@@ -1698,7 +1698,7 @@ mod tests {
         assert_eq!(inset.offset, point(px(0.), px(0.)));
         assert_eq!(inset.blur_radius, px(0.));
         assert_eq!(inset.spread_radius, px(4.));
-        assert_eq!(inset.color, explicit_color);
+        assert_eq!(inset.color, explicit_color.into());
         assert!(inset.inset);
         assert_eq!(style.ring, RingStyle::default());
     }

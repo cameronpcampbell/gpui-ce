@@ -448,14 +448,18 @@ float quarter_ellipse_sdf(float2 point, float2 radii) {
 
 struct ShadowVertexOutput {
   float4 position [[position]];
-  float4 color [[flat]];
+  float4 background_solid [[flat]];
+  float4 background_color0 [[flat]];
+  float4 background_color1 [[flat]];
   uint shadow_id [[flat]];
   float clip_distance [[clip_distance]][4];
 };
 
 struct ShadowFragmentInput {
   float4 position [[position]];
-  float4 color [[flat]];
+  float4 background_solid [[flat]];
+  float4 background_color0 [[flat]];
+  float4 background_color1 [[flat]];
   uint shadow_id [[flat]];
 };
 
@@ -485,11 +489,18 @@ vertex ShadowVertexOutput shadow_vertex(
       to_device_position(unit_vertex, bounds, viewport_size);
   float4 clip_distance =
       distance_from_clip_rect(unit_vertex, bounds, shadow.content_mask.bounds);
-  float4 color = hsla_to_rgba(shadow.color);
+  GradientColor background = prepare_fill_color(
+      shadow.color.tag,
+      shadow.color.color_space,
+      shadow.color.solid,
+      shadow.color.colors[0].color,
+      shadow.color.colors[1].color);
 
   return ShadowVertexOutput{
       device_position,
-      color,
+      background.solid,
+      background.color0,
+      background.color1,
       shadow_id,
       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
 }
@@ -551,7 +562,18 @@ fragment float4 shadow_fragment(ShadowFragmentInput input [[stage_in]],
     alpha *= saturate(0.5 - element_distance);
   }
 
-  return input.color * float4(1., 1., 1., alpha);
+  Bounds_ScaledPixels paint_bounds = shadow.bounds;
+  if (shadow.inset != 0u) {
+    paint_bounds = shadow.element_bounds;
+  }
+  float4 color = fill_color(
+      shadow.color,
+      input.position.xy,
+      paint_bounds,
+      input.background_solid,
+      input.background_color0,
+      input.background_color1);
+  return color * float4(1., 1., 1., alpha);
 }
 
 struct UnderlineVertexOutput {

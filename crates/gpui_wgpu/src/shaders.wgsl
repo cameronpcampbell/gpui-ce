@@ -954,7 +954,7 @@ struct Shadow {
     bounds: Bounds,
     corner_radii: Corners,
     content_mask: Bounds,
-    color: Hsla,
+    color: Background,
     // Only consulted when `inset == 1u`: the element's own bounds, used as a rounded-rect
     // clip so the shadow never escapes the element.
     element_bounds: Bounds,
@@ -966,10 +966,12 @@ struct Shadow {
 
 struct ShadowVarying {
     @builtin(position) position: vec4<f32>,
-    @location(0) @interpolate(flat) color: vec4<f32>,
-    @location(1) @interpolate(flat) shadow_id: u32,
+    @location(0) @interpolate(flat) background_solid: vec4<f32>,
+    @location(1) @interpolate(flat) background_color0: vec4<f32>,
+    @location(2) @interpolate(flat) background_color1: vec4<f32>,
+    @location(3) @interpolate(flat) shadow_id: u32,
     //TODO: use `clip_distance` once Naga supports it
-    @location(3) clip_distances: vec4<f32>,
+    @location(4) clip_distances: vec4<f32>,
 }
 
 @vertex
@@ -990,7 +992,15 @@ fn vs_shadow(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) ins
 
     var out = ShadowVarying();
     out.position = to_device_position(unit_vertex, geometry);
-    out.color = hsla_to_rgba(shadow.color);
+    let background = prepare_gradient_color(
+        shadow.color.tag,
+        shadow.color.color_space,
+        shadow.color.solid,
+        shadow.color.colors,
+    );
+    out.background_solid = background.solid;
+    out.background_color0 = background.color0;
+    out.background_color1 = background.color1;
     out.shadow_id = instance_id;
     out.clip_distances = distance_from_clip_rect(unit_vertex, geometry, shadow.content_mask);
     return out;
@@ -1042,7 +1052,19 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
         alpha *= saturate(0.5 - element_distance);
     }
 
-    return blend_color(input.color, alpha);
+    var paint_bounds = shadow.bounds;
+    if (shadow.inset != 0u) {
+        paint_bounds = shadow.element_bounds;
+    }
+    let color = gradient_color(
+        shadow.color,
+        input.position.xy,
+        paint_bounds,
+        input.background_solid,
+        input.background_color0,
+        input.background_color1,
+    );
+    return blend_color(color, alpha);
 }
 
 // --- path rasterization --- //

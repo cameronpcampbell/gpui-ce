@@ -4094,7 +4094,7 @@ impl Window {
                 bounds: self.cover_bounds(shadow_bounds),
                 content_mask,
                 corner_radii: corner_radii.scale(scale_factor),
-                color: shadow.color.opacity(opacity).into(),
+                color: shadow.color.opacity(opacity),
                 element_bounds,
                 element_corner_radii,
                 inset: 0,
@@ -4139,7 +4139,7 @@ impl Window {
                 bounds: self.cover_bounds(hole),
                 content_mask,
                 corner_radii: hole_corner_radii.scale(scale_factor),
-                color: shadow.color.opacity(opacity).into(),
+                color: shadow.color.opacity(opacity),
                 element_bounds,
                 element_corner_radii,
                 inset: 1,
@@ -7345,12 +7345,13 @@ mod tests {
     };
 
     use crate::{
-        AnyWindowHandle, AppContext as _, Bounds, Context, DispatchPhase, DragMoveEvent, Empty,
-        ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent, FocusHandle,
-        InputEvent as _, InteractiveElement as _, IntoElement, LongPressEvent, MouseButton,
-        MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point, Render, RequestFrameOptions,
-        StatefulInteractiveElement as _, Styled, TestAppContext, TouchDragEvent, TouchEvent,
-        TouchId, TouchPhase, Window, WindowAppearance, WindowOptions, canvas, div, point, px, size,
+        AnyWindowHandle, AppContext as _, Background, Bounds, BoxShadow, Context, DispatchPhase,
+        DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent,
+        FocusHandle, InputEvent as _, InteractiveElement as _, IntoElement, LongPressEvent,
+        MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point, Render,
+        RequestFrameOptions, StatefulInteractiveElement as _, Styled, TestAppContext,
+        TouchDragEvent, TouchEvent, TouchId, TouchPhase, Window, WindowAppearance, WindowOptions,
+        canvas, div, hsla, linear_color_stop, linear_gradient, point, px, size, white,
     };
 
     struct EmptyView;
@@ -7359,6 +7360,75 @@ mod tests {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div()
         }
+    }
+
+    fn shadow_gradient() -> Background {
+        linear_gradient(
+            90.,
+            linear_color_stop(hsla(0., 1., 0.5, 0.8), 0.),
+            linear_color_stop(hsla(2. / 3., 1., 0.5, 0.6), 1.),
+        )
+    }
+
+    struct ShadowBackgroundView;
+
+    impl Render for ShadowBackgroundView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .m(px(40.))
+                .w(px(80.))
+                .h(px(60.))
+                .rounded(px(8.))
+                .bg(white())
+                .opacity(0.5)
+                .shadow(vec![
+                    BoxShadow::new(px(4.), px(2.), shadow_gradient())
+                        .blur_radius(px(6.))
+                        .spread_radius(px(2.)),
+                    BoxShadow::new(px(-3.), px(1.), hsla(0.3, 0.7, 0.4, 0.4)),
+                    BoxShadow::new(px(0.), px(2.), shadow_gradient())
+                        .blur_radius(px(4.))
+                        .spread_radius(px(3.))
+                        .inset(),
+                ])
+        }
+    }
+
+    #[gpui::test]
+    fn shadow_backgrounds_survive_painting_with_geometry_and_opacity(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| ShadowBackgroundView);
+        let shadows = window
+            .update(cx, |_, window, _| {
+                window.rendered_frame.scene.shadows.clone()
+            })
+            .unwrap();
+
+        assert_eq!(shadows.len(), 3);
+        let gradient = shadow_gradient().opacity(0.5);
+        let drop_gradient = shadows
+            .iter()
+            .find(|shadow| shadow.inset == 0 && shadow.color == gradient)
+            .expect("gradient drop shadow should be painted");
+        let inset_gradient = shadows
+            .iter()
+            .find(|shadow| shadow.inset == 1 && shadow.color == gradient)
+            .expect("gradient inset shadow should be painted");
+        let solid = shadows
+            .iter()
+            .find(|shadow| shadow.color.as_solid().is_some())
+            .expect("solid shadows should remain supported");
+
+        assert_eq!(
+            solid.color.as_solid(),
+            Some(hsla(0.3, 0.7, 0.4, 0.2)),
+            "element opacity should apply to solid shadow paint"
+        );
+        assert_eq!(drop_gradient.element_bounds, inset_gradient.element_bounds);
+        assert!(drop_gradient.bounds.size.width > drop_gradient.element_bounds.size.width);
+        assert!(drop_gradient.bounds.size.height > drop_gradient.element_bounds.size.height);
+        assert!(inset_gradient.bounds.size.width < inset_gradient.element_bounds.size.width);
+        assert!(inset_gradient.bounds.size.height < inset_gradient.element_bounds.size.height);
+        assert!(drop_gradient.order < inset_gradient.order);
     }
 
     struct OpensWindowOnPaint {
