@@ -2038,19 +2038,21 @@ impl Element for Div {
                 }
 
                 window.with_image_cache(image_cache, |window| {
-                    window.with_element_offset(scroll_offset, |window| {
-                        if let Some(order_fn) = &self.prepaint_order_fn {
-                            let order = order_fn(window, cx);
-                            for idx in order {
-                                if let Some(child) = self.children.get_mut(idx) {
+                    window.with_style_transition_containing_bounds(bounds, |window| {
+                        window.with_element_offset(scroll_offset, |window| {
+                            if let Some(order_fn) = &self.prepaint_order_fn {
+                                let order = order_fn(window, cx);
+                                for idx in order {
+                                    if let Some(child) = self.children.get_mut(idx) {
+                                        child.prepaint(window, cx);
+                                    }
+                                }
+                            } else {
+                                for child in &mut self.children {
                                     child.prepaint(window, cx);
                                 }
                             }
-                        } else {
-                            for child in &mut self.children {
-                                child.prepaint(window, cx);
-                            }
-                        }
+                        });
                     });
 
                     if let Some(listener) = self.prepaint_listener.as_ref() {
@@ -3581,7 +3583,8 @@ impl Interactivity {
                     element_state
                         .style_transitions
                         .get_or_insert_with(Default::default),
-                    StyleTransitionContext::new(bounds, window.rem_size()),
+                    StyleTransitionContext::new(bounds, window.rem_size())
+                        .with_containing_bounds(window.style_transition_containing_bounds()),
                     cx.background_executor().now(),
                     cx.reduce_motion(),
                 ) {
