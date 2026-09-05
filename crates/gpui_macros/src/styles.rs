@@ -67,6 +67,7 @@ struct CanonicalStyleTransitionField {
 enum StyleTransitionFieldKind {
     Required,
     Optional,
+    Inset,
     AutoSizeWidth,
     AutoSizeHeight,
     CornerRadius,
@@ -87,10 +88,11 @@ impl StyleTransitionField {
         }
     }
 
-    fn required_or_auto_size(path: TokenStream2) -> Self {
+    fn required_or_special_length(path: TokenStream2) -> Self {
         let kind = match style_transition_key(&path).as_str() {
             "size.width" => StyleTransitionFieldKind::AutoSizeWidth,
             "size.height" => StyleTransitionFieldKind::AutoSizeHeight,
+            key if key.starts_with("inset.") => StyleTransitionFieldKind::Inset,
             _ => StyleTransitionFieldKind::Required,
         };
         Self { path, kind }
@@ -239,6 +241,15 @@ fn generate_transition_application(field: &CanonicalStyleTransitionField) -> Tok
                 reduce_motion,
             );
         },
+        StyleTransitionFieldKind::Inset => quote! {
+            in_progress |= apply_inset(
+                &mut state.#path,
+                &mut style.#path,
+                self.#motion_name.as_ref(),
+                now,
+                reduce_motion,
+            );
+        },
         StyleTransitionFieldKind::AutoSizeWidth => quote! {
             in_progress |= apply_auto_size(
                 &mut state.#path,
@@ -300,7 +311,7 @@ fn style_transition_specs() -> Vec<StyleTransitionSpec> {
             fields: prefix
                 .fields
                 .into_iter()
-                .map(StyleTransitionField::required_or_auto_size)
+                .map(StyleTransitionField::required_or_special_length)
                 .collect(),
         });
     }
