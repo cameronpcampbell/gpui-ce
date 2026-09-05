@@ -2073,7 +2073,7 @@ struct Shadow {
     Bounds bounds;
     Corners corner_radii;
     Bounds content_mask;
-    Hsla color;
+    Background color;
     Bounds element_bounds;
     Corners element_corner_radii;
     uint inset;
@@ -2088,7 +2088,9 @@ struct ShadowVertexOutput {
     nointerpolation float4 element_vertical_corner_reaches: TEXCOORD4;
     nointerpolation float4 smoothing_factors: TEXCOORD5;
     float4 position: SV_Position;
-    nointerpolation float4 color: COLOR;
+    nointerpolation float4 background_solid: COLOR0;
+    nointerpolation float4 background_color0: COLOR1;
+    nointerpolation float4 background_color1: COLOR2;
     float4 clip_distance: SV_ClipDistance;
 };
 
@@ -2100,7 +2102,9 @@ struct ShadowFragmentInput {
   nointerpolation float4 element_vertical_corner_reaches: TEXCOORD4;
   nointerpolation float4 smoothing_factors: TEXCOORD5;
   float4 position: SV_Position;
-  nointerpolation float4 color: COLOR;
+  nointerpolation float4 background_solid: COLOR0;
+  nointerpolation float4 background_color0: COLOR1;
+  nointerpolation float4 background_color1: COLOR2;
 };
 
 StructuredBuffer<Shadow> shadows: register(t1);
@@ -2122,11 +2126,18 @@ ShadowVertexOutput shadow_vertex(uint vertex_id: SV_VertexID, uint shadow_id: SV
 
     float4 device_position = to_device_position(unit_vertex, bounds);
     float4 clip_distance = distance_from_clip_rect(unit_vertex, bounds, shadow.content_mask);
-    float4 color = hsla_to_rgba(shadow.color);
+    GradientColor background = prepare_gradient_color(
+        shadow.color.tag,
+        shadow.color.color_space,
+        shadow.color.solid,
+        shadow.color.colors
+    );
 
     ShadowVertexOutput output;
     output.position = device_position;
-    output.color = color;
+    output.background_solid = background.solid;
+    output.background_color0 = background.color0;
+    output.background_color1 = background.color1;
     output.shadow_id = shadow_id;
     output.clip_distance = clip_distance;
     output.horizontal_corner_reaches = corner_values(shadow.corner_radii);
@@ -2253,7 +2264,19 @@ float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
         alpha *= saturate(0.5 - element_distance);
     }
 
-    return input.color * float4(1., 1., 1., alpha);
+    Bounds paint_bounds = shadow.bounds;
+    if (shadow.inset != 0u) {
+        paint_bounds = shadow.element_bounds;
+    }
+    float4 color = gradient_color(
+        shadow.color,
+        input.position.xy,
+        paint_bounds,
+        input.background_solid,
+        input.background_color0,
+        input.background_color1
+    );
+    return color * float4(1., 1., 1., alpha);
 }
 
 /*
