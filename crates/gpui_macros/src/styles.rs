@@ -774,14 +774,14 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
             self
         }
 
-        /// Sets the outer ring color.
+        /// Sets the outer ring color or gradient.
         /// [Docs](https://tailwindcss.com/docs/box-shadow#setting-the-ring-color)
         #visibility fn ring_color<C>(mut self, color: C) -> Self
         where
-            C: palette::IntoColor<palette::Hsla>,
+            C: Into<gpui::Background>,
             Self: Sized,
         {
-            self.style().ring.color = Some(gpui::RingColor::Color(color.into_color()));
+            self.style().ring.color = Some(gpui::RingColor::Color(color.into()));
             self
         }
 
@@ -792,14 +792,14 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
             self
         }
 
-        /// Sets the inset ring color.
+        /// Sets the inset ring color or gradient.
         /// [Docs](https://tailwindcss.com/docs/box-shadow#setting-the-inset-ring-color)
         #visibility fn inset_ring_color<C>(mut self, color: C) -> Self
         where
-            C: palette::IntoColor<palette::Hsla>,
+            C: Into<gpui::Background>,
             Self: Sized,
         {
-            self.style().inset_ring.color = Some(gpui::RingColor::Color(color.into_color()));
+            self.style().inset_ring.color = Some(gpui::RingColor::Color(color.into()));
             self
         }
 
