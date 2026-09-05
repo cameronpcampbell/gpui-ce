@@ -67,7 +67,10 @@ struct CanonicalStyleTransitionField {
 enum StyleTransitionFieldKind {
     Required,
     Optional,
-    Inset,
+    InsetTop,
+    InsetRight,
+    InsetBottom,
+    InsetLeft,
     AutoSizeWidth,
     AutoSizeHeight,
     CornerRadius,
@@ -92,7 +95,10 @@ impl StyleTransitionField {
         let kind = match style_transition_key(&path).as_str() {
             "size.width" => StyleTransitionFieldKind::AutoSizeWidth,
             "size.height" => StyleTransitionFieldKind::AutoSizeHeight,
-            key if key.starts_with("inset.") => StyleTransitionFieldKind::Inset,
+            "inset.top" => StyleTransitionFieldKind::InsetTop,
+            "inset.right" => StyleTransitionFieldKind::InsetRight,
+            "inset.bottom" => StyleTransitionFieldKind::InsetBottom,
+            "inset.left" => StyleTransitionFieldKind::InsetLeft,
             _ => StyleTransitionFieldKind::Required,
         };
         Self { path, kind }
@@ -241,15 +247,29 @@ fn generate_transition_application(field: &CanonicalStyleTransitionField) -> Tok
                 reduce_motion,
             );
         },
-        StyleTransitionFieldKind::Inset => quote! {
+        StyleTransitionFieldKind::InsetTop
+        | StyleTransitionFieldKind::InsetRight
+        | StyleTransitionFieldKind::InsetBottom
+        | StyleTransitionFieldKind::InsetLeft => {
+            let edge = match field.kind {
+                StyleTransitionFieldKind::InsetTop => quote! { StyleTransitionEdge::Top },
+                StyleTransitionFieldKind::InsetRight => quote! { StyleTransitionEdge::Right },
+                StyleTransitionFieldKind::InsetBottom => quote! { StyleTransitionEdge::Bottom },
+                StyleTransitionFieldKind::InsetLeft => quote! { StyleTransitionEdge::Left },
+                _ => unreachable!(),
+            };
+            quote! {
             in_progress |= apply_inset(
                 &mut state.#path,
                 &mut style.#path,
+                #edge,
                 self.#motion_name.as_ref(),
+                context,
                 now,
                 reduce_motion,
             );
-        },
+            }
+        }
         StyleTransitionFieldKind::AutoSizeWidth => quote! {
             in_progress |= apply_auto_size(
                 &mut state.#path,

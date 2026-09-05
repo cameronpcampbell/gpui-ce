@@ -2056,46 +2056,48 @@ impl Element for Div {
                 }
 
                 window.with_image_cache(image_cache, |window| {
-                    if let Some(inline) = request_layout.inline.as_mut() {
-                        let order = self
-                            .prepaint_order_fn
-                            .as_ref()
-                            .map(|order_fn| order_fn(window, cx));
-                        let inline_bounds = inline.prepaint_children(
-                            &mut self.children,
-                            bounds,
-                            style,
-                            scroll_offset,
-                            order.as_deref(),
-                            window,
-                            cx,
-                        );
+                    window.with_style_transition_containing_bounds(bounds, |window| {
+                        if let Some(inline) = request_layout.inline.as_mut() {
+                            let order = self
+                                .prepaint_order_fn
+                                .as_ref()
+                                .map(|order_fn| order_fn(window, cx));
+                            let inline_bounds = inline.prepaint_children(
+                                &mut self.children,
+                                bounds,
+                                style,
+                                scroll_offset,
+                                order.as_deref(),
+                                window,
+                                cx,
+                            );
 
-                        if let Some(listener) = self.prepaint_listener.as_ref() {
-                            children_bounds.extend(inline_bounds);
-                            listener(children_bounds, window, cx);
+                            if let Some(listener) = self.prepaint_listener.as_ref() {
+                                children_bounds.extend(inline_bounds);
+                                listener(children_bounds, window, cx);
+                            }
+                            return;
                         }
-                        return;
-                    }
 
-                    window.with_element_offset(scroll_offset, |window| {
-                        if let Some(order_fn) = &self.prepaint_order_fn {
-                            let order = order_fn(window, cx);
-                            for idx in order {
-                                if let Some(child) = self.children.get_mut(idx) {
+                        window.with_element_offset(scroll_offset, |window| {
+                            if let Some(order_fn) = &self.prepaint_order_fn {
+                                let order = order_fn(window, cx);
+                                for idx in order {
+                                    if let Some(child) = self.children.get_mut(idx) {
+                                        child.prepaint(window, cx);
+                                    }
+                                }
+                            } else {
+                                for child in &mut self.children {
                                     child.prepaint(window, cx);
                                 }
                             }
-                        } else {
-                            for child in &mut self.children {
-                                child.prepaint(window, cx);
-                            }
+                        });
+
+                        if let Some(listener) = self.prepaint_listener.as_ref() {
+                            listener(children_bounds, window, cx);
                         }
                     });
-
-                    if let Some(listener) = self.prepaint_listener.as_ref() {
-                        listener(children_bounds, window, cx);
-                    }
                 });
 
                 hitbox
@@ -3604,7 +3606,8 @@ impl Interactivity {
                     element_state
                         .style_transitions
                         .get_or_insert_with(Default::default),
-                    StyleTransitionContext::new(bounds, window.rem_size()),
+                    StyleTransitionContext::new(bounds, window.rem_size())
+                        .with_containing_bounds(window.style_transition_containing_bounds()),
                     cx.background_executor().now(),
                     cx.reduce_motion(),
                 ) {
