@@ -300,6 +300,68 @@ where
     in_progress
 }
 
+fn zero_inset_like(value: Length) -> Length {
+    match value {
+        Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Pixels(_))) => Length::Definite(
+            DefiniteLength::Absolute(AbsoluteLength::Pixels(Pixels::ZERO)),
+        ),
+        Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Rems(_))) => Length::Definite(
+            DefiniteLength::Absolute(AbsoluteLength::Rems(Default::default())),
+        ),
+        Length::Definite(DefiniteLength::Relative(_)) => {
+            Length::Definite(DefiniteLength::Relative(Default::default()))
+        }
+        Length::Auto => Length::Auto,
+    }
+}
+
+fn apply_inset(
+    state: &mut Option<StyleTransitionPropertyState<Length>>,
+    value: &mut Length,
+    motion: Option<&Motion>,
+    now: Instant,
+    reduce_motion: bool,
+) -> bool {
+    let Some(motion) = motion else {
+        *state = None;
+        return false;
+    };
+
+    let authored_goal = *value;
+    let current_goal = state
+        .as_ref()
+        .and_then(|state| state.animated.as_ref())
+        .map(|animated| *animated.value());
+
+    // An authored `auto` inset is the neutral offset. Resolve it to a zero with the
+    // definite endpoint's unit while animating, then restore `auto` once settled.
+    let transition_goal = match (authored_goal, current_goal) {
+        (Length::Definite(_), Some(Length::Auto)) => {
+            let zero = zero_inset_like(authored_goal);
+            state
+                .as_mut()
+                .expect("inset transition state must exist when it has a goal")
+                .jump_to(Some(zero), motion);
+            authored_goal
+        }
+        (Length::Auto, Some(current_goal @ Length::Definite(_))) => zero_inset_like(current_goal),
+        _ => authored_goal,
+    };
+
+    let (in_progress, evaluated_value) =
+        evaluate(state, Some(transition_goal), motion, now, reduce_motion);
+    *value = if authored_goal == Length::Auto && !in_progress {
+        state
+            .as_mut()
+            .expect("inset transition state must exist after evaluation")
+            .jump_to(Some(Length::Auto), motion);
+        Length::Auto
+    } else {
+        evaluated_value.unwrap_or(authored_goal)
+    };
+    in_progress
+}
+
 impl<T> StyleTransitionPropertyState<T>
 where
     T: Lerp + Clone + PartialEq,
@@ -363,9 +425,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        AbsoluteLength, AnyWindowHandle, Bounds, Corners, DefiniteLength, InputEvent as _, Length,
-        MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Style, TestAppContext, Window, canvas,
-        div, point, prelude::*, px, rems, size,
+        AbsoluteLength, AnyWindowHandle, Bounds, Corners, DefiniteLength, Edges, InputEvent as _,
+        Length, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Style, TestAppContext, Window,
+        canvas, div, point, prelude::*, px, relative, rems, size,
     };
 
     fn length(value: f32) -> Length {
@@ -525,6 +587,184 @@ mod tests {
             false,
         ));
         assert_eq!(value, None);
+    }
+
+    #[test]
+    fn inset_transitions_interpolate_auto_as_unit_appropriate_zero() {
+        let started_at = Instant::now();
+        let duration = Duration::from_secs(1);
+        let transitions = StyleTransitions::new().inset(duration);
+        let context = StyleTransitionContext::new(None, px(16.0));
+        let mut state = StyleTransitionState::default();
+        let mut style = Style::default();
+        let targets = Edges {
+            top: length(20.0),
+            right: Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Rems(rems(2.0)))),
+            bottom: Length::Definite(DefiniteLength::Relative(relative(0.4))),
+            left: length(-20.0),
+        };
+        let zeros = Edges {
+            top: length(0.0),
+            right: Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Rems(rems(0.0)))),
+            bottom: Length::Definite(DefiniteLength::Relative(relative(0.0))),
+            left: length(0.0),
+        };
+        let midpoints = Edges {
+            top: length(10.0),
+            right: Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Rems(rems(1.0)))),
+            bottom: Length::Definite(DefiniteLength::Relative(relative(0.2))),
+            left: length(-10.0),
+        };
+
+        assert!(!transitions.apply(&mut style, &mut state, context, started_at, false));
+
+        style.inset = targets.clone();
+        assert!(transitions.apply(&mut style, &mut state, context, started_at, false));
+        assert_eq!(style.inset, zeros);
+
+        style.inset = targets.clone();
+        assert!(transitions.apply(
+            &mut style,
+            &mut state,
+            context,
+            started_at + duration / 2,
+            false,
+        ));
+        assert_eq!(style.inset, midpoints);
+
+        style.inset = targets.clone();
+        assert!(!transitions.apply(
+            &mut style,
+            &mut state,
+            context,
+            started_at + duration,
+            false,
+        ));
+        assert_eq!(style.inset, targets);
+
+        style.inset = Edges::auto();
+        assert!(transitions.apply(
+            &mut style,
+            &mut state,
+            context,
+            started_at + duration,
+            false,
+        ));
+        assert_eq!(style.inset, targets);
+
+        style.inset = Edges::auto();
+        assert!(transitions.apply(
+            &mut style,
+            &mut state,
+            context,
+            started_at + duration + duration / 2,
+            false,
+        ));
+        assert_eq!(style.inset, midpoints);
+
+        style.inset = Edges::auto();
+        assert!(!transitions.apply(
+            &mut style,
+            &mut state,
+            context,
+            started_at + duration * 2,
+            false,
+        ));
+        assert_eq!(style.inset, Edges::auto());
+
+        let new_targets = Edges {
+            top: Length::Definite(DefiniteLength::Relative(relative(0.6))),
+            right: length(30.0),
+            bottom: Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Rems(rems(3.0)))),
+            left: Length::Definite(DefiniteLength::Relative(relative(-0.2))),
+        };
+        let new_zeros = Edges {
+            top: Length::Definite(DefiniteLength::Relative(relative(0.0))),
+            right: length(0.0),
+            bottom: Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Rems(rems(0.0)))),
+            left: Length::Definite(DefiniteLength::Relative(relative(0.0))),
+        };
+        style.inset = new_targets;
+        assert!(transitions.apply(
+            &mut style,
+            &mut state,
+            context,
+            started_at + duration * 2,
+            false,
+        ));
+        assert_eq!(style.inset, new_zeros);
+    }
+
+    #[test]
+    fn individual_inset_edge_builders_transition_from_auto() {
+        #[derive(Clone, Copy)]
+        enum Edge {
+            Top,
+            Right,
+            Bottom,
+            Left,
+        }
+
+        let started_at = Instant::now();
+        let duration = Duration::from_secs(1);
+        let context = StyleTransitionContext::new(None, px(16.0));
+
+        for (selected_index, edge) in [Edge::Top, Edge::Right, Edge::Bottom, Edge::Left]
+            .into_iter()
+            .enumerate()
+        {
+            let transitions = match edge {
+                Edge::Top => StyleTransitions::new().top(duration),
+                Edge::Right => StyleTransitions::new().right(duration),
+                Edge::Bottom => StyleTransitions::new().bottom(duration),
+                Edge::Left => StyleTransitions::new().left(duration),
+            };
+            let mut state = StyleTransitionState::default();
+            let mut style = Style::default();
+
+            assert!(!transitions.apply(&mut style, &mut state, context, started_at, false));
+
+            match edge {
+                Edge::Top => style.inset.top = length(10.0),
+                Edge::Right => style.inset.right = length(10.0),
+                Edge::Bottom => style.inset.bottom = length(10.0),
+                Edge::Left => style.inset.left = length(10.0),
+            }
+            assert!(transitions.apply(&mut style, &mut state, context, started_at, false));
+
+            match edge {
+                Edge::Top => style.inset.top = length(10.0),
+                Edge::Right => style.inset.right = length(10.0),
+                Edge::Bottom => style.inset.bottom = length(10.0),
+                Edge::Left => style.inset.left = length(10.0),
+            }
+            assert!(transitions.apply(
+                &mut style,
+                &mut state,
+                context,
+                started_at + duration / 2,
+                false,
+            ));
+
+            for (index, value) in [
+                style.inset.top,
+                style.inset.right,
+                style.inset.bottom,
+                style.inset.left,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                assert_eq!(
+                    value,
+                    if index == selected_index {
+                        length(5.0)
+                    } else {
+                        Length::Auto
+                    }
+                );
+            }
+        }
     }
 
     #[test]
