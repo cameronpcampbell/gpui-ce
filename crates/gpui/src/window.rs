@@ -3449,6 +3449,29 @@ impl Window {
         result
     }
 
+    pub(crate) fn with_refined_selector_scope<R>(
+        &mut self,
+        refinement: &SelectorState,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = self.selector_scope_stack.last_mut().map(|scope| {
+            let previous = scope.state.clone();
+            scope.state.refine(refinement);
+            previous
+        });
+
+        let result = f(self);
+
+        if let Some(previous) = previous {
+            self.selector_scope_stack
+                .last_mut()
+                .expect("selector scope disappeared")
+                .state = previous;
+        }
+
+        result
+    }
+
     pub(crate) fn refine_base_style(
         &self,
         style: &mut Style,
@@ -3938,6 +3961,18 @@ impl Window {
         } else {
             f(self)
         }
+    }
+
+    pub(crate) fn with_child_paint_context<R>(
+        &mut self,
+        text_style: Option<TextStyleRefinement>,
+        content_mask: Option<ContentMask<Pixels>>,
+        tab_group: Option<isize>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.with_text_style(text_style, |window| {
+            window.with_content_mask(content_mask, |window| window.with_tab_group(tab_group, f))
+        })
     }
 
     /// Defers the drawing of the given element, scheduling it to be painted on top of the currently-drawn tree

@@ -2310,9 +2310,11 @@ impl Interactivity {
                     );
                 }
 
-                let style =
+                let mut style =
                     self.compute_style_internal(None, None, element_state.as_mut(), window, cx);
-                let layout_id = f(style, window, cx);
+                let selectors = mem::take(&mut style.selectors);
+                let layout_id =
+                    window.with_refined_selector_scope(&selectors, |window| f(style, window, cx));
                 (layout_id, element_state)
             },
         )
@@ -2386,13 +2388,14 @@ impl Interactivity {
             |element_state, window| {
                 let mut element_state =
                     element_state.map(|element_state| element_state.unwrap_or_default());
-                let style = self.compute_style_internal(
+                let mut style = self.compute_style_internal(
                     None,
                     Some(bounds),
                     element_state.as_mut(),
                     window,
                     cx,
                 );
+                let selectors = mem::take(&mut style.selectors);
 
                 if let Some(element_state) = element_state.as_mut() {
                     if let Some(clicked_state) = element_state.clicked_state.as_ref() {
@@ -2426,7 +2429,9 @@ impl Interactivity {
 
                             let scroll_offset =
                                 self.clamp_scroll_position(bounds, &style, window, cx);
-                            let result = f(&style, scroll_offset, hitbox, window, cx);
+                            let result = window.with_refined_selector_scope(&selectors, |window| {
+                                f(&style, scroll_offset, hitbox, window, cx)
+                            });
                             (result, element_state)
                         },
                     )
@@ -2544,13 +2549,14 @@ impl Interactivity {
                 let mut element_state =
                     element_state.map(|element_state| element_state.unwrap_or_default());
 
-                let style = self.compute_style_internal(
+                let mut style = self.compute_style_internal(
                     hitbox,
                     Some(bounds),
                     element_state.as_mut(),
                     window,
                     cx,
                 );
+                let selectors = mem::take(&mut style.selectors);
 
                 #[cfg(any(feature = "test-support", test))]
                 if let Some(debug_selector) = &self.debug_selector {
@@ -2571,95 +2577,81 @@ impl Interactivity {
                     tab_group = self.tab_index;
                 }
 
+                let text_style = style.text_style().cloned();
+                let content_mask = style.overflow_mask(bounds, window.rem_size());
                 window.with_element_opacity(style.opacity, |window| {
-                    style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
-                        window.with_text_style(style.text_style().cloned(), |window| {
-                            window.with_content_mask(
-                                style.overflow_mask(bounds, window.rem_size()),
-                                |window| {
-                                    window.with_tab_group(tab_group, |window| {
-                                        // Register the container's own focus handle *inside* its
-                                        // tab group, so that focusing the container and then
-                                        // calling `focus_next` descends into this group's first
-                                        // item. Inserting it before `with_tab_group` would give the
-                                        // container a shallower tab path than its children; with
-                                        // sibling groups every container would then sort ahead of
-                                        // every item, and `focus_next` from a container would jump
-                                        // to the first item in the whole window instead of its own.
-                                        if let Some(focus_handle) = &self.tracked_focus_handle {
-                                            window.next_frame.tab_stops.insert(focus_handle);
-                                        }
-                                        if let Some(hitbox) = hitbox {
-                                            #[cfg(debug_assertions)]
-                                            self.paint_debug_info(
-                                                global_id, hitbox, &style, window, cx,
-                                            );
+                    style.paint(bounds, window, cx, |window, cx| {
+                        window.with_child_paint_context(
+                            text_style,
+                            content_mask,
+                            tab_group,
+                            |window| {
+                                // Register the container's own focus handle *inside* its
+                                // tab group, so that focusing the container and then
+                                // calling `focus_next` descends into this group's first
+                                // item. Inserting it before `with_tab_group` would give the
+                                // container a shallower tab path than its children; with
+                                // sibling groups every container would then sort ahead of
+                                // every item, and `focus_next` from a container would jump
+                                // to the first item in the whole window instead of its own.
+                                if let Some(focus_handle) = &self.tracked_focus_handle {
+                                    window.next_frame.tab_stops.insert(focus_handle);
+                                }
+                                if let Some(hitbox) = hitbox {
+                                    #[cfg(debug_assertions)]
+                                    self.paint_debug_info(global_id, hitbox, &style, window, cx);
 
-                                            if let Some(drag) = cx.active_drag.as_ref() {
-                                                if let Some(mouse_cursor) = drag.cursor_style {
-                                                    window.set_window_cursor_style(mouse_cursor);
-                                                }
-                                            } else {
-                                                if let Some(mouse_cursor) = style.mouse_cursor {
-                                                    window.set_cursor_style(mouse_cursor, hitbox);
-                                                }
-                                            }
+                                    if let Some(mouse_cursor) =
+                                        cx.active_drag.as_ref().and_then(|drag| drag.cursor_style)
+                                    {
+                                        window.set_window_cursor_style(mouse_cursor);
+                                    } else if let Some(mouse_cursor) = style.mouse_cursor {
+                                        window.set_cursor_style(mouse_cursor, hitbox);
+                                    }
 
-                                            if let Some(group) = self.group.clone() {
-                                                GroupHitboxes::push(group, hitbox.id, cx);
-                                            }
+                                    if let Some(group) = self.group.clone() {
+                                        GroupHitboxes::push(group, hitbox.id, cx);
+                                    }
 
-                                            if let Some(area) = self.window_control {
-                                                window.insert_window_control_hitbox(
-                                                    area,
-                                                    hitbox.clone(),
-                                                );
-                                            }
+                                    if let Some(area) = self.window_control {
+                                        window.insert_window_control_hitbox(area, hitbox.clone());
+                                    }
 
-                                            self.paint_mouse_listeners(
-                                                hitbox,
-                                                element_state.as_mut(),
-                                                window,
-                                                cx,
-                                            );
-                                            self.paint_scroll_listener(hitbox, &style, window, cx);
-                                        }
+                                    self.paint_mouse_listeners(
+                                        hitbox,
+                                        element_state.as_mut(),
+                                        window,
+                                        cx,
+                                    );
+                                    self.paint_scroll_listener(hitbox, &style, window, cx);
+                                }
 
-                                        self.paint_keyboard_listeners(window, cx);
+                                self.paint_keyboard_listeners(window, cx);
 
-                                        if window.a11y.is_active() {
-                                            if let Some(global_id) = global_id {
-                                                if !self.a11y_action_listeners.is_empty() {
-                                                    let node_id = global_id.accesskit_node_id();
-                                                    for (action, listener) in
-                                                        self.a11y_action_listeners.drain(..)
-                                                    {
-                                                        window.on_a11y_action(
-                                                            node_id, action, listener,
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        }
+                                if window.a11y.is_active()
+                                    && let Some(global_id) = global_id
+                                    && !self.a11y_action_listeners.is_empty()
+                                {
+                                    let node_id = global_id.accesskit_node_id();
+                                    for (action, listener) in self.a11y_action_listeners.drain(..) {
+                                        window.on_a11y_action(node_id, action, listener);
+                                    }
+                                }
 
-                                        f(&style, window, cx);
+                                window.with_refined_selector_scope(&selectors, |window| {
+                                    f(&style, window, cx)
+                                });
 
-                                        if let Some(_hitbox) = hitbox {
-                                            #[cfg(any(feature = "inspector", debug_assertions))]
-                                            window.insert_inspector_hitbox(
-                                                _hitbox.id,
-                                                _inspector_id,
-                                                cx,
-                                            );
+                                if let Some(_hitbox) = hitbox {
+                                    #[cfg(any(feature = "inspector", debug_assertions))]
+                                    window.insert_inspector_hitbox(_hitbox.id, _inspector_id, cx);
 
-                                            if let Some(group) = self.group.as_ref() {
-                                                GroupHitboxes::pop(group, cx);
-                                            }
-                                        }
-                                    })
-                                },
-                            );
-                        });
+                                    if let Some(group) = self.group.as_ref() {
+                                        GroupHitboxes::pop(group, cx);
+                                    }
+                                }
+                            },
+                        );
                     });
                 });
 
@@ -4463,6 +4455,87 @@ mod tests {
         }
     }
 
+    struct ConditionalSelectorCachedTarget {
+        width: Rc<Cell<Pixels>>,
+        painted: Rc<Cell<bool>>,
+    }
+
+    impl Render for ConditionalSelectorCachedTarget {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let width = self.width.clone();
+            let painted = self.painted.clone();
+
+            div()
+                .class("nested")
+                .w(px(10.))
+                .h(px(10.))
+                .invisible()
+                .child(
+                    canvas(
+                        move |bounds, _, _| width.set(bounds.size.width),
+                        move |_, _, _, _| painted.set(true),
+                    )
+                    .size_full(),
+                )
+        }
+    }
+
+    struct ConditionalSelectorTestView {
+        direct_width: Rc<Cell<Pixels>>,
+        control_width: Rc<Cell<Pixels>>,
+        nested_target: Entity<ConditionalSelectorCachedTarget>,
+    }
+
+    impl Render for ConditionalSelectorTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let direct_width = self.direct_width.clone();
+            let control_width = self.control_width.clone();
+
+            div().size_full().child(
+                div()
+                    .id("interactive-selector-parent")
+                    .ml(px(20.))
+                    .mt(px(20.))
+                    .size(px(100.))
+                    .hover(|style| {
+                        style
+                            .select_children(class("direct"), |style| style.w(px(20.)))
+                            .select_descendants(class("nested"), |style| style.w(px(30.)).visible())
+                    })
+                    .active(|style| {
+                        style
+                            .select_children(class("direct"), |style| style.w(px(40.)))
+                            .select_descendants(class("nested"), |style| {
+                                style.w(px(50.)).invisible()
+                            })
+                    })
+                    .child(
+                        div().class("direct").w(px(10.)).h(px(10.)).child(
+                            canvas(
+                                move |bounds, _, _| direct_width.set(bounds.size.width),
+                                |_, _, _, _| {},
+                            )
+                            .size_full(),
+                        ),
+                    )
+                    .child(
+                        self.nested_target
+                            .clone()
+                            .cached(StyleRefinement::default().w(px(60.)).h(px(10.))),
+                    )
+                    .child(
+                        div().w(px(10.)).h(px(10.)).child(
+                            canvas(
+                                move |bounds, _, _| control_width.set(bounds.size.width),
+                                |_, _, _, _| {},
+                            )
+                            .size_full(),
+                        ),
+                    ),
+            )
+        }
+    }
+
     impl Render for SelectorTestView {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let measure = |index: usize| {
@@ -4580,6 +4653,99 @@ mod tests {
         cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
             .unwrap();
         assert_eq!(render_count.get(), 2);
+    }
+
+    #[gpui::test]
+    fn conditional_selector_scopes_follow_interaction_state(cx: &mut TestAppContext) {
+        let direct_width = Rc::new(Cell::new(px(0.)));
+        let nested_width = Rc::new(Cell::new(px(0.)));
+        let nested_painted = Rc::new(Cell::new(false));
+        let control_width = Rc::new(Cell::new(px(0.)));
+        let window = cx.add_window({
+            let direct_width = direct_width.clone();
+            let nested_width = nested_width.clone();
+            let nested_painted = nested_painted.clone();
+            let control_width = control_width.clone();
+            move |_, cx| ConditionalSelectorTestView {
+                direct_width,
+                control_width,
+                nested_target: cx.new(|_| ConditionalSelectorCachedTarget {
+                    width: nested_width,
+                    painted: nested_painted,
+                }),
+            }
+        });
+        let window = AnyWindowHandle::from(window);
+
+        let draw = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
+                .unwrap();
+        };
+        let move_mouse = |cx: &mut TestAppContext, position| {
+            cx.update_window(window, |_, window, cx| {
+                window.simulate_mouse_move(position, cx);
+                window.draw(cx).clear(cx);
+            })
+            .unwrap();
+        };
+        let assert_state =
+            |state, expected_direct, expected_nested, expected_control, expected_painted| {
+                assert_eq!(direct_width.get(), expected_direct, "{state}: direct width");
+                assert_eq!(nested_width.get(), expected_nested, "{state}: nested width");
+                assert_eq!(
+                    control_width.get(),
+                    expected_control,
+                    "{state}: control width"
+                );
+                assert_eq!(nested_painted.get(), expected_painted, "{state}: painted");
+            };
+        let inside = point(px(50.), px(50.));
+
+        draw(cx);
+        assert_state("idle", px(10.), px(10.), px(10.), false);
+
+        nested_painted.set(false);
+        move_mouse(cx, inside);
+        assert_state("hover", px(20.), px(30.), px(10.), true);
+
+        nested_painted.set(false);
+        cx.update_window(window, |_, window, cx| {
+            window.dispatch_event(
+                MouseDownEvent {
+                    position: inside,
+                    button: MouseButton::Left,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        assert_state("mouse down", px(40.), px(50.), px(10.), false);
+
+        nested_painted.set(false);
+        cx.update_window(window, |_, window, cx| {
+            window.dispatch_event(
+                MouseUpEvent {
+                    position: inside,
+                    button: MouseButton::Left,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        assert_state("mouse up", px(20.), px(30.), px(10.), true);
+
+        nested_painted.set(false);
+        move_mouse(cx, point(px(150.), px(150.)));
+        assert_state("mouse leave", px(10.), px(10.), px(10.), false);
     }
 
     struct GroupHoverTestView {
