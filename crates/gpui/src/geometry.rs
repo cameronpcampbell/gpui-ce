@@ -3292,11 +3292,16 @@ impl TryFrom<&'_ str> for Rems {
 /// A value of `1.0` represents the full reference length, while `0.5` represents half of it.
 #[derive(Clone, Copy, Default, Add, Sub, Mul, Div, Neg, PartialEq)]
 #[repr(transparent)]
-pub struct Relative(pub f32);
+pub struct Relative(pub(crate) f32);
 
 impl Relative {
     /// A relative length of zero.
     pub const ZERO: Self = Self(0.0);
+
+    /// Returns the raw `f32` value of this `Relative`.
+    pub fn as_f32(self) -> f32 {
+        self.0
+    }
 
     /// Resolves this relative length against a base size.
     pub fn to_pixels(self, base_size: AbsoluteLength, rem_size: Pixels) -> Pixels {
