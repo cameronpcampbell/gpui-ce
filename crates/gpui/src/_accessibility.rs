@@ -188,6 +188,26 @@
 //! label property on a parent [`div`] without duplicating the text in the
 //! accessibility tree.
 //!
+//! ## Hiding content from assistive technology
+//!
+//! [`aria_hidden(true)`][StatefulInteractiveElement::aria_hidden] hides an
+//! element and all of its descendants from assistive technology. It does not
+//! change rendering or input:
+//! ```rust
+//! # use gpui::*;
+//! let decorative_content = div()
+//!     .id("decorative-content")
+//!     .aria_hidden(true)
+//!     .child(text!("Decorative text"));
+//! ```
+//!
+//! GPUI requires an [`ElementId`] so it can create a stable AccessKit node for
+//! the hidden subtree. The element does not need an accessible role. Calling
+//! `aria_hidden(false)` on a descendant cannot override a hidden ancestor.
+//!
+//! Do not hide elements that can receive keyboard focus or contain focusable
+//! descendants. Hidden elements keep their focus and input handlers.
+//!
 //! ### Handling actions
 //!
 //! Assistive technology can dispatch actions to the UI. While many users of
