@@ -181,12 +181,13 @@ impl SelectorState {
     pub(crate) fn matching_self_rules<'a>(
         &'a self,
         element_id: Option<&crate::ElementId>,
+        classes: &'a HashSet<SharedString>,
         element_tag: &'a str,
     ) -> impl Iterator<Item = &'a StyleRefinement> {
         self.data()
             .self_rules
             .iter()
-            .filter(move |rule| rule.matches(element_id, self.classes(), element_tag))
+            .filter(move |rule| rule.matches(element_id, classes, element_tag))
             .map(|rule| rule.refinement.as_ref())
     }
 
