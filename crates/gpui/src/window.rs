@@ -14,13 +14,13 @@ use crate::{
     PromptLevel, Quad, RasterizedGlyphFormat, Render, RenderGlyphParams, RenderImage,
     RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels, Scene, SelectorScope,
-    SelectorState, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite,
-    SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap,
-    TaffyLayoutEngine, Task, TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState,
-    TransformationMatrix, Transition, TransitionState, Underline, UnderlineStyle, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
-    WindowParams, WindowTextSystem, point, prelude::*, profiler, px, rems, size, transparent_black,
-    white,
+    SelectorState, Shadow, SharedString, Size, StrikethroughStyle, Style, StyleRefinement,
+    SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController,
+    TabStopMap, TaffyLayoutEngine, Task, TextRenderingMode, TextStyle, TextStyleRefinement,
+    ThermalState, TransformationMatrix, Transition, TransitionState, Underline, UnderlineStyle,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
+    WindowOptions, WindowParams, WindowTextSystem, point, prelude::*, profiler, px, rems, size,
+    transparent_black, white,
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -3468,6 +3468,7 @@ impl Window {
     pub(crate) fn with_selector_scope<R>(
         &mut self,
         scope: Option<SelectorState>,
+        element_id: Option<&crate::ElementId>,
         element_tag: &'static str,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
@@ -3479,6 +3480,19 @@ impl Window {
             state: scope,
             element_tag,
         });
+
+        let mut nested_selectors = Vec::new();
+        self.for_each_matching_selector_refinement(element_id, |refinement| {
+            nested_selectors.push(refinement.selector_state().clone());
+        });
+        let current = self
+            .selector_scope_stack
+            .last_mut()
+            .expect("selector scope disappeared");
+        for selectors in nested_selectors {
+            Self::refine_selector_scope(current, &selectors, element_id);
+        }
+
         let result = f(self);
         self.selector_scope_stack.pop();
         result
@@ -3487,13 +3501,17 @@ impl Window {
     pub(crate) fn with_refined_selector_scope<R>(
         &mut self,
         refinement: &SelectorState,
+        element_id: Option<&crate::ElementId>,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
-        let previous = self.selector_scope_stack.last_mut().map(|scope| {
-            let previous = scope.state.clone();
-            scope.state.refine(refinement);
-            previous
-        });
+        let previous = self
+            .selector_scope_stack
+            .last()
+            .map(|scope| scope.state.clone());
+
+        if let Some(scope) = self.selector_scope_stack.last_mut() {
+            Self::refine_selector_scope(scope, refinement, element_id);
+        }
 
         let result = f(self);
 
@@ -3507,16 +3525,28 @@ impl Window {
         result
     }
 
-    pub(crate) fn refine_base_style(
-        &self,
-        style: &mut Style,
-        refinement: &crate::StyleRefinement,
+    fn refine_selector_scope(
+        scope: &mut SelectorScope,
+        refinement: &SelectorState,
         element_id: Option<&crate::ElementId>,
     ) {
-        style.refine(refinement);
+        scope.state.refine(refinement);
 
+        let nested_selectors = refinement
+            .matching_self_rules(element_id, scope.state.classes(), scope.element_tag)
+            .map(|refinement| refinement.selector_state().clone())
+            .collect::<Vec<_>>();
+        for selectors in nested_selectors {
+            Self::refine_selector_scope(scope, &selectors, element_id);
+        }
+    }
+
+    fn for_each_matching_selector_refinement(
+        &self,
+        element_id: Option<&crate::ElementId>,
+        mut apply: impl FnMut(&StyleRefinement),
+    ) {
         let Some((current, ancestors)) = self.selector_scope_stack.split_last() else {
-            style.selectors = SelectorState::default();
             return;
         };
         let classes = current.state.classes();
@@ -3524,31 +3554,50 @@ impl Window {
         // Cascade from the broadest scope toward the element: descendant rules first,
         // then immediate-child rules, then rules declared on the element itself.
         for ancestor in ancestors {
-            for selector_style in
+            for refinement in
                 ancestor
                     .state
                     .matching_descendant_rules(element_id, classes, current.element_tag)
             {
-                style.refine(selector_style);
+                apply(refinement);
             }
         }
 
         if let Some(parent) = ancestors.last() {
-            for selector_style in
+            for refinement in
                 parent
                     .state
                     .matching_child_rules(element_id, classes, current.element_tag)
             {
-                style.refine(selector_style);
+                apply(refinement);
             }
         }
 
-        for selector_style in current
-            .state
-            .matching_self_rules(element_id, current.element_tag)
+        for refinement in
+            current
+                .state
+                .matching_self_rules(element_id, classes, current.element_tag)
         {
-            style.refine(selector_style);
+            apply(refinement);
         }
+    }
+
+    pub(crate) fn refine_base_style(
+        &self,
+        style: &mut Style,
+        refinement: &StyleRefinement,
+        element_id: Option<&crate::ElementId>,
+    ) {
+        style.refine(refinement);
+
+        if self.selector_scope_stack.is_empty() {
+            style.selectors = SelectorState::default();
+            return;
+        }
+
+        self.for_each_matching_selector_refinement(element_id, |refinement| {
+            style.refine(refinement);
+        });
 
         // Selector metadata is only needed while resolving the cascade. Do not carry it into
         // layout and paint styles, which are cloned and retained by the layout engine.

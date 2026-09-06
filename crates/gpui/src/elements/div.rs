@@ -2377,8 +2377,11 @@ impl Interactivity {
                 let mut style =
                     self.compute_style_internal(None, None, element_state.as_mut(), window, cx);
                 let selectors = mem::take(&mut style.selectors);
-                let layout_id =
-                    window.with_refined_selector_scope(&selectors, |window| f(style, window, cx));
+                let layout_id = window.with_refined_selector_scope(
+                    &selectors,
+                    self.element_id.as_ref(),
+                    |window| f(style, window, cx),
+                );
                 (layout_id, element_state)
             },
         )
@@ -2493,9 +2496,11 @@ impl Interactivity {
 
                             let scroll_offset =
                                 self.clamp_scroll_position(bounds, &style, window, cx);
-                            let result = window.with_refined_selector_scope(&selectors, |window| {
-                                f(&style, scroll_offset, hitbox, window, cx)
-                            });
+                            let result = window.with_refined_selector_scope(
+                                &selectors,
+                                self.element_id.as_ref(),
+                                |window| f(&style, scroll_offset, hitbox, window, cx),
+                            );
                             (result, element_state)
                         },
                     )
@@ -2702,9 +2707,11 @@ impl Interactivity {
                                     }
                                 }
 
-                                window.with_refined_selector_scope(&selectors, |window| {
-                                    f(&style, window, cx)
-                                });
+                                window.with_refined_selector_scope(
+                                    &selectors,
+                                    self.element_id.as_ref(),
+                                    |window| f(&style, window, cx),
+                                );
 
                                 if let Some(_hitbox) = hitbox {
                                     #[cfg(any(feature = "inspector", debug_assertions))]
@@ -4464,7 +4471,41 @@ mod tests {
         selectors::{class, id, tag},
         util::FluentBuilder as _,
     };
-    use std::{cell::Cell, rc::Weak};
+    use std::{
+        cell::{Cell, RefCell},
+        collections::BTreeMap,
+        rc::Weak,
+    };
+
+    #[derive(Clone, Default)]
+    struct WidthMeasurements(Rc<RefCell<BTreeMap<&'static str, Pixels>>>);
+
+    impl WidthMeasurements {
+        fn observe(&self, name: &'static str) -> Canvas<()> {
+            let measurements = self.0.clone();
+            canvas(
+                move |bounds, _, _| {
+                    measurements.borrow_mut().insert(name, bounds.size.width);
+                },
+                |_, _, _, _| {},
+            )
+        }
+
+        fn observe_paint(&self, name: &'static str, painted: Rc<Cell<bool>>) -> Canvas<()> {
+            let measurements = self.0.clone();
+            canvas(
+                move |bounds, _, _| {
+                    measurements.borrow_mut().insert(name, bounds.size.width);
+                },
+                move |_, _, _, _| painted.set(true),
+            )
+        }
+
+        fn assert_widths(&self, expected: &[(&'static str, Pixels)]) {
+            let expected = expected.iter().copied().collect::<BTreeMap<_, _>>();
+            assert_eq!(*self.0.borrow(), expected);
+        }
+    }
 
     #[gpui::test]
     fn inline_div_places_element_children_in_text_flow(cx: &mut TestAppContext) {
@@ -4523,33 +4564,33 @@ mod tests {
     }
 
     struct SelectorTestView {
-        widths: Rc<Vec<Cell<Pixels>>>,
+        measurements: WidthMeasurements,
     }
 
     #[derive(IntoElement)]
     struct SelectorComponentTarget {
-        widths: Rc<Vec<Cell<Pixels>>>,
+        measurements: WidthMeasurements,
     }
 
     impl RenderOnce for SelectorComponentTarget {
         fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-            canvas(
-                move |bounds, _, _| self.widths[6].set(bounds.size.width),
-                |_, _, _, _| {},
-            )
-            .class("component-target")
-            .h(px(10.))
+            self.measurements
+                .observe("component child")
+                .class("component-target")
+                .h(px(10.))
         }
     }
 
     struct CachedSelectorTarget {
-        render_count: Rc<Cell<usize>>,
+        measurements: WidthMeasurements,
     }
 
     impl Render for CachedSelectorTarget {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            self.render_count.set(self.render_count.get() + 1);
-            div().class("cached-selector-target").size_full()
+            div()
+                .class("cached-selector-target")
+                .h(px(10.))
+                .child(self.measurements.observe("cached subtree").size_full())
         }
     }
 
@@ -4560,11 +4601,19 @@ mod tests {
 
     impl Render for CachedSelectorRoot {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            let root = div().size_full();
+            let root = div().class("cached-selector-root").size_full();
             let root = if self.alternate {
-                root.select_descendants(class("cached-selector-target"), |style| style.opacity(0.5))
+                root.select(class("cached-selector-root"), |style| {
+                    style.select_descendants(class("cached-selector-target"), |style| {
+                        style.w(px(40.))
+                    })
+                })
             } else {
-                root.select_descendants(class("cached-selector-target"), |style| style.opacity(1.0))
+                root.select(class("cached-selector-root"), |style| {
+                    style.select_descendants(class("cached-selector-target"), |style| {
+                        style.w(px(20.))
+                    })
+                })
             };
 
             root.child(
@@ -4576,13 +4625,12 @@ mod tests {
     }
 
     struct ConditionalSelectorCachedTarget {
-        width: Rc<Cell<Pixels>>,
+        measurements: WidthMeasurements,
         painted: Rc<Cell<bool>>,
     }
 
     impl Render for ConditionalSelectorCachedTarget {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            let width = self.width.clone();
             let painted = self.painted.clone();
 
             div()
@@ -4591,52 +4639,51 @@ mod tests {
                 .h(px(10.))
                 .invisible()
                 .child(
-                    canvas(
-                        move |bounds, _, _| width.set(bounds.size.width),
-                        move |_, _, _, _| painted.set(true),
-                    )
-                    .size_full(),
+                    self.measurements
+                        .observe_paint("nested", painted)
+                        .size_full(),
                 )
         }
     }
 
     struct ConditionalSelectorTestView {
-        direct_width: Rc<Cell<Pixels>>,
-        control_width: Rc<Cell<Pixels>>,
+        measurements: WidthMeasurements,
         nested_target: Entity<ConditionalSelectorCachedTarget>,
     }
 
     impl Render for ConditionalSelectorTestView {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            let direct_width = self.direct_width.clone();
-            let control_width = self.control_width.clone();
-
             div().size_full().child(
                 div()
                     .id("interactive-selector-parent")
+                    .class("interactive-selector-parent")
                     .ml(px(20.))
                     .mt(px(20.))
                     .size(px(100.))
                     .hover(|style| {
-                        style
-                            .select_children(class("direct"), |style| style.w(px(20.)))
-                            .select_descendants(class("nested"), |style| style.w(px(30.)).visible())
+                        style.select(class("interactive-selector-parent"), |style| {
+                            style
+                                .select_children(class("direct"), |style| style.w(px(20.)))
+                                .select_descendants(class("nested"), |style| {
+                                    style.w(px(30.)).visible()
+                                })
+                        })
                     })
                     .active(|style| {
-                        style
-                            .select_children(class("direct"), |style| style.w(px(40.)))
-                            .select_descendants(class("nested"), |style| {
-                                style.w(px(50.)).invisible()
-                            })
+                        style.select(class("interactive-selector-parent"), |style| {
+                            style
+                                .select_children(class("direct"), |style| style.w(px(40.)))
+                                .select_descendants(class("nested"), |style| {
+                                    style.w(px(50.)).invisible()
+                                })
+                        })
                     })
                     .child(
-                        div().class("direct").w(px(10.)).h(px(10.)).child(
-                            canvas(
-                                move |bounds, _, _| direct_width.set(bounds.size.width),
-                                |_, _, _, _| {},
-                            )
-                            .size_full(),
-                        ),
+                        div()
+                            .class("direct")
+                            .w(px(10.))
+                            .h(px(10.))
+                            .child(self.measurements.observe("direct").size_full()),
                     )
                     .child(
                         self.nested_target
@@ -4644,13 +4691,10 @@ mod tests {
                             .cached(StyleRefinement::default().w(px(60.)).h(px(10.))),
                     )
                     .child(
-                        div().w(px(10.)).h(px(10.)).child(
-                            canvas(
-                                move |bounds, _, _| control_width.set(bounds.size.width),
-                                |_, _, _, _| {},
-                            )
-                            .size_full(),
-                        ),
+                        div()
+                            .w(px(10.))
+                            .h(px(10.))
+                            .child(self.measurements.observe("unmatched control").size_full()),
                     ),
             )
         }
@@ -4658,19 +4702,13 @@ mod tests {
 
     impl Render for SelectorTestView {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            let measure = |index: usize| {
-                let widths = self.widths.clone();
-                canvas(
-                    move |bounds, _, _| widths[index].set(bounds.size.width),
-                    |_, _, _, _| {},
-                )
-                .size_full()
-            };
-
             div()
                 .flex()
                 .flex_col()
                 .select_descendants([tag::<Div>(), class("target")], |style| style.w(px(30.)))
+                .select_descendants(class("nested-enabled"), |style| {
+                    style.select_children(id("nested-id-leaf"), |style| style.w(px(60.)))
+                })
                 .select_children(tag::<Canvas<()>>(), |style| style.w(px(60.)))
                 .select_children(tag::<Div>(), |style| style.w(px(15.)))
                 .select_children(class("target"), |style| style.w(px(20.)))
@@ -4679,7 +4717,7 @@ mod tests {
                         .w(px(10.))
                         .h(px(10.))
                         .class("target")
-                        .child(measure(0)),
+                        .child(self.measurements.observe("matching child").size_full()),
                 )
                 .child(
                     div().child(
@@ -4687,7 +4725,7 @@ mod tests {
                             .w(px(10.))
                             .h(px(10.))
                             .class("target")
-                            .child(measure(1)),
+                            .child(self.measurements.observe("matching descendant").size_full()),
                     ),
                 )
                 .child(
@@ -4696,7 +4734,7 @@ mod tests {
                         .h(px(10.))
                         .select([tag::<Div>(), class("local")], |style| style.w(px(40.)))
                         .class("local")
-                        .child(measure(2)),
+                        .child(self.measurements.observe("matching self").size_full()),
                 )
                 .child(
                     div()
@@ -4709,7 +4747,11 @@ mod tests {
                                 .class("target")
                                 .w(px(10.))
                                 .h(px(10.))
-                                .child(measure(3)),
+                                .child(
+                                    self.measurements
+                                        .observe("matching compound child")
+                                        .size_full(),
+                                ),
                         )
                         .child(
                             div()
@@ -4717,82 +4759,137 @@ mod tests {
                                 .class("target")
                                 .w(px(10.))
                                 .h(px(10.))
-                                .child(measure(4)),
+                                .child(
+                                    self.measurements
+                                        .observe("non-matching compound child")
+                                        .size_full(),
+                                ),
                         ),
                 )
-                .child(div().w(px(10.)).h(px(10.)).class("other").child(measure(5)))
+                .child(
+                    div()
+                        .w(px(10.))
+                        .h(px(10.))
+                        .class("other")
+                        .child(self.measurements.observe("unmatched child").size_full()),
+                )
                 .child(SelectorComponentTarget {
-                    widths: self.widths.clone(),
+                    measurements: self.measurements.clone(),
                 })
+                .child(
+                    div()
+                        .class("nested-scope")
+                        .select(class("nested-scope"), |style| {
+                            style.select_children(class("nested-child"), |style| {
+                                style
+                                    .w(px(20.))
+                                    .select_children(class("nested-leaf"), |style| style.w(px(40.)))
+                            })
+                        })
+                        .child(
+                            div().class("nested-child").w(px(10.)).h(px(10.)).child(
+                                div().class("nested-leaf").w(px(10.)).h(px(10.)).child(
+                                    self.measurements
+                                        .observe("nested selector from matched child")
+                                        .size_full(),
+                                ),
+                            ),
+                        ),
+                )
+                .child(
+                    div()
+                        .class("other-scope")
+                        .select(class("nested-scope"), |style| {
+                            style.select_descendants(class("blocked-target"), |style| {
+                                style.w(px(50.))
+                            })
+                        })
+                        .child(
+                            div().class("blocked-target").w(px(10.)).h(px(10.)).child(
+                                self.measurements
+                                    .observe("nested rules require outer match")
+                                    .size_full(),
+                            ),
+                        ),
+                )
+                .child(
+                    div().child(
+                        div().class("nested-enabled").child(
+                            div().id("nested-id-leaf").w(px(10.)).h(px(10.)).child(
+                                self.measurements
+                                    .observe("nested selector from matched descendant")
+                                    .size_full(),
+                            ),
+                        ),
+                    ),
+                )
         }
     }
 
     #[gpui::test]
-    fn selector_scopes_match_and_cascade_across_the_element_tree(cx: &mut TestAppContext) {
-        let widths = Rc::new((0..7).map(|_| Cell::new(px(0.))).collect::<Vec<_>>());
+    fn selectors_match_cascade_and_compose_across_the_element_tree(cx: &mut TestAppContext) {
+        let measurements = WidthMeasurements::default();
         let window = cx.add_window({
-            let widths = widths.clone();
-            move |_, _| SelectorTestView { widths }
+            let measurements = measurements.clone();
+            move |_, _| SelectorTestView { measurements }
         });
         let window = AnyWindowHandle::from(window);
 
         cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
             .unwrap();
 
-        assert_eq!(
-            widths.iter().map(Cell::get).collect::<Vec<_>>(),
-            [
-                px(20.),
-                px(30.),
-                px(40.),
-                px(50.),
-                px(30.),
-                px(15.),
-                px(60.)
-            ]
-        );
+        measurements.assert_widths(&[
+            ("matching child", px(20.)),
+            ("matching descendant", px(30.)),
+            ("matching self", px(40.)),
+            ("matching compound child", px(50.)),
+            ("non-matching compound child", px(30.)),
+            ("unmatched child", px(15.)),
+            ("component child", px(60.)),
+            ("nested selector from matched child", px(40.)),
+            ("nested rules require outer match", px(10.)),
+            ("nested selector from matched descendant", px(60.)),
+        ]);
     }
 
     #[gpui::test]
-    fn cached_views_are_invalidated_when_their_selector_scope_changes(cx: &mut TestAppContext) {
-        let render_count = Rc::new(Cell::new(0));
+    fn cached_subtrees_follow_selector_changes(cx: &mut TestAppContext) {
+        let measurements = WidthMeasurements::default();
         let window = cx.add_window({
-            let render_count = render_count.clone();
+            let measurements = measurements.clone();
             move |_, cx| CachedSelectorRoot {
-                target: cx.new(|_| CachedSelectorTarget { render_count }),
+                target: cx.new(|_| CachedSelectorTarget { measurements }),
                 alternate: false,
             }
         });
 
         cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
             .unwrap();
-        assert_eq!(render_count.get(), 1);
+        measurements.assert_widths(&[("cached subtree", px(20.))]);
 
         let root = window.root(cx).unwrap();
         cx.update_entity(&root, |root, _| root.alternate = true);
         cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
             .unwrap();
-        assert_eq!(render_count.get(), 2);
+        measurements.assert_widths(&[("cached subtree", px(40.))]);
     }
 
     #[gpui::test]
-    fn conditional_selector_scopes_follow_interaction_state(cx: &mut TestAppContext) {
-        let direct_width = Rc::new(Cell::new(px(0.)));
-        let nested_width = Rc::new(Cell::new(px(0.)));
+    fn conditional_selectors_update_cached_and_uncached_descendants(cx: &mut TestAppContext) {
+        let measurements = WidthMeasurements::default();
         let nested_painted = Rc::new(Cell::new(false));
-        let control_width = Rc::new(Cell::new(px(0.)));
         let window = cx.add_window({
-            let direct_width = direct_width.clone();
-            let nested_width = nested_width.clone();
+            let measurements = measurements.clone();
             let nested_painted = nested_painted.clone();
-            let control_width = control_width.clone();
-            move |_, cx| ConditionalSelectorTestView {
-                direct_width,
-                control_width,
-                nested_target: cx.new(|_| ConditionalSelectorCachedTarget {
-                    width: nested_width,
-                    painted: nested_painted,
-                }),
+            move |_, cx| {
+                let nested_measurements = measurements.clone();
+                ConditionalSelectorTestView {
+                    measurements,
+                    nested_target: cx.new(|_| ConditionalSelectorCachedTarget {
+                        measurements: nested_measurements,
+                        painted: nested_painted,
+                    }),
+                }
             }
         });
         let window = AnyWindowHandle::from(window);
@@ -4810,13 +4907,11 @@ mod tests {
         };
         let assert_state =
             |state, expected_direct, expected_nested, expected_control, expected_painted| {
-                assert_eq!(direct_width.get(), expected_direct, "{state}: direct width");
-                assert_eq!(nested_width.get(), expected_nested, "{state}: nested width");
-                assert_eq!(
-                    control_width.get(),
-                    expected_control,
-                    "{state}: control width"
-                );
+                measurements.assert_widths(&[
+                    ("direct", expected_direct),
+                    ("nested", expected_nested),
+                    ("unmatched control", expected_control),
+                ]);
                 assert_eq!(nested_painted.get(), expected_painted, "{state}: painted");
             };
         let inside = point(px(50.), px(50.));

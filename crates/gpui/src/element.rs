@@ -364,15 +364,19 @@ impl<E: Element> Drawable<E> {
                 }
 
                 let selector_scope = self.element.selector_state().cloned();
-                let (layout_id, request_layout) =
-                    window.with_selector_scope(selector_scope, type_name::<E>(), |window| {
+                let (layout_id, request_layout) = window.with_selector_scope(
+                    selector_scope,
+                    global_id.as_ref().and_then(|global_id| global_id.0.last()),
+                    type_name::<E>(),
+                    |window| {
                         self.element.request_layout(
                             global_id.as_ref(),
                             inspector_id.as_ref(),
                             window,
                             cx,
                         )
-                    });
+                    },
+                );
 
                 if global_id.is_some() {
                     window.element_id_stack.pop();
@@ -451,8 +455,11 @@ impl<E: Element> Drawable<E> {
 
                 let node_id = window.next_frame.dispatch_tree.push_node();
                 let selector_scope = self.element.selector_state().cloned();
-                let mut prepaint =
-                    window.with_selector_scope(selector_scope, type_name::<E>(), |window| {
+                let mut prepaint = window.with_selector_scope(
+                    selector_scope,
+                    global_id.as_ref().and_then(|global_id| global_id.0.last()),
+                    type_name::<E>(),
+                    |window| {
                         self.element.prepaint(
                             global_id.as_ref(),
                             inspector_id.as_ref(),
@@ -461,7 +468,8 @@ impl<E: Element> Drawable<E> {
                             window,
                             cx,
                         )
-                    });
+                    },
+                );
                 window.next_frame.dispatch_tree.pop_node();
 
                 if pushed_a11y_node {
@@ -529,17 +537,22 @@ impl<E: Element> Drawable<E> {
 
                 window.next_frame.dispatch_tree.set_active_node(node_id);
                 let selector_scope = self.element.selector_state().cloned();
-                window.with_selector_scope(selector_scope, type_name::<E>(), |window| {
-                    self.element.paint(
-                        global_id.as_ref(),
-                        inspector_id.as_ref(),
-                        bounds,
-                        &mut request_layout,
-                        &mut prepaint,
-                        window,
-                        cx,
-                    );
-                });
+                window.with_selector_scope(
+                    selector_scope,
+                    global_id.as_ref().and_then(|global_id| global_id.0.last()),
+                    type_name::<E>(),
+                    |window| {
+                        self.element.paint(
+                            global_id.as_ref(),
+                            inspector_id.as_ref(),
+                            bounds,
+                            &mut request_layout,
+                            &mut prepaint,
+                            window,
+                            cx,
+                        );
+                    },
+                );
 
                 if global_id.is_some() {
                     window.element_id_stack.pop();
