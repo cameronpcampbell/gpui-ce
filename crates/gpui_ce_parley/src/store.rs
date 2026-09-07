@@ -98,6 +98,11 @@ pub enum ColorGlyphKind {
 
 /// A platform glyph rasterizer used after Parley has selected and shaped an exact face.
 pub trait GlyphRasterizer: Send {
+    /// Returns whether this rasterizer can preserve the glyph's native color artwork.
+    fn supports_color_glyph(&self, _kind: ColorGlyphKind) -> bool {
+        true
+    }
+
     /// Reduces a scene request to the settings which alter cached raster pixels.
     fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle;
 
@@ -213,11 +218,6 @@ impl ColorGlyphClassifier<'_> {
             .iter()
             .any(|&(start, end)| (start..=end).contains(&glyph_id.0))
             .then_some(ColorGlyphKind::Svg)
-    }
-
-    /// Returns whether this specific glyph has native color artwork.
-    pub(crate) fn contains(&self, glyph_id: GlyphId) -> bool {
-        self.kind(glyph_id).is_some()
     }
 }
 
@@ -468,6 +468,10 @@ impl Default for SwashGlyphRasterizer {
 }
 
 impl GlyphRasterizer for SwashGlyphRasterizer {
+    fn supports_color_glyph(&self, kind: ColorGlyphKind) -> bool {
+        matches!(kind, ColorGlyphKind::ColrV0 | ColorGlyphKind::Bitmap)
+    }
+
     fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
         if request.requested_mode == GlyphRenderMode::Color {
             PreparedRasterStyle {
