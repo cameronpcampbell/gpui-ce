@@ -214,6 +214,7 @@ struct PrelayoutState {
 
 #[doc(hidden)]
 pub struct LayoutState {
+    layout_id: LayoutId,
     state: Entity<EditableTextState>,
     caret: Entity<Caret>,
 }
@@ -228,6 +229,7 @@ struct InteractivityPrepaint {
 /// Internal type containing prepaint information used to paint the element
 #[doc(hidden)]
 pub struct PrepaintState {
+    bounds: Bounds<Pixels>,
     interactivity: InteractivityPrepaint,
     focus_handle: FocusHandle,
     elements: PrepaintElements,
@@ -359,6 +361,7 @@ impl Element for EditableTextElement {
         (
             layout_id,
             LayoutState {
+                layout_id,
                 state: entity,
                 caret,
             },
@@ -369,11 +372,13 @@ impl Element for EditableTextElement {
         &mut self,
         global_id: Option<&gpui::GlobalElementId>,
         inspector_id: Option<&gpui::InspectorElementId>,
-        bounds: Bounds<Pixels>,
+        _bounds: Bounds<Pixels>,
         request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        let bounds = window.parent_relative_layout_bounds(request_layout.layout_id);
+
         // should reflect the text content layout size of the stored text,
         // so that scrolling can take it into account during prepaint.
         let (content_size, focus_handle) = {
@@ -435,6 +440,7 @@ impl Element for EditableTextElement {
         );
 
         PrepaintState {
+            bounds,
             interactivity: prepaint,
             focus_handle,
             elements,
@@ -448,12 +454,14 @@ impl Element for EditableTextElement {
         &mut self,
         global_id: Option<&gpui::GlobalElementId>,
         inspector_id: Option<&gpui::InspectorElementId>,
-        bounds: Bounds<Pixels>,
+        _bounds: Bounds<Pixels>,
         request_layout: &mut Self::RequestLayoutState,
         prepaint: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
+        let bounds = prepaint.bounds;
+
         if let Some(hitbox) = &prepaint.interactivity.hitbox {
             window.set_cursor_style(CursorStyle::IBeam, hitbox);
         }
@@ -864,6 +872,58 @@ fn build_quad_over_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editable_text::StringStorage;
+    use gpui::{
+        AppContext as _, Context, HeadlessAppContext, Render, ScaledPixels, TestTextSystem, div,
+        hsla, prelude::*,
+    };
+    use std::{collections::HashSet, sync::Arc};
+
+    const CONTAINER_COLOR: Hsla = hsla(0.72, 0.45, 0.32, 1.0);
+    const INPUT_COLOR: Hsla = hsla(0.08, 0.55, 0.28, 1.0);
+    const SELECTION_COLOR: Hsla = hsla(0.37, 0.65, 0.42, 1.0);
+
+    struct CenteredEditableTextView {
+        extent: f32,
+        input: Entity<EditableTextState>,
+    }
+
+    impl Render for CenteredEditableTextView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(320.0 + self.extent))
+                .h(px(160.0 + self.extent))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .w(px(118.0))
+                        .h(px(31.0))
+                        .bg(CONTAINER_COLOR)
+                        .child(
+                            text_input("input")
+                                .state(self.input.downgrade())
+                                .bg(INPUT_COLOR)
+                                .selection_color(SELECTION_COLOR)
+                                .text_size(px(14.0)),
+                        ),
+                )
+        }
+    }
+
+    fn only_quad(
+        cx: &mut HeadlessAppContext,
+        window: gpui::AnyWindowHandle,
+        color: Hsla,
+    ) -> Bounds<ScaledPixels> {
+        let bounds = cx.solid_quad_bounds(window, color).unwrap();
+        assert_eq!(bounds.len(), 1, "expected one rendered quad for {color:?}");
+        bounds[0]
+    }
 
     #[test]
     fn accessibility_selection_uses_character_offsets_and_preserves_direction() {
@@ -879,5 +939,68 @@ mod tests {
             (1, 4)
         );
         assert_eq!(accessible_selection(text, 5..5, None), (2, 2));
+    }
+
+    #[test]
+    fn editable_text_keeps_its_device_pixel_offset_when_its_parent_moves() {
+        for scale_factor in [1.0, 1.5] {
+            let mut cx = HeadlessAppContext::new(Arc::new(TestTextSystem));
+            let window = cx
+                .open_window(size(px(420.0), px(260.0)), |window, cx| {
+                    window.set_scale_factor(scale_factor);
+                    let input = cx.new(|cx| {
+                        let mut state = EditableTextState::new(StringStorage::from("x"), cx);
+                        state.select_document(cx);
+                        state
+                    });
+                    cx.new(|_| CenteredEditableTextView { extent: 0.0, input })
+                })
+                .unwrap();
+
+            cx.run_until_parked();
+            let any_window = window.into();
+            let initial_container = only_quad(&mut cx, any_window, CONTAINER_COLOR);
+            let initial_input = only_quad(&mut cx, any_window, INPUT_COLOR);
+            let initial_selection = only_quad(&mut cx, any_window, SELECTION_COLOR);
+            let expected_input_offset = initial_input.origin - initial_container.origin;
+            let expected_selection_offset = initial_selection.origin - initial_input.origin;
+            let mut container_origins = HashSet::from([(
+                initial_container.origin.x.as_f32() as i32,
+                initial_container.origin.y.as_f32() as i32,
+            )]);
+
+            for step in 1..=32 {
+                window
+                    .update(&mut cx, |view, _, cx| {
+                        view.extent = step as f32;
+                        cx.notify();
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+
+                let container = only_quad(&mut cx, any_window, CONTAINER_COLOR);
+                let input = only_quad(&mut cx, any_window, INPUT_COLOR);
+                let selection = only_quad(&mut cx, any_window, SELECTION_COLOR);
+                assert_eq!(
+                    input.origin - container.origin,
+                    expected_input_offset,
+                    "editable control moved within its parent at scale {scale_factor}, step {step}"
+                );
+                assert_eq!(
+                    selection.origin - input.origin,
+                    expected_selection_offset,
+                    "selected text moved within its control at scale {scale_factor}, step {step}"
+                );
+                container_origins.insert((
+                    container.origin.x.as_f32() as i32,
+                    container.origin.y.as_f32() as i32,
+                ));
+            }
+
+            assert!(
+                container_origins.len() > 8,
+                "fixture did not cross enough device pixels at scale {scale_factor}"
+            );
+        }
     }
 }
