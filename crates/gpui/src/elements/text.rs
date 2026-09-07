@@ -1028,7 +1028,7 @@ impl TextLayout {
             .0
             .layout_id
             .get()
-            .map(|layout_id| window.text_layout_bounds(layout_id))
+            .map(|layout_id| window.parent_relative_layout_bounds(layout_id))
             .unwrap_or(bounds);
         let mut element_state = self.0.layout.borrow_mut();
         let element_state = element_state

@@ -5071,7 +5071,11 @@ impl Window {
         bounds
     }
 
-    pub(crate) fn text_layout_bounds(&mut self, layout_id: LayoutId) -> Bounds<Pixels> {
+    /// Obtain layout bounds snapped within the coordinate space of their parent.
+    ///
+    /// This is useful for text-bearing elements whose position within their parent must remain
+    /// stable while that parent moves across the device-pixel grid.
+    pub fn parent_relative_layout_bounds(&mut self, layout_id: LayoutId) -> Bounds<Pixels> {
         self.invalidator.debug_assert_prepaint();
 
         let scale_factor = self.scale_factor();
