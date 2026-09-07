@@ -37,7 +37,20 @@ pub(crate) struct MacGlyphRasterizer {
 
 struct NativeFace {
     descriptor: CTFontDescriptor,
+    // CoreText may defer reading tables from descriptors created from in-memory data until a
+    // sized CTFont first draws. Keep the descriptor's source alive for the full cached-face
+    // lifetime, as the pre-Parley backend did through its retained CGFont.
+    _source_data: SendCFData,
 }
+
+/// An immutable Core Foundation data object retained by the serialized macOS rasterizer.
+struct SendCFData {
+    _data: CFData,
+}
+
+// SAFETY: CFData is immutable, and MacGlyphRasterizer only accesses native faces while its
+// enclosing mutex is held. The value is retained solely to extend the source data's lifetime.
+unsafe impl Send for SendCFData {}
 
 impl MacGlyphRasterizer {
     pub(crate) fn new() -> Self {
@@ -267,7 +280,10 @@ impl NativeFace {
                 .map_err(|()| anyhow!("CoreText rejected the variation coordinates"))?;
         }
 
-        Ok(Self { descriptor })
+        Ok(Self {
+            descriptor,
+            _source_data: SendCFData { _data: data },
+        })
     }
 }
 
@@ -362,6 +378,60 @@ mod tests {
 
     const SOURCE_SERIF: &[u8] =
         include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
+
+    #[test]
+    fn in_memory_variable_font_renders_stably_across_glyphs_and_sizes() {
+        let system = ParleyTextSystem::new_with_rasterizer(
+            SystemFonts::Skip,
+            "Source Serif 4",
+            MacGlyphRasterizer::new(),
+        );
+        system.add_fonts(vec![Cow::Borrowed(SOURCE_SERIF)]).unwrap();
+        let font_id = system.font_id(&font("Source Serif 4")).unwrap();
+        let render_pass = || {
+            "Ag&"
+                .chars()
+                .enumerate()
+                .map(|(index, character)| {
+                    let step = index as u8;
+                    let glyph = system
+                        .rasterize_glyph(&RenderGlyphParams {
+                            font_id,
+                            glyph_id: system.glyph_for_char(font_id, character).unwrap(),
+                            font_size: px(12.0 * f32::from(step + 1)),
+                            subpixel_variant: point(step, step),
+                            scale_factor: 1.0 + f32::from(step) * 0.5,
+                            raster_style: PreparedRasterStyle {
+                                mode: GlyphRenderMode::Grayscale,
+                                color_effect: RasterColorEffect::Dilation(step * 2),
+                            },
+                        })
+                        .unwrap();
+                    glyph.validate().unwrap();
+                    assert!(
+                        glyph.pixels.iter().any(|&coverage| coverage != 0),
+                        "'{character}' produced an empty coverage mask"
+                    );
+                    glyph
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let first_pass = render_pass();
+        let second_pass = render_pass();
+        for (character, (expected, actual)) in
+            "Ag&".chars().zip(first_pass.iter().zip(&second_pass))
+        {
+            assert_eq!(
+                actual.bounds, expected.bounds,
+                "bounds changed for '{character}'"
+            );
+            assert_eq!(
+                actual.pixels, expected.pixels,
+                "pixels changed for '{character}'"
+            );
+        }
+    }
 
     #[test]
     fn core_text_obeys_platform_style_mask_color_baseline_and_empty_glyph_behavior() {
