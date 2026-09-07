@@ -494,9 +494,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        AbsoluteLength, AnyWindowHandle, Bounds, Corners, DefiniteLength, Edges, InputEvent as _,
-        Length, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, Style, TestAppContext, Window,
-        canvas, div, point, prelude::*, px, relative, rems, size,
+        AbsoluteLength, AnyWindowHandle, Bounds, Corners, DefiniteLength, DurationWithEasing,
+        Edges, FocusHandle, InputEvent as _, Length, MouseButton, MouseDownEvent, MouseUpEvent,
+        Pixels, Style, TestAppContext, Window, canvas, div, ease_in_out, point, prelude::*, px,
+        relative, rems, size,
     };
 
     fn length(value: f32) -> Length {
@@ -1133,5 +1134,125 @@ mod tests {
         }
         draw(cx);
         assert_width_near(240.0);
+    }
+
+    struct HoverTransitionFocusTestView {
+        target_focus: FocusHandle,
+        next_focus: FocusHandle,
+        presented_width: Rc<Cell<Pixels>>,
+    }
+
+    impl Render for HoverTransitionFocusTestView {
+        fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let presented_width = self.presented_width.clone();
+            let hover_width = if self.target_focus.is_focused(window) {
+                px(200.0)
+            } else {
+                px(150.0)
+            };
+
+            div()
+                .size_full()
+                .child(
+                    div()
+                        .id("transition-target")
+                        .w(px(100.0))
+                        .h(px(50.0))
+                        .track_focus(&self.target_focus)
+                        .hover(move |style| style.w(hover_width))
+                        .transitions(|transitions| {
+                            transitions.w(Duration::from_millis(120).with_easing(ease_in_out))
+                        })
+                        .on_key_down(|event, window, cx| {
+                            if event.keystroke.key == "tab" {
+                                window.focus_next(cx);
+                            }
+                        })
+                        .child(canvas(
+                            move |bounds, _, _| presented_width.set(bounds.size.width),
+                            |_, _, _, _| {},
+                        )),
+                )
+                .child(div().w(px(50.0)).h(px(50.0)).track_focus(&self.next_focus))
+        }
+    }
+
+    #[gpui::test]
+    fn hover_transitions_follow_input_modality_across_focus_changes(cx: &mut TestAppContext) {
+        let target_focus = cx.update(|cx| cx.focus_handle().tab_stop(true));
+        let next_focus = cx.update(|cx| cx.focus_handle().tab_stop(true));
+        let presented_width = Rc::new(Cell::new(px(0.0)));
+        let window = cx.add_window({
+            let target_focus = target_focus.clone();
+            let next_focus = next_focus.clone();
+            let presented_width = presented_width.clone();
+            move |_, _| HoverTransitionFocusTestView {
+                target_focus,
+                next_focus,
+                presented_width,
+            }
+        });
+        let any_window = AnyWindowHandle::from(window);
+
+        let simulate_next_frame = |cx: &mut TestAppContext| {
+            let callback_count = cx
+                .update_window(any_window, |_, window, cx| window.simulate_next_frame(cx))
+                .expect("failed to deliver the next transition frame");
+            cx.run_until_parked();
+            callback_count
+        };
+        let assert_width_near = |expected: f32| {
+            assert!(
+                (presented_width.get().0 - expected).abs() < 0.01,
+                "expected width near {expected}, got {}",
+                presented_width.get().0,
+            );
+        };
+
+        cx.update_window(any_window, |_, window, cx| {
+            window.draw(cx).clear(cx);
+            window.focus(&target_focus, cx);
+            window.simulate_mouse_move(point(px(10.0), px(10.0)), cx);
+        })
+        .expect("failed to focus and hover the transition target");
+        cx.run_until_parked();
+
+        cx.executor().advance_clock(Duration::from_millis(120));
+        assert!(simulate_next_frame(cx) > 0);
+        assert_width_near(200.0);
+
+        cx.update_window(any_window, |_, window, cx| {
+            window.focus(&next_focus, cx);
+        })
+        .expect("failed to move focus while retaining mouse modality");
+        cx.run_until_parked();
+
+        cx.executor().advance_clock(Duration::from_millis(120));
+        assert!(simulate_next_frame(cx) > 0);
+        assert_width_near(150.0);
+
+        cx.update_window(any_window, |_, window, cx| {
+            window.focus(&target_focus, cx);
+        })
+        .expect("failed to restore focus while retaining mouse modality");
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(120));
+        assert!(simulate_next_frame(cx) > 0);
+        assert_width_near(200.0);
+
+        cx.simulate_keystrokes(any_window, "tab");
+        assert!(
+            cx.update_window(any_window, |_, window, _| next_focus.is_focused(window))
+                .expect("transition test window should remain open")
+        );
+
+        cx.executor().advance_clock(Duration::from_millis(120));
+        assert!(simulate_next_frame(cx) > 0);
+        assert_width_near(100.0);
+        assert_eq!(
+            simulate_next_frame(cx),
+            0,
+            "the completed hover transition must stop requesting frames"
+        );
     }
 }

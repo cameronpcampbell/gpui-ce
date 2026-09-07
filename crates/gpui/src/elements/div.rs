@@ -3534,8 +3534,7 @@ impl Interactivity {
                         element_state
                             .hover_state
                             .as_ref()
-                            .map(|state| state.borrow().group)
-                            .unwrap_or(false)
+                            .is_some_and(|state| state.borrow().group_is_active(window))
                     } else {
                         false
                     };
@@ -3552,8 +3551,7 @@ impl Interactivity {
                     element_state
                         .hover_state
                         .as_ref()
-                        .map(|state| state.borrow().element)
-                        .unwrap_or(false)
+                        .is_some_and(|state| state.borrow().element_is_active(window))
                 } else {
                     false
                 };
@@ -3755,6 +3753,16 @@ pub struct ElementHoverState {
 
     /// True if this element is hovered, false otherwise
     pub element: bool,
+}
+
+impl ElementHoverState {
+    fn group_is_active(&self, window: &Window) -> bool {
+        self.group && !window.last_input_was_keyboard() && !window.last_input_was_touch()
+    }
+
+    fn element_is_active(&self, window: &Window) -> bool {
+        self.element && !window.last_input_was_keyboard() && !window.last_input_was_touch()
+    }
 }
 
 pub(crate) enum ActiveTooltip {
