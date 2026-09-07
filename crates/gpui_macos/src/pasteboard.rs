@@ -35,8 +35,9 @@ impl Pasteboard {
     }
 
     #[cfg(test)]
-    pub fn unique() -> Self {
-        unsafe { Self::new(NSPasteboard::pasteboardWithUniqueName(nil)) }
+    pub fn unique() -> Option<Self> {
+        let inner = unsafe { NSPasteboard::pasteboardWithUniqueName(nil) };
+        (!inner.is_null()).then(|| unsafe { Self::new(inner) })
     }
 
     unsafe fn new(inner: id) -> Self {
@@ -343,6 +344,15 @@ mod tests {
 
     use super::*;
 
+    macro_rules! unique_pasteboard {
+        () => {
+            match Pasteboard::unique() {
+                Some(pasteboard) => pasteboard,
+                None => return,
+            }
+        };
+    }
+
     unsafe fn simulate_external_file_copy(pasteboard: &Pasteboard, paths: &[&str]) {
         unsafe {
             let ns_paths: Vec<id> = paths.iter().map(|p| ns_string(p)).collect();
@@ -372,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_string() {
-        let pasteboard = Pasteboard::unique();
+        let pasteboard = unique_pasteboard!();
         assert_eq!(pasteboard.read(), None);
 
         let item = ClipboardItem::new_string("1".to_string());
@@ -418,7 +428,7 @@ mod tests {
 
     #[test]
     fn test_read_external_path() {
-        let pasteboard = Pasteboard::unique();
+        let pasteboard = unique_pasteboard!();
 
         unsafe {
             simulate_external_file_copy(&pasteboard, &["/test.txt"]);
@@ -448,7 +458,7 @@ mod tests {
 
     #[test]
     fn test_read_external_paths_with_spaces() {
-        let pasteboard = Pasteboard::unique();
+        let pasteboard = unique_pasteboard!();
         let paths = ["/some file with spaces.txt"];
 
         unsafe {
@@ -467,7 +477,7 @@ mod tests {
 
     #[test]
     fn test_read_multiple_external_paths() {
-        let pasteboard = Pasteboard::unique();
+        let pasteboard = unique_pasteboard!();
         let paths = ["/file.txt", "/image.png"];
 
         unsafe {
@@ -499,7 +509,7 @@ mod tests {
 
     #[test]
     fn test_read_image() {
-        let pasteboard = Pasteboard::unique();
+        let pasteboard = unique_pasteboard!();
 
         // Smallest valid PNG: 1x1 transparent pixel
         let png_bytes: &[u8] = &[
