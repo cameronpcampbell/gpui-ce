@@ -294,10 +294,10 @@ impl Element for &'static str {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         text_layout: &mut Self::RequestLayoutState,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut App,
     ) {
-        text_layout.prepaint(bounds, self)
+        text_layout.prepaint(bounds, self, window)
     }
 
     fn paint(
@@ -368,10 +368,10 @@ impl Element for SharedString {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         text_layout: &mut Self::RequestLayoutState,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut App,
     ) {
-        text_layout.prepaint(bounds, self.as_ref())
+        text_layout.prepaint(bounds, self.as_ref(), window)
     }
 
     fn paint(
@@ -609,10 +609,10 @@ impl Element for StyledText {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut App,
     ) {
-        self.layout.prepaint(bounds, &self.text)
+        self.layout.prepaint(bounds, &self.text, window)
     }
 
     fn paint(
@@ -639,7 +639,13 @@ impl IntoElement for StyledText {
 
 /// The Layout for TextElement. This can be used to map indices to pixels and vice versa.
 #[derive(Default, Clone)]
-pub struct TextLayout(Rc<RefCell<Option<TextLayoutInner>>>);
+pub struct TextLayout(Rc<TextLayoutState>);
+
+#[derive(Default)]
+struct TextLayoutState {
+    layout_id: Cell<Option<LayoutId>>,
+    layout: RefCell<Option<TextLayoutInner>>,
+}
 
 struct TextLayoutInner {
     len: usize,
@@ -923,7 +929,7 @@ impl TextLayout {
         } else {
             vec![text_style.to_run(text.len())]
         };
-        window.request_measured_layout(Default::default(), {
+        let layout_id = window.request_measured_layout(Default::default(), {
             let element_state = self.clone();
 
             move |known_dimensions, available_space, window, cx| {
@@ -945,7 +951,7 @@ impl TextLayout {
                 // 4. the cached layout was not truncated (a truncated layout answers an
                 //    unconstrained probe with the truncated size, which poisons intrinsic
                 //    sizing with whatever width some earlier measure pass happened to use)
-                if let Some(text_layout) = element_state.0.borrow().as_ref()
+                if let Some(text_layout) = element_state.0.layout.borrow().as_ref()
                     && let Some(size) = text_layout.size
                     && (wrap_width.is_none() || wrap_width == text_layout.wrap_width)
                     && truncate_width.is_none()
@@ -978,37 +984,53 @@ impl TextLayout {
                     )
                     .log_err()
                 else {
-                    element_state.0.borrow_mut().replace(TextLayoutInner {
-                        document: None,
-                        len: 0,
-                        line_height,
-                        wrap_width,
-                        truncate_width,
-                        size: Some(Size::default()),
-                        bounds: None,
-                    });
+                    element_state
+                        .0
+                        .layout
+                        .borrow_mut()
+                        .replace(TextLayoutInner {
+                            document: None,
+                            len: 0,
+                            line_height,
+                            wrap_width,
+                            truncate_width,
+                            size: Some(Size::default()),
+                            bounds: None,
+                        });
                     return Size::default();
                 };
 
                 let size = document.size(line_height);
 
-                element_state.0.borrow_mut().replace(TextLayoutInner {
-                    document: Some(document),
-                    len,
-                    line_height,
-                    wrap_width,
-                    truncate_width,
-                    size: Some(size),
-                    bounds: None,
-                });
+                element_state
+                    .0
+                    .layout
+                    .borrow_mut()
+                    .replace(TextLayoutInner {
+                        document: Some(document),
+                        len,
+                        line_height,
+                        wrap_width,
+                        truncate_width,
+                        size: Some(size),
+                        bounds: None,
+                    });
 
                 size
             }
-        })
+        });
+        self.0.layout_id.set(Some(layout_id));
+        layout_id
     }
 
-    fn prepaint(&self, bounds: Bounds<Pixels>, text: &str) {
-        let mut element_state = self.0.borrow_mut();
+    fn prepaint(&self, bounds: Bounds<Pixels>, text: &str, window: &mut Window) {
+        let bounds = self
+            .0
+            .layout_id
+            .get()
+            .map(|layout_id| window.text_layout_bounds(layout_id))
+            .unwrap_or(bounds);
+        let mut element_state = self.0.layout.borrow_mut();
         let element_state = element_state
             .as_mut()
             .with_context(|| format!("measurement has not been performed on {text}"))
@@ -1017,7 +1039,7 @@ impl TextLayout {
     }
 
     fn paint(&self, text: &str, window: &mut Window, cx: &mut App) {
-        let element_state = self.0.borrow();
+        let element_state = self.0.layout.borrow();
         let element_state = element_state
             .as_ref()
             .with_context(|| format!("measurement has not been performed on {text}"))
@@ -1055,7 +1077,7 @@ impl TextLayout {
 
     /// Get the byte index into the input of the pixel position.
     pub fn index_for_position(&self, mut position: Point<Pixels>) -> Result<usize, usize> {
-        let element_state = self.0.borrow();
+        let element_state = self.0.layout.borrow();
         let element_state = element_state
             .as_ref()
             .expect("measurement has not been performed");
@@ -1076,7 +1098,7 @@ impl TextLayout {
 
     /// Get the pixel position for the given byte index.
     pub fn position_for_index(&self, index: usize) -> Option<Point<Pixels>> {
-        let element_state = self.0.borrow();
+        let element_state = self.0.layout.borrow();
         let element_state = element_state
             .as_ref()
             .expect("measurement has not been performed");
@@ -1091,7 +1113,7 @@ impl TextLayout {
 
     /// Retrieve the layout for the line containing the given byte index.
     pub fn line_layout_for_index(&self, index: usize) -> Option<Arc<WrappedLineLayout>> {
-        let element_state = self.0.borrow();
+        let element_state = self.0.layout.borrow();
         let element_state = element_state
             .as_ref()
             .expect("measurement has not been performed");
@@ -1102,6 +1124,7 @@ impl TextLayout {
     /// Retrieve all line layouts in source order.
     pub fn line_layouts(&self) -> SmallVec<[Arc<WrappedLineLayout>; 1]> {
         self.0
+            .layout
             .borrow()
             .as_ref()
             .expect("measurement has not been performed")
@@ -1113,22 +1136,23 @@ impl TextLayout {
 
     /// The bounds of this layout.
     pub fn bounds(&self) -> Bounds<Pixels> {
-        self.0.borrow().as_ref().unwrap().bounds.unwrap()
+        self.0.layout.borrow().as_ref().unwrap().bounds.unwrap()
     }
 
     /// The line height for this layout.
     pub fn line_height(&self) -> Pixels {
-        self.0.borrow().as_ref().unwrap().line_height
+        self.0.layout.borrow().as_ref().unwrap().line_height
     }
 
     /// The UTF-8 length of the underlying text.
     pub fn len(&self) -> usize {
-        self.0.borrow().as_ref().unwrap().len
+        self.0.layout.borrow().as_ref().unwrap().len
     }
 
     /// The text for this layout.
     pub fn text(&self) -> String {
         self.0
+            .layout
             .borrow()
             .as_ref()
             .unwrap()
@@ -1141,7 +1165,7 @@ impl TextLayout {
     pub fn wrapped_text(&self) -> String {
         let mut accumulator = String::new();
 
-        if let Some(document) = &self.0.borrow().as_ref().unwrap().document {
+        if let Some(document) = &self.0.layout.borrow().as_ref().unwrap().document {
             for visual_line in document.layout.visual_lines() {
                 accumulator.push_str(&document.text[visual_line.text_range.clone()]);
                 accumulator.push('\n');
@@ -1669,6 +1693,57 @@ impl IntoElement for InteractiveText {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Context, Hsla, Render, ScaledPixels, TestApp, div, hsla, prelude::*};
+    use std::collections::HashSet;
+
+    const CONTAINER_COLOR: Hsla = hsla(0.72, 0.45, 0.32, 1.0);
+    const TEXT_BACKGROUND_COLOR: Hsla = hsla(0.37, 0.65, 0.42, 1.0);
+
+    struct CenteredTextView {
+        extent: f32,
+    }
+
+    impl Render for CenteredTextView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(320.0 + self.extent))
+                .h(px(160.0 + self.extent))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .w(px(118.0))
+                        .h(px(31.0))
+                        .bg(CONTAINER_COLOR)
+                        .text_size(px(14.0))
+                        .child(StyledText::new("x").with_highlights([(
+                            0..1,
+                            HighlightStyle {
+                                background_color: Some(TEXT_BACKGROUND_COLOR),
+                                ..Default::default()
+                            },
+                        )])),
+                )
+        }
+    }
+
+    fn only_quad(window: &Window, color: Hsla) -> Bounds<ScaledPixels> {
+        let color = color.into();
+        let mut bounds = window
+            .rendered_frame
+            .scene
+            .quads
+            .iter()
+            .filter(|quad| quad.background.solid == color)
+            .map(|quad| quad.bounds);
+        let result = bounds.next().expect("expected a rendered quad");
+        assert!(bounds.next().is_none(), "expected only one rendered quad");
+        result
+    }
 
     #[test]
     fn test_into_element_for() {
@@ -1713,5 +1788,58 @@ mod tests {
 
         let hidden = Text::new_inaccessible("decorative 👀".into());
         assert_eq!(hidden.a11y_role(), None);
+    }
+
+    #[test]
+    fn centered_text_keeps_its_device_pixel_offset_when_its_parent_moves() {
+        for scale_factor in [1.0, 1.5] {
+            let mut app = TestApp::new();
+            let mut test_window = app.open_window(|window, _| {
+                window.set_scale_factor(scale_factor);
+                CenteredTextView { extent: 0.0 }
+            });
+            test_window.draw();
+
+            let (initial_container, initial_background) = test_window.update(|_, window, _| {
+                (
+                    only_quad(window, CONTAINER_COLOR),
+                    only_quad(window, TEXT_BACKGROUND_COLOR),
+                )
+            });
+            let expected_offset = initial_background.origin - initial_container.origin;
+            let mut container_origins = HashSet::from([(
+                initial_container.origin.x.as_f32() as i32,
+                initial_container.origin.y.as_f32() as i32,
+            )]);
+
+            for step in 1..=32 {
+                test_window.update(|view, _, cx| {
+                    view.extent = step as f32;
+                    cx.notify();
+                });
+                test_window.draw();
+
+                let (container, background) = test_window.update(|_, window, _| {
+                    (
+                        only_quad(window, CONTAINER_COLOR),
+                        only_quad(window, TEXT_BACKGROUND_COLOR),
+                    )
+                });
+                assert_eq!(
+                    background.origin - container.origin,
+                    expected_offset,
+                    "text moved within its parent at scale {scale_factor}, step {step}"
+                );
+                container_origins.insert((
+                    container.origin.x.as_f32() as i32,
+                    container.origin.y.as_f32() as i32,
+                ));
+            }
+
+            assert!(
+                container_origins.len() > 8,
+                "fixture did not cross enough device pixels at scale {scale_factor}"
+            );
+        }
     }
 }

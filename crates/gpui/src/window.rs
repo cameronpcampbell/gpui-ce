@@ -4819,6 +4819,19 @@ impl Window {
         bounds
     }
 
+    pub(crate) fn text_layout_bounds(&mut self, layout_id: LayoutId) -> Bounds<Pixels> {
+        self.invalidator.debug_assert_prepaint();
+
+        let scale_factor = self.scale_factor();
+        let mut bounds = self
+            .layout_engine
+            .as_mut()
+            .unwrap()
+            .parent_relative_layout_bounds(layout_id, scale_factor);
+        bounds.origin += self.pixel_snap_point(self.element_offset());
+        bounds
+    }
+
     pub(crate) fn layout_vertical_align(&self, layout_id: LayoutId) -> crate::VerticalAlign {
         self.layout_engine
             .as_ref()
