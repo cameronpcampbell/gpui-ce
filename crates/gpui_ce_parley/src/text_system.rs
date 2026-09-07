@@ -837,6 +837,7 @@ impl ParleyTextSystem {
                         .get(font_id)
                         .context("canonical font missing after interning")?
                         .color_glyphs()?;
+                    let rasterizer = self.rasterizer.lock();
                     glyph_run
                         .positioned_glyphs()
                         .map(|glyph| {
@@ -844,7 +845,9 @@ impl ParleyTextSystem {
                             ShapedGlyph {
                                 id,
                                 position: point(px(glyph.x) - line_x, px(glyph.y - baseline)),
-                                is_emoji: color_glyphs.contains(id),
+                                is_emoji: color_glyphs
+                                    .kind(id)
+                                    .is_some_and(|kind| rasterizer.supports_color_glyph(kind)),
                             }
                         })
                         .collect()
@@ -1114,7 +1117,7 @@ mod tests {
     const SOURCE_SERIF: &[u8] =
         include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
     const NOTO_COLOR_EMOJI: &[u8] =
-        include_bytes!("../../../assets/fonts/noto-color-emoji/NotoColorEmoji.ttf");
+        include_bytes!("../../../assets/fonts/noto-color-emoji/NotoColorEmoji.subset.ttf");
 
     fn test_system() -> Arc<ParleyTextSystem> {
         let system = Arc::new(

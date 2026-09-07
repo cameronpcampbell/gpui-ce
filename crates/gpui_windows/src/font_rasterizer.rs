@@ -84,6 +84,10 @@ impl WindowsGlyphRasterizer {
 }
 
 impl GlyphRasterizer for WindowsGlyphRasterizer {
+    fn supports_color_glyph(&self, kind: ColorGlyphKind) -> bool {
+        matches!(kind, ColorGlyphKind::ColrV0 | ColorGlyphKind::Bitmap)
+    }
+
     fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
         match &self.backend {
             WindowsRasterBackend::DirectWrite { rasterizer, .. } => {
@@ -348,12 +352,6 @@ impl DirectWriteGlyphRasterizer {
         params: &RenderGlyphParams,
     ) -> Result<RasterizedGlyph> {
         let current_color = prepared_color(params.raster_style)?;
-        let base_glyph =
-            self.create_glyph_analysis(font_face, params, GlyphRenderMode::Grayscale)?;
-        let Some((bounds, width, height)) = convert_bounds(base_glyph.bounds)? else {
-            return Ok(RasterizedGlyph::empty(RasterizedGlyphFormat::BgraColor));
-        };
-
         let glyph_id = [u16::try_from(params.glyph_id.0)?];
         let advances = [0.0];
         let offsets = [DWRITE_GLYPH_OFFSET::default()];
@@ -370,7 +368,7 @@ impl DirectWriteGlyphRasterizer {
         };
         let transform = raster_transform(params.scale_factor);
         let baseline = baseline_origin(params);
-        let enumerator = unsafe {
+        let enumerate = || unsafe {
             self.factory.TranslateColorGlyphRun(
                 baseline,
                 &glyph_run,
@@ -380,9 +378,53 @@ impl DirectWriteGlyphRasterizer {
                 Some(&transform),
                 0,
             )
-        }?;
+        };
+
+        let enumerator = enumerate()?;
+        let mut raster_bounds: Option<RECT> = None;
+        while unsafe { enumerator.MoveNext() }?.as_bool() {
+            let run = unsafe { &*enumerator.GetCurrentRun()? };
+            if run.glyphImageFormat & DWRITE_GLYPH_IMAGE_FORMATS_COLR
+                == DWRITE_GLYPH_IMAGE_FORMATS_NONE
+            {
+                continue;
+            }
+            let analysis = unsafe {
+                self.factory.CreateGlyphRunAnalysis(
+                    &run.Base.glyphRun,
+                    Some(&transform),
+                    DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC,
+                    run.measuringMode,
+                    DWRITE_GRID_FIT_MODE_DEFAULT,
+                    DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
+                    run.Base.baselineOriginX,
+                    run.Base.baselineOriginY,
+                )
+            }?;
+            let layer_bounds =
+                unsafe { analysis.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1) }?;
+            if convert_bounds(layer_bounds)?.is_none() {
+                continue;
+            }
+            raster_bounds = Some(match raster_bounds {
+                Some(bounds) => RECT {
+                    left: bounds.left.min(layer_bounds.left),
+                    top: bounds.top.min(layer_bounds.top),
+                    right: bounds.right.max(layer_bounds.right),
+                    bottom: bounds.bottom.max(layer_bounds.bottom),
+                },
+                None => layer_bounds,
+            });
+        }
+        let Some(raster_bounds) = raster_bounds else {
+            return Ok(RasterizedGlyph::empty(RasterizedGlyphFormat::BgraColor));
+        };
+        let Some((bounds, width, height)) = convert_bounds(raster_bounds)? else {
+            unreachable!("color layer bounds were validated above");
+        };
 
         let mut premultiplied = vec![[0.0f32; 4]; width as usize * height as usize];
+        let enumerator = enumerate()?;
         while unsafe { enumerator.MoveNext() }?.as_bool() {
             let run = unsafe { &*enumerator.GetCurrentRun()? };
             if run.glyphImageFormat & DWRITE_GLYPH_IMAGE_FORMATS_COLR
@@ -417,12 +459,12 @@ impl DirectWriteGlyphRasterizer {
             }
             let color = layer_color(run, current_color);
             for layer_y in 0..layer_height {
-                let target_y = layer_bounds.top - base_glyph.bounds.top + layer_y;
+                let target_y = layer_bounds.top - raster_bounds.top + layer_y;
                 if !(0..height).contains(&target_y) {
                     continue;
                 }
                 for layer_x in 0..layer_width {
-                    let target_x = layer_bounds.left - base_glyph.bounds.left + layer_x;
+                    let target_x = layer_bounds.left - raster_bounds.left + layer_x;
                     if !(0..width).contains(&target_x) {
                         continue;
                     }
@@ -503,6 +545,10 @@ impl Drop for DirectWriteGlyphRasterizer {
 }
 
 impl GlyphRasterizer for DirectWriteGlyphRasterizer {
+    fn supports_color_glyph(&self, kind: ColorGlyphKind) -> bool {
+        kind == ColorGlyphKind::ColrV0
+    }
+
     fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
         if request.requested_mode == GlyphRenderMode::Color {
             PreparedRasterStyle {
@@ -747,7 +793,7 @@ mod tests {
     const SOURCE_SERIF: &[u8] =
         include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
     const NOTO_COLOR_EMOJI: &[u8] =
-        include_bytes!("../../../assets/fonts/noto-color-emoji/NotoColorEmoji.ttf");
+        include_bytes!("../../../assets/fonts/noto-color-emoji/NotoColorEmoji.subset.ttf");
 
     #[test]
     fn windows_rasterizer_covers_native_masks_current_color_and_color_fallbacks() {
