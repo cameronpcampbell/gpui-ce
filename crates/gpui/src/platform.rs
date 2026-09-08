@@ -18,21 +18,27 @@ mod test;
 #[cfg(all(target_os = "macos", any(test, feature = "test-support")))]
 mod visual_test;
 
-#[cfg(all(
-    feature = "screen-capture",
-    any(target_os = "windows", target_os = "linux", target_os = "freebsd",)
-))]
-pub mod scap_screen_capture;
+#[cfg(all(feature = "screen-capture", target_os = "windows"))]
+pub mod screen_capture;
+#[cfg(target_os = "windows")]
+mod windows_screen_capture;
+#[cfg(target_os = "windows")]
+pub use windows_screen_capture::WindowsScreenCaptureFrame;
 
-#[cfg(all(
-    any(target_os = "windows", target_os = "linux"),
-    feature = "screen-capture"
-))]
-pub(crate) type PlatformScreenCaptureFrame = scap::frame::Frame;
+#[cfg(all(target_os = "windows", feature = "screen-capture"))]
+pub(crate) type PlatformScreenCaptureFrame = WindowsScreenCaptureFrame;
 #[cfg(not(feature = "screen-capture"))]
 pub(crate) type PlatformScreenCaptureFrame = ();
 #[cfg(all(target_os = "macos", feature = "screen-capture"))]
 pub(crate) type PlatformScreenCaptureFrame = core_video::image_buffer::CVImageBuffer;
+#[cfg(all(
+    feature = "screen-capture",
+    not(any(target_os = "macos", target_os = "windows"))
+))]
+// Screen capture currently has native frame representations only on macOS and Windows. Keep the
+// cross-platform API well-formed for enabled-but-unsupported targets; source enumeration simply
+// yields no platform sources there.
+pub(crate) type PlatformScreenCaptureFrame = ();
 
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
@@ -355,7 +361,6 @@ pub trait Platform: 'static {
     /// Register additional GPU device requirements (features, limits) before
     /// the first window is opened.  The concrete type inside the `Box` must be
     /// `gpui_wgpu::WgpuDeviceRequirements`.
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn set_gpu_requirements(&self, _requirements: Box<dyn std::any::Any>) {}
 
     /// Sets the label applied to credentials stored in the system keyring.
@@ -984,11 +989,7 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
 
     /// Returns the GPU context for this window's renderer.
     /// The returned `Box` contains `(Arc<wgpu::Device>, Arc<wgpu::Queue>)`.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "freebsd",
-        all(target_os = "windows", feature = "wgpu-surfaces")
-    ))]
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
     fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
         None
     }
@@ -999,11 +1000,7 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// captured the device from `gpu_context` should stop submitting while
     /// this is `Some(true)` and re-acquire the device once it reads
     /// `Some(false)` again.
-    #[cfg(any(
-        target_os = "linux",
-        target_os = "freebsd",
-        all(target_os = "windows", feature = "wgpu-surfaces")
-    ))]
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
     fn gpu_device_lost(&self) -> Option<bool> {
         None
     }
@@ -1505,6 +1502,31 @@ pub enum AtlasTextureKind {
     Monochrome = 0,
     Polychrome = 1,
     Subpixel = 2,
+}
+
+impl AtlasTextureKind {
+    /// Validates a tightly packed bitmap before an atlas allocates or caches its tile.
+    /// Monochrome tiles contain one coverage byte; color and LCD tiles contain four bytes.
+    pub fn validate_upload(self, size: Size<DevicePixels>, bytes: &[u8]) -> Result<()> {
+        anyhow::ensure!(
+            size.width.0 > 0 && size.height.0 > 0,
+            "{self:?} atlas upload requires positive dimensions, got {size:?}"
+        );
+        let channels = match self {
+            Self::Monochrome => 1,
+            Self::Polychrome | Self::Subpixel => 4,
+        };
+        let expected = (size.width.0 as usize)
+            .checked_mul(size.height.0 as usize)
+            .and_then(|pixels| pixels.checked_mul(channels))
+            .ok_or_else(|| anyhow::anyhow!("atlas upload byte count overflow for {size:?}"))?;
+        anyhow::ensure!(
+            bytes.len() == expected,
+            "{self:?} atlas upload for {size:?} requires {expected} bytes, got {}",
+            bytes.len()
+        );
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

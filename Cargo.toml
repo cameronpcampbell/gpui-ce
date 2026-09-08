@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "./crates/gpui/",
+  "./crates/gpui_render/",
   "./crates/gpui_web/",
   "./crates/gpui_wgpu/",
   "./crates/gpui_linux/",
@@ -117,6 +118,7 @@ objc = "0.2"
 objc2 = "0.6"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = [
   "NSArray",
+  "NSAutoreleasePool",
   "NSAttributedString",
   "NSBundle",
   "NSCoder",
@@ -135,8 +137,10 @@ objc2-foundation = { version = "=0.3.2", default-features = false, features = [
   "NSRunLoop",
   "NSSet",
   "NSString",
+  "NSThread",
   "NSURL",
   "NSUndoManager",
+  "NSUserDefaults",
   "NSValue",
   "objc2-core-foundation",
   "std",
@@ -144,7 +148,8 @@ objc2-foundation = { version = "=0.3.2", default-features = false, features = [
 objc2-user-notifications = "0.3"
 mach2 = "0.5"
 metal = "0.33"
-scap = { version = "0.0.8-zed", package = "zed-scap", default-features = false }
+windows-capture = "1.5.0"
+windows-061 = { package = "windows", version = "0.61.3" }
 env_logger = "0.11"
 unicode-segmentation = "1.10"
 
@@ -169,25 +174,67 @@ libc = "0.2"
 smol = "2.0"
 util = { path = "crates/gpui_zed_util", version = "0.2.2", package = "gpui_ce_zed_util" }
 wgpu = "29.0.3"
+wgsl-rs = { git = "https://github.com/schell/wgsl-rs", rev = "b2de16a1b81e67d76bc265c296184f882864badb", default-features = false, features = [
+  "validation",
+] }
 criterion = { version = "0.5", features = ["html_reports"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "objc2-core-foundation",
+  "objc2-core-graphics",
   "NSAlert",
   "NSApplication",
+  "NSDocumentController",
+  "NSAppearance",
   "NSButton",
+  "NSCell",
   "NSControl",
+  "NSEvent",
   "NSGraphics",
+  "NSHapticFeedback",
+  "NSCursor",
+  "NSPanel",
+  "NSMenu",
+  "NSMenuItem",
+  "NSOpenPanel",
+  "NSSavePanel",
+  "NSScroller",
+  "NSWorkspace",
+  "NSVisualEffectView",
+  "NSPasteboard",
+  "NSPasteboardItem",
   "NSResponder",
+  "NSRunningApplication",
+  "NSScreen",
+  "NSTextInputClient",
   "NSView",
   "NSWindow",
   "block2",
 ] }
-objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer"] }
+objc2-core-media = { version = "0.3", default-features = false, features = [
+  "CMSampleBuffer",
+  "objc2",
+] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = [
+  "CALayer",
+  "CAMetalLayer",
+] }
+objc2-screen-capture-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "SCShareableContent",
+  "SCStream",
+  "block2",
+  "dispatch2",
+  "objc2-core-foundation",
+  "objc2-core-graphics",
+  "objc2-core-media",
+] }
 semver = { version = "1.0", features = ["serde"] }
 windows-core = "0.62.2"
 tokio = { version = "1" }
 gpui_util = { path = "crates/gpui_ce_util", version = "0.2.6", package = "gpui_ce_util" }
 
 gpui = { path = "./crates/gpui/", version = "0.2.2", package = "gpui-ce" }
+gpui_render = { path = "./crates/gpui_render/", version = "0.1.0", package = "gpui_ce_render" }
 gpui_platform = { path = "./crates/gpui_platform/", version = "0.1.0", package = "gpui_ce_platform" }
 gpui_linux = { path = "./crates/gpui_linux/", version = "0.1.0", package = "gpui_ce_linux" }
 gpui_macos = { path = "./crates/gpui_macos/", version = "0.1.0", package = "gpui_ce_macos" }
