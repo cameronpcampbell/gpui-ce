@@ -997,6 +997,7 @@ impl MetalRenderer {
                                 filter.bounds,
                                 filter.content_mask.bounds,
                                 filter.corner_radii,
+                                filter.corner_smoothing,
                                 filter.max_blur_radius(),
                                 filter.opacity,
                                 true,
@@ -1056,6 +1057,7 @@ impl MetalRenderer {
                             boundary.bounds,
                             boundary.content_mask.bounds,
                             boundary.corner_radii,
+                            boundary.corner_smoothing,
                             boundary.max_blur_radius(),
                             boundary.opacity,
                             false,
@@ -1210,6 +1212,7 @@ impl MetalRenderer {
         bounds: Bounds<ScaledPixels>,
         content_mask: Bounds<ScaledPixels>,
         corner_radii: Corners<ScaledPixels>,
+        corner_smoothing: f32,
         blur_radius: f32,
         opacity: f32,
         // Backdrop clips to the rounded rect; content (`filter`) bleeds past its bounds.
@@ -1291,6 +1294,7 @@ impl MetalRenderer {
             composite_bounds,
             content_mask,
             corner_radii,
+            corner_smoothing,
             opacity,
             clip,
             blur_size,
@@ -2353,7 +2357,7 @@ mod tests {
             element_bounds: box_bounds,
             element_corner_radii: Corners::all(ScaledPixels(2.0)),
             inset: gpui::ShaderBool::Disabled,
-            padding: 0,
+            corner_smoothing: 0.0,
         });
         shadow.finish();
         assert_legacy_fixture(
@@ -2427,9 +2431,9 @@ mod tests {
         let mut sprite = Scene::default();
         sprite.insert_primitive(PolychromeSprite {
             order: 0,
-            padding: 0,
             grayscale: gpui::ShaderBool::Disabled,
             opacity: 0.75,
+            corner_smoothing: 0.0,
             bounds: sprite_bounds,
             content_mask: ContentMask {
                 bounds: sprite_bounds,

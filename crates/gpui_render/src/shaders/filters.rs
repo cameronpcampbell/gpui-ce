@@ -80,6 +80,7 @@ pub mod surface {
 #[wgsl_rs::wgsl]
 pub mod blur {
     use super::super::common::*;
+    use super::super::corner_smoothing::*;
     use wgsl_rs::std::*;
 
     #[repr(C)]
@@ -97,6 +98,10 @@ pub mod blur {
         pub downsample_mode: DownsampleMode,
         pub source_size: Vec2f,
         pub target_size: Vec2f,
+        pub corner_smoothing: f32,
+        pub padding0: u32,
+        pub padding1: u32,
+        pub padding2: u32,
     }
     uniform!(group(1), binding(0), BLUR_LOCALS: BlurUniforms);
     texture!(group(1), binding(1), BLUR_TEXTURE: Texture2D<f32>);
@@ -108,8 +113,20 @@ pub mod blur {
         pub position: Vec4f,
         #[location(0)]
         pub texture_coordinates: Vec2f,
+        #[location(1)]
+        #[interpolate(flat)]
+        pub horizontal_corner_reaches: Vec4f,
+        #[location(2)]
+        #[interpolate(flat)]
+        pub vertical_corner_reaches: Vec4f,
         #[location(3)]
         pub clip_distances: Vec4f,
+        #[location(4)]
+        #[interpolate(flat)]
+        pub smoothing_factors: Vec4f,
+        #[location(5)]
+        #[interpolate(flat)]
+        pub superellipse_power: f32,
     }
 
     #[vertex]
@@ -118,7 +135,11 @@ pub mod blur {
         BlurVarying {
             position: vertex.clip_position,
             texture_coordinates: vertex.texture_coordinates,
+            horizontal_corner_reaches: vec4f(0.0, 0.0, 0.0, 0.0),
+            vertical_corner_reaches: vec4f(0.0, 0.0, 0.0, 0.0),
             clip_distances: unclipped_distances(),
+            smoothing_factors: vec4f(0.0, 0.0, 0.0, 0.0),
+            superellipse_power: 0.0,
         }
     }
 
@@ -167,13 +188,23 @@ pub mod blur {
     #[vertex]
     pub fn vertex_blur_composite(#[builtin(vertex_index)] vertex_id: u32) -> BlurVarying {
         let vertex = rectangle_vertex(vertex_id, get!(BLUR_LOCALS).bounds);
+        let prepared = prepare_corners(
+            get!(BLUR_LOCALS).bounds.size,
+            get!(BLUR_LOCALS).corner_radii,
+            get!(BLUR_LOCALS).corner_smoothing,
+            true,
+        );
         BlurVarying {
             position: vertex.clip_position,
             texture_coordinates: vertex.unit_position,
+            horizontal_corner_reaches: prepared.horizontal_reaches,
+            vertical_corner_reaches: prepared.vertical_reaches,
             clip_distances: clip_distances(
                 vertex.viewport_position,
                 get!(BLUR_LOCALS).content_mask,
             ),
+            smoothing_factors: prepared.smoothing_factors,
+            superellipse_power: prepared.superellipse_power,
         }
     }
 
@@ -190,10 +221,17 @@ pub mod blur {
         );
         let coverage = select(
             1.0,
-            antialiased_coverage(rounded_rectangle_signed_distance(
+            antialiased_coverage(prepared_corner_signed_distance(
                 input.position.xy(),
                 get!(BLUR_LOCALS).bounds,
                 get!(BLUR_LOCALS).corner_radii,
+                get!(BLUR_LOCALS).corner_smoothing,
+                PreparedCorners {
+                    horizontal_reaches: input.horizontal_corner_reaches,
+                    vertical_reaches: input.vertical_corner_reaches,
+                    smoothing_factors: input.smoothing_factors,
+                    superellipse_power: input.superellipse_power,
+                },
             )),
             get!(BLUR_LOCALS).composite_clip == BlurCompositeClip::RoundedBounds,
         );

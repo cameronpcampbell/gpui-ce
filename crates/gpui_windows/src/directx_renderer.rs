@@ -680,6 +680,7 @@ impl DirectXRenderer {
                                 filter.bounds,
                                 filter.content_mask.bounds,
                                 filter.corner_radii,
+                                filter.corner_smoothing,
                                 filter.max_blur_radius(),
                                 filter.opacity,
                                 true,
@@ -724,6 +725,7 @@ impl DirectXRenderer {
                         boundary.bounds,
                         boundary.content_mask.bounds,
                         boundary.corner_radii,
+                        boundary.corner_smoothing,
                         boundary.max_blur_radius(),
                         boundary.opacity,
                         false,
@@ -1283,6 +1285,7 @@ impl DirectXRenderer {
         bounds: Bounds<ScaledPixels>,
         content_mask: Bounds<ScaledPixels>,
         corner_radii: Corners<ScaledPixels>,
+        corner_smoothing: f32,
         blur_radius: f32,
         opacity: f32,
         // Backdrop clips to the rounded rect; content (`filter`) bleeds past its bounds.
@@ -1382,6 +1385,7 @@ impl DirectXRenderer {
                 composite_bounds,
                 content_mask,
                 corner_radii,
+                corner_smoothing,
                 opacity,
                 clip,
                 blur_size,
@@ -2825,9 +2829,9 @@ mod tests {
         });
         scene.insert_primitive(PolychromeSprite {
             order: 0,
-            padding: 0,
             grayscale: ShaderBool::Disabled,
             opacity: 1.0,
+            corner_smoothing: 0.0,
             bounds: scaled(50.0, 60.0, 30.0, 30.0),
             content_mask: full_mask(),
             corner_radii: Default::default(),

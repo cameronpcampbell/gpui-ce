@@ -218,7 +218,11 @@ pub const RENDER_BUFFER_LAYOUTS: &[gpui::SceneBufferLayout] = &[
         composite_clip,
         downsample_mode,
         source_size,
-        target_size
+        target_size,
+        corner_smoothing,
+        padding0,
+        padding1,
+        padding2
     ),
     render_layout!(crate::path_types::PathSprite, "PathSprite", bounds),
     render_layout!(

@@ -152,14 +152,15 @@ pub mod monochrome_sprite {
 #[wgsl_rs::wgsl]
 pub mod polychrome_sprite {
     use super::super::common::*;
+    use super::super::corner_smoothing::*;
     use wgsl_rs::std::*;
 
     #[derive(Clone, Copy, Wgsl)]
     pub struct PolychromeSprite {
         pub order: u32,
-        pub padding: u32,
         pub grayscale: ShaderBool,
         pub opacity: f32,
+        pub corner_smoothing: f32,
         pub bounds: Bounds,
         pub content_mask: Bounds,
         pub corner_radii: Corners,
@@ -178,8 +179,20 @@ pub mod polychrome_sprite {
         #[location(1)]
         #[interpolate(flat)]
         pub sprite_id: u32,
+        #[location(2)]
+        #[interpolate(flat)]
+        pub horizontal_corner_reaches: Vec4f,
         #[location(3)]
         pub clip_distances: Vec4f,
+        #[location(4)]
+        #[interpolate(flat)]
+        pub vertical_corner_reaches: Vec4f,
+        #[location(5)]
+        #[interpolate(flat)]
+        pub smoothing_factors: Vec4f,
+        #[location(6)]
+        #[interpolate(flat)]
+        pub superellipse_power: f32,
     }
 
     #[vertex]
@@ -189,6 +202,13 @@ pub mod polychrome_sprite {
     ) -> PolychromeSpriteVarying {
         let sprite = get!(POLYCHROME_SPRITES)[instance_id as usize];
         let vertex = rectangle_vertex(vertex_id, sprite.bounds);
+        let prepared = prepare_corners(
+            sprite.bounds.size,
+            sprite.corner_radii,
+            sprite.corner_smoothing,
+            true,
+        );
+
         PolychromeSpriteVarying {
             position: vertex.clip_position,
             tile_position: atlas_texture_coordinates(
@@ -197,7 +217,11 @@ pub mod polychrome_sprite {
                 texture_dimensions(POLYCHROME_TEXTURE),
             ),
             sprite_id: instance_id,
+            horizontal_corner_reaches: prepared.horizontal_reaches,
             clip_distances: clip_distances(vertex.viewport_position, sprite.content_mask),
+            vertical_corner_reaches: prepared.vertical_reaches,
+            smoothing_factors: prepared.smoothing_factors,
+            superellipse_power: prepared.superellipse_power,
         }
     }
 
@@ -222,10 +246,17 @@ pub mod polychrome_sprite {
         blend_color(
             color,
             sprite.opacity
-                * antialiased_coverage(rounded_rectangle_signed_distance(
+                * antialiased_coverage(prepared_corner_signed_distance(
                     input.position.xy(),
                     sprite.bounds,
                     sprite.corner_radii,
+                    sprite.corner_smoothing,
+                    PreparedCorners {
+                        horizontal_reaches: input.horizontal_corner_reaches,
+                        vertical_reaches: input.vertical_corner_reaches,
+                        smoothing_factors: input.smoothing_factors,
+                        superellipse_power: input.superellipse_power,
+                    },
                 )),
         )
     }

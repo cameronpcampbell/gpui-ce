@@ -18,7 +18,7 @@ pub(super) struct FrameUniformRequirements {
     pub(super) surface_count: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<BlurUniforms>() == 96);
+const _: () = assert!(std::mem::size_of::<BlurUniforms>() == 112);
 
 impl WgpuRenderer {
     fn make_blur_bind_group(
@@ -140,6 +140,7 @@ impl WgpuRenderer {
             composite_bounds,
             parameters.content_mask,
             parameters.corner_radii,
+            parameters.corner_smoothing,
             parameters.opacity,
             parameters.clip,
             blur_size,
@@ -180,6 +181,7 @@ impl WgpuRenderer {
                 bounds: filter.bounds,
                 content_mask: filter.content_mask.bounds,
                 corner_radii: filter.corner_radii,
+                corner_smoothing: filter.corner_smoothing,
                 blur_radius: filter.max_blur_radius(),
                 opacity: filter.opacity,
                 clip: FilterCompositeClip::RoundedBounds,

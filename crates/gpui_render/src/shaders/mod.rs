@@ -5,6 +5,7 @@
 pub mod common;
 pub mod interface;
 
+mod corner_smoothing;
 mod emoji;
 mod filters;
 mod linkage;
