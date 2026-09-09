@@ -59,6 +59,7 @@ pub(super) struct WgpuPipelines {
     pub(super) polychrome_sprites: WgpuRenderPipeline,
     #[cfg_attr(
         not(any(
+            all(target_family = "wasm", feature = "custom-gpu"),
             target_os = "macos",
             target_os = "linux",
             target_os = "freebsd",
@@ -255,6 +256,7 @@ impl WgpuBindGroupLayouts {
     }
 
     #[cfg(any(
+        all(target_family = "wasm", feature = "custom-gpu"),
         target_os = "macos",
         target_os = "linux",
         target_os = "freebsd",
@@ -502,8 +504,9 @@ fn generated_bind_group_layout(
                 GeneratedBindingKind::RangeUniform => wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
-                    // The generated `vec2<u32> DATA_RANGE` batch base.
-                    min_binding_size: NonZeroU64::new(8),
+                    // The generated `DATA_RANGE` batch base, padded to satisfy
+                    // browser/WebGL downlevel uniform-binding alignment.
+                    min_binding_size: NonZeroU64::new(16),
                 },
             },
             count: None,
@@ -732,6 +735,13 @@ mod tests {
             &view,
             &sampler,
         );
+        #[cfg(any(
+            all(target_family = "wasm", feature = "custom-gpu"),
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "freebsd",
+            all(target_os = "windows", feature = "wgpu-surfaces")
+        ))]
         let _surface = layouts.create_surface(device, binding(), &view, &view, &sampler);
         let _blur = layouts.create_blur(device, binding(), &view, &sampler);
         Ok(())
