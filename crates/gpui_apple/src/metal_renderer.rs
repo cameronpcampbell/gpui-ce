@@ -977,6 +977,7 @@ impl MetalRenderer {
                 }
                 RenderCommand::Batch(PrimitiveBatch::Surfaces(range)) => self.draw_surfaces(
                     &scene.surfaces[range.clone()],
+                    &scene.surface_opacities()[range.clone()],
                     &scene_uniforms,
                     command_encoder,
                 ),
@@ -1717,6 +1718,7 @@ impl MetalRenderer {
     fn draw_surfaces(
         &mut self,
         surfaces: &[PaintSurface],
+        opacities: &[f32],
         scene_uniforms: &SceneUniforms,
         command_encoder: &metal::RenderCommandEncoderRef,
     ) -> bool {
@@ -1724,7 +1726,7 @@ impl MetalRenderer {
         bind_scene_uniforms(command_encoder, scene_uniforms);
         command_encoder.set_fragment_sampler_state(SAMPLER_SLOT, Some(&self.sampler));
 
-        for surface in surfaces {
+        for (index, surface) in surfaces.iter().enumerate() {
             let image_buffer = match &surface.source {
                 SurfaceSource::Surface(image_buffer) => image_buffer,
                 SurfaceSource::Unsupported(size) => {
@@ -1765,9 +1767,13 @@ impl MetalRenderer {
                 bounds: surface.bounds.into(),
                 content_mask: surface.content_mask.bounds.into(),
                 color_format: SurfaceColorFormat::Yuv,
+                opacity: opacities.get(index).copied().unwrap_or(1.0),
                 padding0: 0,
                 padding1: 0,
                 padding2: 0,
+                padding3: 0,
+                padding4: 0,
+                padding5: 0,
             };
             command_encoder.set_vertex_bytes(
                 DATA_SLOT,
