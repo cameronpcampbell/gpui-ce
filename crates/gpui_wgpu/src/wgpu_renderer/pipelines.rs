@@ -732,6 +732,12 @@ mod tests {
             &view,
             &sampler,
         );
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "freebsd",
+            all(target_os = "windows", feature = "wgpu-surfaces")
+        ))]
         let _surface = layouts.create_surface(device, binding(), &view, &view, &sampler);
         let _blur = layouts.create_blur(device, binding(), &view, &sampler);
         Ok(())
