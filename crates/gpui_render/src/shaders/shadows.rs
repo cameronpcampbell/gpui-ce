@@ -222,7 +222,7 @@ pub mod shadow {
             return transparent();
         }
         let shadow = get!(SHADOWS)[input.shadow_id as usize];
-        let mut coverage = shadow_coverage(shadow, input.position.xy());
+        let mut coverage = 0.0;
         if shadow.corner_smoothing > 0.0 {
             coverage = smoothed_shadow_coverage(
                 shadow,
@@ -240,6 +240,8 @@ pub mod shadow {
                     superellipse_power: 0.0,
                 },
             );
+        } else {
+            coverage = shadow_coverage(shadow, input.position.xy());
         }
         blend_color(input.color, coverage)
     }
