@@ -165,6 +165,45 @@ pub mod shadow {
         pub shadow_id: u32,
         #[location(3)]
         pub clip_distances: Vec4f,
+    }
+
+    #[vertex]
+    pub fn vertex_shadow(
+        #[builtin(vertex_index)] vertex_id: u32,
+        #[builtin(instance_index)] instance_id: u32,
+    ) -> ShadowVarying {
+        let shadow = get!(SHADOWS)[instance_id as usize];
+        let geometry = shadow_geometry(shadow);
+        let vertex = rectangle_vertex(vertex_id, geometry);
+        ShadowVarying {
+            position: vertex.clip_position,
+            color: hsla_to_rgba(shadow.color),
+            shadow_id: instance_id,
+            clip_distances: clip_distances(vertex.viewport_position, shadow.content_mask),
+        }
+    }
+
+    #[fragment]
+    pub fn fragment_shadow(input: ShadowVarying) -> Vec4f {
+        if is_clipped(input.clip_distances) {
+            return transparent();
+        }
+        let shadow = get!(SHADOWS)[input.shadow_id as usize];
+        blend_color(input.color, shadow_coverage(shadow, input.position.xy()))
+    }
+
+    #[derive(Wgsl)]
+    pub struct SmoothedShadowVarying {
+        #[builtin(position)]
+        pub position: Vec4f,
+        #[location(0)]
+        #[interpolate(flat)]
+        pub color: Vec4f,
+        #[location(1)]
+        #[interpolate(flat)]
+        pub shadow_id: u32,
+        #[location(3)]
+        pub clip_distances: Vec4f,
         #[location(4)]
         #[interpolate(flat)]
         pub horizontal_corner_reaches: Vec4f,
@@ -183,10 +222,10 @@ pub mod shadow {
     }
 
     #[vertex]
-    pub fn vertex_shadow(
+    pub fn vertex_smoothed_shadow(
         #[builtin(vertex_index)] vertex_id: u32,
         #[builtin(instance_index)] instance_id: u32,
-    ) -> ShadowVarying {
+    ) -> SmoothedShadowVarying {
         let shadow = get!(SHADOWS)[instance_id as usize];
         let geometry = shadow_geometry(shadow);
         let vertex = rectangle_vertex(vertex_id, geometry);
@@ -203,7 +242,7 @@ pub mod shadow {
             false,
         );
 
-        ShadowVarying {
+        SmoothedShadowVarying {
             position: vertex.clip_position,
             color: hsla_to_rgba(shadow.color),
             shadow_id: instance_id,
@@ -217,32 +256,27 @@ pub mod shadow {
     }
 
     #[fragment]
-    pub fn fragment_shadow(input: ShadowVarying) -> Vec4f {
+    pub fn fragment_smoothed_shadow(input: SmoothedShadowVarying) -> Vec4f {
         if is_clipped(input.clip_distances) {
             return transparent();
         }
         let shadow = get!(SHADOWS)[input.shadow_id as usize];
-        let mut coverage = 0.0;
-        if shadow.corner_smoothing > 0.0 {
-            coverage = smoothed_shadow_coverage(
-                shadow,
-                input.position.xy(),
-                PreparedCorners {
-                    horizontal_reaches: input.horizontal_corner_reaches,
-                    vertical_reaches: input.vertical_corner_reaches,
-                    smoothing_factors: input.smoothing_factors,
-                    superellipse_power: 0.0,
-                },
-                PreparedCorners {
-                    horizontal_reaches: input.element_horizontal_corner_reaches,
-                    vertical_reaches: input.element_vertical_corner_reaches,
-                    smoothing_factors: input.smoothing_factors,
-                    superellipse_power: 0.0,
-                },
-            );
-        } else {
-            coverage = shadow_coverage(shadow, input.position.xy());
-        }
+        let coverage = smoothed_shadow_coverage(
+            shadow,
+            input.position.xy(),
+            PreparedCorners {
+                horizontal_reaches: input.horizontal_corner_reaches,
+                vertical_reaches: input.vertical_corner_reaches,
+                smoothing_factors: input.smoothing_factors,
+                superellipse_power: 0.0,
+            },
+            PreparedCorners {
+                horizontal_reaches: input.element_horizontal_corner_reaches,
+                vertical_reaches: input.element_vertical_corner_reaches,
+                smoothing_factors: input.smoothing_factors,
+                superellipse_power: 0.0,
+            },
+        );
         blend_color(input.color, coverage)
     }
 }

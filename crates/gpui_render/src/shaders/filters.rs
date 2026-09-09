@@ -113,20 +113,8 @@ pub mod blur {
         pub position: Vec4f,
         #[location(0)]
         pub texture_coordinates: Vec2f,
-        #[location(1)]
-        #[interpolate(flat)]
-        pub horizontal_corner_reaches: Vec4f,
-        #[location(2)]
-        #[interpolate(flat)]
-        pub vertical_corner_reaches: Vec4f,
         #[location(3)]
         pub clip_distances: Vec4f,
-        #[location(4)]
-        #[interpolate(flat)]
-        pub smoothing_factors: Vec4f,
-        #[location(5)]
-        #[interpolate(flat)]
-        pub superellipse_power: f32,
     }
 
     #[vertex]
@@ -135,11 +123,7 @@ pub mod blur {
         BlurVarying {
             position: vertex.clip_position,
             texture_coordinates: vertex.texture_coordinates,
-            horizontal_corner_reaches: vec4f(0.0, 0.0, 0.0, 0.0),
-            vertical_corner_reaches: vec4f(0.0, 0.0, 0.0, 0.0),
             clip_distances: unclipped_distances(),
-            smoothing_factors: vec4f(0.0, 0.0, 0.0, 0.0),
-            superellipse_power: 0.0,
         }
     }
 
@@ -188,13 +172,79 @@ pub mod blur {
     #[vertex]
     pub fn vertex_blur_composite(#[builtin(vertex_index)] vertex_id: u32) -> BlurVarying {
         let vertex = rectangle_vertex(vertex_id, get!(BLUR_LOCALS).bounds);
+        BlurVarying {
+            position: vertex.clip_position,
+            texture_coordinates: vertex.unit_position,
+            clip_distances: clip_distances(
+                vertex.viewport_position,
+                get!(BLUR_LOCALS).content_mask,
+            ),
+        }
+    }
+
+    #[fragment]
+    pub fn fragment_blur_composite(input: BlurVarying) -> Vec4f {
+        if is_clipped(input.clip_distances) {
+            return transparent();
+        }
+        let blurred = texture_sample_level(
+            BLUR_TEXTURE,
+            BLUR_SAMPLER,
+            input.position.xy() / get!(BLUR_LOCALS).target_size,
+            0.0,
+        );
+        let coverage = select(
+            1.0,
+            antialiased_coverage(rounded_rectangle_signed_distance(
+                input.position.xy(),
+                get!(BLUR_LOCALS).bounds,
+                get!(BLUR_LOCALS).corner_radii,
+            )),
+            get!(BLUR_LOCALS).composite_clip == BlurCompositeClip::RoundedBounds,
+        );
+        let factor = coverage * get!(BLUR_LOCALS).opacity;
+        vec4f(
+            blurred.x * factor,
+            blurred.y * factor,
+            blurred.z * factor,
+            blurred.w * factor,
+        )
+    }
+
+    #[derive(Wgsl)]
+    pub struct SmoothedBlurVarying {
+        #[builtin(position)]
+        pub position: Vec4f,
+        #[location(0)]
+        pub texture_coordinates: Vec2f,
+        #[location(1)]
+        #[interpolate(flat)]
+        pub horizontal_corner_reaches: Vec4f,
+        #[location(2)]
+        #[interpolate(flat)]
+        pub vertical_corner_reaches: Vec4f,
+        #[location(3)]
+        pub clip_distances: Vec4f,
+        #[location(4)]
+        #[interpolate(flat)]
+        pub smoothing_factors: Vec4f,
+        #[location(5)]
+        #[interpolate(flat)]
+        pub superellipse_power: f32,
+    }
+
+    #[vertex]
+    pub fn vertex_smoothed_blur_composite(
+        #[builtin(vertex_index)] vertex_id: u32,
+    ) -> SmoothedBlurVarying {
+        let vertex = rectangle_vertex(vertex_id, get!(BLUR_LOCALS).bounds);
         let prepared = prepare_corners(
             get!(BLUR_LOCALS).bounds.size,
             get!(BLUR_LOCALS).corner_radii,
             get!(BLUR_LOCALS).corner_smoothing,
             true,
         );
-        BlurVarying {
+        SmoothedBlurVarying {
             position: vertex.clip_position,
             texture_coordinates: vertex.unit_position,
             horizontal_corner_reaches: prepared.horizontal_reaches,
@@ -209,7 +259,7 @@ pub mod blur {
     }
 
     #[fragment]
-    pub fn fragment_blur_composite(input: BlurVarying) -> Vec4f {
+    pub fn fragment_smoothed_blur_composite(input: SmoothedBlurVarying) -> Vec4f {
         if is_clipped(input.clip_distances) {
             return transparent();
         }

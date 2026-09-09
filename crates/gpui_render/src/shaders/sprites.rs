@@ -179,6 +179,67 @@ pub mod polychrome_sprite {
         #[location(1)]
         #[interpolate(flat)]
         pub sprite_id: u32,
+        #[location(3)]
+        pub clip_distances: Vec4f,
+    }
+
+    #[vertex]
+    pub fn vertex_polychrome_sprite(
+        #[builtin(vertex_index)] vertex_id: u32,
+        #[builtin(instance_index)] instance_id: u32,
+    ) -> PolychromeSpriteVarying {
+        let sprite = get!(POLYCHROME_SPRITES)[instance_id as usize];
+        let vertex = rectangle_vertex(vertex_id, sprite.bounds);
+        PolychromeSpriteVarying {
+            position: vertex.clip_position,
+            tile_position: atlas_texture_coordinates(
+                vertex.unit_position,
+                sprite.tile,
+                texture_dimensions(POLYCHROME_TEXTURE),
+            ),
+            sprite_id: instance_id,
+            clip_distances: clip_distances(vertex.viewport_position, sprite.content_mask),
+        }
+    }
+
+    #[fragment]
+    pub fn fragment_polychrome_sprite(input: PolychromeSpriteVarying) -> Vec4f {
+        if is_clipped(input.clip_distances) {
+            return transparent();
+        }
+        let sprite = get!(POLYCHROME_SPRITES)[input.sprite_id as usize];
+        let sample = texture_sample_level(
+            POLYCHROME_TEXTURE,
+            POLYCHROME_SAMPLER,
+            input.tile_position,
+            0.0,
+        );
+        let grayscale = dot(sample.rgb(), LINEAR_RGB_LUMA_WEIGHTS);
+        let color = select(
+            sample,
+            vec4f(grayscale, grayscale, grayscale, sample.w),
+            is_enabled(sprite.grayscale),
+        );
+        blend_color(
+            color,
+            sprite.opacity
+                * antialiased_coverage(rounded_rectangle_signed_distance(
+                    input.position.xy(),
+                    sprite.bounds,
+                    sprite.corner_radii,
+                )),
+        )
+    }
+
+    #[derive(Wgsl)]
+    pub struct SmoothedPolychromeSpriteVarying {
+        #[builtin(position)]
+        pub position: Vec4f,
+        #[location(0)]
+        pub tile_position: Vec2f,
+        #[location(1)]
+        #[interpolate(flat)]
+        pub sprite_id: u32,
         #[location(2)]
         #[interpolate(flat)]
         pub horizontal_corner_reaches: Vec4f,
@@ -196,10 +257,10 @@ pub mod polychrome_sprite {
     }
 
     #[vertex]
-    pub fn vertex_polychrome_sprite(
+    pub fn vertex_smoothed_polychrome_sprite(
         #[builtin(vertex_index)] vertex_id: u32,
         #[builtin(instance_index)] instance_id: u32,
-    ) -> PolychromeSpriteVarying {
+    ) -> SmoothedPolychromeSpriteVarying {
         let sprite = get!(POLYCHROME_SPRITES)[instance_id as usize];
         let vertex = rectangle_vertex(vertex_id, sprite.bounds);
         let prepared = prepare_corners(
@@ -209,7 +270,7 @@ pub mod polychrome_sprite {
             true,
         );
 
-        PolychromeSpriteVarying {
+        SmoothedPolychromeSpriteVarying {
             position: vertex.clip_position,
             tile_position: atlas_texture_coordinates(
                 vertex.unit_position,
@@ -226,7 +287,7 @@ pub mod polychrome_sprite {
     }
 
     #[fragment]
-    pub fn fragment_polychrome_sprite(input: PolychromeSpriteVarying) -> Vec4f {
+    pub fn fragment_smoothed_polychrome_sprite(input: SmoothedPolychromeSpriteVarying) -> Vec4f {
         if is_clipped(input.clip_distances) {
             return transparent();
         }

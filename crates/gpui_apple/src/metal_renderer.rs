@@ -225,16 +225,20 @@ pub struct MetalRenderer {
     paths_rasterization_pipeline_state: metal::RenderPipelineState,
     path_sprites_pipeline_state: metal::RenderPipelineState,
     shadows_pipeline_state: metal::RenderPipelineState,
+    smoothed_shadows_pipeline_state: metal::RenderPipelineState,
     quads_pipeline_state: metal::RenderPipelineState,
+    smoothed_quads_pipeline_state: metal::RenderPipelineState,
     underlines_pipeline_state: metal::RenderPipelineState,
     monochrome_sprites_pipeline_state: metal::RenderPipelineState,
     polychrome_sprites_pipeline_state: metal::RenderPipelineState,
+    smoothed_polychrome_sprites_pipeline_state: metal::RenderPipelineState,
     surfaces_pipeline_state: metal::RenderPipelineState,
     // Blur pipelines: downsample (no blend, also used for the final blit), separable gaussian
     // (no blend), and composite (alpha blend into a rounded rect), from shared shader sources.
     blur_downsample_pipeline_state: metal::RenderPipelineState,
     blur_pipeline_state: metal::RenderPipelineState,
     blur_composite_pipeline_state: metal::RenderPipelineState,
+    smoothed_blur_composite_pipeline_state: metal::RenderPipelineState,
     sampler: metal::SamplerState,
     #[allow(clippy::arc_with_non_send_sync)]
     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
@@ -381,11 +385,25 @@ impl MetalRenderer {
             shadows_shader,
             MTLPixelFormat::BGRA8Unorm,
         );
+        let (smoothed_shadows_shader, smoothed_shadows_library) = pipeline("smoothed_shadows");
+        let smoothed_shadows_pipeline_state = build_pipeline_state(
+            &device,
+            &smoothed_shadows_library,
+            smoothed_shadows_shader,
+            MTLPixelFormat::BGRA8Unorm,
+        );
         let (quads_shader, quads_library) = pipeline("quads");
         let quads_pipeline_state = build_pipeline_state(
             &device,
             &quads_library,
             quads_shader,
+            MTLPixelFormat::BGRA8Unorm,
+        );
+        let (smoothed_quads_shader, smoothed_quads_library) = pipeline("smoothed_quads");
+        let smoothed_quads_pipeline_state = build_pipeline_state(
+            &device,
+            &smoothed_quads_library,
+            smoothed_quads_shader,
             MTLPixelFormat::BGRA8Unorm,
         );
         let (underlines_shader, underlines_library) = pipeline("underlines");
@@ -407,6 +425,14 @@ impl MetalRenderer {
             &device,
             &polychrome_library,
             polychrome_shader,
+            MTLPixelFormat::BGRA8Unorm,
+        );
+        let (smoothed_polychrome_shader, smoothed_polychrome_library) =
+            pipeline("smoothed_polychrome_sprites");
+        let smoothed_polychrome_sprites_pipeline_state = build_pipeline_state(
+            &device,
+            &smoothed_polychrome_library,
+            smoothed_polychrome_shader,
             MTLPixelFormat::BGRA8Unorm,
         );
         let (surfaces_shader, surfaces_library) = pipeline("surfaces");
@@ -439,6 +465,14 @@ impl MetalRenderer {
             blur_composite_shader,
             MTLPixelFormat::BGRA8Unorm,
         );
+        let (smoothed_blur_composite_shader, smoothed_blur_composite_library) =
+            pipeline("smoothed_blur_composite");
+        let smoothed_blur_composite_pipeline_state = build_path_sprite_pipeline_state(
+            &device,
+            &smoothed_blur_composite_library,
+            smoothed_blur_composite_shader,
+            MTLPixelFormat::BGRA8Unorm,
+        );
 
         let sampler_descriptor = SamplerDescriptor::new();
         sampler_descriptor.set_min_filter(metal::MTLSamplerMinMagFilter::Linear);
@@ -461,14 +495,18 @@ impl MetalRenderer {
             paths_rasterization_pipeline_state,
             path_sprites_pipeline_state,
             shadows_pipeline_state,
+            smoothed_shadows_pipeline_state,
             quads_pipeline_state,
+            smoothed_quads_pipeline_state,
             underlines_pipeline_state,
             monochrome_sprites_pipeline_state,
             polychrome_sprites_pipeline_state,
+            smoothed_polychrome_sprites_pipeline_state,
             surfaces_pipeline_state,
             blur_downsample_pipeline_state,
             blur_pipeline_state,
             blur_composite_pipeline_state,
+            smoothed_blur_composite_pipeline_state,
             sampler,
             instance_buffer_pool,
             sprite_atlas,
@@ -892,15 +930,18 @@ impl MetalRenderer {
 
         for command in scene.render_commands() {
             let ok = match command {
-                RenderCommand::Batch(PrimitiveBatch::Shadows(range)) => self.draw_shadows(
-                    &scene.shadows[range.clone()],
-                    instance_buffer,
-                    &mut instance_offset,
-                    &scene_uniforms,
-                    command_encoder,
-                ),
-                RenderCommand::Batch(PrimitiveBatch::Quads(range)) => self.draw_quads(
+                RenderCommand::Batch(PrimitiveBatch::Shadows { range, smoothed }) => self
+                    .draw_shadows(
+                        &scene.shadows[range.clone()],
+                        *smoothed,
+                        instance_buffer,
+                        &mut instance_offset,
+                        &scene_uniforms,
+                        command_encoder,
+                    ),
+                RenderCommand::Batch(PrimitiveBatch::Quads { range, smoothed }) => self.draw_quads(
                     &scene.quads[range.clone()],
+                    *smoothed,
                     instance_buffer,
                     &mut instance_offset,
                     &scene_uniforms,
@@ -965,16 +1006,19 @@ impl MetalRenderer {
                         command_encoder,
                     )
                 }
-                RenderCommand::Batch(PrimitiveBatch::PolychromeSprites { texture_id, range }) => {
-                    self.draw_polychrome_sprites(
-                        *texture_id,
-                        &scene.polychrome_sprites[range.clone()],
-                        instance_buffer,
-                        &mut instance_offset,
-                        &scene_uniforms,
-                        command_encoder,
-                    )
-                }
+                RenderCommand::Batch(PrimitiveBatch::PolychromeSprites {
+                    texture_id,
+                    range,
+                    smoothed,
+                }) => self.draw_polychrome_sprites(
+                    *texture_id,
+                    &scene.polychrome_sprites[range.clone()],
+                    *smoothed,
+                    instance_buffer,
+                    &mut instance_offset,
+                    &scene_uniforms,
+                    command_encoder,
+                ),
                 RenderCommand::Batch(PrimitiveBatch::Surfaces(range)) => self.draw_surfaces(
                     &scene.surfaces[range.clone()],
                     &scene_uniforms,
@@ -1308,7 +1352,12 @@ impl MetalRenderer {
                 color_attachment.set_load_action(metal::MTLLoadAction::Load);
             },
         );
-        encoder.set_render_pipeline_state(&self.blur_composite_pipeline_state);
+        let pipeline = if composite_uniforms.corner_smoothing > 0.0 {
+            &self.smoothed_blur_composite_pipeline_state
+        } else {
+            &self.blur_composite_pipeline_state
+        };
+        encoder.set_render_pipeline_state(pipeline);
         bind_scene_uniforms(encoder, scene_uniforms);
         encoder.set_vertex_bytes(
             DATA_SLOT,
@@ -1406,6 +1455,7 @@ impl MetalRenderer {
     fn draw_shadows(
         &self,
         shadows: &[Shadow],
+        smoothed: bool,
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
         scene_uniforms: &SceneUniforms,
@@ -1422,7 +1472,12 @@ impl MetalRenderer {
             return false;
         }
 
-        command_encoder.set_render_pipeline_state(&self.shadows_pipeline_state);
+        let pipeline = if smoothed {
+            &self.smoothed_shadows_pipeline_state
+        } else {
+            &self.shadows_pipeline_state
+        };
+        command_encoder.set_render_pipeline_state(pipeline);
         bind_scene_uniforms(command_encoder, scene_uniforms);
 
         let buffer_contents =
@@ -1454,6 +1509,7 @@ impl MetalRenderer {
     fn draw_quads(
         &self,
         quads: &[Quad],
+        smoothed: bool,
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
         scene_uniforms: &SceneUniforms,
@@ -1470,7 +1526,12 @@ impl MetalRenderer {
             return false;
         }
 
-        command_encoder.set_render_pipeline_state(&self.quads_pipeline_state);
+        let pipeline = if smoothed {
+            &self.smoothed_quads_pipeline_state
+        } else {
+            &self.quads_pipeline_state
+        };
+        command_encoder.set_render_pipeline_state(pipeline);
         bind_scene_uniforms(command_encoder, scene_uniforms);
 
         let buffer_contents =
@@ -1669,6 +1730,7 @@ impl MetalRenderer {
         &self,
         texture_id: AtlasTextureId,
         sprites: &[PolychromeSprite],
+        smoothed: bool,
         instance_buffer: &mut InstanceBuffer,
         instance_offset: &mut usize,
         scene_uniforms: &SceneUniforms,
@@ -1686,7 +1748,12 @@ impl MetalRenderer {
         }
 
         let texture = self.sprite_atlas.metal_texture(texture_id);
-        command_encoder.set_render_pipeline_state(&self.polychrome_sprites_pipeline_state);
+        let pipeline = if smoothed {
+            &self.smoothed_polychrome_sprites_pipeline_state
+        } else {
+            &self.polychrome_sprites_pipeline_state
+        };
+        command_encoder.set_render_pipeline_state(pipeline);
         bind_scene_uniforms(command_encoder, scene_uniforms);
 
         let buffer_contents =
@@ -1968,8 +2035,8 @@ fn required_instance_buffer_size(scene: &Scene) -> usize {
             continue;
         };
         match batch {
-            PrimitiveBatch::Shadows(range) => reserve(mem::size_of::<Shadow>(), range.len()),
-            PrimitiveBatch::Quads(range) => reserve(mem::size_of::<Quad>(), range.len()),
+            PrimitiveBatch::Shadows { range, .. } => reserve(mem::size_of::<Shadow>(), range.len()),
+            PrimitiveBatch::Quads { range, .. } => reserve(mem::size_of::<Quad>(), range.len()),
             PrimitiveBatch::Paths {
                 rasterization_vertex_count,
                 sprite_count,

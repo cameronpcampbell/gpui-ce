@@ -171,7 +171,9 @@ fn every_primitive_kind_renders() {
         .render_commands()
         .iter()
         .filter_map(|command| match command {
-            gpui::RenderCommand::Batch(gpui::PrimitiveBatch::Quads(range)) => Some(range.clone()),
+            gpui::RenderCommand::Batch(gpui::PrimitiveBatch::Quads { range, .. }) => {
+                Some(range.clone())
+            }
             _ => None,
         })
         .collect();

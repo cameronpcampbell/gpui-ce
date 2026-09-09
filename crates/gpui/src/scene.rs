@@ -469,6 +469,10 @@ fn precedes_limit(
     limit.is_none_or(|limit| (order, kind) < limit)
 }
 
+fn has_corner_smoothing(corner_smoothing: f32) -> bool {
+    corner_smoothing > 0.0
+}
+
 impl<'a> Iterator for BatchIterator<'a> {
     type Item = PrimitiveBatch;
 
@@ -535,32 +539,48 @@ impl<'a> Iterator for BatchIterator<'a> {
 
         match batch_kind {
             PrimitiveKind::Shadow => {
+                let smoothed =
+                    has_corner_smoothing(self.shadows_iter.peek().unwrap().corner_smoothing);
                 let shadows_start = self.shadows_start;
                 let mut shadows_end = shadows_start + 1;
                 self.shadows_iter.next();
                 while self
                     .shadows_iter
-                    .next_if(|shadow| precedes_limit(shadow.order, batch_kind, max_order_and_kind))
+                    .next_if(|shadow| {
+                        precedes_limit(shadow.order, batch_kind, max_order_and_kind)
+                            && has_corner_smoothing(shadow.corner_smoothing) == smoothed
+                    })
                     .is_some()
                 {
                     shadows_end += 1;
                 }
                 self.shadows_start = shadows_end;
-                Some(PrimitiveBatch::Shadows(shadows_start..shadows_end))
+                Some(PrimitiveBatch::Shadows {
+                    range: shadows_start..shadows_end,
+                    smoothed,
+                })
             }
             PrimitiveKind::Quad => {
+                let smoothed =
+                    has_corner_smoothing(self.quads_iter.peek().unwrap().corner_smoothing);
                 let quads_start = self.quads_start;
                 let mut quads_end = quads_start + 1;
                 self.quads_iter.next();
                 while self
                     .quads_iter
-                    .next_if(|quad| precedes_limit(quad.order, batch_kind, max_order_and_kind))
+                    .next_if(|quad| {
+                        precedes_limit(quad.order, batch_kind, max_order_and_kind)
+                            && has_corner_smoothing(quad.corner_smoothing) == smoothed
+                    })
                     .is_some()
                 {
                     quads_end += 1;
                 }
                 self.quads_start = quads_end;
-                Some(PrimitiveBatch::Quads(quads_start..quads_end))
+                Some(PrimitiveBatch::Quads {
+                    range: quads_start..quads_end,
+                    smoothed,
+                })
             }
             PrimitiveKind::Path => {
                 let paths_start = self.paths_start;
@@ -650,7 +670,9 @@ impl<'a> Iterator for BatchIterator<'a> {
                 })
             }
             PrimitiveKind::PolychromeSprite => {
-                let texture_id = self.polychrome_sprites_iter.peek().unwrap().tile.texture_id;
+                let first_sprite = self.polychrome_sprites_iter.peek().unwrap();
+                let texture_id = first_sprite.tile.texture_id;
+                let smoothed = has_corner_smoothing(first_sprite.corner_smoothing);
                 let sprites_start = self.polychrome_sprites_start;
                 let mut sprites_end = sprites_start + 1;
                 self.polychrome_sprites_iter.next();
@@ -659,6 +681,7 @@ impl<'a> Iterator for BatchIterator<'a> {
                     .next_if(|sprite| {
                         precedes_limit(sprite.order, batch_kind, max_order_and_kind)
                             && sprite.tile.texture_id == texture_id
+                            && has_corner_smoothing(sprite.corner_smoothing) == smoothed
                     })
                     .is_some()
                 {
@@ -668,6 +691,7 @@ impl<'a> Iterator for BatchIterator<'a> {
                 Some(PrimitiveBatch::PolychromeSprites {
                     texture_id,
                     range: sprites_start..sprites_end,
+                    smoothed,
                 })
             }
             PrimitiveKind::Surface => {
@@ -1216,7 +1240,7 @@ impl PathVertex<Pixels> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Point, Size};
+    use crate::{AtlasTextureKind, DevicePixels, Point, ShaderBool, Size, TileId};
 
     fn sp(value: f32) -> ScaledPixels {
         ScaledPixels(value)
@@ -1249,6 +1273,181 @@ mod tests {
             content_mask: mask(),
             ..Default::default()
         }
+    }
+
+    fn shadow() -> Shadow {
+        Shadow {
+            order: 0,
+            blur_radius: sp(0.0),
+            bounds: full_bounds(),
+            corner_radii: Corners::default(),
+            content_mask: mask(),
+            color: Default::default(),
+            element_bounds: full_bounds(),
+            element_corner_radii: Corners::default(),
+            inset: ShaderBool::Disabled,
+            corner_smoothing: 0.0,
+        }
+    }
+
+    fn polychrome_sprite(texture_index: u32) -> PolychromeSprite {
+        PolychromeSprite {
+            order: 0,
+            grayscale: ShaderBool::Disabled,
+            opacity: 1.0,
+            corner_smoothing: 0.0,
+            bounds: full_bounds(),
+            content_mask: mask(),
+            corner_radii: Corners::default(),
+            tile: AtlasTile {
+                texture_id: AtlasTextureId {
+                    index: texture_index,
+                    kind: AtlasTextureKind::Polychrome,
+                },
+                tile_id: TileId(0),
+                padding: 0,
+                bounds: Bounds::<DevicePixels>::default(),
+            },
+        }
+    }
+
+    fn batches(scene: &mut Scene) -> Vec<PrimitiveBatch> {
+        scene.finish();
+        scene.batches().collect()
+    }
+
+    #[test]
+    fn unsmoothed_primitives_each_remain_one_batch() {
+        let mut quad_scene = Scene::default();
+        let mut shadow_scene = Scene::default();
+        let mut sprite_scene = Scene::default();
+        for _ in 0..3 {
+            quad_scene.insert_primitive(quad());
+            shadow_scene.insert_primitive(shadow());
+            sprite_scene.insert_primitive(polychrome_sprite(0));
+        }
+
+        assert_eq!(
+            batches(&mut quad_scene),
+            vec![PrimitiveBatch::Quads {
+                range: 0..3,
+                smoothed: false,
+            }]
+        );
+        assert_eq!(
+            batches(&mut shadow_scene),
+            vec![PrimitiveBatch::Shadows {
+                range: 0..3,
+                smoothed: false,
+            }]
+        );
+        assert_eq!(
+            batches(&mut sprite_scene),
+            vec![PrimitiveBatch::PolychromeSprites {
+                texture_id: AtlasTextureId {
+                    index: 0,
+                    kind: AtlasTextureKind::Polychrome,
+                },
+                range: 0..3,
+                smoothed: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn mixed_smoothing_splits_only_at_mode_changes() {
+        let mut quad_scene = Scene::default();
+        let mut shadow_scene = Scene::default();
+        let mut sprite_scene = Scene::default();
+        for smoothing in [0.0, 0.0, 0.5, 1.0, 0.0] {
+            let mut quad = quad();
+            quad.corner_smoothing = smoothing;
+            quad_scene.insert_primitive(quad);
+
+            let mut shadow = shadow();
+            shadow.corner_smoothing = smoothing;
+            shadow_scene.insert_primitive(shadow);
+
+            let mut sprite = polychrome_sprite(0);
+            sprite.corner_smoothing = smoothing;
+            sprite_scene.insert_primitive(sprite);
+        }
+
+        let expected_ranges = [(0..2, false), (2..4, true), (4..5, false)];
+        assert_eq!(
+            batches(&mut quad_scene),
+            expected_ranges
+                .iter()
+                .map(|(range, smoothed)| PrimitiveBatch::Quads {
+                    range: range.clone(),
+                    smoothed: *smoothed,
+                })
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            batches(&mut shadow_scene),
+            expected_ranges
+                .iter()
+                .map(|(range, smoothed)| PrimitiveBatch::Shadows {
+                    range: range.clone(),
+                    smoothed: *smoothed,
+                })
+                .collect::<Vec<_>>()
+        );
+        let texture_id = AtlasTextureId {
+            index: 0,
+            kind: AtlasTextureKind::Polychrome,
+        };
+        assert_eq!(
+            batches(&mut sprite_scene),
+            expected_ranges
+                .iter()
+                .map(|(range, smoothed)| PrimitiveBatch::PolychromeSprites {
+                    texture_id,
+                    range: range.clone(),
+                    smoothed: *smoothed,
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn polychrome_sprites_preserve_texture_grouping_with_smoothing_splits() {
+        let mut scene = Scene::default();
+        for (texture, smoothing) in [
+            (0, 0.0),
+            (0, 0.0),
+            (0, 0.5),
+            (0, 1.0),
+            (1, 1.0),
+            (1, 0.5),
+            (1, 0.0),
+        ] {
+            let mut sprite = polychrome_sprite(texture);
+            sprite.corner_smoothing = smoothing;
+            scene.insert_primitive(sprite);
+        }
+
+        let batch_ranges_and_modes = batches(&mut scene)
+            .into_iter()
+            .map(|batch| match batch {
+                PrimitiveBatch::PolychromeSprites {
+                    texture_id,
+                    range,
+                    smoothed,
+                } => (texture_id.index, range, smoothed),
+                other => panic!("unexpected batch: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            batch_ranges_and_modes,
+            vec![
+                (0, 0..2, false),
+                (0, 2..4, true),
+                (1, 4..6, true),
+                (1, 6..7, false),
+            ]
+        );
     }
 
     /// A 100x100 quad whose bounds don't overlap `full_bounds()` (used to exercise the
@@ -1300,7 +1499,7 @@ mod tests {
         scene
             .batches()
             .map(|batch| match batch {
-                PrimitiveBatch::Quads(_) => "quad",
+                PrimitiveBatch::Quads { .. } => "quad",
                 PrimitiveBatch::BackdropFilters(_) => "backdrop",
                 PrimitiveBatch::FilterBoundary(ix) => {
                     if scene.filter_boundaries[ix].is_start {
@@ -1402,7 +1601,7 @@ mod tests {
             .render_commands()
             .iter()
             .map(|command| match command {
-                RenderCommand::Batch(PrimitiveBatch::Quads(_)) => "quad".to_string(),
+                RenderCommand::Batch(PrimitiveBatch::Quads { .. }) => "quad".to_string(),
                 RenderCommand::BeginFilter {
                     boundary_index,
                     target,
@@ -1463,7 +1662,7 @@ mod tests {
                     format!("begin:{target:?}")
                 }
                 RenderCommand::EndFilter { target, .. } => format!("end:{target:?}"),
-                RenderCommand::Batch(PrimitiveBatch::Quads(_)) => "quad".to_string(),
+                RenderCommand::Batch(PrimitiveBatch::Quads { .. }) => "quad".to_string(),
                 RenderCommand::Batch(other) => panic!("unexpected batch: {other:?}"),
             })
             .collect();
@@ -1496,7 +1695,7 @@ mod tests {
         ));
         assert!(matches!(
             commands.next(),
-            Some(RenderCommand::Batch(PrimitiveBatch::Quads(_)))
+            Some(RenderCommand::Batch(PrimitiveBatch::Quads { .. }))
         ));
         assert!(commands.next().is_none());
         assert!(!scene.requires_offscreen_rendering());
@@ -1543,7 +1742,8 @@ mod tests {
 
         assert!(matches!(
             scene.render_commands(),
-            [RenderCommand::Batch(PrimitiveBatch::Quads(range))] if range == &(0..1)
+            [RenderCommand::Batch(PrimitiveBatch::Quads { range, smoothed: false })]
+                if range == &(0..1)
         ));
     }
 

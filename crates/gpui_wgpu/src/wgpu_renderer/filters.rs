@@ -148,9 +148,14 @@ impl WgpuRenderer {
         );
         let (bind_group, uniform_offset) = self.make_blur_bind_group(uniforms, &horizontal_target);
         let resources = self.resources();
+        let pipeline = if uniforms.corner_smoothing > 0.0 {
+            &resources.pipelines.smoothed_blur_composite
+        } else {
+            &resources.pipelines.blur_composite
+        };
         let mut pass =
             begin_color_render_pass(encoder, "blur_composite", target, wgpu::LoadOp::Load);
-        pass.set_pipeline(&resources.pipelines.blur_composite);
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(
             shader_interface::GLOBAL_BIND_GROUP,
             &resources.globals_bind_group,
@@ -161,10 +166,7 @@ impl WgpuRenderer {
             &bind_group,
             &[uniform_offset],
         );
-        pass.draw(
-            0..resources.pipelines.blur_composite.fixed_vertex_count(),
-            0..1,
-        );
+        pass.draw(0..pipeline.fixed_vertex_count(), 0..1);
     }
 
     pub(super) fn draw_backdrop_filter(

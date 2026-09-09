@@ -1,5 +1,29 @@
 use super::*;
 
+fn braced_declaration<'a>(source: &'a str, declaration: &str) -> &'a str {
+    let start = source
+        .find(declaration)
+        .unwrap_or_else(|| panic!("missing shader declaration {declaration}"));
+    let body_start = source[start..]
+        .find('{')
+        .map(|offset| start + offset)
+        .unwrap_or_else(|| panic!("shader declaration {declaration} has no body"));
+    let mut depth = 0_u32;
+    for (offset, character) in source[body_start..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &source[start..body_start + offset + 1];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("shader declaration {declaration} has an unterminated body")
+}
+
 #[test]
 fn validates_subpixel_shader() {
     let generated = subpixel_sprite::WGSL_SOURCE.wgsl_source().unwrap();
@@ -53,6 +77,54 @@ fn shader_interface_matches_generated_sources() {
     );
     assert_eq!(quad::QUADS.group(), interface::DATA_BIND_GROUP);
     assert_eq!(quad::QUADS.binding(), interface::DATA_BUFFER_BINDING);
+}
+
+#[test]
+fn ordinary_entry_points_keep_compact_corner_geometry() {
+    let source = base::WGSL_SOURCE.wgsl_source().unwrap();
+    for entry in [
+        "fn vertex_quad(",
+        "fn fragment_quad(",
+        "fn vertex_shadow(",
+        "fn fragment_shadow(",
+        "fn vertex_polychrome_sprite(",
+        "fn fragment_polychrome_sprite(",
+        "fn vertex_blur_composite(",
+        "fn fragment_blur_composite(",
+    ] {
+        let declaration = braced_declaration(&source, entry);
+        for expanded_operation in [
+            "prepare_corners",
+            "prepared_corner_signed_distance",
+            "figma_smooth_rectangle_sample",
+            "corner_smoothing",
+        ] {
+            assert!(
+                !declaration.contains(expanded_operation),
+                "ordinary shader {entry} contains {expanded_operation}"
+            );
+        }
+    }
+
+    for varying in [
+        "struct QuadVarying",
+        "struct ShadowVarying",
+        "struct PolychromeSpriteVarying",
+        "struct BlurVarying",
+    ] {
+        let declaration = braced_declaration(&source, varying);
+        for expanded_varying in [
+            "horizontal_corner_reaches",
+            "vertical_corner_reaches",
+            "smoothing_factors",
+            "superellipse_power",
+        ] {
+            assert!(
+                !declaration.contains(expanded_varying),
+                "ordinary shader {varying} contains {expanded_varying}"
+            );
+        }
+    }
 }
 
 #[test]
