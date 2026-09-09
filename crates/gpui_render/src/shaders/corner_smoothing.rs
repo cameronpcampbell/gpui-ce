@@ -39,16 +39,14 @@ mod source {
     ) -> bool {
         let radii = max(corner_values(corner_radii), vec4f(0.0, 0.0, 0.0, 0.0));
         let reaches = normalized_superellipse_reaches(corner_radii, corner_smoothing);
-        let half_short_side = 0.5 * min(size.x, size.y);
-
         corner_smoothing > 0.0
             && size.x > 0.0
             && size.y > 0.0
             && (radii.x > 0.0 || radii.y > 0.0 || radii.z > 0.0 || radii.w > 0.0)
-            && reaches.x <= half_short_side
-            && reaches.y <= half_short_side
-            && reaches.z <= half_short_side
-            && reaches.w <= half_short_side
+            && reaches.x + reaches.y <= size.x
+            && reaches.y + reaches.z <= size.y
+            && reaches.z + reaches.w <= size.x
+            && reaches.w + reaches.x <= size.y
     }
 
     pub fn normalized_superellipse_signed_distance_from_corner(
@@ -71,7 +69,16 @@ mod source {
         extent * (powered.x + powered.y - 1.0) / max(gradient, FIGMA_EPSILON)
     }
 
-    pub fn normalized_superellipse_signed_distance(
+    pub fn can_use_compact_corner_selection(size: Vec2f, reaches: Vec4f) -> bool {
+        let half_short_side = 0.5 * min(size.x, size.y);
+
+        reaches.x <= half_short_side
+            && reaches.y <= half_short_side
+            && reaches.z <= half_short_side
+            && reaches.w <= half_short_side
+    }
+
+    pub fn compact_normalized_superellipse_signed_distance(
         point: Vec2f,
         bounds: Bounds,
         corner_radii: Corners,
@@ -87,6 +94,74 @@ mod source {
             corner_to_point,
             corner_radius,
             corner_smoothing,
+            power,
+        )
+    }
+
+    pub fn reach_aware_normalized_superellipse_signed_distance(
+        point: Vec2f,
+        bounds: Bounds,
+        corner_radii: Corners,
+        corner_smoothing: f32,
+        reaches: Vec4f,
+        power: f32,
+    ) -> f32 {
+        let local_point = point - bounds.origin;
+        let radii = corner_values(corner_radii);
+        let mut distance =
+            figma_nearest_straight_sample(local_point, bounds.size, reaches, reaches).distance;
+        let mut corner = 0u32;
+
+        while corner < 4u32 {
+            if figma_is_corner_candidate(
+                local_point,
+                bounds.size,
+                reaches[corner],
+                reaches[corner],
+                corner,
+            ) {
+                let candidate = normalized_superellipse_signed_distance_from_corner(
+                    figma_corner_to_point(local_point, bounds.size, corner),
+                    radii[corner],
+                    corner_smoothing,
+                    power,
+                );
+
+                if abs(candidate) <= abs(distance) {
+                    distance = candidate;
+                }
+            }
+
+            corner += 1u32;
+        }
+
+        distance
+    }
+
+    pub fn normalized_superellipse_signed_distance(
+        point: Vec2f,
+        bounds: Bounds,
+        corner_radii: Corners,
+        corner_smoothing: f32,
+        reaches: Vec4f,
+        power: f32,
+    ) -> f32 {
+        if can_use_compact_corner_selection(bounds.size, reaches) {
+            return compact_normalized_superellipse_signed_distance(
+                point,
+                bounds,
+                corner_radii,
+                corner_smoothing,
+                power,
+            );
+        }
+
+        reach_aware_normalized_superellipse_signed_distance(
+            point,
+            bounds,
+            corner_radii,
+            corner_smoothing,
+            reaches,
             power,
         )
     }
@@ -927,6 +1002,7 @@ mod source {
                 bounds,
                 corner_radii,
                 corner_smoothing,
+                prepared.horizontal_reaches,
                 prepared.superellipse_power,
             );
         }
@@ -1034,5 +1110,122 @@ mod tests {
         assert_eq!(circular.horizontal_reaches.x, 20.0);
         assert!(smoothed.horizontal_reaches.x > circular.horizontal_reaches.x);
         assert!(smoothed.vertical_reaches.x > circular.vertical_reaches.x);
+    }
+
+    #[test]
+    fn normalized_shortcut_checks_adjacent_corner_overlap_boundaries() {
+        let size = vec2f(100.0, 80.0);
+        let corners = |top_left, top_right, bottom_right, bottom_left| Corners {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        };
+        let exact_fit = [
+            corners(20.0, 30.0, 0.0, 0.0),
+            corners(0.0, 20.0, 20.0, 0.0),
+            corners(0.0, 0.0, 30.0, 20.0),
+            corners(20.0, 0.0, 0.0, 20.0),
+        ];
+        let just_fitting = [
+            corners(20.0, 29.999, 0.0, 0.0),
+            corners(0.0, 20.0, 19.999, 0.0),
+            corners(0.0, 0.0, 30.0, 19.999),
+            corners(20.0, 0.0, 0.0, 19.999),
+        ];
+        let overlapping = [
+            corners(20.0, 30.001, 0.0, 0.0),
+            corners(0.0, 20.0, 20.001, 0.0),
+            corners(0.0, 0.0, 30.0, 20.001),
+            corners(20.0, 0.0, 0.0, 20.001),
+        ];
+
+        for radii in exact_fit {
+            assert!(can_use_normalized_superellipse(size, radii, 1.0));
+        }
+        for radii in just_fitting {
+            assert!(can_use_normalized_superellipse(size, radii, 1.0));
+        }
+        for radii in overlapping {
+            assert!(!can_use_normalized_superellipse(size, radii, 1.0));
+        }
+
+        let preservation = prepare_corners(size, exact_fit[0], 1.0, false);
+        assert_eq!(preservation.superellipse_power, 0.0);
+    }
+
+    #[test]
+    fn normalized_shortcut_preserves_compact_corner_selection() {
+        let bounds = Bounds {
+            origin: vec2f(0.0, 0.0),
+            size: vec2f(120.0, 80.0),
+        };
+        let radii = Corners {
+            top_left: 20.0,
+            top_right: 8.0,
+            bottom_right: 16.0,
+            bottom_left: 4.0,
+        };
+        let smoothing = 0.6;
+        let prepared = prepare_corners(bounds.size, radii, smoothing, true);
+
+        assert!(prepared.superellipse_power > 0.0);
+        assert!(can_use_compact_corner_selection(
+            bounds.size,
+            prepared.horizontal_reaches,
+        ));
+
+        for y in 0..=8 {
+            for x in 0..=12 {
+                let point = vec2f(x as f32 * 10.0, y as f32 * 10.0);
+                let expected = compact_normalized_superellipse_signed_distance(
+                    point,
+                    bounds,
+                    radii,
+                    smoothing,
+                    prepared.superellipse_power,
+                );
+                let actual =
+                    prepared_corner_signed_distance(point, bounds, radii, smoothing, prepared);
+                assert_eq!(actual, expected, "compact distance at {point:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn normalized_shortcut_uses_asymmetric_corner_reach_regions() {
+        let bounds = Bounds {
+            origin: vec2f(0.0, 0.0),
+            size: vec2f(120.0, 80.0),
+        };
+        let radii = Corners {
+            top_left: 35.0,
+            top_right: 0.0,
+            bottom_right: 0.0,
+            bottom_left: 0.0,
+        };
+        let smoothing = 1.0;
+        let prepared = prepare_corners(bounds.size, radii, smoothing, true);
+
+        assert!(prepared.superellipse_power > 0.0);
+        assert!(!can_use_compact_corner_selection(
+            bounds.size,
+            prepared.horizontal_reaches,
+        ));
+
+        let shoulder = vec2f(65.0, 0.0);
+        let expected = normalized_superellipse_signed_distance_from_corner(
+            -shoulder,
+            radii.top_left,
+            smoothing,
+            prepared.superellipse_power,
+        );
+        let actual = prepared_corner_signed_distance(shoulder, bounds, radii, smoothing, prepared);
+        assert!((actual - expected).abs() < 0.0001);
+        assert!(actual > 0.0);
+
+        let deep_interior =
+            prepared_corner_signed_distance(vec2f(65.0, 65.0), bounds, radii, smoothing, prepared);
+        assert!((deep_interior + 15.0).abs() < 0.0001);
     }
 }

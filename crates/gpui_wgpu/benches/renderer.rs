@@ -1,7 +1,7 @@
 use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use gpui::{
-    Bounds, ContentMask, DevicePixels, PlatformHeadlessRenderer, Point, Quad, ScaledPixels, Scene,
-    ShaderBool, Size, Underline, solid_background, white,
+    Bounds, ContentMask, Corners, DevicePixels, PlatformHeadlessRenderer, Point, Quad,
+    ScaledPixels, Scene, ShaderBool, Size, Underline, solid_background, white,
 };
 use gpui_ce_wgpu::WgpuHeadlessRenderer;
 
@@ -12,6 +12,16 @@ const TARGET_SIZE: Size<DevicePixels> = Size {
 
 fn quad_scene(count: usize) -> Scene {
     let mut scene = unplanned_quad_scene(count);
+    scene.finish();
+    scene
+}
+
+fn smoothed_quad_scene(count: usize, corner_radii: Corners<ScaledPixels>) -> Scene {
+    let mut scene = unplanned_quad_scene(count);
+    for quad in &mut scene.quads {
+        quad.corner_radii = corner_radii.clone();
+        quad.corner_smoothing = 1.0;
+    }
     scene.finish();
     scene
 }
@@ -79,6 +89,16 @@ fn bench_renderer(c: &mut Criterion) {
     let mut renderer = WgpuHeadlessRenderer::new().expect("headless WGPU renderer must initialize");
     let single_quad = quad_scene(1);
     let dense_quads = quad_scene(512);
+    let compact_smoothed_quads = smoothed_quad_scene(512, Corners::all(ScaledPixels(8.0)));
+    let reach_aware_smoothed_quads = smoothed_quad_scene(
+        512,
+        Corners {
+            top_left: ScaledPixels(14.0),
+            top_right: ScaledPixels(0.0),
+            bottom_right: ScaledPixels(0.0),
+            bottom_left: ScaledPixels(0.0),
+        },
+    );
     let mut mixed_batches = unplanned_mixed_scene(512);
     mixed_batches.finish();
 
@@ -109,6 +129,20 @@ fn bench_renderer(c: &mut Criterion) {
             renderer
                 .render_scene_and_wait(&dense_quads, TARGET_SIZE)
                 .expect("dense quad render must succeed")
+        })
+    });
+    group.bench_function("512_compact_smoothed_quads_wait", |b| {
+        b.iter(|| {
+            renderer
+                .render_scene_and_wait(&compact_smoothed_quads, TARGET_SIZE)
+                .expect("compact smoothed quad render must succeed")
+        })
+    });
+    group.bench_function("512_reach_aware_smoothed_quads_wait", |b| {
+        b.iter(|| {
+            renderer
+                .render_scene_and_wait(&reach_aware_smoothed_quads, TARGET_SIZE)
+                .expect("reach-aware smoothed quad render must succeed")
         })
     });
     group.bench_function("1024_mixed_batches_wait", |b| {
