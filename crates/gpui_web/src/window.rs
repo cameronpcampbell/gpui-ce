@@ -388,9 +388,10 @@ impl WebWindowInner {
             this.with_callback(
                 |callbacks| &mut callbacks.request_frame,
                 |callback| {
+                    let force_render = this.state.borrow_mut().renderer.needs_redraw();
                     callback(RequestFrameOptions {
                         require_presentation: false,
-                        force_render: false,
+                        force_render,
                     })
                 },
             );
@@ -847,6 +848,15 @@ impl PlatformWindow for WebWindow {
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         Some(self.inner.state.borrow().renderer.gpu_specs())
+    }
+
+    fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
+        self.inner
+            .state
+            .borrow()
+            .renderer
+            .gpu_context_info()
+            .map(|context| Box::new(context) as Box<dyn std::any::Any>)
     }
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>) {}
