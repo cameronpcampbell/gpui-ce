@@ -612,9 +612,11 @@ fn encode_inline_batch(
             instances,
             pass,
         ),
-        PrimitiveBatch::Surfaces(range) => {
-            renderer.draw_surfaces(&scene.surfaces[range.clone()], pass)
-        }
+        PrimitiveBatch::Surfaces(range) => renderer.draw_surfaces(
+            &scene.surfaces[range.clone()],
+            &scene.surface_opacities()[range.clone()],
+            pass,
+        ),
         PrimitiveBatch::Paths { .. }
         | PrimitiveBatch::BackdropFilters(_)
         | PrimitiveBatch::FilterBoundary(_) => {

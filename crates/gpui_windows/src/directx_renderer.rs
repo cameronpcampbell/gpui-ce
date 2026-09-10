@@ -676,7 +676,10 @@ impl DirectXRenderer {
                     *smoothed,
                 ),
                 RenderCommand::Batch(PrimitiveBatch::Surfaces(range)) => {
-                    self.draw_surfaces(&scene.surfaces[range.clone()])
+                    self.draw_surfaces(
+                        &scene.surfaces[range.clone()],
+                        &scene.surface_opacities()[range.clone()],
+                    )
                 }
                 RenderCommand::Batch(PrimitiveBatch::BackdropFilters(range)) => {
                     let result = (|| {
@@ -1168,7 +1171,7 @@ impl DirectXRenderer {
         )
     }
 
-    fn draw_surfaces(&mut self, surfaces: &[PaintSurface]) -> Result<()> {
+    fn draw_surfaces(&mut self, surfaces: &[PaintSurface], opacities: &[f32]) -> Result<()> {
         if surfaces.is_empty() {
             return Ok(());
         }
@@ -1179,7 +1182,7 @@ impl DirectXRenderer {
         let surface_cb = [Some(self.pipelines.surfaces.params_buffer.clone())];
         let sampler = [self.globals.sampler.clone()];
 
-        for surface in surfaces {
+        for (index, surface) in surfaces.iter().enumerate() {
             let gpui::SurfaceSource::WindowsCapture(frame) = &surface.source else {
                 log::error!("DirectX renderer cannot import this surface source");
                 anyhow::bail!("unsupported surface source");
@@ -1212,9 +1215,13 @@ impl DirectXRenderer {
                 bounds: surface.bounds.into(),
                 content_mask: surface.content_mask.bounds.into(),
                 color_format: SurfaceColorFormat::Rgba,
+                opacity: opacities.get(index).copied().unwrap_or(1.0),
                 padding0: 0,
                 padding1: 0,
                 padding2: 0,
+                padding3: 0,
+                padding4: 0,
+                padding5: 0,
             };
             update_buffer(ctx, &self.pipelines.surfaces.params_buffer, &[uniforms])?;
 

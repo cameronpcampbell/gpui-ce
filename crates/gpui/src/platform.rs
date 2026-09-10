@@ -994,6 +994,14 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         None
     }
 
+    /// Returns typed backend-specific GPU context information for custom
+    /// controls. The value is intentionally type-erased in this crate so the
+    /// core UI crate does not depend on a rendering backend.
+    #[cfg(any(target_family = "wasm", target_os = "linux", target_os = "freebsd"))]
+    fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
+        None
+    }
+
     /// Whether this window's GPU device has been lost (the platform renderer
     /// recovers it on a subsequent draw). `None` when the backend cannot
     /// know. Safe to call mid-recovery, unlike `gpu_context`. Embedders that
