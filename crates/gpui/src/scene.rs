@@ -68,6 +68,7 @@ pub struct Scene {
     pub subpixel_sprites: Vec<SubpixelSprite>,
     pub polychrome_sprites: Vec<PolychromeSprite>,
     pub surfaces: Vec<PaintSurface>,
+    surface_opacities: Vec<f32>,
     pub backdrop_filters: Vec<BackdropFilter>,
     pub filter_boundaries: Vec<FilterBoundary>,
     render_plan: ScenePlan,
@@ -88,6 +89,7 @@ impl Scene {
         self.subpixel_sprites.clear();
         self.polychrome_sprites.clear();
         self.surfaces.clear();
+        self.surface_opacities.clear();
         self.backdrop_filters.clear();
         self.filter_boundaries.clear();
         self.render_plan.clear();
@@ -123,8 +125,19 @@ impl Scene {
     }
 
     pub fn insert_primitive(&mut self, primitive: impl Into<Primitive>) {
+        self.insert_primitive_with_surface_opacity(primitive.into(), None);
+    }
+
+    pub(crate) fn insert_surface(&mut self, surface: PaintSurface, opacity: f32) {
+        self.insert_primitive_with_surface_opacity(Primitive::Surface(surface), Some(opacity));
+    }
+
+    fn insert_primitive_with_surface_opacity(
+        &mut self,
+        mut primitive: Primitive,
+        surface_opacity: Option<f32>,
+    ) {
         self.is_finished = false;
-        let mut primitive = primitive.into();
         let clipped_bounds = primitive
             .bounds()
             .intersect(&primitive.content_mask().bounds);
@@ -191,6 +204,7 @@ impl Scene {
             Primitive::Surface(surface) => {
                 surface.order = order;
                 self.surfaces.push(surface.clone());
+                self.surface_opacities.push(surface_opacity.unwrap_or(1.0));
             }
             Primitive::BackdropFilter(filter) => {
                 filter.order = order;
@@ -209,14 +223,24 @@ impl Scene {
                 self.filter_boundaries.push(boundary.clone());
             }
         }
-        self.paint_operations
-            .push(PaintOperation::Primitive(primitive));
+        if let (Primitive::Surface(surface), Some(opacity)) = (&primitive, surface_opacity) {
+            self.paint_operations.push(PaintOperation::Surface {
+                surface: surface.clone(),
+                opacity,
+            });
+        } else {
+            self.paint_operations
+                .push(PaintOperation::Primitive(primitive));
+        }
     }
 
     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
         for operation in &prev_scene.paint_operations[range] {
             match operation {
                 PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
+                PaintOperation::Surface { surface, opacity } => {
+                    self.insert_surface(surface.clone(), *opacity)
+                }
                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
                 PaintOperation::EndLayer => self.pop_layer(),
             }
@@ -234,7 +258,19 @@ impl Scene {
             .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
         self.polychrome_sprites
             .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
-        self.surfaces.sort_by_key(|surface| surface.order);
+        let surfaces = std::mem::take(&mut self.surfaces);
+        let mut surface_opacities = std::mem::take(&mut self.surface_opacities);
+        surface_opacities.resize(surfaces.len(), 1.0);
+        surface_opacities.truncate(surfaces.len());
+        let mut surfaces_with_opacity = surfaces
+            .into_iter()
+            .zip(surface_opacities)
+            .collect::<Vec<_>>();
+        surfaces_with_opacity.sort_by_key(|(surface, _)| surface.order);
+        let (surfaces, surface_opacities): (Vec<_>, Vec<_>) =
+            surfaces_with_opacity.into_iter().unzip();
+        self.surfaces = surfaces;
+        self.surface_opacities = surface_opacities;
         self.backdrop_filters.sort_by_key(|filter| filter.order);
         // Markers normally get distinct, monotonically-increasing orders (children overlap
         // their group bounds and so sort strictly between the start and end). The `!is_start`
@@ -284,6 +320,13 @@ impl Scene {
         );
         self.render_plan.assert_matches(self);
         &self.render_plan
+    }
+
+    /// Returns the opacity associated with each surface in [`Self::surfaces`].
+    ///
+    /// Entries created through [`Self::insert_primitive`] default to fully opaque.
+    pub fn surface_opacities(&self) -> &[f32] {
+        &self.surface_opacities
     }
 
     /// Whether rendering needs an offscreen scene target for backdrop or content filters.
@@ -350,6 +393,7 @@ pub(crate) enum PrimitiveKind {
 
 pub(crate) enum PaintOperation {
     Primitive(Primitive),
+    Surface { surface: PaintSurface, opacity: f32 },
     StartLayer(Bounds<ScaledPixels>),
     EndLayer,
 }
@@ -1212,7 +1256,7 @@ impl PathVertex<Pixels> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Point, Size};
+    use crate::{Point, Size, SurfaceSource};
 
     fn sp(value: f32) -> ScaledPixels {
         ScaledPixels(value)
@@ -1290,6 +1334,15 @@ mod tests {
         }
     }
 
+    fn surface() -> PaintSurface {
+        PaintSurface {
+            order: 0,
+            bounds: full_bounds(),
+            content_mask: mask(),
+            source: SurfaceSource::Unsupported(Size::default()),
+        }
+    }
+
     fn batch_kinds(scene: &mut Scene) -> Vec<&'static str> {
         scene.finish();
         scene
@@ -1325,6 +1378,21 @@ mod tests {
             batch_kinds(&mut scene),
             vec!["quad", "start", "quad", "end"]
         );
+    }
+
+    #[test]
+    fn surface_opacity_is_preserved_without_changing_paint_surface_layout() {
+        let mut scene = Scene::default();
+        scene.insert_surface(surface(), 0.25);
+        scene.insert_primitive(surface());
+        scene.finish();
+
+        assert_eq!(scene.surface_opacities(), &[0.25, 1.0]);
+
+        let mut replay = Scene::default();
+        replay.replay(0..scene.paint_operations.len(), &scene);
+        replay.finish();
+        assert_eq!(replay.surface_opacities(), &[0.25, 1.0]);
     }
 
     // Note: this validates only the *scene ordering* of nested filter boundaries (start/child/

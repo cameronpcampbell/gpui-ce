@@ -4792,12 +4792,15 @@ impl Window {
 
         let bounds = self.snap_bounds(bounds);
         let content_mask = self.snapped_content_mask();
-        self.next_frame.scene.insert_primitive(PaintSurface {
-            order: 0,
-            bounds,
-            content_mask,
-            source: source.into(),
-        });
+        self.next_frame.scene.insert_surface(
+            PaintSurface {
+                order: 0,
+                bounds,
+                content_mask,
+                source: source.into(),
+            },
+            self.element_opacity(),
+        );
     }
 
     /// Removes an image from the sprite atlas.
@@ -6414,6 +6417,14 @@ impl Window {
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
     pub fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
         self.platform_window.gpu_context()
+    }
+
+    /// Returns backend-specific typed GPU context information for custom
+    /// controls. Use the rendering backend's context type to downcast the
+    /// returned value.
+    #[cfg(any(target_family = "wasm", target_os = "linux", target_os = "freebsd"))]
+    pub fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
+        self.platform_window.gpu_context_info()
     }
 
     /// Whether the GPU device backing this window has been lost (recovery
