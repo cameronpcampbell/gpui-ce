@@ -85,6 +85,8 @@ pub enum SelectorGroupItem {
     Selector(Selector),
     /// A nested selector group.
     Group(SelectorGroup),
+    /// A nested selector group whose result is inverted.
+    Not(SelectorGroup),
 }
 
 impl SelectorGroupItem {
@@ -97,6 +99,7 @@ impl SelectorGroupItem {
         match self {
             Self::Selector(selector) => selector.matches(element_id, classes, element_tag),
             Self::Group(group) => group.matches(element_id, classes, element_tag),
+            Self::Not(group) => !group.matches(element_id, classes, element_tag),
         }
     }
 }
@@ -138,6 +141,10 @@ impl SelectorGroup {
             behavior,
             items: flattened,
         }
+    }
+
+    pub(crate) fn negated(self) -> Self {
+        Self::new(SelectorGroupBehavior::And, [SelectorGroupItem::Not(self)])
     }
 
     fn matches(
@@ -1907,7 +1914,7 @@ impl From<Position> for taffy::style::Position {
 mod tests {
     use crate::{
         blue, green, px, red,
-        selectors::{any, class, id},
+        selectors::{any, class, id, not},
         yellow,
     };
     use palette::WithAlpha;
@@ -2120,7 +2127,7 @@ mod tests {
     }
 
     #[test]
-    fn selector_groups_preserve_and_and_or_behavior() {
+    fn selector_groups_preserve_boolean_behavior() {
         fn classes(values: &[&str]) -> HashSet<SharedString> {
             values.iter().copied().map(SharedString::from).collect()
         }
@@ -2147,6 +2154,30 @@ mod tests {
         assert!(required.matches(None, &classes(&["enabled", "overlay"]), "test-tag"));
         assert!(!required.matches(None, &classes(&["overlay"]), "test-tag"));
         assert!(!required.matches(None, &classes(&["enabled"]), "test-tag"));
+
+        let selectable = (
+            class("item"),
+            not(any([class("disabled"), class("loading")])),
+        )
+            .into_selector_group();
+        let cases = [
+            (classes(&["item"]), true),
+            (classes(&["item", "disabled"]), false),
+            (classes(&["item", "loading"]), false),
+            (classes(&["other"]), false),
+        ];
+
+        for (classes, expected) in cases {
+            assert_eq!(selectable.matches(None, &classes, "test-tag"), expected);
+        }
+
+        let not_both = not((class("selected"), class("focused")));
+        assert!(not_both.matches(None, &classes(&["selected"]), "test-tag"));
+        assert!(!not_both.matches(None, &classes(&["selected", "focused"]), "test-tag"));
+
+        let double_negated = not(not(class("active")));
+        assert!(double_negated.matches(None, &classes(&["active"]), "test-tag"));
+        assert!(!double_negated.matches(None, &classes(&[]), "test-tag"));
     }
 
     #[test]

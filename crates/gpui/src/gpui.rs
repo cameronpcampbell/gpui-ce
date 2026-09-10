@@ -182,6 +182,14 @@ pub mod selectors {
         selectors.into_selector_group_with_behavior(SelectorGroupBehavior::Or)
     }
 
+    /// Creates a selector group that matches when the supplied group does not match.
+    ///
+    /// Arrays and tuples retain their default `AND` behavior. Use [`any`] inside `not` to reject
+    /// an element when any alternative matches.
+    pub fn not(selectors: impl IntoSelectorGroup) -> SelectorGroup {
+        selectors.into_selector_group().negated()
+    }
+
     /// Creates a selector that matches styled elements with the concrete type `E`.
     pub fn tag<E: Element + Styled>() -> Selector {
         Selector::tag::<E>()
