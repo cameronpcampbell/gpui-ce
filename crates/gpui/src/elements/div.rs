@@ -4510,7 +4510,7 @@ mod tests {
     use crate::{
         AnyWindowHandle, Canvas, Context, HighlightStyle, InputEvent, Keystroke, MouseMoveEvent,
         RenderOnce, StyledText, TestAppContext, canvas, hsla,
-        selectors::{any, class, id, tag},
+        selectors::{any, class, id, not, tag},
         util::FluentBuilder as _,
     };
     use std::{
@@ -4754,6 +4754,13 @@ mod tests {
                     any((class("overlay"), (class("bob"), id("apple")))),
                     |style| style.w(px(70.)),
                 )
+                .select_descendants(
+                    (
+                        class("candidate"),
+                        not(any([class("disabled"), class("loading")])),
+                    ),
+                    |style| style.w(px(80.)),
+                )
                 .select_descendants(class("nested-enabled"), |style| {
                     style.select_children(id("nested-id-leaf"), |style| style.w(px(60.)))
                 })
@@ -4896,6 +4903,28 @@ mod tests {
                             ),
                         ),
                 )
+                .child(
+                    div()
+                        .child(
+                            div().class("candidate").w(px(10.)).h(px(10.)).child(
+                                self.measurements
+                                    .observe("not eligible descendant")
+                                    .size_full(),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .class("candidate")
+                                .class("disabled")
+                                .w(px(10.))
+                                .h(px(10.))
+                                .child(
+                                    self.measurements
+                                        .observe("not excluded descendant")
+                                        .size_full(),
+                                ),
+                        ),
+                )
         }
     }
 
@@ -4925,6 +4954,8 @@ mod tests {
             ("any first alternative", px(70.)),
             ("any compound alternative", px(70.)),
             ("any incomplete alternative", px(10.)),
+            ("not eligible descendant", px(80.)),
+            ("not excluded descendant", px(10.)),
         ]);
     }
 
