@@ -4404,7 +4404,7 @@ mod tests {
     use crate::{
         AnyWindowHandle, Canvas, Context, InputEvent, Keystroke, MouseMoveEvent, RenderOnce,
         TestAppContext, canvas,
-        selectors::{class, id, tag},
+        selectors::{any, class, id, tag},
         util::FluentBuilder as _,
     };
     use std::{
@@ -4484,15 +4484,17 @@ mod tests {
             let root = div().class("cached-selector-root").size_full();
             let root = if self.alternate {
                 root.select(class("cached-selector-root"), |style| {
-                    style.select_descendants(class("cached-selector-target"), |style| {
-                        style.w(px(40.))
-                    })
+                    style.select_descendants(
+                        any([id("missing-cached-target"), class("cached-selector-target")]),
+                        |style| style.w(px(40.)),
+                    )
                 })
             } else {
                 root.select(class("cached-selector-root"), |style| {
-                    style.select_descendants(class("cached-selector-target"), |style| {
-                        style.w(px(20.))
-                    })
+                    style.select_descendants(
+                        any([id("missing-cached-target"), class("cached-selector-target")]),
+                        |style| style.w(px(20.)),
+                    )
                 })
             };
 
@@ -4586,6 +4588,10 @@ mod tests {
                 .flex()
                 .flex_col()
                 .select_descendants([tag::<Div>(), class("target")], |style| style.w(px(30.)))
+                .select_descendants(
+                    any((class("overlay"), (class("bob"), id("apple")))),
+                    |style| style.w(px(70.)),
+                )
                 .select_descendants(class("nested-enabled"), |style| {
                     style.select_children(id("nested-id-leaf"), |style| style.w(px(60.)))
                 })
@@ -4704,6 +4710,30 @@ mod tests {
                         ),
                     ),
                 )
+                .child(
+                    div()
+                        .child(
+                            div().class("overlay").w(px(10.)).h(px(10.)).child(
+                                self.measurements
+                                    .observe("any first alternative")
+                                    .size_full(),
+                            ),
+                        )
+                        .child(
+                            div().id("apple").class("bob").w(px(10.)).h(px(10.)).child(
+                                self.measurements
+                                    .observe("any compound alternative")
+                                    .size_full(),
+                            ),
+                        )
+                        .child(
+                            div().id("pear").class("bob").w(px(10.)).h(px(10.)).child(
+                                self.measurements
+                                    .observe("any incomplete alternative")
+                                    .size_full(),
+                            ),
+                        ),
+                )
         }
     }
 
@@ -4730,6 +4760,9 @@ mod tests {
             ("nested selector from matched child", px(40.)),
             ("nested rules require outer match", px(10.)),
             ("nested selector from matched descendant", px(60.)),
+            ("any first alternative", px(70.)),
+            ("any compound alternative", px(70.)),
+            ("any incomplete alternative", px(10.)),
         ]);
     }
 

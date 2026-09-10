@@ -1,10 +1,10 @@
 use crate::{
     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
     DefiniteLength, Display, Fill, Filter, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
-    FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, IntoSelectorSet, JustifyContent,
-    Length, Pixels, SelectorRuleKind, SharedString, StrikethroughStyle, StyleRefinement, TextAlign,
-    TextOverflow, TextStyleRefinement, TextTransform, UnderlineStyle, WhiteSpace, px, relative,
-    rems,
+    FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, IntoSelectorGroup,
+    JustifyContent, Length, Pixels, SelectorRuleKind, SharedString, StrikethroughStyle,
+    StyleRefinement, TextAlign, TextOverflow, TextStyleRefinement, TextTransform, UnderlineStyle,
+    WhiteSpace, px, relative, rems,
 };
 pub use gpui_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -34,12 +34,12 @@ pub trait Styled: Sized {
     /// Applies a refinement when the selector matches this element.
     fn select(
         mut self,
-        selector: impl IntoSelectorSet,
+        selector: impl IntoSelectorGroup,
         build: impl FnOnce(StyleRefinement) -> StyleRefinement,
     ) -> Self {
         self.style().selectors.push_rule(
             SelectorRuleKind::Self_,
-            selector.into_selector_set(),
+            selector.into_selector_group(),
             build(StyleRefinement::default()),
         );
         self
@@ -48,12 +48,12 @@ pub trait Styled: Sized {
     /// Applies a refinement to matching immediate children of this element.
     fn select_children(
         mut self,
-        selector: impl IntoSelectorSet,
+        selector: impl IntoSelectorGroup,
         build: impl FnOnce(StyleRefinement) -> StyleRefinement,
     ) -> Self {
         self.style().selectors.push_rule(
             SelectorRuleKind::Child,
-            selector.into_selector_set(),
+            selector.into_selector_group(),
             build(StyleRefinement::default()),
         );
         self
@@ -62,12 +62,12 @@ pub trait Styled: Sized {
     /// Applies a refinement to matching descendants of this element.
     fn select_descendants(
         mut self,
-        selector: impl IntoSelectorSet,
+        selector: impl IntoSelectorGroup,
         build: impl FnOnce(StyleRefinement) -> StyleRefinement,
     ) -> Self {
         self.style().selectors.push_rule(
             SelectorRuleKind::Descendant,
-            selector.into_selector_set(),
+            selector.into_selector_group(),
             build(StyleRefinement::default()),
         );
         self
