@@ -48,50 +48,197 @@ impl Selector {
     pub(crate) fn tag<E: crate::Element + crate::Styled>() -> Self {
         Self(SelectorKind::Tag(std::any::type_name::<E>().into()))
     }
-}
 
-/// Converts a selector or a group of selectors into a selector set.
-///
-/// Arrays and tuples can be nested to compose larger selector sets.
-///
-/// All selectors in a set must match the target element.
-pub trait IntoSelectorSet {
-    /// Performs the conversion.
-    fn into_selector_set(self) -> Vec<Selector>;
-}
-
-impl IntoSelectorSet for Selector {
-    fn into_selector_set(self) -> Vec<Selector> {
-        vec![self]
+    fn matches(
+        &self,
+        element_id: Option<&crate::ElementId>,
+        classes: &HashSet<SharedString>,
+        element_tag: &str,
+    ) -> bool {
+        match &self.0 {
+            SelectorKind::All => true,
+            SelectorKind::Id(selector_id) => matches!(
+                element_id,
+                Some(crate::ElementId::Name(element_id)) if element_id == selector_id
+            ),
+            SelectorKind::Class(class) => classes.contains(class),
+            SelectorKind::Tag(tag) => tag.as_ref() == element_tag,
+        }
     }
 }
 
-impl<const N: usize> IntoSelectorSet for [Selector; N] {
-    fn into_selector_set(self) -> Vec<Selector> {
-        assert!(N > 0, "selector sets must not be empty");
-        self.into()
+/// Determines how the items in a [`SelectorGroup`] are matched.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SelectorGroupBehavior {
+    /// Every item must match.
+    And,
+    /// At least one item must match.
+    Or,
+}
+
+/// A selector or nested selector group.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SelectorGroupItem {
+    /// An individual selector.
+    Selector(Selector),
+    /// A nested selector group.
+    Group(SelectorGroup),
+}
+
+impl SelectorGroupItem {
+    fn matches(
+        &self,
+        element_id: Option<&crate::ElementId>,
+        classes: &HashSet<SharedString>,
+        element_tag: &str,
+    ) -> bool {
+        match self {
+            Self::Selector(selector) => selector.matches(element_id, classes, element_tag),
+            Self::Group(group) => group.matches(element_id, classes, element_tag),
+        }
     }
 }
 
-macro_rules! impl_into_selector_set_for_tuples {
+/// A group of selectors with explicit matching behavior.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SelectorGroup {
+    behavior: SelectorGroupBehavior,
+    items: Vec<SelectorGroupItem>,
+}
+
+impl SelectorGroup {
+    fn new(
+        behavior: SelectorGroupBehavior,
+        items: impl IntoIterator<Item = SelectorGroupItem>,
+    ) -> Self {
+        fn push_item(
+            behavior: SelectorGroupBehavior,
+            items: &mut Vec<SelectorGroupItem>,
+            item: SelectorGroupItem,
+        ) {
+            match item {
+                SelectorGroupItem::Group(group) if group.behavior == behavior => {
+                    for item in group.items {
+                        push_item(behavior, items, item);
+                    }
+                }
+                item => items.push(item),
+            }
+        }
+
+        let mut flattened = Vec::new();
+        for item in items {
+            push_item(behavior, &mut flattened, item);
+        }
+        debug_assert!(!flattened.is_empty(), "selector groups must not be empty");
+
+        Self {
+            behavior,
+            items: flattened,
+        }
+    }
+
+    fn matches(
+        &self,
+        element_id: Option<&crate::ElementId>,
+        classes: &HashSet<SharedString>,
+        element_tag: &str,
+    ) -> bool {
+        let matches = |item: &SelectorGroupItem| item.matches(element_id, classes, element_tag);
+
+        match self.behavior {
+            SelectorGroupBehavior::And => self.items.iter().all(matches),
+            SelectorGroupBehavior::Or => self.items.iter().any(matches),
+        }
+    }
+}
+
+/// Converts selectors, arrays, and tuples into a [`SelectorGroup`].
+///
+/// Arrays and tuples use `AND` behavior by default. Nested groups with the same behavior are
+/// flattened, while groups with different behavior retain their boundary.
+pub trait IntoSelectorGroup: Sized {
+    /// Converts this value into a selector group with `AND` behavior.
+    fn into_selector_group(self) -> SelectorGroup {
+        self.into_selector_group_with_behavior(SelectorGroupBehavior::And)
+    }
+
+    /// Converts this value into a selector group with the requested root behavior.
+    #[doc(hidden)]
+    fn into_selector_group_with_behavior(self, behavior: SelectorGroupBehavior) -> SelectorGroup;
+
+    /// Converts this value into an item in another selector group.
+    #[doc(hidden)]
+    fn into_selector_group_item(self) -> SelectorGroupItem {
+        SelectorGroupItem::Group(self.into_selector_group())
+    }
+}
+
+impl IntoSelectorGroup for Selector {
+    fn into_selector_group_with_behavior(self, behavior: SelectorGroupBehavior) -> SelectorGroup {
+        SelectorGroup::new(behavior, [SelectorGroupItem::Selector(self)])
+    }
+
+    fn into_selector_group_item(self) -> SelectorGroupItem {
+        SelectorGroupItem::Selector(self)
+    }
+}
+
+impl IntoSelectorGroup for SelectorGroup {
+    fn into_selector_group(self) -> SelectorGroup {
+        self
+    }
+
+    fn into_selector_group_with_behavior(self, behavior: SelectorGroupBehavior) -> SelectorGroup {
+        SelectorGroup::new(behavior, [SelectorGroupItem::Group(self)])
+    }
+
+    fn into_selector_group_item(self) -> SelectorGroupItem {
+        SelectorGroupItem::Group(self)
+    }
+}
+
+impl<T, const N: usize> IntoSelectorGroup for [T; N]
+where
+    T: IntoSelectorGroup,
+{
+    fn into_selector_group_with_behavior(self, behavior: SelectorGroupBehavior) -> SelectorGroup {
+        SelectorGroup::new(
+            behavior,
+            self.into_iter()
+                .map(IntoSelectorGroup::into_selector_group_item),
+        )
+    }
+}
+
+macro_rules! impl_into_selector_group_for_tuples {
     ($(($first_type:ident: $first_index:tt $(, $type:ident: $index:tt)*)),+ $(,)?) => {
         $(
-            impl<$first_type $(, $type)*> IntoSelectorSet for ($first_type, $($type,)*)
+            impl<$first_type $(, $type)*> IntoSelectorGroup for ($first_type, $($type,)*)
             where
-                $first_type: IntoSelectorSet,
-                $($type: IntoSelectorSet,)*
+                $first_type: IntoSelectorGroup,
+                $($type: IntoSelectorGroup,)*
             {
-                fn into_selector_set(self) -> Vec<Selector> {
-                    let mut selectors = self.$first_index.into_selector_set();
-                    $(selectors.extend(self.$index.into_selector_set());)*
-                    selectors
+                fn into_selector_group_with_behavior(
+                    self,
+                    behavior: SelectorGroupBehavior,
+                ) -> SelectorGroup {
+                    SelectorGroup::new(
+                        behavior,
+                        [
+                            self.$first_index.into_selector_group_item(),
+                            $(self.$index.into_selector_group_item(),)*
+                        ],
+                    )
                 }
             }
         )+
     };
 }
 
-impl_into_selector_set_for_tuples!(
+impl_into_selector_group_for_tuples!(
     (T0: 0),
     (T0: 0, T1: 1),
     (T0: 0, T1: 1, T2: 2),
@@ -125,7 +272,7 @@ impl SelectorData {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SelectorRule {
-    pub(crate) selectors: Vec<Selector>,
+    pub(crate) selectors: SelectorGroup,
     pub(crate) refinement: Arc<StyleRefinement>,
 }
 
@@ -142,15 +289,7 @@ impl SelectorRule {
         classes: &HashSet<SharedString>,
         element_tag: &str,
     ) -> bool {
-        self.selectors.iter().all(|selector| match &selector.0 {
-            SelectorKind::All => true,
-            SelectorKind::Id(selector_id) => matches!(
-                element_id,
-                Some(crate::ElementId::Name(element_id)) if element_id == selector_id
-            ),
-            SelectorKind::Class(class) => classes.contains(class),
-            SelectorKind::Tag(tag) => tag.as_ref() == element_tag,
-        })
+        self.selectors.matches(element_id, classes, element_tag)
     }
 }
 
@@ -199,7 +338,7 @@ impl SelectorState {
     pub(crate) fn push_rule(
         &mut self,
         kind: SelectorRuleKind,
-        selectors: Vec<Selector>,
+        selectors: SelectorGroup,
         refinement: StyleRefinement,
     ) {
         let rule = SelectorRule {
@@ -1895,7 +2034,7 @@ impl From<Position> for taffy::style::Position {
 mod tests {
     use crate::{
         blue, green, hsla, linear_color_stop, linear_gradient, px, red,
-        selectors::{class, id},
+        selectors::{any, class, id},
         yellow,
     };
     use palette::WithAlpha;
@@ -2181,7 +2320,51 @@ mod tests {
     }
 
     #[test]
-    fn selector_tuples_flatten_nested_sets_through_the_maximum_supported_arity() {
+    fn selector_groups_flatten_only_groups_with_the_same_behavior() {
+        let flat_and = (class("a"), class("b"), class("c")).into_selector_group();
+        let nested_and = (class("a"), (class("b"), class("c"))).into_selector_group();
+        assert_eq!(nested_and, flat_and);
+
+        let flat_or = any((class("a"), class("b"), class("c")));
+        let nested_or = any((class("a"), any((class("b"), class("c")))));
+        assert_eq!(nested_or, flat_or);
+
+        let mixed = any((class("a"), (class("b"), class("c"))));
+        assert_ne!(mixed, flat_or);
+    }
+
+    #[test]
+    fn selector_groups_preserve_and_and_or_behavior() {
+        fn classes(values: &[&str]) -> HashSet<SharedString> {
+            values.iter().copied().map(SharedString::from).collect()
+        }
+
+        let alternatives = any((class("overlay"), (class("bob"), id("apple"))));
+        let apple = crate::ElementId::Name("apple".into());
+
+        let cases = [
+            (None, classes(&["overlay"]), true),
+            (Some(&apple), classes(&["bob"]), true),
+            (None, classes(&["bob"]), false),
+            (Some(&apple), classes(&[]), false),
+            (None, classes(&[]), false),
+        ];
+
+        for (element_id, classes, expected) in cases {
+            assert_eq!(
+                alternatives.matches(element_id, &classes, "test-tag"),
+                expected
+            );
+        }
+
+        let required = (class("enabled"), alternatives).into_selector_group();
+        assert!(required.matches(None, &classes(&["enabled", "overlay"]), "test-tag"));
+        assert!(!required.matches(None, &classes(&["overlay"]), "test-tag"));
+        assert!(!required.matches(None, &classes(&["enabled"]), "test-tag"));
+    }
+
+    #[test]
+    fn selector_tuples_match_through_the_maximum_supported_arity() {
         let selectors = (
             class("0"),
             [class("1"), class("2")],
@@ -2196,14 +2379,22 @@ mod tests {
             class("12"),
             class("13"),
         )
-            .into_selector_set();
+            .into_selector_group();
 
-        assert_eq!(
-            selectors,
-            (0..14)
-                .map(|index| class(index.to_string()))
-                .collect::<Vec<_>>()
-        );
+        let mut classes = (0..14)
+            .map(|index| SharedString::from(index.to_string()))
+            .collect::<HashSet<_>>();
+        assert!(selectors.matches(None, &classes, "test-tag"));
+
+        classes.remove("13");
+        assert!(!selectors.matches(None, &classes, "test-tag"));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "selector groups must not be empty")]
+    fn empty_selector_groups_debug_assert() {
+        let _ = ([] as [Selector; 0]).into_selector_group();
     }
 
     #[test]
