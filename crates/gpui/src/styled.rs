@@ -31,6 +31,15 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Assigns this element to multiple classes for selector matching.
+    fn classes<T, const N: usize>(mut self, classes: [T; N]) -> Self
+    where
+        T: Into<SharedString>,
+    {
+        self.style().selectors.add_classes(classes.map(Into::into));
+        self
+    }
+
     /// Applies a refinement when the selector matches this element.
     fn select(
         mut self,

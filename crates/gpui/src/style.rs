@@ -338,6 +338,10 @@ impl SelectorState {
         self.data_mut().classes.insert(class);
     }
 
+    pub(crate) fn add_classes(&mut self, classes: impl IntoIterator<Item = SharedString>) {
+        self.data_mut().classes.extend(classes);
+    }
+
     pub(crate) fn classes(&self) -> &HashSet<SharedString> {
         &self.data().classes
     }
@@ -2445,5 +2449,26 @@ mod tests {
         assert_eq!(selectors.self_rules.len(), 1);
         assert_eq!(selectors.child_rules.len(), 1);
         assert_eq!(selectors.descendant_rules.len(), 1);
+    }
+
+    #[test]
+    fn classes_assigns_multiple_classes_for_selector_matching() {
+        let refinement = StyleRefinement::default()
+            .class("base")
+            .classes(["interactive", "primary", "primary"])
+            .classes([String::from("owned")])
+            .classes([] as [&str; 0]);
+        let classes = refinement.selectors.classes();
+
+        let required = (
+            class("base"),
+            class("interactive"),
+            class("primary"),
+            class("owned"),
+        )
+            .into_selector_group();
+
+        assert!(required.matches(None, classes, "test-tag"));
+        assert!(!class("missing").matches(None, classes, "test-tag"));
     }
 }
