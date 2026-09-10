@@ -4612,15 +4612,16 @@ mod tests {
                     div()
                         .w(px(10.))
                         .h(px(10.))
-                        .select([tag::<Div>(), class("local")], |style| style.w(px(40.)))
+                        .select((tag::<Div>(), class("local")), |style| style.w(px(40.)))
                         .class("local")
                         .child(self.measurements.observe("matching self").size_full()),
                 )
                 .child(
                     div()
-                        .select_children([tag::<Div>(), class("target"), id("compound")], |style| {
-                            style.w(px(50.))
-                        })
+                        .select_children(
+                            (tag::<Div>(), (class("target"), id("compound"))),
+                            |style| style.w(px(50.)),
+                        )
                         .child(
                             div()
                                 .id("compound")
