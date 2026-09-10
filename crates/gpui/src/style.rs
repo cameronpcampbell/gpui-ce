@@ -50,7 +50,9 @@ impl Selector {
     }
 }
 
-/// Converts a selector or selector array into a selector set.
+/// Converts a selector or a group of selectors into a selector set.
+///
+/// Arrays and tuples can be nested to compose larger selector sets.
 ///
 /// All selectors in a set must match the target element.
 pub trait IntoSelectorSet {
@@ -70,6 +72,39 @@ impl<const N: usize> IntoSelectorSet for [Selector; N] {
         self.into()
     }
 }
+
+macro_rules! impl_into_selector_set_for_tuples {
+    ($(($first_type:ident: $first_index:tt $(, $type:ident: $index:tt)*)),+ $(,)?) => {
+        $(
+            impl<$first_type $(, $type)*> IntoSelectorSet for ($first_type, $($type,)*)
+            where
+                $first_type: IntoSelectorSet,
+                $($type: IntoSelectorSet,)*
+            {
+                fn into_selector_set(self) -> Vec<Selector> {
+                    let mut selectors = self.$first_index.into_selector_set();
+                    $(selectors.extend(self.$index.into_selector_set());)*
+                    selectors
+                }
+            }
+        )+
+    };
+}
+
+impl_into_selector_set_for_tuples!(
+    (T0: 0),
+    (T0: 0, T1: 1),
+    (T0: 0, T1: 1, T2: 2),
+    (T0: 0, T1: 1, T2: 2, T3: 3),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7, T8: 8),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7, T8: 8, T9: 9),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7, T8: 8, T9: 9, T10: 10),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7, T8: 8, T9: 9, T10: 10, T11: 11),
+);
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct SelectorData {
@@ -2143,6 +2178,32 @@ mod tests {
         assert_eq!(inset.color, gradient);
         assert!(inset.inset);
         assert_eq!(style.ring, RingStyle::default());
+    }
+
+    #[test]
+    fn selector_tuples_flatten_nested_sets_through_the_maximum_supported_arity() {
+        let selectors = (
+            class("0"),
+            [class("1"), class("2")],
+            (class("3"),),
+            (class("4"), class("5")),
+            class("6"),
+            class("7"),
+            class("8"),
+            class("9"),
+            class("10"),
+            class("11"),
+            class("12"),
+            class("13"),
+        )
+            .into_selector_set();
+
+        assert_eq!(
+            selectors,
+            (0..14)
+                .map(|index| class(index.to_string()))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
