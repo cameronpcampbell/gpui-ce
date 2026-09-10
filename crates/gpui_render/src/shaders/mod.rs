@@ -1,4 +1,7 @@
 //! Rust-authored shader sources, split by ABI and rendering domain.
+//!
+//! Ordinary and smoothed entry points share vertex preparation, but keep distinct stage-output
+//! structs so ordinary primitives do not reserve or interpolate corner-smoothing data.
 
 #![allow(dead_code, unused_assignments, unused_imports)]
 

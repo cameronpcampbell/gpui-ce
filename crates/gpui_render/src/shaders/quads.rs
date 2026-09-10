@@ -505,6 +505,26 @@ pub mod quad {
         }
     }
 
+    #[derive(Clone, Copy, Wgsl)]
+    pub struct QuadVertexData {
+        pub position: Vec4f,
+        pub border_color: Vec4f,
+        pub quad_id: u32,
+        pub clip_distances: Vec4f,
+        pub background: PreparedBackground,
+    }
+
+    pub fn prepare_quad_vertex(vertex_id: u32, instance_id: u32, quad: Quad) -> QuadVertexData {
+        let vertex = rectangle_vertex(vertex_id, quad.bounds);
+        QuadVertexData {
+            position: vertex.clip_position,
+            border_color: hsla_to_rgba(quad.border_color),
+            quad_id: instance_id,
+            clip_distances: clip_distances(vertex.viewport_position, quad.content_mask),
+            background: prepare_background(quad.background),
+        }
+    }
+
     #[derive(Wgsl)]
     pub struct QuadVarying {
         #[builtin(position)]
@@ -534,16 +554,15 @@ pub mod quad {
         #[builtin(instance_index)] instance_id: u32,
     ) -> QuadVarying {
         let quad = get!(QUADS)[instance_id as usize];
-        let vertex = rectangle_vertex(vertex_id, quad.bounds);
-        let gradient = prepare_background(quad.background);
+        let vertex = prepare_quad_vertex(vertex_id, instance_id, quad);
         QuadVarying {
-            position: vertex.clip_position,
-            border_color: hsla_to_rgba(quad.border_color),
-            quad_id: instance_id,
-            clip_distances: clip_distances(vertex.viewport_position, quad.content_mask),
-            background_solid: gradient.solid,
-            background_color0: gradient.color0,
-            background_color1: gradient.color1,
+            position: vertex.position,
+            border_color: vertex.border_color,
+            quad_id: vertex.quad_id,
+            clip_distances: vertex.clip_distances,
+            background_solid: vertex.background.solid,
+            background_color0: vertex.background.color0,
+            background_color1: vertex.background.color1,
         }
     }
 
@@ -634,8 +653,7 @@ pub mod quad {
         #[builtin(instance_index)] instance_id: u32,
     ) -> SmoothedQuadVarying {
         let quad = get!(QUADS)[instance_id as usize];
-        let vertex = rectangle_vertex(vertex_id, quad.bounds);
-        let gradient = prepare_background(quad.background);
+        let vertex = prepare_quad_vertex(vertex_id, instance_id, quad);
         let prepared = prepare_corners(
             quad.bounds.size,
             quad.corner_radii,
@@ -644,13 +662,13 @@ pub mod quad {
         );
 
         SmoothedQuadVarying {
-            position: vertex.clip_position,
-            border_color: hsla_to_rgba(quad.border_color),
-            quad_id: instance_id,
-            clip_distances: clip_distances(vertex.viewport_position, quad.content_mask),
-            background_solid: gradient.solid,
-            background_color0: gradient.color0,
-            background_color1: gradient.color1,
+            position: vertex.position,
+            border_color: vertex.border_color,
+            quad_id: vertex.quad_id,
+            clip_distances: vertex.clip_distances,
+            background_solid: vertex.background.solid,
+            background_color0: vertex.background.color0,
+            background_color1: vertex.background.color1,
             horizontal_corner_reaches: prepared.horizontal_reaches,
             vertical_corner_reaches: prepared.vertical_reaches,
             corner_lengths: smoothed_corner_lengths(quad, prepared),

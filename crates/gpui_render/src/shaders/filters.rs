@@ -111,6 +111,41 @@ pub mod blur {
     texture!(group(1), binding(1), BLUR_TEXTURE: Texture2D<f32>);
     sampler!(group(1), binding(2), BLUR_SAMPLER: Sampler);
 
+    #[derive(Clone, Copy, Wgsl)]
+    pub struct BlurCompositeVertexData {
+        pub position: Vec4f,
+        pub texture_coordinates: Vec2f,
+        pub clip_distances: Vec4f,
+    }
+
+    pub fn prepare_blur_composite_vertex(vertex_id: u32) -> BlurCompositeVertexData {
+        let vertex = rectangle_vertex(vertex_id, get!(BLUR_LOCALS).bounds);
+        BlurCompositeVertexData {
+            position: vertex.clip_position,
+            texture_coordinates: vertex.unit_position,
+            clip_distances: clip_distances(
+                vertex.viewport_position,
+                get!(BLUR_LOCALS).content_mask,
+            ),
+        }
+    }
+
+    pub fn blur_composite_color(position: Vec2f, coverage: f32) -> Vec4f {
+        let blurred = texture_sample_level(
+            BLUR_TEXTURE,
+            BLUR_SAMPLER,
+            position / get!(BLUR_LOCALS).target_size,
+            0.0,
+        );
+        let factor = coverage * get!(BLUR_LOCALS).opacity;
+        vec4f(
+            blurred.x * factor,
+            blurred.y * factor,
+            blurred.z * factor,
+            blurred.w * factor,
+        )
+    }
+
     #[derive(Wgsl)]
     pub struct BlurVarying {
         #[builtin(position)]
@@ -175,14 +210,11 @@ pub mod blur {
 
     #[vertex]
     pub fn vertex_blur_composite(#[builtin(vertex_index)] vertex_id: u32) -> BlurVarying {
-        let vertex = rectangle_vertex(vertex_id, get!(BLUR_LOCALS).bounds);
+        let vertex = prepare_blur_composite_vertex(vertex_id);
         BlurVarying {
-            position: vertex.clip_position,
-            texture_coordinates: vertex.unit_position,
-            clip_distances: clip_distances(
-                vertex.viewport_position,
-                get!(BLUR_LOCALS).content_mask,
-            ),
+            position: vertex.position,
+            texture_coordinates: vertex.texture_coordinates,
+            clip_distances: vertex.clip_distances,
         }
     }
 
@@ -191,12 +223,6 @@ pub mod blur {
         if is_clipped(input.clip_distances) {
             return transparent();
         }
-        let blurred = texture_sample_level(
-            BLUR_TEXTURE,
-            BLUR_SAMPLER,
-            input.position.xy() / get!(BLUR_LOCALS).target_size,
-            0.0,
-        );
         let coverage = select(
             1.0,
             antialiased_coverage(rounded_rectangle_signed_distance(
@@ -206,13 +232,7 @@ pub mod blur {
             )),
             get!(BLUR_LOCALS).composite_clip == BlurCompositeClip::RoundedBounds,
         );
-        let factor = coverage * get!(BLUR_LOCALS).opacity;
-        vec4f(
-            blurred.x * factor,
-            blurred.y * factor,
-            blurred.z * factor,
-            blurred.w * factor,
-        )
+        blur_composite_color(input.position.xy(), coverage)
     }
 
     #[derive(Wgsl)]
@@ -241,7 +261,7 @@ pub mod blur {
     pub fn vertex_smoothed_blur_composite(
         #[builtin(vertex_index)] vertex_id: u32,
     ) -> SmoothedBlurVarying {
-        let vertex = rectangle_vertex(vertex_id, get!(BLUR_LOCALS).bounds);
+        let vertex = prepare_blur_composite_vertex(vertex_id);
         let prepared = prepare_corners(
             get!(BLUR_LOCALS).bounds.size,
             get!(BLUR_LOCALS).corner_radii,
@@ -249,14 +269,11 @@ pub mod blur {
             true,
         );
         SmoothedBlurVarying {
-            position: vertex.clip_position,
-            texture_coordinates: vertex.unit_position,
+            position: vertex.position,
+            texture_coordinates: vertex.texture_coordinates,
             horizontal_corner_reaches: prepared.horizontal_reaches,
             vertical_corner_reaches: prepared.vertical_reaches,
-            clip_distances: clip_distances(
-                vertex.viewport_position,
-                get!(BLUR_LOCALS).content_mask,
-            ),
+            clip_distances: vertex.clip_distances,
             smoothing_factors: prepared.smoothing_factors,
             superellipse_power: prepared.superellipse_power,
         }
@@ -267,12 +284,6 @@ pub mod blur {
         if is_clipped(input.clip_distances) {
             return transparent();
         }
-        let blurred = texture_sample_level(
-            BLUR_TEXTURE,
-            BLUR_SAMPLER,
-            input.position.xy() / get!(BLUR_LOCALS).target_size,
-            0.0,
-        );
         let coverage = select(
             1.0,
             antialiased_coverage(prepared_corner_signed_distance(
@@ -289,12 +300,6 @@ pub mod blur {
             )),
             get!(BLUR_LOCALS).composite_clip == BlurCompositeClip::RoundedBounds,
         );
-        let factor = coverage * get!(BLUR_LOCALS).opacity;
-        vec4f(
-            blurred.x * factor,
-            blurred.y * factor,
-            blurred.z * factor,
-            blurred.w * factor,
-        )
+        blur_composite_color(input.position.xy(), coverage)
     }
 }

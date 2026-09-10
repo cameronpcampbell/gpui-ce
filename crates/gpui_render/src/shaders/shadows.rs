@@ -153,6 +153,28 @@ pub mod shadow {
         coverage
     }
 
+    #[derive(Clone, Copy, Wgsl)]
+    pub struct ShadowVertexData {
+        pub position: Vec4f,
+        pub color: Vec4f,
+        pub shadow_id: u32,
+        pub clip_distances: Vec4f,
+    }
+
+    pub fn prepare_shadow_vertex(
+        vertex_id: u32,
+        instance_id: u32,
+        shadow: Shadow,
+    ) -> ShadowVertexData {
+        let vertex = rectangle_vertex(vertex_id, shadow_geometry(shadow));
+        ShadowVertexData {
+            position: vertex.clip_position,
+            color: hsla_to_rgba(shadow.color),
+            shadow_id: instance_id,
+            clip_distances: clip_distances(vertex.viewport_position, shadow.content_mask),
+        }
+    }
+
     #[derive(Wgsl)]
     pub struct ShadowVarying {
         #[builtin(position)]
@@ -173,13 +195,12 @@ pub mod shadow {
         #[builtin(instance_index)] instance_id: u32,
     ) -> ShadowVarying {
         let shadow = get!(SHADOWS)[instance_id as usize];
-        let geometry = shadow_geometry(shadow);
-        let vertex = rectangle_vertex(vertex_id, geometry);
+        let vertex = prepare_shadow_vertex(vertex_id, instance_id, shadow);
         ShadowVarying {
-            position: vertex.clip_position,
-            color: hsla_to_rgba(shadow.color),
-            shadow_id: instance_id,
-            clip_distances: clip_distances(vertex.viewport_position, shadow.content_mask),
+            position: vertex.position,
+            color: vertex.color,
+            shadow_id: vertex.shadow_id,
+            clip_distances: vertex.clip_distances,
         }
     }
 
@@ -227,8 +248,7 @@ pub mod shadow {
         #[builtin(instance_index)] instance_id: u32,
     ) -> SmoothedShadowVarying {
         let shadow = get!(SHADOWS)[instance_id as usize];
-        let geometry = shadow_geometry(shadow);
-        let vertex = rectangle_vertex(vertex_id, geometry);
+        let vertex = prepare_shadow_vertex(vertex_id, instance_id, shadow);
         let prepared = prepare_corners(
             shadow.bounds.size,
             shadow.corner_radii,
@@ -243,10 +263,10 @@ pub mod shadow {
         );
 
         SmoothedShadowVarying {
-            position: vertex.clip_position,
-            color: hsla_to_rgba(shadow.color),
-            shadow_id: instance_id,
-            clip_distances: clip_distances(vertex.viewport_position, shadow.content_mask),
+            position: vertex.position,
+            color: vertex.color,
+            shadow_id: vertex.shadow_id,
+            clip_distances: vertex.clip_distances,
             horizontal_corner_reaches: prepared.horizontal_reaches,
             vertical_corner_reaches: prepared.vertical_reaches,
             element_horizontal_corner_reaches: prepared_element.horizontal_reaches,

@@ -1361,103 +1361,20 @@ mod tests {
     }
 
     #[test]
-    fn unsmoothed_primitives_each_remain_one_batch() {
-        let mut quad_scene = Scene::default();
-        let mut shadow_scene = Scene::default();
-        let mut sprite_scene = Scene::default();
-        for _ in 0..3 {
-            quad_scene.insert_primitive(quad());
-            shadow_scene.insert_primitive(shadow());
-            sprite_scene.insert_primitive(polychrome_sprite(0));
-        }
-
-        assert_eq!(
-            batches(&mut quad_scene),
-            vec![PrimitiveBatch::Quads {
-                range: 0..3,
-                smoothed: false,
-            }]
-        );
-        assert_eq!(
-            batches(&mut shadow_scene),
-            vec![PrimitiveBatch::Shadows {
-                range: 0..3,
-                smoothed: false,
-            }]
-        );
-        assert_eq!(
-            batches(&mut sprite_scene),
-            vec![PrimitiveBatch::PolychromeSprites {
-                texture_id: AtlasTextureId {
-                    index: 0,
-                    kind: AtlasTextureKind::Polychrome,
-                },
-                range: 0..3,
-                smoothed: false,
-            }]
-        );
-    }
-
-    #[test]
-    fn mixed_smoothing_splits_only_at_mode_changes() {
-        let mut quad_scene = Scene::default();
-        let mut shadow_scene = Scene::default();
-        let mut sprite_scene = Scene::default();
+    fn smoothing_and_texture_changes_define_batches() {
+        let mut scene = Scene::default();
         for smoothing in [0.0, 0.0, 0.5, 1.0, 0.0] {
             let mut quad = quad();
             quad.corner_smoothing = smoothing;
-            quad_scene.insert_primitive(quad);
-
-            let mut shadow = shadow();
-            shadow.corner_smoothing = smoothing;
-            shadow_scene.insert_primitive(shadow);
-
-            let mut sprite = polychrome_sprite(0);
-            sprite.corner_smoothing = smoothing;
-            sprite_scene.insert_primitive(sprite);
+            scene.insert_primitive(quad);
         }
 
-        let expected_ranges = [(0..2, false), (2..4, true), (4..5, false)];
-        assert_eq!(
-            batches(&mut quad_scene),
-            expected_ranges
-                .iter()
-                .map(|(range, smoothed)| PrimitiveBatch::Quads {
-                    range: range.clone(),
-                    smoothed: *smoothed,
-                })
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            batches(&mut shadow_scene),
-            expected_ranges
-                .iter()
-                .map(|(range, smoothed)| PrimitiveBatch::Shadows {
-                    range: range.clone(),
-                    smoothed: *smoothed,
-                })
-                .collect::<Vec<_>>()
-        );
-        let texture_id = AtlasTextureId {
-            index: 0,
-            kind: AtlasTextureKind::Polychrome,
-        };
-        assert_eq!(
-            batches(&mut sprite_scene),
-            expected_ranges
-                .iter()
-                .map(|(range, smoothed)| PrimitiveBatch::PolychromeSprites {
-                    texture_id,
-                    range: range.clone(),
-                    smoothed: *smoothed,
-                })
-                .collect::<Vec<_>>()
-        );
-    }
+        for smoothing in [0.0, 0.0, 0.5, 1.0, 0.0] {
+            let mut shadow = shadow();
+            shadow.corner_smoothing = smoothing;
+            scene.insert_primitive(shadow);
+        }
 
-    #[test]
-    fn polychrome_sprites_preserve_texture_grouping_with_smoothing_splits() {
-        let mut scene = Scene::default();
         for (texture, smoothing) in [
             (0, 0.0),
             (0, 0.0),
@@ -1472,24 +1389,32 @@ mod tests {
             scene.insert_primitive(sprite);
         }
 
-        let batch_ranges_and_modes = batches(&mut scene)
+        let batch_signatures = batches(&mut scene)
             .into_iter()
             .map(|batch| match batch {
+                PrimitiveBatch::Quads { range, smoothed } => ("quad", None, range, smoothed),
+                PrimitiveBatch::Shadows { range, smoothed } => ("shadow", None, range, smoothed),
                 PrimitiveBatch::PolychromeSprites {
                     texture_id,
                     range,
                     smoothed,
-                } => (texture_id.index, range, smoothed),
+                } => ("polychrome", Some(texture_id.index), range, smoothed),
                 other => panic!("unexpected batch: {other:?}"),
             })
             .collect::<Vec<_>>();
         assert_eq!(
-            batch_ranges_and_modes,
+            batch_signatures,
             vec![
-                (0, 0..2, false),
-                (0, 2..4, true),
-                (1, 4..6, true),
-                (1, 6..7, false),
+                ("quad", None, 0..2, false),
+                ("quad", None, 2..4, true),
+                ("quad", None, 4..5, false),
+                ("shadow", None, 0..2, false),
+                ("shadow", None, 2..4, true),
+                ("shadow", None, 4..5, false),
+                ("polychrome", Some(0), 0..2, false),
+                ("polychrome", Some(0), 2..4, true),
+                ("polychrome", Some(1), 4..6, true),
+                ("polychrome", Some(1), 6..7, false),
             ]
         );
     }

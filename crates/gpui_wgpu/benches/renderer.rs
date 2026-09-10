@@ -19,8 +19,18 @@ fn quad_scene(count: usize) -> Scene {
 fn smoothed_quad_scene(count: usize, corner_radii: Corners<ScaledPixels>) -> Scene {
     let mut scene = unplanned_quad_scene(count);
     for quad in &mut scene.quads {
-        quad.corner_radii = corner_radii.clone();
+        quad.corner_radii = corner_radii;
         quad.corner_smoothing = 1.0;
+    }
+    scene.finish();
+    scene
+}
+
+fn alternating_corner_modes_scene(count: usize) -> Scene {
+    let mut scene = unplanned_quad_scene(count);
+    for (index, quad) in scene.quads.iter_mut().enumerate() {
+        quad.corner_radii = Corners::all(ScaledPixels(8.0));
+        quad.corner_smoothing = if index % 2 == 0 { 0.0 } else { 1.0 };
     }
     scene.finish();
     scene
@@ -99,6 +109,7 @@ fn bench_renderer(c: &mut Criterion) {
             bottom_left: ScaledPixels(0.0),
         },
     );
+    let alternating_corner_modes = alternating_corner_modes_scene(512);
     let mut mixed_batches = unplanned_mixed_scene(512);
     mixed_batches.finish();
 
@@ -143,6 +154,13 @@ fn bench_renderer(c: &mut Criterion) {
             renderer
                 .render_scene_and_wait(&reach_aware_smoothed_quads, TARGET_SIZE)
                 .expect("reach-aware smoothed quad render must succeed")
+        })
+    });
+    group.bench_function("512_alternating_corner_modes_wait", |b| {
+        b.iter(|| {
+            renderer
+                .render_scene_and_wait(&alternating_corner_modes, TARGET_SIZE)
+                .expect("alternating corner modes must render successfully")
         })
     });
     group.bench_function("1024_mixed_batches_wait", |b| {

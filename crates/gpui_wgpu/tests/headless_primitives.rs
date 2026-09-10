@@ -249,7 +249,7 @@ fn smoothed_primitives_share_one_contour() {
         bounds: fill_bounds,
         content_mask,
         background: solid_background(green),
-        corner_radii: radii.clone(),
+        corner_radii: radii,
         corner_smoothing: 1.0,
         ..Default::default()
     });
@@ -265,7 +265,7 @@ fn smoothed_primitives_share_one_contour() {
             bottom: ScaledPixels(8.0),
             left: ScaledPixels(3.0),
         },
-        corner_radii: radii.clone(),
+        corner_radii: radii,
         corner_smoothing: 0.6,
         ..Default::default()
     });
@@ -295,7 +295,7 @@ fn smoothed_primitives_share_one_contour() {
         corner_smoothing: 1.0,
         bounds: image_bounds,
         content_mask,
-        corner_radii: radii.clone(),
+        corner_radii: radii,
         tile: image_tile,
     });
 

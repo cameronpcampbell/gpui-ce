@@ -170,6 +170,43 @@ pub mod polychrome_sprite {
     texture!(group(1), binding(1), POLYCHROME_TEXTURE: Texture2D<f32>);
     sampler!(group(1), binding(2), POLYCHROME_SAMPLER: Sampler);
 
+    #[derive(Clone, Copy, Wgsl)]
+    pub struct PolychromeVertexData {
+        pub position: Vec4f,
+        pub tile_position: Vec2f,
+        pub sprite_id: u32,
+        pub clip_distances: Vec4f,
+    }
+
+    pub fn prepare_polychrome_vertex(
+        vertex_id: u32,
+        instance_id: u32,
+        sprite: PolychromeSprite,
+    ) -> PolychromeVertexData {
+        let vertex = rectangle_vertex(vertex_id, sprite.bounds);
+        PolychromeVertexData {
+            position: vertex.clip_position,
+            tile_position: atlas_texture_coordinates(
+                vertex.unit_position,
+                sprite.tile,
+                texture_dimensions(POLYCHROME_TEXTURE),
+            ),
+            sprite_id: instance_id,
+            clip_distances: clip_distances(vertex.viewport_position, sprite.content_mask),
+        }
+    }
+
+    pub fn polychrome_color(sprite: PolychromeSprite, tile_position: Vec2f) -> Vec4f {
+        let sample =
+            texture_sample_level(POLYCHROME_TEXTURE, POLYCHROME_SAMPLER, tile_position, 0.0);
+        let grayscale = dot(sample.rgb(), LINEAR_RGB_LUMA_WEIGHTS);
+        select(
+            sample,
+            vec4f(grayscale, grayscale, grayscale, sample.w),
+            is_enabled(sprite.grayscale),
+        )
+    }
+
     #[derive(Wgsl)]
     pub struct PolychromeSpriteVarying {
         #[builtin(position)]
@@ -189,16 +226,12 @@ pub mod polychrome_sprite {
         #[builtin(instance_index)] instance_id: u32,
     ) -> PolychromeSpriteVarying {
         let sprite = get!(POLYCHROME_SPRITES)[instance_id as usize];
-        let vertex = rectangle_vertex(vertex_id, sprite.bounds);
+        let vertex = prepare_polychrome_vertex(vertex_id, instance_id, sprite);
         PolychromeSpriteVarying {
-            position: vertex.clip_position,
-            tile_position: atlas_texture_coordinates(
-                vertex.unit_position,
-                sprite.tile,
-                texture_dimensions(POLYCHROME_TEXTURE),
-            ),
-            sprite_id: instance_id,
-            clip_distances: clip_distances(vertex.viewport_position, sprite.content_mask),
+            position: vertex.position,
+            tile_position: vertex.tile_position,
+            sprite_id: vertex.sprite_id,
+            clip_distances: vertex.clip_distances,
         }
     }
 
@@ -208,18 +241,7 @@ pub mod polychrome_sprite {
             return transparent();
         }
         let sprite = get!(POLYCHROME_SPRITES)[input.sprite_id as usize];
-        let sample = texture_sample_level(
-            POLYCHROME_TEXTURE,
-            POLYCHROME_SAMPLER,
-            input.tile_position,
-            0.0,
-        );
-        let grayscale = dot(sample.rgb(), LINEAR_RGB_LUMA_WEIGHTS);
-        let color = select(
-            sample,
-            vec4f(grayscale, grayscale, grayscale, sample.w),
-            is_enabled(sprite.grayscale),
-        );
+        let color = polychrome_color(sprite, input.tile_position);
         blend_color(
             color,
             sprite.opacity
@@ -262,7 +284,7 @@ pub mod polychrome_sprite {
         #[builtin(instance_index)] instance_id: u32,
     ) -> SmoothedPolychromeSpriteVarying {
         let sprite = get!(POLYCHROME_SPRITES)[instance_id as usize];
-        let vertex = rectangle_vertex(vertex_id, sprite.bounds);
+        let vertex = prepare_polychrome_vertex(vertex_id, instance_id, sprite);
         let prepared = prepare_corners(
             sprite.bounds.size,
             sprite.corner_radii,
@@ -271,15 +293,11 @@ pub mod polychrome_sprite {
         );
 
         SmoothedPolychromeSpriteVarying {
-            position: vertex.clip_position,
-            tile_position: atlas_texture_coordinates(
-                vertex.unit_position,
-                sprite.tile,
-                texture_dimensions(POLYCHROME_TEXTURE),
-            ),
-            sprite_id: instance_id,
+            position: vertex.position,
+            tile_position: vertex.tile_position,
+            sprite_id: vertex.sprite_id,
             horizontal_corner_reaches: prepared.horizontal_reaches,
-            clip_distances: clip_distances(vertex.viewport_position, sprite.content_mask),
+            clip_distances: vertex.clip_distances,
             vertical_corner_reaches: prepared.vertical_reaches,
             smoothing_factors: prepared.smoothing_factors,
             superellipse_power: prepared.superellipse_power,
@@ -292,18 +310,7 @@ pub mod polychrome_sprite {
             return transparent();
         }
         let sprite = get!(POLYCHROME_SPRITES)[input.sprite_id as usize];
-        let sample = texture_sample_level(
-            POLYCHROME_TEXTURE,
-            POLYCHROME_SAMPLER,
-            input.tile_position,
-            0.0,
-        );
-        let grayscale = dot(sample.rgb(), LINEAR_RGB_LUMA_WEIGHTS);
-        let color = select(
-            sample,
-            vec4f(grayscale, grayscale, grayscale, sample.w),
-            is_enabled(sprite.grayscale),
-        );
+        let color = polychrome_color(sprite, input.tile_position);
         blend_color(
             color,
             sprite.opacity
