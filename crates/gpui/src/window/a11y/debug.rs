@@ -338,6 +338,7 @@ mod tests {
     use crate::{
         AnyWindowHandle, AppContext as _, Context, InteractiveElement as _, IntoElement,
         ParentElement as _, Render, StatefulInteractiveElement as _, TestAppContext, Window, div,
+        util::FluentBuilder as _,
     };
     use accesskit::{Role, TreeUpdate};
     use accesskit_consumer::{Tree, common_filter};
@@ -351,13 +352,10 @@ mod tests {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div()
                 .child(
-                    div().id("hidden-boundary").aria_hidden(self.hidden).child(
-                        div()
-                            .id("inside")
-                            .role(Role::Button)
-                            .aria_label("Inside")
-                            .aria_hidden(false),
-                    ),
+                    div()
+                        .id("hidden-boundary")
+                        .when(self.hidden, |element| element.aria_hidden())
+                        .child(div().id("inside").role(Role::Button).aria_label("Inside")),
                 )
                 .child(div().id("outside").role(Role::Button).aria_label("Outside"))
         }

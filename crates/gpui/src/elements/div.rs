@@ -1379,13 +1379,12 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
-    /// Hide this element and its descendants from assistive technology when
-    /// `hidden` is `true`.
+    /// Hide this element and its descendants from assistive technology.
     ///
     /// This does not change rendering, focus, or input. Do not use it on an
     /// element that can receive focus or contains focusable descendants.
-    fn aria_hidden(mut self, hidden: bool) -> Self {
-        self.interactivity().aria.hidden = hidden;
+    fn aria_hidden(mut self) -> Self {
+        self.interactivity().aria.hidden = true;
         self
     }
 
@@ -1415,7 +1414,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     ///
     /// GPUI calls the closure after prepaint. The element must have an id and
     /// either a [`role`][StatefulInteractiveElement::role] or
-    /// [`aria_hidden(true)`][StatefulInteractiveElement::aria_hidden].
+    /// [`aria_hidden()`][StatefulInteractiveElement::aria_hidden].
     ///
     /// See [`Element::a11y_synthetic_children`] for details.
     fn a11y_synthetic_children(
