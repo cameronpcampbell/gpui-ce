@@ -77,7 +77,13 @@ impl Render for StyleTransitionsExample {
             .bg(rgb(0x110F15))
             .gap(px(20.))
             .p(px(100.))
-            .child(Button::new("btn").child("Click me!"))
+            .child(Button::new("btn").child(
+                "שלום עולם
+            مرحبا بالعالم
+abc אבג def
+x (مرحبا) y
+English ثم عربي ثم English",
+            ))
     }
 }
 

@@ -1156,32 +1156,28 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         &mut self,
         event: &gpui::MouseDownEvent,
         text_position: Point<Pixels>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
         const DOUBLE_CLICK: usize = 2;
         const TRIPLE_CLICK: usize = 3;
 
-        let caret = self.caret_for_pixel_point(text_position, window.line_height());
+        let line_height = self.layout_data.line_height;
+        let caret = self.caret_for_pixel_point(text_position, line_height);
 
         self.is_selecting = true;
         self.apply_click(event.click_count, text_position);
 
         match self.click_count {
             DOUBLE_CLICK => {
-                if !self.select_layout_at(
-                    text_position,
-                    window.line_height(),
-                    TextSelectionKind::Word,
-                    cx,
-                ) {
+                if !self.select_layout_at(text_position, line_height, TextSelectionKind::Word, cx) {
                     self.select_word_at(caret.index, cx);
                 }
             }
             TRIPLE_CLICK => {
                 if !self.select_layout_at(
                     text_position,
-                    window.line_height(),
+                    line_height,
                     TextSelectionKind::HardLine,
                     cx,
                 ) {
@@ -1206,11 +1202,11 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         &mut self,
         _event: &gpui::MouseMoveEvent,
         text_position: Point<Pixels>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
         if self.is_selecting && self.click_count == 1 {
-            let caret = self.caret_for_pixel_point(text_position, window.line_height());
+            let caret = self.caret_for_pixel_point(text_position, self.layout_data.line_height);
             self.select_to_caret(caret, cx);
         }
     }
