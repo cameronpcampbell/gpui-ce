@@ -38,7 +38,7 @@ use parley::{
     PositionedLayoutItem, Selection, StyleProperty,
 };
 use skrifa::instance::NormalizedCoord;
-use std::borrow::Cow;
+use std::{borrow::Cow, ops::Range};
 use unicode_segmentation::UnicodeSegmentation as _;
 
 mod paragraphs;
@@ -719,13 +719,7 @@ impl ParleyTextSystem {
             );
         }
 
-        let run_ranges = validated_run_ranges(text, runs)?;
-
-        for inline_box in inline_boxes {
-            if inline_box.index > text.len() || !text.is_char_boundary(inline_box.index) {
-                anyhow::bail!("inline box index does not align with the input text");
-            }
-        }
+        let run_ranges = run_ranges(runs);
 
         let mut paragraphs = Vec::new();
         let mut visual_lines = Vec::new();
@@ -862,8 +856,7 @@ impl ParleyTextSystem {
                 first_line,
                 block_offset,
                 native: result.layout.platform_layout,
-                newline_width,
-                newline_x,
+                newline: newline_x..newline_x + newline_width,
                 is_rtl: result.is_rtl,
             });
             visual_lines.extend(result.layout.visual_lines);
@@ -905,7 +898,7 @@ impl ParleyTextSystem {
         inline_text_metrics: Option<InlineTextMetrics>,
         text_align: Option<TextAlign>,
     ) -> Result<ParleyLayoutResult> {
-        let run_ranges = validated_run_ranges(text, runs)?;
+        let run_ranges = run_ranges(runs);
         let line_height = if text.is_empty() {
             text_styles
                 .last()
@@ -1346,33 +1339,17 @@ impl ParleyTextSystem {
     }
 }
 
-fn validated_run_ranges(text: &str, runs: &[TextRun]) -> Result<Vec<std::ops::Range<usize>>> {
-    let mut expected_start = 0usize;
-    let mut run_ranges = Vec::with_capacity(runs.len());
-    for run in runs {
-        let Some(end) = expected_start.checked_add(run.len) else {
-            anyhow::bail!("text run length overflowed the input range");
-        };
+fn run_ranges(runs: &[TextRun]) -> Vec<Range<usize>> {
+    let mut start = 0;
 
-        if end > text.len() {
-            anyhow::bail!("text runs extend past the input text");
-        }
+    runs.iter()
+        .map(|run| {
+            let range = start..start + run.len;
+            start = range.end;
 
-        let range = expected_start..end;
-
-        if !text.is_char_boundary(range.start) || !text.is_char_boundary(range.end) {
-            anyhow::bail!("text runs do not align with the input text");
-        }
-
-        expected_start = range.end;
-        run_ranges.push(range);
-    }
-
-    if expected_start != text.len() {
-        anyhow::bail!("text runs do not cover the input text");
-    }
-
-    Ok(run_ranges)
+            range
+        })
+        .collect()
 }
 
 fn push_face_families<'a>(

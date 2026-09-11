@@ -5,7 +5,7 @@ use gpui::{
 use std::{ops::Range, sync::Arc};
 use unicode_segmentation::UnicodeSegmentation as _;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub(super) struct ParagraphRange {
     pub content: Range<usize>,
     pub separator: Range<usize>,
@@ -68,8 +68,7 @@ pub(super) struct ParagraphLayout {
     pub first_line: usize,
     pub block_offset: Pixels,
     pub native: Arc<dyn PlatformTextLayout>,
-    pub newline_width: Pixels,
-    pub newline_x: Pixels,
+    pub newline: Range<Pixels>,
     pub is_rtl: bool,
 }
 
@@ -111,7 +110,6 @@ impl ParagraphLayout {
 #[derive(Debug)]
 pub(super) struct ParleyDocumentLayout {
     paragraphs: Vec<ParagraphLayout>,
-    text_len: usize,
     size: Size<Pixels>,
     graphemes: Vec<Range<usize>>,
 }
@@ -125,7 +123,6 @@ impl ParleyDocumentLayout {
 
         Self {
             paragraphs,
-            text_len: text.len(),
             size,
             graphemes,
         }
@@ -171,7 +168,7 @@ impl ParleyDocumentLayout {
 
 impl PlatformTextLayout for ParleyDocumentLayout {
     fn len(&self) -> usize {
-        self.text_len
+        self.paragraphs.last().unwrap().source.separator.end
     }
 
     fn line_count(&self) -> usize {
@@ -213,7 +210,7 @@ impl PlatformTextLayout for ParleyDocumentLayout {
     }
 
     fn caret_geometry(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>> {
-        if caret.index > self.text_len {
+        if caret.index > self.len() {
             return None;
         }
 
@@ -252,17 +249,10 @@ impl PlatformTextLayout for ParleyDocumentLayout {
 
         for paragraph in &self.paragraphs {
             if let Some(local) = local_range(&range, &paragraph.source.content) {
-                regions.extend(
-                    paragraph
-                        .native
-                        .selection_geometry(local, line_height)
-                        .into_iter()
-                        .map(|mut bounds| {
-                            bounds.origin.y += line_height * paragraph.first_line;
-
-                            bounds
-                        }),
-                );
+                for mut bounds in paragraph.native.selection_geometry(local, line_height) {
+                    bounds.origin.y += line_height * paragraph.first_line;
+                    regions.push(bounds);
+                }
             }
 
             if local_range(&range, &paragraph.source.separator).is_none() {
@@ -271,21 +261,10 @@ impl PlatformTextLayout for ParleyDocumentLayout {
 
             let line_idx = paragraph.first_line + paragraph.native.line_count() - 1;
             regions.push(Bounds::from_corners(
-                point(paragraph.newline_x, line_height * line_idx),
-                point(
-                    paragraph.newline_x + paragraph.newline_width,
-                    line_height * (line_idx + 1),
-                ),
+                point(paragraph.newline.start, line_height * line_idx),
+                point(paragraph.newline.end, line_height * (line_idx + 1)),
             ));
         }
-
-        regions.sort_by(|left, right| {
-            left.origin
-                .y
-                .partial_cmp(&right.origin.y)
-                .unwrap()
-                .then_with(|| left.origin.x.partial_cmp(&right.origin.x).unwrap())
-        });
 
         regions
     }
@@ -298,13 +277,10 @@ impl PlatformTextLayout for ParleyDocumentLayout {
                 continue;
             };
 
-            regions.extend(paragraph.native.inline_geometry(local).into_iter().map(
-                |(mut bounds, idx)| {
-                    bounds.origin.y += paragraph.block_offset;
-
-                    (bounds, idx + paragraph.first_line)
-                },
-            ));
+            for (mut bounds, idx) in paragraph.native.inline_geometry(local) {
+                bounds.origin.y += paragraph.block_offset;
+                regions.push((bounds, idx + paragraph.first_line));
+            }
         }
 
         regions
@@ -361,7 +337,7 @@ impl PlatformTextLayout for ParleyDocumentLayout {
                 .checked_add_signed(delta)
                 .filter(|idx| *idx < self.line_count());
             let Some(target_idx) = target_idx else {
-                let idx = if delta < 0 { 0 } else { self.text_len };
+                let idx = if delta < 0 { 0 } else { self.len() };
 
                 return (
                     self.refresh_caret(CaretPosition::new(idx, caret.affinity)),
