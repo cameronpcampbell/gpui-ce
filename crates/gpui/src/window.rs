@@ -3488,13 +3488,16 @@ impl Window {
         });
 
         let mut nested_selectors = Vec::new();
+
         self.for_each_matching_selector_refinement(element_id, |refinement| {
             nested_selectors.push(refinement.selector_state().clone());
         });
+
         let current = self
             .selector_scope_stack
             .last_mut()
             .expect("selector scope disappeared");
+
         for selectors in nested_selectors {
             Self::refine_selector_scope(current, &selectors, element_id);
         }
