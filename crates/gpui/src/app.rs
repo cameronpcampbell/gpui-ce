@@ -201,6 +201,9 @@ impl Application {
     }
 
     /// Assigns the source of assets for the application.
+    ///
+    /// Pass a tuple to use multiple sources. Sources are searched in tuple order when loading an
+    /// asset, and their results are concatenated in tuple order when listing assets.
     pub fn with_assets(self, asset_source: impl AssetSource) -> Self {
         let mut context_lock = self.0.borrow_mut();
         let asset_source = Arc::new(asset_source);
