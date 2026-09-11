@@ -199,12 +199,23 @@ impl Application {
     }
 
     /// Assigns the source of assets for the application.
+    ///
+    /// Pass a tuple to use multiple sources. Sources are searched in tuple order when loading an
+    /// asset, and their results are concatenated in tuple order when listing assets.
     pub fn with_assets(self, asset_source: impl AssetSource) -> Self {
         let mut context_lock = self.0.borrow_mut();
         let asset_source = Arc::new(asset_source);
         context_lock.asset_source = asset_source.clone();
         context_lock.svg_renderer = SvgRenderer::new(asset_source);
         drop(context_lock);
+        self
+    }
+
+    /// Configures whether fonts under `fonts` are loaded from the asset source at startup.
+    /// This is enabled by default.
+    pub fn load_font_assets(self, load_font_assets: bool) -> Self {
+        self.0.borrow_mut().load_font_assets = load_font_assets;
+
         self
     }
 
@@ -255,6 +266,11 @@ impl Application {
         let platform = self.0.borrow().platform.clone();
         platform.run(Box::new(move || {
             let cx = &mut *this.borrow_mut();
+
+            if cx.load_font_assets {
+                load_font_assets(cx).log_err();
+            }
+
             on_finish_launching(cx);
         }));
     }
@@ -276,6 +292,11 @@ impl Application {
         let platform = self.0.borrow().platform.clone();
         platform.run(Box::new(move || {
             let cx = &mut *this.borrow_mut();
+
+            if cx.load_font_assets {
+                load_font_assets(cx).log_err();
+            }
+
             on_finish_launching(cx);
         }));
         ApplicationHandle { app: self.0 }
@@ -342,6 +363,35 @@ impl Application {
     pub fn path_for_auxiliary_executable(&self, name: &str) -> Result<PathBuf> {
         self.0.borrow().path_for_auxiliary_executable(name)
     }
+}
+
+fn load_font_assets(cx: &App) -> Result<()> {
+    let font_paths = cx
+        .asset_source()
+        .list("fonts")
+        .context("failed to list font assets")?;
+
+    let mut embedded_fonts = Vec::new();
+
+    for font_path in font_paths {
+        if !font_path.ends_with(".ttf") {
+            continue;
+        }
+
+        let Some(font_bytes) = cx
+            .asset_source()
+            .load(&font_path)
+            .with_context(|| format!("failed to load font asset {font_path}"))?
+        else {
+            continue;
+        };
+
+        embedded_fonts.push(font_bytes);
+    }
+
+    cx.text_system()
+        .add_fonts(embedded_fonts)
+        .context("failed to register font assets")
 }
 
 type Handler = Box<dyn FnMut(&mut App) -> bool + 'static>;
@@ -766,6 +816,7 @@ pub struct App {
     // assets
     pub(crate) loading_assets: FxHashMap<(TypeId, u64), Box<dyn Any>>,
     asset_source: Arc<dyn AssetSource>,
+    load_font_assets: bool,
     pub(crate) svg_renderer: SvgRenderer,
     http_client: Arc<dyn HttpClient>,
 
@@ -845,6 +896,7 @@ impl App {
                 svg_renderer: SvgRenderer::new(asset_source.clone()),
                 loading_assets: Default::default(),
                 asset_source,
+                load_font_assets: true,
                 http_client,
                 globals_by_type: Default::default(),
                 global_entities: Default::default(),
@@ -3085,9 +3137,92 @@ impl<'a, T> Drop for GpuiBorrow<'a, T> {
 
 #[cfg(test)]
 mod test {
-    use std::{cell::RefCell, rc::Rc};
+    use std::{
+        borrow::Cow,
+        cell::RefCell,
+        rc::Rc,
+        sync::{Arc, Mutex},
+    };
 
-    use crate::{AppContext, TestAppContext};
+    use anyhow::anyhow;
+
+    use crate::{AppContext, AssetSource, Result, SharedString, TestAppContext};
+
+    use super::{Application, load_font_assets};
+
+    struct RecordingFontAssets {
+        list_requests: Arc<Mutex<Vec<String>>>,
+        load_requests: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl AssetSource for RecordingFontAssets {
+        fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+            self.load_requests.lock().unwrap().push(path.to_owned());
+
+            if path == "fonts/regular.ttf" {
+                return Ok(Some(Cow::Borrowed(b"font")));
+            }
+
+            Ok(None)
+        }
+
+        fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+            self.list_requests.lock().unwrap().push(path.to_owned());
+
+            Ok(vec![
+                "fonts/regular.ttf".into(),
+                "fonts/missing.ttf".into(),
+                "fonts/ignored.otf".into(),
+            ])
+        }
+    }
+
+    struct FailingFontAssets;
+
+    impl AssetSource for FailingFontAssets {
+        fn load(&self, _path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+            Ok(None)
+        }
+
+        fn list(&self, _path: &str) -> Result<Vec<SharedString>> {
+            Err(anyhow!("font listing failed"))
+        }
+    }
+
+    #[test]
+    fn loads_ttf_font_assets() {
+        let cx = TestAppContext::single();
+        let list_requests = Arc::new(Mutex::new(Vec::new()));
+        let load_requests = Arc::new(Mutex::new(Vec::new()));
+
+        Application(cx.app.clone()).with_assets(RecordingFontAssets {
+            list_requests: list_requests.clone(),
+            load_requests: load_requests.clone(),
+        });
+
+        assert!(cx.app.borrow().load_font_assets);
+
+        cx.update(|cx| load_font_assets(cx)).unwrap();
+
+        assert_eq!(list_requests.lock().unwrap().as_slice(), ["fonts"]);
+
+        assert_eq!(
+            load_requests.lock().unwrap().as_slice(),
+            ["fonts/regular.ttf", "fonts/missing.ttf"]
+        );
+
+        Application(cx.app.clone()).load_font_assets(false);
+
+        assert!(!cx.app.borrow().load_font_assets);
+
+        Application(cx.app.clone())
+            .with_assets(FailingFontAssets)
+            .load_font_assets(true);
+
+        let error = cx.update(|cx| load_font_assets(cx)).unwrap_err();
+
+        assert_eq!(error.to_string(), "failed to list font assets");
+    }
 
     #[test]
     fn test_gpui_borrow() {
