@@ -819,7 +819,7 @@ impl PrepaintElements {
             caret_visible,
         } = prepaint;
 
-        let caret = state.caret();
+        let caret = state.visible_caret();
         let selection = state.selected_range();
         let ime_range = state.marked_range();
 

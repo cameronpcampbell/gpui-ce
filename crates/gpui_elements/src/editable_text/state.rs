@@ -34,6 +34,7 @@ pub struct EditableTextState {
     /// True while the user is in the act of highlighting a section of the text (e.g. during mouse pressed & dragging).
     is_selecting: bool,
     mouse_anchor: Option<CaretPosition>,
+    mouse_caret: Option<(CaretSelection, CaretPosition)>,
     /// The last ui location relative to the element that the user clicked. Used to filter when a user clicks multiple times in the same area.
     last_click_position: Option<Point<Pixels>>,
     /// The number of times the user has clicked `last_click_position`. Used to determine which click behavior to trigger, depending on single, double, or triple clicks.
@@ -124,6 +125,7 @@ impl EditableTextState {
 
             is_selecting: false,
             mouse_anchor: None,
+            mouse_caret: None,
             last_click_position: None,
             click_count: 0,
 
@@ -178,6 +180,13 @@ impl EditableTextState {
 
     pub(super) fn caret(&self) -> CaretPosition {
         self.selected_range.focus
+    }
+
+    pub(super) fn visible_caret(&self) -> CaretPosition {
+        match self.mouse_caret {
+            Some((selection, caret)) if selection == self.selected_range => caret,
+            _ => self.caret(),
+        }
     }
 
     /// Returns the IME marked range for character operations.
@@ -294,25 +303,36 @@ impl EditableTextState {
         self.caret_for_pixel_point(point, line_height).index
     }
 
-    fn mouse_selection_anchor(&self, focus: CaretPosition) -> Option<CaretPosition> {
-        let anchor = self.mouse_anchor?;
-        let document = self.current_document()?;
-        let line_height = self.layout_data.line_height;
-        let anchor_point = document.position_for_caret(anchor, line_height)?;
-        let focus_point = document.position_for_caret(focus, line_height)?;
-        let (edge, opposite_edge) = if focus_point.y > anchor_point.y {
-            (TextMovement::VisualLineEnd, TextMovement::VisualLineStart)
-        } else if focus_point.y < anchor_point.y {
-            (TextMovement::VisualLineStart, TextMovement::VisualLineEnd)
-        } else {
-            return Some(anchor);
+    fn mouse_selection_endpoint(
+        &self,
+        endpoint: CaretPosition,
+        opposite: CaretPosition,
+    ) -> CaretPosition {
+        let Some(document) = self.current_document() else {
+            return endpoint;
         };
 
-        if document.move_caret(anchor, edge, None).0.index != anchor.index {
-            return Some(anchor);
+        let line_height = self.layout_data.line_height;
+        let Some(endpoint_point) = document.position_for_caret(endpoint, line_height) else {
+            return endpoint;
+        };
+        let Some(opposite_point) = document.position_for_caret(opposite, line_height) else {
+            return endpoint;
+        };
+
+        let (edge, opposite_edge) = if opposite_point.y > endpoint_point.y {
+            (TextMovement::VisualLineEnd, TextMovement::VisualLineStart)
+        } else if opposite_point.y < endpoint_point.y {
+            (TextMovement::VisualLineStart, TextMovement::VisualLineEnd)
+        } else {
+            return endpoint;
+        };
+
+        if document.move_caret(endpoint, edge, None).0.index != endpoint.index {
+            return endpoint;
         }
 
-        Some(document.move_caret(anchor, opposite_edge, None).0)
+        document.move_caret(endpoint, opposite_edge, None).0
     }
 
     fn find_point_for_caret(&self, caret: CaretPosition) -> Point<Pixels> {
@@ -368,7 +388,7 @@ impl EditableTextState {
         };
 
         // point will be relative to content_size, and may or may not be within the current scroll_bounds
-        let point = self.find_point_for_caret(self.caret());
+        let point = self.find_point_for_caret(self.visible_caret());
 
         // this scroll_offset diverges from the rest of gpui, as it is stored in the
         // positive real number space (interactivity stores it in the negatives)
@@ -1189,6 +1209,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         let caret = self.caret_for_pixel_point(text_position, line_height);
 
         self.is_selecting = true;
+        self.mouse_caret = None;
         self.apply_click(event.click_count, text_position);
 
         match self.click_count {
@@ -1233,12 +1254,16 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         cx: &mut Context<'app, Self>,
     ) {
         if self.is_selecting && self.click_count == 1 {
-            let caret = self.caret_for_pixel_point(text_position, self.layout_data.line_height);
+            let mouse_caret =
+                self.caret_for_pixel_point(text_position, self.layout_data.line_height);
+            let mut caret = mouse_caret;
 
-            if let Some(anchor) = self.mouse_selection_anchor(caret) {
-                self.selected_range.anchor = anchor;
+            if let Some(anchor) = self.mouse_anchor {
+                self.selected_range.anchor = self.mouse_selection_endpoint(anchor, caret);
+                caret = self.mouse_selection_endpoint(caret, anchor);
             }
 
+            self.mouse_caret = Some((self.selected_range.with_focus(caret), mouse_caret));
             self.select_to_caret(caret, cx);
         }
     }
