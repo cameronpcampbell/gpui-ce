@@ -1,4 +1,4 @@
-use crate::{DevicePixels, Pixels, Result, SharedString, Size, size};
+use crate::{size, DevicePixels, Pixels, Result, SharedString, Size};
 use smallvec::SmallVec;
 
 use image::{Delay, Frame};
@@ -57,7 +57,6 @@ macro_rules! impl_asset_source_for_tuples {
 }
 
 impl_asset_source_for_tuples!(
-    (T0: 0),
     (T0: 0, T1: 1),
     (T0: 0, T1: 1, T2: 2),
     (T0: 0, T1: 1, T2: 2, T3: 3),
