@@ -1,4 +1,4 @@
-use crate::{size, DevicePixels, Pixels, Result, SharedString, Size};
+use crate::{DevicePixels, Pixels, Result, SharedString, Size, size};
 use smallvec::SmallVec;
 
 use image::{Delay, Frame};
