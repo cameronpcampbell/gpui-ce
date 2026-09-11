@@ -93,6 +93,6 @@ And yet, our ambitious are larger than supporting the use-cases of two applicati
 As a whole, we'd like to be a framework for real applications, to allow for deep support and code-sharing between GPUI projects. Our roots are in the web, and we want to take on the current application monster that is Electron, head to head, but with order-of-magnitude performance improvements and platform integrations. 
 
 #### How does the project compare to other forks in the ecosystem?
-Other efforts (namely WGPUI) are actively maintained, but have diverged quite a bit from mainline usage. They typically serve the interests of the projects that they're used within, leading to a diverse yet fragmented ecosystem. GPUI-CE focuses on stability, and continously monitors the other forks for good ideas worth pulling in.
+Other efforts (namely WGPUI) are actively maintained, but have diverged quite a bit from mainline usage. They typically serve the interests of the projects that they're used within, leading to a diverse yet fragmented ecosystem. GPUI-CE focuses on stability, and continuously monitors the other forks for good ideas worth pulling in.
 
 

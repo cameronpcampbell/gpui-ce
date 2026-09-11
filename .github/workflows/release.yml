@@ -30,9 +30,7 @@ jobs:
       value:   ${{ steps.check.outputs.value }}
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - uses: actions/checkout@v5
       - id: check
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -48,9 +46,7 @@ jobs:
     needs: [prerelease]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy, rustfmt
@@ -74,33 +70,13 @@ jobs:
       - run: just build
       - run: just test
       - run: just test-doc
-      - name: Build components workspace
-        run: |
-          component_patch_args=(
-            --config 'patch.crates-io.gpui-ce.path="../gpui"'
-            --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
-            --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
-            --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
-          )
-          (cd crates/gpui_ce_components && cargo "${component_patch_args[@]}" build --workspace --all-targets)
-      - name: Test components workspace
-        run: |
-          component_patch_args=(
-            --config 'patch.crates-io.gpui-ce.path="../gpui"'
-            --config 'patch.crates-io.gpui_ce_platform.path="../gpui_platform"'
-            --config 'patch.crates-io.gpui_ce_web.path="../gpui_web"'
-            --config 'patch.crates-io.gpui_ce_macros.path="../gpui_macros"'
-          )
-          (cd crates/gpui_ce_components && cargo "${component_patch_args[@]}" test --workspace --no-fail-fast)
 
   # Verify packages are publishable
   verify-publish:
     needs: [prerelease, verify]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - uses: hustcer/setup-nu@v3
@@ -114,9 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true'
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - uses: actions/checkout@v5
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - uses: hustcer/setup-nu@v3
@@ -132,9 +106,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      - uses: actions/checkout@v5
       - uses: softprops/action-gh-release@v2
         with:
           draft: true

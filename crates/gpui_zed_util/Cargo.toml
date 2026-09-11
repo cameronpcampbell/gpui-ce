@@ -12,6 +12,11 @@ name = "util"
 path = "src/util.rs"
 doctest = true
 
+[features]
+test-support = ["path/test-support"]
+# Embed `fs_embed!` assets at compile time even in debug builds.
+debug-embed = ["rust-embed/debug-embed"]
+
 [dependencies]
 anyhow = "1.0.86"
 async_zip = { version = "0.0.18", features = ["deflate", "deflate64"] }
@@ -58,15 +63,12 @@ nix = { version = "0.29", features = ["user"] }
 mach2 = "0.5"
 
 [target.'cfg(windows)'.dependencies]
-tendril = "0.4.3"
+tendril = "0.5"
 windows.workspace = true
 
 [dev-dependencies]
 pretty_assertions = { version = "1.3.0", features = ["unstable"] }
-rand = "0.9"
+rand.workspace = true
 path = { package = "gpui_ce_path", version = "0.2.2", path = "../gpui_path", features = [
   "test-support",
 ] }
-
-[features]
-test-support = ["path/test-support"]

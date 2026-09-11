@@ -83,7 +83,7 @@ check-wasm-atomics:
 check-examples:
     @echo "📐 Checking examples..."
     cargo build --package gpui-ce --examples
-    cargo check --package gpui_ce_web --target wasm32-unknown-unknown
+    cargo check --package gpui_ce_web --target wasm32-unknown-unknown --no-default-features
 
 
 [doc('Run all workspace unit and integration tests')]
@@ -433,15 +433,6 @@ publish dry="false":
 
         "crates/gpui_platform/Cargo.toml"
 
-        # GPUI CE Components. These are a nested workspace because its
-        # examples and web demo have their own resolver and lockfile.
-        "crates/gpui_ce_components/crates/macros/Cargo.toml"
-        "crates/gpui_ce_components/crates/assets/Cargo.toml"
-        "crates/gpui_ce_components/crates/base/Cargo.toml"
-        "crates/gpui_ce_components/crates/fps/Cargo.toml"
-        "crates/gpui_ce_components/crates/shell/Cargo.toml"
-        "crates/gpui_ce_components/crates/ui/Cargo.toml"
-        "crates/gpui_ce_components/crates/webview/Cargo.toml"
     ]
 
     let dry_flag = if $dry_run { ["--dry-run"] } else { [] }
@@ -454,8 +445,6 @@ publish dry="false":
     # validates the complete local release graph rather than stale registry
     # versions. The patches are passed only to the dry run and are never part
     # of the published manifests.
-    let root_crates = $crates | where { |manifest| not ($manifest | str starts-with "crates/gpui_ce_components/") }
-
     for manifest in $crates {
         let name = ($manifest | path dirname | path basename)
         let metadata = (^cargo metadata --no-deps --format-version 1 --manifest-path $manifest | from json)
@@ -492,11 +481,7 @@ publish dry="false":
         }
 
         print $"\n📦 Publishing ($name)..."
-        let patch_manifests = if ($manifest | str starts-with "crates/gpui_ce_components/") {
-            $crates
-        } else {
-            $root_crates
-        }
+        let patch_manifests = $crates
         let patch_flags = if $dry_run {
             $patch_manifests
                 | each { |patch_manifest|
@@ -530,7 +515,7 @@ publish dry="false":
 sync-upstream *args:
     @python3 {{ project_root }}/scripts/sync-upstream/sync_upstream.py sync {{ args }}
 
-[doc('One-time: record the upstream baseline to sync from (defaults to the pinned zed dep rev)')]
+[doc('One-time: record the upstream baseline to sync from (pass the upstream SHA explicitly)')]
 [group('sync')]
 sync-upstream-bootstrap *args:
     @python3 {{ project_root }}/scripts/sync-upstream/sync_upstream.py bootstrap {{ args }}

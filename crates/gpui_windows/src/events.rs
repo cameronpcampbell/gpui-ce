@@ -1,5 +1,3 @@
-#[cfg(feature = "wgpu")]
-use crate::window::RawWindow;
 use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
 
 use anyhow::Context as _;
@@ -30,6 +28,7 @@ pub(crate) const WM_GPUI_FORCE_UPDATE_WINDOW: u32 = WM_USER + 5;
 pub(crate) const WM_GPUI_KEYBOARD_LAYOUT_CHANGED: u32 = WM_USER + 6;
 pub(crate) const WM_GPUI_GPU_DEVICE_LOST: u32 = WM_USER + 7;
 pub(crate) const WM_GPUI_KEYDOWN: u32 = WM_USER + 8;
+pub(crate) const WM_GPUI_END_SESSION: u32 = WM_USER + 9;
 
 const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
 
@@ -110,6 +109,8 @@ impl WindowsWindowInner {
             WM_PAINT => self.handle_paint_msg(handle),
             WM_CLOSE => self.handle_close_msg(),
             WM_DESTROY => self.handle_destroy_msg(handle),
+            WM_QUERYENDSESSION => Some(1),
+            WM_ENDSESSION => self.handle_end_session_msg(wparam),
             WM_MOUSEMOVE => self.handle_mouse_move_msg(handle, lparam, wparam),
             WM_MOUSELEAVE | WM_NCMOUSELEAVE => self.handle_mouse_leave_msg(),
             WM_NCMOUSEMOVE => self.handle_nc_mouse_move_msg(handle, lparam),
@@ -170,6 +171,20 @@ impl WindowsWindowInner {
         } else {
             unsafe { DefWindowProcW(handle, msg, wparam, lparam) }
         }
+    }
+
+    fn handle_end_session_msg(&self, wparam: WPARAM) -> Option<isize> {
+        if wparam.0 != 0 {
+            unsafe {
+                SendMessageW(
+                    self.platform_window_handle,
+                    WM_GPUI_END_SESSION,
+                    Some(WPARAM(self.validation_number)),
+                    None,
+                );
+            }
+        }
+        Some(0)
     }
 
     fn handle_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
@@ -259,25 +274,13 @@ impl WindowsWindowInner {
         let new_logical_size = device_size.to_pixels(scale_factor);
 
         self.state.logical_size.set(new_logical_size);
-        #[cfg(not(feature = "wgpu"))]
+        if should_resize_renderer
+            && let Err(e) = self.state.renderer.borrow_mut().resize(device_size)
         {
-            if should_resize_renderer
-                && let Err(e) = self.state.renderer.borrow_mut().resize(device_size)
-            {
-                log::error!("Failed to resize renderer, invalidating devices: {}", e);
-                self.state
-                    .invalidate_devices
-                    .store(true, std::sync::atomic::Ordering::Release);
-            }
-        }
-        #[cfg(feature = "wgpu")]
-        {
-            if should_resize_renderer {
-                self.state
-                    .renderer
-                    .borrow_mut()
-                    .update_drawable_size(device_size)
-            }
+            log::error!("Failed to resize renderer, invalidating devices: {}", e);
+            self.state
+                .invalidate_devices
+                .store(true, std::sync::atomic::Ordering::Release);
         }
         if let Some(mut callback) = self.state.callbacks.resize.take() {
             callback(new_logical_size, scale_factor);
@@ -1273,27 +1276,15 @@ impl WindowsWindowInner {
     }
 
     fn handle_device_lost(&self, lparam: LPARAM) -> Option<isize> {
-        #[cfg(not(feature = "wgpu"))]
+        let devices = lparam.0 as *const DirectXDevices;
+        let devices = unsafe { &*devices };
+        if let Err(err) = self
+            .state
+            .renderer
+            .borrow_mut()
+            .handle_device_lost(&devices)
         {
-            let devices = lparam.0 as *const DirectXDevices;
-            let devices = unsafe { &*devices };
-            if let Err(err) = self
-                .state
-                .renderer
-                .borrow_mut()
-                .handle_device_lost(&devices)
-            {
-                panic!("Device lost: {err}");
-            }
-        }
-        #[cfg(feature = "wgpu")]
-        {
-            _ = lparam;
-            if let Err(err) = self.state.renderer.borrow_mut().recover(&RawWindow {
-                hwnd: self.platform_window_handle,
-            }) {
-                panic!("Device lost: {err}");
-            }
+            panic!("Device lost: {err}");
         }
         // Make sure the first `draw_window` after recovery (whether it comes
         // from the forced WM_GPUI_FORCE_UPDATE_WINDOW or a stray WM_PAINT in
@@ -1338,13 +1329,9 @@ impl WindowsWindowInner {
         }
 
         let force_render = force_render || self.state.force_render_pending.take();
-        #[cfg(not(feature = "wgpu"))]
-        {
-            if force_render {
-                // Re-enable drawing after a device loss recovery. The forced render
-                // will rebuild the scene with fresh atlas textures.
-                self.state.renderer.borrow_mut().mark_drawable();
-            }
+        if force_render {
+            // After device-loss recovery, force a render that rebuilds atlas textures.
+            self.state.renderer.borrow_mut().mark_drawable();
         }
         request_frame(RequestFrameOptions {
             require_presentation: false,
