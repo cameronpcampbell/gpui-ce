@@ -1,3 +1,18 @@
+#[cfg(test)]
+use crate::{
+    DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths, Font, FontMetrics,
+    InlineLayout, InlineLayoutRequest, InputEvent, InteractiveElement, IntoElement, LineLayout,
+    LongPressEvent, MouseDownEvent, ParentElement, PlatformTextSystem, RasterizedGlyph,
+    RequestFrameOptions, StatefulInteractiveElement, Styled, TestApp, TestAppContext,
+    TestTextSystem, TextLayoutRequest, TouchDragEvent, TouchId, TouchPhase, canvas, div, hsla,
+};
+
+#[cfg(test)]
+use proptest::prelude::*;
+
+#[cfg(test)]
+use std::path::PathBuf;
+
 #[cfg(feature = "profiler")]
 use crate::DebugFrameOverlayMode;
 #[cfg(any(feature = "inspector", debug_assertions))]
@@ -851,9 +866,20 @@ pub struct Hitbox {
     pub content_mask: ContentMask<Pixels>,
     /// Flags that specify hitbox behavior.
     pub behavior: HitboxBehavior,
+    /// Disjoint regions of an inline element. `bounds` is their union.
+    pub fragments: Option<Arc<[Bounds<Pixels>]>>,
 }
 
 impl Hitbox {
+    /// Tests the actual regions, including the content mask, without occlusion checks.
+    pub fn contains(&self, point: &Point<Pixels>) -> bool {
+        self.content_mask.bounds.contains(point)
+            && self.fragments.as_ref().map_or_else(
+                || self.bounds.contains(point),
+                |fragments| fragments.iter().any(|bounds| bounds.contains(point)),
+            )
+    }
+
     /// Checks if the hitbox is currently hovered. Returns `false` during keyboard input modality
     /// so that keyboard navigation suppresses hover highlights. Except when handling
     /// `ScrollWheelEvent`, this is typically what you want when determining whether to handle mouse
@@ -1104,10 +1130,11 @@ impl Frame {
     pub(crate) fn hit_test(&self, position: Point<Pixels>) -> HitTest {
         let mut set_hover_hitbox_count = false;
         let mut hit_test = HitTest::default();
+
         for hitbox in self.hitboxes.iter().rev() {
-            let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
-            if bounds.contains(&position) {
+            if hitbox.contains(&position) {
                 hit_test.ids.push(hitbox.id);
+
                 if !set_hover_hitbox_count
                     && hitbox.behavior == HitboxBehavior::BlockMouseExceptScroll
                 {
@@ -1171,6 +1198,7 @@ pub struct Window {
     rem_size_override_stack: SmallVec<[Pixels; 8]>,
     pub(crate) viewport_size: Size<Pixels>,
     layout_engine: Option<TaffyLayoutEngine>,
+    pub(crate) current_inline_fragments: Option<Arc<[Bounds<Pixels>]>>,
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
@@ -1872,6 +1900,7 @@ impl Window {
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
+            current_inline_fragments: None,
             root: None,
             element_id_stack: SmallVec::default(),
             text_style_stack: Vec::new(),
@@ -4501,6 +4530,7 @@ impl Window {
         } else {
             GlyphRenderMode::Grayscale
         };
+
         let raster_style = self
             .text_system()
             .prepare_raster_style(color, requested_mode);
@@ -4534,6 +4564,7 @@ impl Window {
                 metadata
             }
         };
+
         if metadata.bounds.is_zero() {
             return Ok(());
         }
@@ -4545,21 +4576,26 @@ impl Window {
                 Some(rasterized) => rasterized,
                 None => text_system.rasterize_glyph(&params)?,
             };
+
             uploaded_metadata = Some(rasterized.metadata());
+
             if rasterized.bounds.is_zero() {
                 return Ok(None);
             }
+
             Ok(Some((rasterized.size, Cow::Owned(rasterized.pixels))))
         })?
         else {
             return Ok(());
         };
+
         let metadata = uploaded_metadata.unwrap_or(metadata);
         debug_assert_eq!(metadata.bounds.size, tile.bounds.size.map(Into::into));
         let bounds = Bounds {
             origin: integer_origin + metadata.bounds.origin.map(Into::into),
             size: tile.bounds.size.map(Into::into),
         };
+
         let content_mask = self.snapped_content_mask();
 
         match metadata.format {
@@ -4984,6 +5020,81 @@ impl Window {
         bounds
     }
 
+    pub(crate) fn publish_inline_content(
+        &mut self,
+        node_id: LayoutId,
+        content: crate::InlineContent,
+    ) {
+        self.layout_engine
+            .as_mut()
+            .unwrap()
+            .inline_content
+            .insert(node_id, Arc::new(content));
+    }
+
+    pub(crate) fn inline_content(&self, node_id: LayoutId) -> Option<Arc<crate::InlineContent>> {
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .inline_content
+            .get(&node_id)
+            .cloned()
+    }
+
+    pub(crate) fn layout_display_and_position(
+        &self,
+        node_id: LayoutId,
+    ) -> (crate::Display, crate::Position) {
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .display_and_position(node_id)
+    }
+
+    pub(crate) fn inline_fragments(&self, node_id: LayoutId) -> Option<Arc<[Bounds<Pixels>]>> {
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .inline_fragments
+            .get(&node_id)
+            .map(|fragments| {
+                let offset = self.pixel_snap_point(self.element_offset());
+
+                fragments
+                    .iter()
+                    .map(|bounds| Bounds::new(bounds.origin + offset, bounds.size))
+                    .collect()
+            })
+    }
+
+    pub(crate) fn place_inline(
+        &mut self,
+        node_id: LayoutId,
+        mut bounds: Bounds<Pixels>,
+        fragments: Option<Vec<Bounds<Pixels>>>,
+    ) {
+        let offset = self.pixel_snap_point(self.element_offset());
+        bounds.origin -= offset;
+
+        let scale = self.scale_factor();
+        let engine = self.layout_engine.as_mut().unwrap();
+
+        engine.place_inline(node_id, bounds, scale);
+
+        if let Some(fragments) = fragments {
+            engine.inline_fragments.insert(
+                node_id,
+                fragments
+                    .into_iter()
+                    .map(|mut right| {
+                        right.origin -= offset;
+                        right
+                    })
+                    .collect(),
+            );
+        }
+    }
+
     pub(crate) fn layout_vertical_align(&self, layout_id: LayoutId) -> crate::VerticalAlign {
         self.layout_engine
             .as_ref()
@@ -5007,7 +5118,9 @@ impl Window {
             bounds,
             content_mask,
             behavior,
+            fragments: self.current_inline_fragments.clone(),
         };
+
         self.next_frame.hitboxes.push(hitbox.clone());
         hitbox
     }
@@ -7383,29 +7496,7 @@ pub fn outline(
 
 #[cfg(test)]
 mod tests {
-    use super::{quantize_color_glyph_origin, quantize_glyph_origin};
-    use proptest::prelude::*;
-    use std::{
-        borrow::Cow,
-        cell::{Cell, RefCell},
-        path::PathBuf,
-        rc::Rc,
-        sync::Arc,
-        time::Duration,
-    };
-
-    use crate::{
-        AnyWindowHandle, AppContext as _, Bounds, ColorExt as _, Context, DevicePixels,
-        DispatchPhase, DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths,
-        FileDropEvent, FocusHandle, Font, FontId, FontMetrics, GlyphId, InlineLayout,
-        InlineLayoutRequest, InputEvent as _, InteractiveElement as _, IntoElement, LineLayout,
-        LongPressEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels,
-        PlatformTextSystem, Point, RasterizedGlyph, RasterizedGlyphFormat, Render,
-        RenderGlyphParams, RequestFrameOptions, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y,
-        ScaledPixels, Size, StatefulInteractiveElement as _, Styled, TestApp, TestAppContext,
-        TestTextSystem, TextLayoutRequest, TouchDragEvent, TouchEvent, TouchId, TouchPhase, Window,
-        WindowAppearance, WindowOptions, canvas, div, hsla, point, px, size,
-    };
+    use super::*;
 
     proptest! {
         #[test]
@@ -7467,8 +7558,8 @@ mod tests {
             PlatformTextSystem::advance(&TestTextSystem, font_id, glyph_id)
         }
 
-        fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId> {
-            PlatformTextSystem::glyph_for_char(&TestTextSystem, font_id, ch)
+        fn glyph_for_char(&self, font_id: FontId, character: char) -> Option<GlyphId> {
+            PlatformTextSystem::glyph_for_char(&TestTextSystem, font_id, character)
         }
 
         fn rasterize_glyph(&self, params: &RenderGlyphParams) -> anyhow::Result<RasterizedGlyph> {
@@ -7482,8 +7573,9 @@ mod tests {
                     RasterizedGlyphFormat::BgraColor,
                     vec![10, 20, 30, 128, 40, 50, 60, 255],
                 ),
-                id => anyhow::bail!("unexpected scripted glyph {id}"),
+                node_id => anyhow::bail!("unexpected scripted glyph {node_id}"),
             };
+
             let size = size(DevicePixels(2), DevicePixels(1));
             Ok(RasterizedGlyph {
                 bounds: Bounds {
@@ -7508,7 +7600,11 @@ mod tests {
     struct RasterFormatView;
 
     impl Render for RasterFormatView {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _context: &mut Context<Self>,
+        ) -> impl IntoElement {
             let color = hsla(0.6, 0.7, 0.4, 0.8);
             div().size_full().opacity(0.5).child(
                 canvas(

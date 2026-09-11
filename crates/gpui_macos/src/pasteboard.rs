@@ -32,6 +32,7 @@ impl Pasteboard {
     pub fn unique() -> Option<Self> {
         let inner: Option<Retained<NSPasteboard>> =
             unsafe { objc2::msg_send![objc2::class!(NSPasteboard), pasteboardWithUniqueName] };
+
         inner.map(Self::new)
     }
 
