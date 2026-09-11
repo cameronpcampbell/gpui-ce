@@ -18,6 +18,10 @@ workspace = true
 
 [features]
 default = ["wayland", "x11", "windows-manifest"]
+# Enables the opt-in custom WGPU control API on platforms that support shared
+# texture surfaces.
+custom-gpu = []
+wgpu-surfaces = []
 test-support = [
   "leak-detection",
   "collections/test-support",
@@ -25,15 +29,17 @@ test-support = [
   "x11",
   "proptest",
 ]
-bench = ["test-support", "dep:criterion", "dep:hdrhistogram"]
+bench-support = ["profiler", "dep:criterion"]
+# Preserve the published feature name while consumers migrate to `bench-support`.
+bench = ["bench-support"]
 inspector = ["gpui_macros/inspector"]
 leak-detection = ["backtrace"]
 wayland = []
-x11 = ["scap?/x11"]
-screen-capture = ["scap"]
+x11 = []
+screen-capture = ["dep:windows-capture"]
 windows-manifest = ["dep:embed-resource"]
-input-latency-histogram = ["dep:hdrhistogram"]
-profiler = []
+profiler = ["dep:hdrhistogram"]
+stacker = ["dep:stacksafe"]
 
 [lib]
 name = "gpui"
@@ -89,11 +95,12 @@ serde_json.workspace = true
 slotmap.workspace = true
 smallvec.workspace = true
 async-channel.workspace = true
-stacksafe.workspace = true
+stacksafe = { workspace = true, optional = true }
 strum.workspace = true
 sum_tree.workspace = true
-taffy = "=0.12.2"
+taffy = "=0.13.0"
 thiserror.workspace = true
+tracing.workspace = true
 gpui_util.workspace = true
 unicode-segmentation.workspace = true
 hdrhistogram = { workspace = true, optional = true }
@@ -113,32 +120,19 @@ uuid = { workspace = true, features = ["js"] }
 
 
 [target.'cfg(target_os = "macos")'.dependencies]
-block.workspace = true
-cocoa.workspace = true
-cocoa-foundation.workspace = true
-core-foundation.workspace = true
-core-foundation-sys.workspace = true
-core-graphics.workspace = true
 core-video.workspace = true
 foreign-types = "0.5"
 log.workspace = true
-media.workspace = true
-objc.workspace = true
 objc2 = { workspace = true, optional = true }
 objc2-metal = { version = "0.3", optional = true }
-mach2.workspace = true
-#TODO: replace with "objc2"
-metal.workspace = true
-
-[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies]
-scap = { workspace = true, optional = true }
-
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
   "Win32_Foundation",
   "Win32_System_Power",
 ] }
+windows-capture = { workspace = true, optional = true }
+windows-061 = { workspace = true, features = ["Win32_Graphics_Direct3D11"] }
 
 
 [dev-dependencies]
@@ -157,15 +151,23 @@ proptest = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen = { workspace = true }
-gpui_web.workspace = true
+web-sys = { version = "0.3", features = ["console"] }
 
 [build-dependencies]
 embed-resource = { version = "3.0", optional = true }
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
-bindgen = "0.71"
-cbindgen.workspace = true
+bindgen = "0.72"
 
+[package.metadata.cargo-shear]
+ignored = [
+  "bindgen",
+  "getrandom",
+  "objc2",
+  "objc2-metal",
+  "tracing",
+]
+ignored-paths = ["src/_ownership_and_data_flow.rs"]
 
 # ============================================================================
 # Learn Examples - Educational examples for learning GPUI
@@ -204,8 +206,12 @@ name = "text"
 path = "examples/learn/text.rs"
 
 [[example]]
-name = "transition"
-path = "examples/learn/transition.rs"
+name = "transitions"
+path = "examples/learn/transitions.rs"
+
+[[example]]
+name = "style_transitions"
+path = "examples/learn/style_transitions.rs"
 
 [[example]]
 name = "haptic_feedback"

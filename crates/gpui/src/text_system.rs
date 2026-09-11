@@ -10,6 +10,7 @@ use palette::Hsla;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::{
     borrow::Cow,
     fmt::{Debug, Display, Formatter},
@@ -65,10 +66,12 @@ impl TextSystem {
 
     /// Add a font's data to the text system.
     pub fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
-        self.platform_text_system.add_fonts(fonts)?;
-        // A missing font may have been cached before its data was registered.
-        self.font_ids_by_font.write().clear();
-        Ok(())
+        // Serialize registration with cache misses so an in-flight lookup cannot
+        // repopulate a stale miss after the newly registered fonts become available.
+        let mut font_ids = self.font_ids_by_font.write();
+        let result = self.platform_text_system.add_fonts(fonts);
+        font_ids.clear();
+        result
     }
 
     /// Get the FontId for the configure font family and style.
@@ -88,10 +91,12 @@ impl TextSystem {
         if let Some(font_id) = font_id {
             font_id
         } else {
+            let mut font_ids = self.font_ids_by_font.write();
+            if let Some(font_id) = font_ids.get(font) {
+                return clone_font_id_result(font_id);
+            }
             let font_id = self.platform_text_system.font_id(font);
-            self.font_ids_by_font
-                .write()
-                .insert(font.clone(), clone_font_id_result(&font_id));
+            font_ids.insert(font.clone(), clone_font_id_result(&font_id));
             font_id
         }
     }
@@ -104,6 +109,22 @@ impl TextSystem {
     pub fn resolve_font(&self, font: &Font) -> FontId {
         self.font_id(font)
             .unwrap_or_else(|error| panic!("failed to resolve font '{}': {error}", font.family))
+    }
+
+    /// Prewarm any system font caches needed to shape text.
+    ///
+    /// This may be expensive, so callers should generally invoke it on a
+    /// background executor. Missing entries are still populated on demand by
+    /// the normal shaping path.
+    pub fn prewarm_fonts(&self, fonts: &[Font]) {
+        let mut font_ids = SmallVec::<[FontId; 8]>::new();
+        for font in fonts {
+            let font_id = self.resolve_font(font);
+            if !font_ids.contains(&font_id) {
+                font_ids.push(font_id);
+            }
+        }
+        self.platform_text_system.prewarm_fonts(&font_ids);
     }
 
     /// Get the bounding box for the given font and font size.

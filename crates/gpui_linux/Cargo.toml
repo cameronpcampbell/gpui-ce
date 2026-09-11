@@ -21,6 +21,7 @@ wayland = [
   "ashpd/wayland",
 
   "calloop-wayland-source",
+  "memfd",
   "wayland-backend",
   "wayland-client",
   "wayland-cursor",
@@ -43,9 +44,7 @@ x11 = [
   "x11-clipboard",
   "filedescriptor",
   "open",
-  "scap?/x11",
 ]
-screen-capture = ["gpui/screen-capture", "scap"]
 
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
@@ -89,13 +88,14 @@ open = { version = "5.2.0", optional = true }
 xkbcommon = { version = "0.8.0", default-features = false, optional = true }
 
 # Screen capture
-scap = { workspace = true, optional = true }
 
 # Wayland
 calloop-wayland-source = { version = "0.4.1", optional = true }
+memfd = { version = "0.6.5", optional = true }
 wayland-backend = { version = "0.3.15", features = [
   "client_system",
   "dlopen",
+  "log",
 ], optional = true }
 wayland-client = { version = "0.31.11", optional = true }
 wayland-cursor = { version = "0.31.11", optional = true }
@@ -128,3 +128,6 @@ xim = { version = "0.4.0-zed", package = "zed-xim", features = [
   "x11rb-client",
 ], optional = true }
 x11-clipboard = { version = "0.9.3", optional = true }
+
+[package.metadata.cargo-shear]
+ignored = ["bitflags", "scap", "x11-clipboard"]

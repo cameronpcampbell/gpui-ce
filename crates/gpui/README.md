@@ -28,7 +28,7 @@ fn main() {
 
 GPUI uses Parley for shaping, wrapping, hit testing, and font fallback on every platform. The features on `gpui_platform` select windowing and rendering integrations. If you build for a single platform, you can trim them:
 
-- **macOS.** Rendering uses Metal and text uses the shared Parley backend. No text feature is required.
+- **macOS.** Rendering uses the shared renderer over Metal, and text uses the shared Parley backend. No text feature is required.
 
     ```toml
     gpui_platform = { version = "*" }
@@ -40,7 +40,7 @@ GPUI uses Parley for shaping, wrapping, hit testing, and font fallback on every 
     gpui_platform = { version = "*", features = ["wayland", "x11"] }
     ```
 
-- **Windows.** No features are required. Windowing uses Win32 and text uses the shared Parley backend.
+- **Windows.** No features are required. Windowing uses Win32, rendering uses DirectX, and text uses the shared Parley backend.
 
 ### Additional Topics
 

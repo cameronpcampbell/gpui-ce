@@ -889,7 +889,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         self.preferred_x = None;
         cx.notify();
 
-        window.blur();
+        window.blur(cx);
     }
 
     fn insert_enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<'app, Self>) {
@@ -1705,7 +1705,7 @@ mod tests {
         cx.write_to_clipboard(ClipboardItem::new_string(" there".to_string()));
         view.update(cx, |view, window, cx| {
             view.input.update(cx, |input, cx| {
-                input.paste(&Paste, window, cx);
+                EditableTextActionHandler::paste(input, &Paste, window, cx);
                 assert_eq!(input.as_str(), "hello there world");
                 assert_eq!(
                     input.selected_range,
@@ -2540,7 +2540,7 @@ mod tests {
             view.input.update(cx, |input, cx| {
                 without_history_grouping(input);
 
-                input.paste(&Paste, window, cx);
+                EditableTextActionHandler::paste(input, &Paste, window, cx);
                 assert_eq!(input.as_str(), "hello world");
 
                 input.undo(&Undo, window, cx);

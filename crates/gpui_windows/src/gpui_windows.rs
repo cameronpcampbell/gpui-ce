@@ -3,11 +3,8 @@
 mod clipboard;
 mod destination_list;
 mod direct_manipulation;
-#[cfg(not(feature = "wgpu"))]
 mod directx_atlas;
-#[cfg(not(feature = "wgpu"))]
 mod directx_devices;
-#[cfg(not(feature = "wgpu"))]
 mod directx_renderer;
 mod dispatcher;
 mod display;
@@ -24,11 +21,8 @@ mod wrapper;
 
 pub(crate) use clipboard::*;
 pub(crate) use destination_list::*;
-#[cfg(not(feature = "wgpu"))]
 pub(crate) use directx_atlas::*;
-#[cfg(not(feature = "wgpu"))]
 pub(crate) use directx_devices::*;
-#[cfg(not(feature = "wgpu"))]
 pub(crate) use directx_renderer::*;
 pub(crate) use dispatcher::*;
 pub(crate) use display::*;

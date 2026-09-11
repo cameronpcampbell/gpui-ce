@@ -1,4 +1,4 @@
-use super::ScrollHandle;
+use super::{ScrollHandle, StackSafe};
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, InlineBoxRequest, InlineLayout, InlineLayoutRequest,
     InlineTextMetrics, LayoutId, Pixels, Point, SharedString, Size, Style, TextLayout, TextRun,
@@ -6,7 +6,6 @@ use crate::{
 };
 use gpui_util::ResultExt;
 use smallvec::SmallVec;
-use stacksafe::StackSafe;
 use std::{
     cell::{Ref, RefCell},
     rc::Rc,
