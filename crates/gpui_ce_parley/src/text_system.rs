@@ -844,12 +844,7 @@ impl ParleyTextSystem {
 
             let last_line = result.inline_lines.last().unwrap();
             let newline_width = (result.layout.ascent + result.layout.descent) * 0.25;
-            let newline_x = last_line.origin.x
-                + if result.is_rtl {
-                    -newline_width
-                } else {
-                    last_line.size.width
-                };
+            let newline_x = last_line.origin.x + last_line.size.width;
 
             paragraphs.push(ParagraphLayout {
                 source,
