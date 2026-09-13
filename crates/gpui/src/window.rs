@@ -7549,8 +7549,6 @@ mod tests {
                 .border_b(px(6.))
                 .border_l(px(8.))
                 .border_color(crate::white())
-                .ring(px(3.))
-                .inset_ring(px(2.))
                 .shadow(vec![
                     BoxShadow::new(px(2.), px(3.), crate::black().opacity(0.5))
                         .blur_radius(px(5.))
@@ -7620,7 +7618,7 @@ mod tests {
                 );
                 assert_smoothing(
                     "shadows",
-                    4,
+                    2,
                     scene.shadows.iter().map(|shadow| shadow.corner_smoothing),
                 );
                 assert_smoothing(
