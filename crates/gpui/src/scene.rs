@@ -796,7 +796,7 @@ pub struct Quad {
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub background: Background,
-    pub border_color: SceneHsla,
+    pub border_color: Background,
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
     pub corner_smoothing: f32,
@@ -856,7 +856,7 @@ pub struct Shadow {
     pub bounds: Bounds<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub color: SceneHsla,
+    pub color: Background,
     pub element_bounds: Bounds<ScaledPixels>,
     pub element_corner_radii: Corners<ScaledPixels>,
     /// Whether this shadow is rendered inside the element instead of outside it.

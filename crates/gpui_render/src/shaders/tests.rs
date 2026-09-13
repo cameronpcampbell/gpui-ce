@@ -87,8 +87,8 @@ fn vertex_output_shape(module: &naga::Module, entry_name: &str) -> (usize, u32) 
 fn ordinary_vertex_interfaces_stay_within_compact_budgets() {
     let module = naga::front::wgsl::parse_str(&base::WGSL_SOURCE.wgsl_source().unwrap()).unwrap();
     for (entry, maximum_shape) in [
-        ("vertex_quad", (6, 21)),
-        ("vertex_shadow", (3, 9)),
+        ("vertex_quad", (8, 29)),
+        ("vertex_shadow", (5, 17)),
         ("vertex_polychrome_sprite", (3, 7)),
         ("vertex_blur_composite", (2, 6)),
     ] {
@@ -103,8 +103,8 @@ fn ordinary_vertex_interfaces_stay_within_compact_budgets() {
 #[test]
 fn scene_instance_storage_sizes_are_bounded() {
     for (name, actual, maximum) in [
-        ("Quad", std::mem::size_of::<gpui::Quad>(), 176),
-        ("Shadow", std::mem::size_of::<gpui::Shadow>(), 112),
+        ("Quad", std::mem::size_of::<gpui::Quad>(), 232),
+        ("Shadow", std::mem::size_of::<gpui::Shadow>(), 168),
         (
             "PolychromeSprite",
             std::mem::size_of::<gpui::PolychromeSprite>(),

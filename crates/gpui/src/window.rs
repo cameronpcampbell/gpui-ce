@@ -37,7 +37,7 @@ use gpui_util::post_inc;
 use gpui_util::{ResultExt, measure};
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
-use palette::{Hsla, IntoColor};
+use palette::Hsla;
 use parking_lot::RwLock;
 use raw_window_handle::{HandleError, HasDisplayHandle, HasWindowHandle};
 use refineable::Refineable;
@@ -4136,7 +4136,7 @@ impl Window {
                 bounds: self.cover_bounds(shadow_bounds),
                 content_mask,
                 corner_radii: corner_radii.scale(scale_factor),
-                color: shadow.color.opacity(opacity).into(),
+                color: shadow.color.opacity(opacity),
                 element_bounds,
                 element_corner_radii,
                 inset: false.into(),
@@ -4194,7 +4194,7 @@ impl Window {
                 bounds: self.cover_bounds(hole),
                 content_mask,
                 corner_radii: hole_corner_radii.scale(scale_factor),
-                color: shadow.color.opacity(opacity).into(),
+                color: shadow.color.opacity(opacity),
                 element_bounds,
                 element_corner_radii,
                 inset: true.into(),
@@ -4385,7 +4385,7 @@ impl Window {
             bounds: snapped_bounds,
             content_mask: self.snapped_content_mask(),
             background: quad.background.opacity(opacity),
-            border_color: quad.border_color.opacity(opacity).into(),
+            border_color: quad.border_color.opacity(opacity),
             corner_radii: quad.corner_radii.scale(self.scale_factor()),
             border_widths: snapped_border_widths,
             border_style: quad.border_style,
@@ -7344,8 +7344,8 @@ pub struct PaintQuad {
     pub background: Background,
     /// The widths of the quad's borders.
     pub border_widths: Edges<Pixels>,
-    /// The color of the quad's borders.
-    pub border_color: Hsla,
+    /// The background painted into the quad's borders.
+    pub border_color: Background,
     /// The style of the quad's borders.
     pub border_style: BorderStyle,
     /// The length of each border dash, as a multiple of the border width.
@@ -7371,10 +7371,10 @@ impl PaintQuad {
         }
     }
 
-    /// Sets the border color of the quad.
-    pub fn border_color(self, border_color: impl IntoColor<Hsla>) -> Self {
+    /// Sets the background painted into the quad's borders.
+    pub fn border_color(self, border_color: impl Into<Background>) -> Self {
         PaintQuad {
-            border_color: border_color.into_color(),
+            border_color: border_color.into(),
             ..self
         }
     }
@@ -7410,7 +7410,7 @@ pub fn quad(
     corner_radii: impl Into<Corners<Pixels>>,
     background: impl Into<Background>,
     border_widths: impl Into<Edges<Pixels>>,
-    border_color: impl IntoColor<Hsla>,
+    border_color: impl Into<Background>,
     border_style: BorderStyle,
 ) -> PaintQuad {
     PaintQuad {
@@ -7418,7 +7418,7 @@ pub fn quad(
         corner_radii: corner_radii.into(),
         background: background.into(),
         border_widths: border_widths.into(),
-        border_color: border_color.into_color(),
+        border_color: border_color.into(),
         border_style,
         border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
         border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
@@ -7432,7 +7432,7 @@ pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>
         corner_radii: (0.).into(),
         background: background.into(),
         border_widths: (0.).into(),
-        border_color: transparent_black(),
+        border_color: transparent_black().into(),
         border_style: BorderStyle::default(),
         border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
         border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
@@ -7442,7 +7442,7 @@ pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>
 /// Creates a rectangle outline with the given bounds, border color, and a 1px border width
 pub fn outline(
     bounds: impl Into<Bounds<Pixels>>,
-    border_color: impl IntoColor<Hsla>,
+    border_color: impl Into<Background>,
     border_style: BorderStyle,
 ) -> PaintQuad {
     PaintQuad {
@@ -7450,7 +7450,7 @@ pub fn outline(
         corner_radii: (0.).into(),
         background: transparent_black().into(),
         border_widths: (1.).into(),
-        border_color: border_color.into_color(),
+        border_color: border_color.into(),
         border_style,
         border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
         border_dashed_gap: crate::scene::DEFAULT_BORDER_DASHED_GAP,
@@ -7468,13 +7468,14 @@ mod tests {
     };
 
     use crate::{
-        AnyWindowHandle, AppContext as _, Bounds, BoxShadow, ColorExt as _, Context, DispatchPhase,
-        DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths, FileDropEvent,
-        FocusHandle, ImageSource, InputEvent as _, InteractiveElement as _, IntoElement,
-        LongPressEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point,
-        Render, RenderImage, RequestFrameOptions, ShaderBool, StatefulInteractiveElement as _,
-        Styled, TestAppContext, TouchDragEvent, TouchEvent, TouchId, TouchPhase, Window,
-        WindowAppearance, WindowOptions, canvas, div, img, point, px, size,
+        AnyWindowHandle, AppContext as _, Background, Bounds, BoxShadow, ColorExt as _, Context,
+        DispatchPhase, DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths,
+        FileDropEvent, FocusHandle, ImageSource, InputEvent as _, InteractiveElement as _,
+        IntoElement, LongPressEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement,
+        Pixels, Point, Render, RenderImage, RequestFrameOptions, ShaderBool,
+        StatefulInteractiveElement as _, Styled, TestAppContext, TouchDragEvent, TouchEvent,
+        TouchId, TouchPhase, Window, WindowAppearance, WindowOptions, canvas, div, hsla, img,
+        linear_color_stop, linear_gradient, point, px, size, white,
     };
     use image::{Frame as ImageFrame, ImageBuffer, Rgba};
     use smallvec::smallvec;
@@ -7484,6 +7485,38 @@ mod tests {
     impl Render for EmptyView {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div()
+        }
+    }
+
+    fn shadow_gradient() -> Background {
+        linear_gradient(
+            90.,
+            linear_color_stop(hsla(0., 1., 0.5, 0.8), 0.),
+            linear_color_stop(hsla(2. / 3., 1., 0.5, 0.6), 1.),
+        )
+    }
+
+    struct ShadowBackgroundView;
+
+    impl Render for ShadowBackgroundView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .m(px(40.))
+                .w(px(80.))
+                .h(px(60.))
+                .rounded(px(8.))
+                .bg(white())
+                .opacity(0.5)
+                .shadow(vec![
+                    BoxShadow::new(px(4.), px(2.), shadow_gradient())
+                        .blur_radius(px(6.))
+                        .spread_radius(px(2.)),
+                    BoxShadow::new(px(-3.), px(1.), hsla(0.3, 0.7, 0.4, 0.4)),
+                    BoxShadow::new(px(0.), px(2.), shadow_gradient())
+                        .blur_radius(px(4.))
+                        .spread_radius(px(3.))
+                        .inset(),
+                ])
         }
     }
 
@@ -7532,6 +7565,43 @@ mod tests {
             root.style().corner_smoothing = Some(1.5);
             root
         }
+    }
+
+    #[gpui::test]
+    fn shadow_backgrounds_survive_painting_with_geometry_and_opacity(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| ShadowBackgroundView);
+        let shadows = window
+            .update(cx, |_, window, _| {
+                window.rendered_frame.scene.shadows.clone()
+            })
+            .unwrap();
+
+        assert_eq!(shadows.len(), 3);
+        let gradient = shadow_gradient().opacity(0.5);
+        let drop_gradient = shadows
+            .iter()
+            .find(|shadow| shadow.inset == ShaderBool::Disabled && shadow.color == gradient)
+            .expect("gradient drop shadow should be painted");
+        let inset_gradient = shadows
+            .iter()
+            .find(|shadow| shadow.inset == ShaderBool::Enabled && shadow.color == gradient)
+            .expect("gradient inset shadow should be painted");
+        let solid = shadows
+            .iter()
+            .find(|shadow| shadow.color.as_solid().is_some())
+            .expect("solid shadows should remain supported");
+
+        assert_eq!(
+            solid.color.as_solid(),
+            Some(hsla(0.3, 0.7, 0.4, 0.2)),
+            "element opacity should apply to solid shadow paint"
+        );
+        assert_eq!(drop_gradient.element_bounds, inset_gradient.element_bounds);
+        assert!(drop_gradient.bounds.size.width > drop_gradient.element_bounds.size.width);
+        assert!(drop_gradient.bounds.size.height > drop_gradient.element_bounds.size.height);
+        assert!(inset_gradient.bounds.size.width < inset_gradient.element_bounds.size.width);
+        assert!(inset_gradient.bounds.size.height < inset_gradient.element_bounds.size.height);
+        assert!(drop_gradient.order < inset_gradient.order);
     }
 
     #[gpui::test]

@@ -11,7 +11,7 @@ pub mod shadow {
         pub bounds: Bounds,
         pub corner_radii: Corners,
         pub content_mask: Bounds,
-        pub color: Hsla,
+        pub color: Background,
         pub element_bounds: Bounds,
         pub element_corner_radii: Corners,
         pub inset: ShaderBool,
@@ -156,7 +156,7 @@ pub mod shadow {
     #[derive(Clone, Copy, Wgsl)]
     pub struct ShadowVertexData {
         pub position: Vec4f,
-        pub color: Vec4f,
+        pub background: PreparedBackground,
         pub shadow_id: u32,
         pub clip_distances: Vec4f,
     }
@@ -169,7 +169,7 @@ pub mod shadow {
         let vertex = rectangle_vertex(vertex_id, shadow_geometry(shadow));
         ShadowVertexData {
             position: vertex.clip_position,
-            color: hsla_to_rgba(shadow.color),
+            background: prepare_background(shadow.color),
             shadow_id: instance_id,
             clip_distances: clip_distances(vertex.viewport_position, shadow.content_mask),
         }
@@ -181,11 +181,17 @@ pub mod shadow {
         pub position: Vec4f,
         #[location(0)]
         #[interpolate(flat)]
-        pub color: Vec4f,
+        pub background_solid: Vec4f,
         #[location(1)]
         #[interpolate(flat)]
-        pub shadow_id: u32,
+        pub background_color0: Vec4f,
+        #[location(2)]
+        #[interpolate(flat)]
+        pub background_color1: Vec4f,
         #[location(3)]
+        #[interpolate(flat)]
+        pub shadow_id: u32,
+        #[location(4)]
         pub clip_distances: Vec4f,
     }
 
@@ -198,7 +204,9 @@ pub mod shadow {
         let vertex = prepare_shadow_vertex(vertex_id, instance_id, shadow);
         ShadowVarying {
             position: vertex.position,
-            color: vertex.color,
+            background_solid: vertex.background.solid,
+            background_color0: vertex.background.color0,
+            background_color1: vertex.background.color1,
             shadow_id: vertex.shadow_id,
             clip_distances: vertex.clip_distances,
         }
@@ -210,7 +218,22 @@ pub mod shadow {
             return transparent();
         }
         let shadow = get!(SHADOWS)[input.shadow_id as usize];
-        blend_color(input.color, shadow_coverage(shadow, input.position.xy()))
+        // Drop gradients span the shadow rect; inset gradients stay anchored to the element.
+        let mut paint_bounds = shadow.bounds;
+        if is_enabled(shadow.inset) {
+            paint_bounds = shadow.element_bounds;
+        }
+        let color = background_color(
+            shadow.color,
+            input.position.xy(),
+            paint_bounds,
+            PreparedBackground {
+                solid: input.background_solid,
+                color0: input.background_color0,
+                color1: input.background_color1,
+            },
+        );
+        blend_color(color, shadow_coverage(shadow, input.position.xy()))
     }
 
     #[derive(Wgsl)]
@@ -219,25 +242,31 @@ pub mod shadow {
         pub position: Vec4f,
         #[location(0)]
         #[interpolate(flat)]
-        pub color: Vec4f,
+        pub background_solid: Vec4f,
         #[location(1)]
         #[interpolate(flat)]
-        pub shadow_id: u32,
-        #[location(3)]
-        pub clip_distances: Vec4f,
-        #[location(4)]
+        pub background_color0: Vec4f,
+        #[location(2)]
         #[interpolate(flat)]
-        pub horizontal_corner_reaches: Vec4f,
+        pub background_color1: Vec4f,
+        #[location(3)]
+        #[interpolate(flat)]
+        pub shadow_id: u32,
+        #[location(4)]
+        pub clip_distances: Vec4f,
         #[location(5)]
         #[interpolate(flat)]
-        pub vertical_corner_reaches: Vec4f,
+        pub horizontal_corner_reaches: Vec4f,
         #[location(6)]
         #[interpolate(flat)]
-        pub element_horizontal_corner_reaches: Vec4f,
+        pub vertical_corner_reaches: Vec4f,
         #[location(7)]
         #[interpolate(flat)]
-        pub element_vertical_corner_reaches: Vec4f,
+        pub element_horizontal_corner_reaches: Vec4f,
         #[location(8)]
+        #[interpolate(flat)]
+        pub element_vertical_corner_reaches: Vec4f,
+        #[location(9)]
         #[interpolate(flat)]
         pub smoothing_factors: Vec4f,
     }
@@ -264,7 +293,9 @@ pub mod shadow {
 
         SmoothedShadowVarying {
             position: vertex.position,
-            color: vertex.color,
+            background_solid: vertex.background.solid,
+            background_color0: vertex.background.color0,
+            background_color1: vertex.background.color1,
             shadow_id: vertex.shadow_id,
             clip_distances: vertex.clip_distances,
             horizontal_corner_reaches: prepared.horizontal_reaches,
@@ -297,6 +328,20 @@ pub mod shadow {
                 superellipse_power: 0.0,
             },
         );
-        blend_color(input.color, coverage)
+        let mut paint_bounds = shadow.bounds;
+        if is_enabled(shadow.inset) {
+            paint_bounds = shadow.element_bounds;
+        }
+        let color = background_color(
+            shadow.color,
+            input.position.xy(),
+            paint_bounds,
+            PreparedBackground {
+                solid: input.background_solid,
+                color0: input.background_color0,
+                color1: input.background_color1,
+            },
+        );
+        blend_color(color, coverage)
     }
 }

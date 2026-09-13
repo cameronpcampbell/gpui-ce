@@ -92,7 +92,7 @@ impl gpui::View for TextArea {
             .border_color(border)
             .when(is_focused, |this| {
                 this.shadow(vec![BoxShadow {
-                    color: hsla(220. / 360., 0.8, 0.5, 0.3),
+                    color: hsla(220. / 360., 0.8, 0.5, 0.3).into(),
                     offset: point(px(0.), px(0.)),
                     blur_radius: px(4.),
                     spread_radius: px(1.),
