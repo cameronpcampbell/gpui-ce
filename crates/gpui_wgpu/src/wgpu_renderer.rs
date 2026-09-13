@@ -435,8 +435,8 @@ mod tests {
         const LEGACY: &[u8] = &[
             255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 0, 255, 38, 110, 217, 255, 255, 0, 0, 255, 255,
             0, 0, 255, 38, 110, 217, 255, 0, 0, 0, 255, 10, 34, 4, 255, 57, 196, 22, 255, 193, 114,
-            151, 255, 223, 154, 105, 255, 57, 196, 22, 255, 10, 34, 4, 255, 166, 61, 182, 255, 192,
-            113, 151, 255,
+            152, 255, 223, 155, 105, 255, 57, 196, 22, 255, 10, 34, 4, 255, 165, 60, 182, 255, 193,
+            114, 151, 255,
         ];
         let bounds = |x, y| Bounds {
             origin: Point {
@@ -503,6 +503,88 @@ mod tests {
             );
         }
         assert_eq!(actual.as_raw().len(), LEGACY.len());
+        Ok(())
+    }
+
+    #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+    #[test]
+    fn quad_border_backgrounds_use_the_fill_coordinate_space() -> anyhow::Result<()> {
+        let context = WgpuContext::new_headless(None)?;
+        let size = Size {
+            width: DevicePixels(12),
+            height: DevicePixels(12),
+        };
+        let bounds = Bounds {
+            origin: Point {
+                x: ScaledPixels(0.0),
+                y: ScaledPixels(0.0),
+            },
+            size: Size {
+                width: ScaledPixels(12.0),
+                height: ScaledPixels(12.0),
+            },
+        };
+        let render = |quad| -> anyhow::Result<image::RgbaImage> {
+            let mut scene = Scene::default();
+            scene.insert_primitive(quad);
+            scene.finish();
+            let mut renderer = WgpuRenderer::new_headless(&context, size)?;
+            renderer.render_to_image(&scene)
+        };
+        let backgrounds = [
+            gpui::solid_background(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
+            gpui::checkerboard(gpui::hsla(0.6, 0.7, 0.5, 1.0), 2.0),
+            gpui::pattern_slash(gpui::hsla(0.3, 0.8, 0.5, 1.0), 2.0, 2.0),
+            gpui::linear_gradient(
+                90.0,
+                gpui::linear_color_stop(gpui::hsla(0.8, 0.9, 0.4, 1.0), 0.0),
+                gpui::linear_color_stop(gpui::hsla(0.1, 0.8, 0.6, 1.0), 1.0),
+            ),
+        ];
+        let border_samples = [
+            (1, 1),
+            (6, 1),
+            (10, 1),
+            (1, 6),
+            (10, 6),
+            (1, 10),
+            (6, 10),
+            (10, 10),
+        ];
+
+        for background in backgrounds {
+            let filled = render(Quad {
+                bounds,
+                content_mask: gpui::ContentMask { bounds },
+                background,
+                ..Default::default()
+            })?;
+            let bordered = render(Quad {
+                bounds,
+                content_mask: gpui::ContentMask { bounds },
+                border_color: background,
+                border_widths: gpui::Edges::all(ScaledPixels(4.0)),
+                ..Default::default()
+            })?;
+
+            for (x, y) in border_samples {
+                let border_pixel = bordered.get_pixel(x, y).0;
+                let fill_pixel = filled.get_pixel(x, y).0;
+                for (channel, (border, fill)) in
+                    border_pixel.iter().zip(fill_pixel.iter()).enumerate()
+                {
+                    assert!(
+                        border.abs_diff(*fill) <= 1,
+                        "border background must sample like a fill at ({x}, {y}), channel {channel}, for {background:?}: got {border_pixel:?}, expected {fill_pixel:?}"
+                    );
+                }
+            }
+            assert_eq!(
+                bordered.get_pixel(6, 6).0,
+                [0, 0, 0, 255],
+                "border background must not paint the quad interior for {background:?}"
+            );
+        }
         Ok(())
     }
 

@@ -10,7 +10,7 @@ pub mod quad {
         pub bounds: Bounds,
         pub content_mask: Bounds,
         pub background: Background,
-        pub border_color: Hsla,
+        pub border_color: Background,
         pub corner_radii: Corners,
         pub border_widths: Edges,
     }
@@ -316,7 +316,7 @@ pub mod quad {
         pub position: Vec4f,
         #[location(0)]
         #[interpolate(flat)]
-        pub border_color: Vec4f,
+        pub border_solid: Vec4f,
         #[location(1)]
         #[interpolate(flat)]
         pub quad_id: u32,
@@ -331,6 +331,12 @@ pub mod quad {
         #[location(5)]
         #[interpolate(flat)]
         pub background_color1: Vec4f,
+        #[location(6)]
+        #[interpolate(flat)]
+        pub border_color0: Vec4f,
+        #[location(7)]
+        #[interpolate(flat)]
+        pub border_color1: Vec4f,
     }
 
     #[vertex]
@@ -341,14 +347,17 @@ pub mod quad {
         let quad = get!(QUADS)[instance_id as usize];
         let vertex = rectangle_vertex(vertex_id, quad.bounds);
         let gradient = prepare_background(quad.background);
+        let border = prepare_background(quad.border_color);
         QuadVarying {
             position: vertex.clip_position,
-            border_color: hsla_to_rgba(quad.border_color),
+            border_solid: border.solid,
             quad_id: instance_id,
             clip_distances: clip_distances(vertex.viewport_position, quad.content_mask),
             background_solid: gradient.solid,
             background_color0: gradient.color0,
             background_color1: gradient.color1,
+            border_color0: border.color0,
+            border_color1: border.color1,
         }
     }
 
@@ -358,7 +367,7 @@ pub mod quad {
             return transparent();
         }
         let quad = get!(QUADS)[input.quad_id as usize];
-        let background_color = background_color(
+        let fill_color = background_color(
             quad.background,
             input.position.xy(),
             quad.bounds,
@@ -369,25 +378,34 @@ pub mod quad {
             },
         );
         if Edges::is_zero(quad.border_widths) && Corners::is_zero(quad.corner_radii) {
-            return blend_color(background_color, 1.0);
+            return blend_color(fill_color, 1.0);
         }
 
         let geometry = quad_geometry(quad, input.position.xy());
         if is_unaffected_background(geometry) {
-            return blend_color(background_color, 1.0);
+            return blend_color(fill_color, 1.0);
         }
 
         let distances = border_distances(geometry);
-        let mut color = background_color;
+        let mut color = fill_color;
         if max(distances.inner, distances.outer) < PIXEL_ANTIALIAS_RADIUS {
-            let mut border_color = input.border_color;
+            let mut border_color = background_color(
+                quad.border_color,
+                input.position.xy(),
+                quad.bounds,
+                PreparedBackground {
+                    solid: input.border_solid,
+                    color0: input.border_color0,
+                    color1: input.border_color1,
+                },
+            );
             if quad.border_style == BorderStyle::Dashed {
                 border_color.w *= dashed_border_alpha(quad, geometry);
             }
-            let blended_border = over(background_color, border_color);
+            let blended_border = over(fill_color, border_color);
             let factor = antialiased_coverage(distances.inner);
             color = mix(
-                background_color,
+                fill_color,
                 blended_border,
                 vec4f(factor, factor, factor, factor),
             );

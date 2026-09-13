@@ -1,7 +1,7 @@
 use crate::{
-    AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ColorExt, ContentMask,
-    Corners, CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement,
-    Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length, Pixels, Point,
+    AbsoluteLength, App, Background, BorderStyle, Bounds, ColorExt, ContentMask, Corners,
+    CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
+    FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Length, Pixels, Point,
     PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun, Window,
     black, phi, point, px, quad, rems, size,
 };
@@ -313,8 +313,8 @@ pub struct Style {
     /// The fill color of this element
     pub background: Option<Fill>,
 
-    /// The border color of this element
-    pub border_color: Option<Hsla>,
+    /// The background painted into the border of this element
+    pub border_color: Option<Background>,
 
     /// The border style of this element
     pub border_style: BorderStyle,
@@ -769,7 +769,10 @@ impl Style {
                 let mut min = bounds.origin;
                 let mut max = bounds.bottom_right();
 
-                if self.border_color.is_some_and(|color| color.alpha > 0.) {
+                if self
+                    .border_color
+                    .is_some_and(|background| !background.is_transparent())
+                {
                     min.x += self.border_widths.left.to_pixels(rem_size);
                     max.x -= self.border_widths.right.to_pixels(rem_size);
                     min.y += self.border_widths.top.to_pixels(rem_size);
@@ -844,27 +847,13 @@ impl Style {
         let paint_box = |window: &mut Window, cx: &mut App| {
             let background_color = self.background.as_ref().and_then(Fill::color);
             if background_color.is_some_and(|color| !color.is_transparent()) {
-                let mut border_color = match background_color {
-                    Some(color) => match color.tag {
-                        BackgroundTag::Solid
-                        | BackgroundTag::PatternSlash
-                        | BackgroundTag::Checkerboard => color.solid.into(),
-
-                        BackgroundTag::LinearGradient => color
-                            .colors
-                            .first()
-                            .map(|stop| stop.color.into())
-                            .unwrap_or_default(),
-                    },
-                    None => Hsla::default(),
-                };
-                border_color.alpha = 0.;
+                let background_color = background_color.unwrap_or_default();
                 window.paint_quad(quad(
                     bounds,
                     corner_radii,
-                    background_color.unwrap_or_default(),
+                    background_color,
                     Edges::default(),
-                    border_color,
+                    background_color.opacity(0.),
                     self.border_style,
                 ));
             }
@@ -878,14 +867,13 @@ impl Style {
 
             if self.is_border_visible() {
                 let border_widths = self.border_widths.to_pixels(rem_size);
-                let mut background = self.border_color.unwrap_or_default();
-                background.alpha = 0.;
+                let border_color = self.border_color.unwrap_or_default();
                 window.paint_quad(quad(
                     bounds,
                     corner_radii,
-                    background,
+                    border_color.opacity(0.),
                     border_widths,
-                    self.border_color.unwrap_or_default(),
+                    border_color,
                     self.border_style,
                 ));
             }
@@ -906,7 +894,8 @@ impl Style {
     }
 
     fn is_border_visible(&self) -> bool {
-        self.border_color.is_some_and(|color| color.alpha > 0.)
+        self.border_color
+            .is_some_and(|background| !background.is_transparent())
             && self.border_widths.any(|length| !length.is_zero())
     }
 }
@@ -1472,6 +1461,20 @@ mod tests {
             linear_color_stop(red(), 0.),
             linear_color_stop(blue(), 1.),
         )
+    }
+
+    #[test]
+    fn border_color_accepts_backgrounds_and_solid_colors() {
+        let gradient = linear_gradient(
+            90.0,
+            linear_color_stop(red(), 0.0),
+            linear_color_stop(blue(), 1.0),
+        );
+        let gradient_style = StyleRefinement::default().border_color(gradient);
+        assert_eq!(gradient_style.border_color, Some(gradient));
+
+        let solid_style = StyleRefinement::default().border_color(red());
+        assert_eq!(solid_style.border_color, Some(red().into()));
     }
 
     #[test]
