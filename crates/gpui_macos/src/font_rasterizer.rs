@@ -1,15 +1,20 @@
 use core_foundation_sys::{
-    preferences::CFPreferencesCopyAppValue, preferences::kCFPreferencesCurrentApplication,
+    array::CFArrayRef, data::CFDataRef, preferences::CFPreferencesCopyAppValue,
+    preferences::kCFPreferencesCurrentApplication,
 };
 
 #[cfg(test)]
-use gpui::{GlyphId, PlatformTextSystem, font as gpui_font, px, rgba};
+use gpui::{FontId, GlyphId, PlatformTextSystem, font as gpui_font, px, rgba};
 
 #[cfg(test)]
-use gpui_parley::{ParleyTextSystem, SystemFonts};
+use gpui_parley::{FontSynthesis, ParleyTextSystem, SystemFonts};
+
+#[cfg(test)]
+use std::borrow::Cow;
 
 use anyhow::{Context as _, Result, anyhow, ensure};
 use core_foundation::{
+    array::CFArray,
     base::{CFType, TCFType},
     data::CFData,
     dictionary::CFDictionary,
@@ -35,13 +40,18 @@ use gpui::{
 use gpui_parley::{GlyphRasterizer, RasterFace};
 use objc2::rc::autoreleasepool;
 use std::{
-    borrow::Cow,
     collections::HashMap,
     f64::consts::PI,
     sync::{Arc, OnceLock},
 };
 
 const TTC_TAG: &[u8; 4] = b"ttcf";
+const CHECKSUM_MAGIC: u32 = 0xb1b0_afba;
+
+#[link(name = "CoreText", kind = "framework")]
+unsafe extern "C" {
+    fn CTFontManagerCreateFontDescriptorsFromData(data: CFDataRef) -> CFArrayRef;
+}
 
 #[allow(non_upper_case_globals)]
 const kCGImageAlphaOnly: u32 = 7;
@@ -49,7 +59,7 @@ const kCGImageAlphaOnly: u32 = 7;
 /// CoreText and CoreGraphics rasterization for the exact face selected by Parley.
 pub(crate) struct MacGlyphRasterizer {
     faces: HashMap<gpui::FontId, NativeFace>,
-    sources: HashMap<(u64, u32), Arc<SendCFData>>,
+    sources: HashMap<u64, Arc<SendCFData>>,
 }
 
 struct NativeFace {
@@ -84,25 +94,24 @@ impl MacGlyphRasterizer {
             return Ok(&self.faces[&face.font_id]);
         }
 
-        let source_key = (face.source_id, face.face_index);
-        let source = if let Some(source) = self.sources.get(&source_key) {
+        let source = if let Some(source) = self.sources.get(&face.source_id) {
             source.clone()
         } else {
-            let sfnt = sfnt_for_face(face.data, face.face_index)?;
-            let source = Arc::new(SendCFData {
-                data: CFData::from_buffer(sfnt.as_ref()),
-            });
-            self.sources.insert(source_key, source.clone());
-
-            source
+            source_from_bytes(face.data.to_vec())
         };
 
-        let native = autoreleasepool(|_| NativeFace::new(face, source)).with_context(|| {
-            format!(
-                "CoreText could not create FontId {:?}, face index {}, variations {:?}",
-                face.font_id, face.face_index, face.variations
-            )
-        })?;
+        let native =
+            autoreleasepool(|_| NativeFace::new(face, source.clone())).with_context(|| {
+                format!(
+                    "CoreText could not create FontId {:?}, face index {}, variations {:?}",
+                    face.font_id, face.face_index, face.variations
+                )
+            })?;
+        if Arc::ptr_eq(&native._source_data, &source) {
+            self.sources
+                .entry(face.source_id)
+                .or_insert_with(|| source.clone());
+        }
         self.faces.insert(face.font_id, native);
         Ok(&self.faces[&face.font_id])
     }
@@ -277,10 +286,37 @@ impl GlyphRasterizer for MacGlyphRasterizer {
 }
 
 impl NativeFace {
-    fn new(face: &RasterFace<'_>, source_data: Arc<SendCFData>) -> Result<Self> {
-        let mut descriptor =
-            core_text::font_manager::create_font_descriptor_with_data(source_data.data.clone())
-                .map_err(|()| anyhow!("CoreText rejected the selected font face"))?;
+    fn new(face: &RasterFace<'_>, shared_source: Arc<SendCFData>) -> Result<Self> {
+        let (mut descriptor, source_data) = if face.data.get(..4) == Some(TTC_TAG) {
+            match collection_descriptor(&shared_source.data, face.data, face.face_index) {
+                Ok(descriptor) => (descriptor, shared_source),
+                Err(error) => {
+                    log::debug!(
+                        "CoreText could not select collection face {}; using a compact SFNT: {error:#}",
+                        face.face_index
+                    );
+
+                    let source =
+                        source_from_bytes(compact_sfnt_for_face(face.data, face.face_index)?);
+                    let descriptor = core_text::font_manager::create_font_descriptor_with_data(
+                        source.data.clone(),
+                    )
+                    .map_err(|()| anyhow!("CoreText rejected the extracted font face"))?;
+                    (descriptor, source)
+                }
+            }
+        } else {
+            ensure!(
+                face.face_index == 0,
+                "single font contains only face 0, requested {}",
+                face.face_index
+            );
+            let descriptor = core_text::font_manager::create_font_descriptor_with_data(
+                shared_source.data.clone(),
+            )
+            .map_err(|()| anyhow!("CoreText rejected the selected font face"))?;
+            (descriptor, shared_source)
+        };
 
         if !face.variations.is_empty() {
             let variations = face
@@ -315,27 +351,81 @@ impl NativeFace {
     }
 }
 
-fn sfnt_for_face(data: &[u8], face_index: u32) -> Result<Cow<'_, [u8]>> {
-    if data.get(..4) != Some(TTC_TAG) {
-        ensure!(
-            face_index == 0,
-            "single font contains only face 0, requested {face_index}"
-        );
+fn source_from_bytes(bytes: Vec<u8>) -> Arc<SendCFData> {
+    Arc::new(SendCFData {
+        data: CFData::from_arc(Arc::new(bytes)),
+    })
+}
 
-        return Ok(Cow::Borrowed(data));
+fn collection_descriptor(
+    source: &CFData,
+    data: &[u8],
+    face_index: u32,
+) -> Result<CTFontDescriptor> {
+    let descriptors_ref =
+        unsafe { CTFontManagerCreateFontDescriptorsFromData(source.as_concrete_TypeRef()) };
+    ensure!(
+        !descriptors_ref.is_null(),
+        "CoreText rejected the font collection"
+    );
+    let descriptors =
+        unsafe { CFArray::<CTFontDescriptor>::wrap_under_create_rule(descriptors_ref) };
+    let face_offset = collection_face_offset(data, face_index)?;
+    for descriptor in &descriptors {
+        if descriptor_matches_face(&descriptor, data, face_offset)? {
+            return Ok(descriptor.clone());
+        }
     }
 
-    let face_count = read_u32(data, 8).context("truncated font collection header")?;
-    ensure!(
-        face_index < face_count,
-        "collection contains {face_count} faces, requested {face_index}"
-    );
+    Err(anyhow!(
+        "none of CoreText's {} descriptors matched physical face {face_index}",
+        descriptors.len()
+    ))
+}
 
-    let face_offset_position = 12usize
-        .checked_add(face_index as usize * 4)
-        .context("font collection face offset overflow")?;
-    let face_offset = read_u32(data, face_offset_position)
-        .context("truncated font collection face offsets")? as usize;
+fn descriptor_matches_face(
+    descriptor: &CTFontDescriptor,
+    data: &[u8],
+    face_offset: usize,
+) -> Result<bool> {
+    let native_font = font::new_from_descriptor(descriptor, 0.0);
+
+    // CoreText expands variable faces into named-instance descriptors, so descriptor array
+    // positions are not collection face indexes. These raw tables identify the physical face.
+    for tag in [b"name", b"head", b"maxp"] {
+        let Some(expected) = face_table(data, face_offset, tag)? else {
+            return Ok(false);
+        };
+        let Some(actual) = native_font.get_font_table(u32::from_be_bytes(*tag)) else {
+            return Ok(false);
+        };
+
+        if !identity_table_matches(tag, actual.bytes(), expected) {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+fn identity_table_matches(tag: &[u8; 4], actual: &[u8], expected: &[u8]) -> bool {
+    if tag != b"head" {
+        return actual == expected;
+    }
+
+    // CoreText clears checkSumAdjustment when exposing a face from a collection.
+    actual.len() >= 12
+        && actual.len() == expected.len()
+        && actual[..8] == expected[..8]
+        && actual[12..] == expected[12..]
+}
+
+fn compact_sfnt_for_face(data: &[u8], face_index: u32) -> Result<Vec<u8>> {
+    ensure!(
+        data.get(..4) == Some(TTC_TAG),
+        "compact extraction requires a font collection"
+    );
+    let face_offset = collection_face_offset(data, face_index)?;
     let table_count =
         read_u16(data, face_offset + 4).context("truncated selected SFNT header")? as usize;
     let directory_len = 12usize
@@ -345,19 +435,121 @@ fn sfnt_for_face(data: &[u8], face_index: u32) -> Result<Cow<'_, [u8]>> {
                 .context("selected SFNT table count overflow")?,
         )
         .context("selected SFNT directory length overflow")?;
-    let directory_end = face_offset
-        .checked_add(directory_len)
-        .context("selected SFNT directory offset overflow")?;
     let directory = data
-        .get(face_offset..directory_end)
+        .get(
+            face_offset
+                ..face_offset
+                    .checked_add(directory_len)
+                    .context("selected SFNT directory offset overflow")?,
+        )
         .context("truncated selected SFNT directory")?;
+    let mut sfnt = directory.to_vec();
+    let mut head_offset = None;
 
-    // Collection table offsets refer to the complete file. Keep that backing data and replace
-    // only the collection header with the selected face's SFNT directory.
-    let mut sfnt = data.to_vec();
-    sfnt[..directory_len].copy_from_slice(directory);
+    for table_idx in 0..table_count {
+        let record_position = 12 + table_idx * 16;
+        let tag: [u8; 4] = directory[record_position..record_position + 4]
+            .try_into()
+            .expect("validated table record width");
+        let source_offset = read_u32(directory, record_position + 8)
+            .context("truncated selected SFNT table offset")? as usize;
+        let table_len = read_u32(directory, record_position + 12)
+            .context("truncated selected SFNT table length")? as usize;
+        let table = data
+            .get(
+                source_offset
+                    ..source_offset
+                        .checked_add(table_len)
+                        .context("selected SFNT table end overflow")?,
+            )
+            .context("truncated selected SFNT table")?;
 
-    Ok(Cow::Owned(sfnt))
+        pad_to_u32(&mut sfnt);
+        let target_offset = sfnt.len();
+        let target_offset_u32 = u32::try_from(target_offset)
+            .context("extracted SFNT exceeds the OpenType offset range")?;
+        sfnt[record_position + 8..record_position + 12]
+            .copy_from_slice(&target_offset_u32.to_be_bytes());
+        sfnt.extend_from_slice(table);
+
+        if &tag == b"head" {
+            ensure!(table_len >= 12, "truncated selected SFNT head table");
+            head_offset = Some(target_offset);
+        }
+    }
+
+    pad_to_u32(&mut sfnt);
+
+    let head_offset = head_offset.context("selected SFNT has no head table")?;
+    sfnt[head_offset + 8..head_offset + 12].fill(0);
+    let adjustment = CHECKSUM_MAGIC.wrapping_sub(sfnt_checksum(&sfnt));
+    sfnt[head_offset + 8..head_offset + 12].copy_from_slice(&adjustment.to_be_bytes());
+
+    Ok(sfnt)
+}
+
+fn collection_face_offset(data: &[u8], face_index: u32) -> Result<usize> {
+    let face_count = read_u32(data, 8).context("truncated font collection header")?;
+    ensure!(
+        face_index < face_count,
+        "collection contains {face_count} faces, requested {face_index}"
+    );
+
+    let offset_position = 12usize
+        .checked_add(face_index as usize * 4)
+        .context("font collection face offset overflow")?;
+
+    Ok(read_u32(data, offset_position).context("truncated font collection face offsets")? as usize)
+}
+
+fn face_table<'a>(
+    data: &'a [u8],
+    face_offset: usize,
+    target_tag: &[u8; 4],
+) -> Result<Option<&'a [u8]>> {
+    let table_count =
+        read_u16(data, face_offset + 4).context("truncated selected SFNT header")? as usize;
+
+    for table_idx in 0..table_count {
+        let record_position = face_offset
+            .checked_add(12 + table_idx * 16)
+            .context("selected SFNT table record overflow")?;
+        let tag = data
+            .get(record_position..record_position + 4)
+            .context("truncated selected SFNT table tag")?;
+
+        if tag != target_tag {
+            continue;
+        }
+
+        let table_offset = read_u32(data, record_position + 8)
+            .context("truncated selected SFNT table offset")? as usize;
+        let table_len = read_u32(data, record_position + 12)
+            .context("truncated selected SFNT table length")? as usize;
+        let table_end = table_offset
+            .checked_add(table_len)
+            .context("selected SFNT table end overflow")?;
+
+        return Ok(Some(
+            data.get(table_offset..table_end)
+                .context("truncated selected SFNT table")?,
+        ));
+    }
+
+    Ok(None)
+}
+
+fn pad_to_u32(data: &mut Vec<u8>) {
+    let padding = (4 - data.len() % 4) % 4;
+    data.resize(data.len() + padding, 0);
+}
+
+fn sfnt_checksum(data: &[u8]) -> u32 {
+    data.chunks_exact(4).fold(0, |checksum, bytes| {
+        checksum.wrapping_add(u32::from_be_bytes(
+            bytes.try_into().expect("four-byte checksum chunk"),
+        ))
+    })
 }
 
 fn read_u16(data: &[u8], offset: usize) -> Option<u16> {
@@ -453,15 +645,16 @@ mod tests {
 
     const IBM_PLEX: &[u8] =
         include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf");
+    const IBM_PLEX_ITALIC: &[u8] =
+        include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Italic.ttf");
     const SOURCE_SERIF: &[u8] =
         include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
 
     #[test]
-    fn collection_face_selection_uses_the_physical_face_index() {
-        let collection = test_collection(&[SOURCE_SERIF, IBM_PLEX]);
-        let sfnt = sfnt_for_face(&collection, 1).unwrap();
-        let data = CFData::from_buffer(sfnt.as_ref());
-        let descriptor = core_text::font_manager::create_font_descriptor_with_data(data).unwrap();
+    fn collection_faces_are_selected_and_compacted_by_physical_index() {
+        let collection = test_collection(&[SOURCE_SERIF, IBM_PLEX, IBM_PLEX_ITALIC]);
+        let source = source_from_bytes(collection.clone());
+        let descriptor = collection_descriptor(&source.data, &collection, 1).unwrap();
         let font = font::new_from_descriptor(&descriptor, 16.0);
 
         assert_eq!(font.postscript_name(), "IBMPlexSans");
@@ -473,6 +666,36 @@ mod tests {
 
         assert!(mapped);
         assert_ne!(glyph[0], 0);
+
+        let sfnt = compact_sfnt_for_face(&collection, 1).unwrap();
+        assert!(sfnt.len() < collection.len());
+        assert_eq!(sfnt_checksum(&sfnt), CHECKSUM_MAGIC);
+
+        let data = CFData::from_arc(Arc::new(sfnt));
+        let descriptor = core_text::font_manager::create_font_descriptor_with_data(data).unwrap();
+        let font = font::new_from_descriptor(&descriptor, 16.0);
+        assert_eq!(font.postscript_name(), "IBMPlexSans");
+
+        let mut rasterizer = MacGlyphRasterizer::new();
+        for (font_id, face_index) in [(FontId(1), 1), (FontId(2), 2)] {
+            rasterizer
+                .native_face(&RasterFace {
+                    font_id,
+                    source_id: 1,
+                    data: &collection,
+                    face_index,
+                    variations: &[],
+                    synthesis: FontSynthesis::default(),
+                    has_color_glyphs: false,
+                })
+                .unwrap();
+        }
+
+        assert_eq!(rasterizer.sources.len(), 1);
+        assert!(Arc::ptr_eq(
+            &rasterizer.faces[&FontId(1)]._source_data,
+            &rasterizer.faces[&FontId(2)]._source_data,
+        ));
     }
 
     fn test_collection(faces: &[&[u8]]) -> Vec<u8> {

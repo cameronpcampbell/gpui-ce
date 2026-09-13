@@ -1,5 +1,5 @@
 #[cfg(test)]
-use gpui::{GlyphId, PlatformTextSystem, font, rgba};
+use gpui::{FontId, GlyphId, PlatformTextSystem, font, rgba};
 
 #[cfg(test)]
 use gpui_parley::{ParleyTextSystem, SystemFonts};
@@ -152,6 +152,8 @@ pub(crate) struct DirectWriteGlyphRasterizer {
     color_rendering: ColorRenderingParams,
     compositor: Option<Arc<GlyphCompositor>>,
     system_subpixel_rendering: bool,
+    #[cfg(test)]
+    fail_next_colr: bool,
 }
 
 struct NativeFace {
@@ -214,16 +216,21 @@ impl DirectWriteGlyphRasterizer {
             color_rendering,
             compositor,
             system_subpixel_rendering: get_system_subpixel_rendering(),
+            #[cfg(test)]
+            fail_next_colr: false,
         })
     }
 
     fn native_face(&mut self, face: &RasterFace<'_>) -> Result<IDWriteFontFace3> {
-        if !face.variations.is_empty() && self.variable_factory.is_none() {
-            return Err(NativeRasterUnsupported::VariableAxesOnLegacyDirectWrite.into());
-        }
-
         if let Some(native) = self.faces.get(&face.font_id) {
             return Ok(native.face.clone());
+        }
+
+        let use_default_axes = face.variations.is_empty()
+            || (self.variable_factory.is_none() && face.has_default_variations()?);
+
+        if !use_default_axes && self.variable_factory.is_none() {
+            return Err(NativeRasterUnsupported::VariableAxesOnLegacyDirectWrite.into());
         }
 
         let source = match self.sources.entry(face.source_id) {
@@ -238,6 +245,7 @@ impl DirectWriteGlyphRasterizer {
             self.variable_factory.as_ref(),
             &source.file,
             face,
+            use_default_axes,
         )
         .with_context(|| {
             format!(
@@ -536,6 +544,59 @@ impl DirectWriteGlyphRasterizer {
         })
     }
 
+    fn rasterize_colr_or_monochrome(
+        &mut self,
+        font_face: &IDWriteFontFace3,
+        params: &RenderGlyphParams,
+    ) -> Result<RasterizedGlyph> {
+        match self.try_rasterize_colr(font_face, params) {
+            Ok(glyph) => Ok(glyph),
+            Err(error) => {
+                log::warn!(
+                    "DirectWrite color glyph rasterization failed; using a black silhouette: {error:#}"
+                );
+
+                self.rasterize_monochrome_color(
+                    font_face,
+                    params,
+                    Rgba8 {
+                        red: 0,
+                        green: 0,
+                        blue: 0,
+                        alpha: 255,
+                    },
+                )
+            }
+        }
+    }
+
+    fn try_rasterize_colr(
+        &mut self,
+        font_face: &IDWriteFontFace3,
+        params: &RenderGlyphParams,
+    ) -> Result<RasterizedGlyph> {
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_next_colr) {
+            bail!("injected DirectWrite color glyph failure");
+        }
+
+        self.rasterize_colr(font_face, params)
+    }
+
+    fn rasterize_monochrome_color(
+        &self,
+        font_face: &IDWriteFontFace3,
+        params: &RenderGlyphParams,
+        color: Rgba8,
+    ) -> Result<RasterizedGlyph> {
+        let glyph = self.create_glyph_analysis(font_face, params, GlyphRenderMode::Grayscale)?;
+        let Some((bounds, width, height)) = convert_bounds(glyph.bounds)? else {
+            return Ok(RasterizedGlyph::empty(RasterizedGlyphFormat::BgraColor));
+        };
+
+        self.rasterize_native_monochrome_color(glyph, bounds, width, height, color)
+    }
+
     fn composite_layers(
         &self,
         layers: &[ColorGlyphLayer],
@@ -647,18 +708,13 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
 
         let font_face = self.native_face(&face)?;
         match color_kind {
-            Some(ColorGlyphKind::ColrV0) => self.rasterize_colr(&font_face, params),
+            Some(ColorGlyphKind::ColrV0) => self.rasterize_colr_or_monochrome(&font_face, params),
             Some(ColorGlyphKind::Svg) | None
                 if params.raster_style.mode == GlyphRenderMode::Color =>
             {
                 let color = prepared_color(params.raster_style)?;
-                let glyph =
-                    self.create_glyph_analysis(&font_face, params, GlyphRenderMode::Grayscale)?;
-                let Some((bounds, width, height)) = convert_bounds(glyph.bounds)? else {
-                    return Ok(RasterizedGlyph::empty(RasterizedGlyphFormat::BgraColor));
-                };
 
-                self.rasterize_native_monochrome_color(glyph, bounds, width, height, color)
+                self.rasterize_monochrome_color(&font_face, params, color)
             }
             _ => self.rasterize_mask(&font_face, params, params.raster_style.mode),
         }
@@ -683,6 +739,7 @@ impl NativeFace {
         variable_factory: Option<&IDWriteFactory6>,
         file: &IDWriteFontFile,
         face: &RasterFace<'_>,
+        use_default_axes: bool,
     ) -> Result<Self> {
         let mut simulations = DWRITE_FONT_SIMULATIONS_NONE;
 
@@ -694,7 +751,7 @@ impl NativeFace {
             simulations |= DWRITE_FONT_SIMULATIONS_OBLIQUE;
         }
 
-        let native_face = if face.variations.is_empty() {
+        let native_face = if use_default_axes {
             let reference =
                 unsafe { factory.CreateFontFaceReference(file, face.face_index, simulations) }?;
 
@@ -1008,6 +1065,97 @@ mod tests {
                 .join()
                 .expect("background glyph composition panicked")?;
         assert_eq!(background, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn native_colr_recovers_from_failure_and_is_stable_across_batches() -> Result<()> {
+        let devices = DirectXDevices::new()?;
+        let compositor = Arc::new(GlyphCompositor::new(&devices)?);
+        let mut rasterizer = WindowsGlyphRasterizer::new(Some(compositor));
+        let WindowsRasterBackend::DirectWrite {
+            rasterizer: direct_write,
+            ..
+        } = &mut rasterizer.backend
+        else {
+            bail!("DirectWrite is unavailable for its native rasterizer test");
+        };
+        direct_write.fail_next_colr = true;
+
+        let system =
+            ParleyTextSystem::new_with_rasterizer(SystemFonts::Load, "Segoe UI", rasterizer);
+        system.add_fonts(vec![Cow::Borrowed(SOURCE_SERIF)])?;
+
+        let emoji_font = system.font_id(&font("Segoe UI Emoji"))?;
+        let render = |font_id: FontId, glyph_id: GlyphId, mode| {
+            let raster_style = system.prepare_raster_style(RasterStyleRequest {
+                scene_color: rgba(0xffffffff),
+                requested_mode: mode,
+            });
+
+            system.rasterize_glyph(&RenderGlyphParams {
+                font_id,
+                glyph_id,
+                font_size: gpui::px(48.0),
+                subpixel_variant: point(0, 0),
+                scale_factor: 1.0,
+                raster_style,
+            })
+        };
+
+        let first_emoji = system
+            .glyph_for_char(emoji_font, '😀')
+            .context("Segoe UI Emoji has no grinning-face glyph")?;
+        let silhouette = render(emoji_font, first_emoji, GlyphRenderMode::Color)?;
+        silhouette.validate()?;
+        assert!(silhouette.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
+        assert!(
+            silhouette
+                .pixels
+                .chunks_exact(4)
+                .all(|pixel| pixel[..3] == [0, 0, 0])
+        );
+
+        let text_font = system.font_id(&font("Source Serif 4"))?;
+        let letter = system
+            .glyph_for_char(text_font, 'A')
+            .context("Source Serif 4 has no A glyph")?;
+        let subsequent_text = render(text_font, letter, GlyphRenderMode::Grayscale)?;
+        subsequent_text.validate()?;
+        assert!(subsequent_text.pixels.iter().any(|coverage| *coverage != 0));
+
+        let emoji_glyphs = ['😀', '🚀', '🥺']
+            .into_iter()
+            .filter_map(|character| system.glyph_for_char(emoji_font, character))
+            .collect::<Vec<_>>();
+        assert!(!emoji_glyphs.is_empty());
+
+        let render_batch = || {
+            emoji_glyphs
+                .iter()
+                .map(|glyph_id| render(emoji_font, *glyph_id, GlyphRenderMode::Color))
+                .collect::<Result<Vec<_>>>()
+        };
+        let first_batch = render_batch()?;
+
+        for _ in 0..3 {
+            render_batch()?;
+        }
+
+        let second_batch = render_batch()?;
+        for (expected, actual) in first_batch.iter().zip(&second_batch) {
+            expected.validate()?;
+            assert_eq!(actual.bounds, expected.bounds);
+            assert_eq!(actual.size, expected.size);
+            assert_eq!(actual.format, expected.format);
+            assert_eq!(actual.pixels, expected.pixels);
+            assert!(
+                actual.pixels.chunks_exact(4).any(|pixel| {
+                    pixel[3] > 128 && (pixel[0] != pixel[1] || pixel[1] != pixel[2])
+                })
+            );
+        }
 
         Ok(())
     }

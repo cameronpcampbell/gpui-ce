@@ -80,6 +80,14 @@ pub struct RasterFace<'a> {
 }
 
 impl RasterFace<'_> {
+    /// Returns whether every supplied variation coordinate uses its axis default.
+    pub fn has_default_variations(&self) -> Result<bool> {
+        let font = FontRef::from_index(self.data, self.face_index)
+            .context("cannot inspect variation axes in the selected face")?;
+
+        Ok(variations_are_default(&font, self.variations))
+    }
+
     /// Returns the preferred color artwork format supported by the rasterizer.
     pub fn supported_color_glyph_kind(
         &self,
@@ -528,6 +536,15 @@ fn design_variations(
         .collect()
 }
 
+fn variations_are_default(font: &FontRef<'_>, variations: &[FontVariation]) -> bool {
+    let axes = font.axes();
+
+    variations.iter().all(|variation| {
+        axes.iter()
+            .any(|axis| axis.tag() == variation.tag && axis.default_value() == variation.value)
+    })
+}
+
 fn canonical_index(font_id: FontId) -> Option<usize> {
     (font_id.0 & CANONICAL_FONT_ID_BIT != 0).then_some(font_id.0 & !CANONICAL_FONT_ID_BIT)
 }
@@ -768,6 +785,21 @@ mod tests {
                     .map(|variation| (variation.tag, variation.value)),
             );
             assert_eq!(actual.coords(), target);
+            let face = RasterFace {
+                font_id: FontId(1),
+                source_id: 1,
+                data: SOURCE_SERIF,
+                face_index: 0,
+                variations: &variations,
+                synthesis: FontSynthesis::default(),
+                has_color_glyphs: false,
+            };
+            assert_eq!(
+                face.has_default_variations().unwrap(),
+                target
+                    .iter()
+                    .all(|coordinate| *coordinate == NormalizedCoord::default())
+            );
         }
     }
 
