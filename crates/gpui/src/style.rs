@@ -978,7 +978,7 @@ impl Style {
 impl Default for Style {
     fn default() -> Self {
         Style {
-            display: Display::Flex,
+            display: Display::Block,
             visibility: Visibility::Visible,
             overflow: Point {
                 x: Overflow::Visible,
@@ -1344,9 +1344,11 @@ pub type JustifyContent = AlignContent;
 pub enum Display {
     /// The children will follow the block layout algorithm
     Block,
+
     /// The children will follow the flexbox layout algorithm
     #[default]
     Flex,
+
     /// The children will follow the CSS Grid layout algorithm
     Grid,
 
