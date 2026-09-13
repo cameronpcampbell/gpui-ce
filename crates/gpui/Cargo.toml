@@ -136,6 +136,7 @@ windows-061 = { workspace = true, features = ["Win32_Graphics_Direct3D11"] }
 
 
 [dev-dependencies]
+accesskit_consumer.workspace = true
 backtrace.workspace = true
 smol.workspace = true
 collections = { workspace = true, features = ["test-support"] }
@@ -220,6 +221,10 @@ path = "examples/learn/haptic_feedback.rs"
 [[example]]
 name = "blur"
 path = "examples/learn/blur.rs"
+
+[[example]]
+name = "corner_smoothing"
+path = "examples/learn/corner_smoothing.rs"
 
 [[example]]
 name = "keyring"

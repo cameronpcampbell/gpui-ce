@@ -47,7 +47,7 @@ pub fn editable_text(id: impl Into<ElementId>) -> EditableTextElement {
         colors: EditableTextColors::default(),
         caret_blink_interval: None,
         caret_width: px(2.),
-        caret_height: relative(1.),
+        caret_height: relative(1.).into(),
     };
     this.interactivity.element_id = Some(id.into());
 
