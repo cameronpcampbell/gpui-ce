@@ -10,7 +10,7 @@ pub mod shadow {
         pub bounds: Bounds,
         pub corner_radii: Corners,
         pub content_mask: Bounds,
-        pub color: Hsla,
+        pub color: Background,
         pub element_bounds: Bounds,
         pub element_corner_radii: Corners,
         pub inset: ShaderBool,
@@ -91,11 +91,17 @@ pub mod shadow {
         pub position: Vec4f,
         #[location(0)]
         #[interpolate(flat)]
-        pub color: Vec4f,
+        pub background_solid: Vec4f,
         #[location(1)]
         #[interpolate(flat)]
-        pub shadow_id: u32,
+        pub background_color0: Vec4f,
+        #[location(2)]
+        #[interpolate(flat)]
+        pub background_color1: Vec4f,
         #[location(3)]
+        #[interpolate(flat)]
+        pub shadow_id: u32,
+        #[location(4)]
         pub clip_distances: Vec4f,
     }
 
@@ -107,9 +113,12 @@ pub mod shadow {
         let shadow = get!(SHADOWS)[instance_id as usize];
         let geometry = shadow_geometry(shadow);
         let vertex = rectangle_vertex(vertex_id, geometry);
+        let background = prepare_background(shadow.color);
         ShadowVarying {
             position: vertex.clip_position,
-            color: hsla_to_rgba(shadow.color),
+            background_solid: background.solid,
+            background_color0: background.color0,
+            background_color1: background.color1,
             shadow_id: instance_id,
             clip_distances: clip_distances(vertex.viewport_position, shadow.content_mask),
         }
@@ -121,6 +130,21 @@ pub mod shadow {
             return transparent();
         }
         let shadow = get!(SHADOWS)[input.shadow_id as usize];
-        blend_color(input.color, shadow_coverage(shadow, input.position.xy()))
+        // Drop gradients span the shadow rect; inset gradients stay anchored to the element.
+        let mut paint_bounds = shadow.bounds;
+        if is_enabled(shadow.inset) {
+            paint_bounds = shadow.element_bounds;
+        }
+        let color = background_color(
+            shadow.color,
+            input.position.xy(),
+            paint_bounds,
+            PreparedBackground {
+                solid: input.background_solid,
+                color0: input.background_color0,
+                color1: input.background_color1,
+            },
+        );
+        blend_color(color, shadow_coverage(shadow, input.position.xy()))
     }
 }

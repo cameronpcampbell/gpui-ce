@@ -496,8 +496,8 @@ mod tests {
     use crate::{
         AbsoluteLength, AnyWindowHandle, Bounds, Corners, DefiniteLength, DurationWithEasing,
         Edges, FocusHandle, InputEvent as _, Length, MouseButton, MouseDownEvent, MouseUpEvent,
-        Pixels, Style, TestAppContext, Window, canvas, div, ease_in_out, point, prelude::*, px,
-        relative, rems, size,
+        Pixels, Style, TestAppContext, Window, blue, canvas, div, ease_in_out, point, prelude::*,
+        px, red, relative, rems, size,
     };
 
     fn length(value: f32) -> Length {
@@ -608,6 +608,35 @@ mod tests {
             true,
         ));
         assert_eq!((style.flex_grow, style.opacity), (30.0, Some(1.0)));
+    }
+
+    #[test]
+    fn solid_ring_color_transitions_survive_background_storage() {
+        let started_at = Instant::now();
+        let duration = Duration::from_secs(1);
+        let transitions = StyleTransitions::new().ring_color(duration);
+        let context = StyleTransitionContext::new(None, px(16.0));
+        let mut state = StyleTransitionState::default();
+        let mut style = Style::default();
+        style.ring.color = RingColor::Color(red().into());
+
+        assert!(!transitions.apply(&mut style, &mut state, context, started_at, false));
+
+        style.ring.color = RingColor::Color(blue().into());
+        assert!(transitions.apply(&mut style, &mut state, context, started_at, false));
+
+        style.ring.color = RingColor::Color(blue().into());
+        assert!(transitions.apply(
+            &mut style,
+            &mut state,
+            context,
+            started_at + duration / 2,
+            false,
+        ));
+        assert_eq!(
+            style.ring.color,
+            RingColor::Color(red().lerp(&blue(), 0.5).into())
+        );
     }
 
     #[test]
