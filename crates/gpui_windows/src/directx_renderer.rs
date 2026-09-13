@@ -2536,27 +2536,6 @@ pub(crate) mod shader_resources {
     }
 
     impl ShaderModule {
-        #[cfg(test)]
-        const ALL: [Self; 17] = [
-            Self::Quad,
-            Self::SmoothedQuad,
-            Self::Shadow,
-            Self::SmoothedShadow,
-            Self::Underline,
-            Self::PathRasterization,
-            Self::PathSprite,
-            Self::MonochromeSprite,
-            Self::SubpixelSprite,
-            Self::PolychromeSprite,
-            Self::SmoothedPolychromeSprite,
-            Self::EmojiRasterization,
-            Self::Surface,
-            Self::BlurDownsample,
-            Self::Blur,
-            Self::BlurComposite,
-            Self::SmoothedBlurComposite,
-        ];
-
         pub(crate) fn shader(self) -> &'static NativeShader {
             let label = match self {
                 Self::Quad => "quads",
@@ -2585,14 +2564,17 @@ pub(crate) mod shader_resources {
 
         /// Both compiled stages plus the draw-constants contract the vertex stage expects.
         pub(crate) fn bytecode(self) -> Result<Dx11Bytecode> {
-            let shader = self.shader();
-            match shader.dx11 {
-                Dx11Shader::Sm50(bytecode) => Ok(bytecode),
-                Dx11Shader::NativeWindowsBuildRequired => anyhow::bail!(
-                    "{} has no DX11 bytecode: build the Windows target on a Windows host; runtime HLSL compilation is intentionally unsupported",
-                    shader.label,
-                ),
-            }
+            dx11_bytecode(self.shader())
+        }
+    }
+
+    fn dx11_bytecode(shader: &NativeShader) -> Result<Dx11Bytecode> {
+        match shader.dx11 {
+            Dx11Shader::Sm50(bytecode) => Ok(bytecode),
+            Dx11Shader::NativeWindowsBuildRequired => anyhow::bail!(
+                "{} has no DX11 bytecode: build the Windows target on a Windows host; runtime HLSL compilation is intentionally unsupported",
+                shader.label,
+            ),
         }
     }
 
@@ -2603,18 +2585,17 @@ pub(crate) mod shader_resources {
 
         #[test]
         fn every_generated_dx11_artifact_is_available() {
-            for module in ShaderModule::ALL {
-                module
-                    .bytecode()
-                    .unwrap_or_else(|error| panic!("missing bytecode for {module:?}: {error:#}"));
+            for shader in NATIVE_SHADERS {
+                dx11_bytecode(shader).unwrap_or_else(|error| {
+                    panic!("missing bytecode for {}: {error:#}", shader.label)
+                });
             }
         }
 
         /// Instanced pipelines index a whole-frame buffer, so they must carry the base.
         #[test]
         fn instanced_pipelines_declare_draw_constants() {
-            for module in ShaderModule::ALL {
-                let shader = module.shader();
+            for shader in NATIVE_SHADERS {
                 let instanced = matches!(
                     shader.pipeline.data_layout,
                     DataLayout::Instances
@@ -2622,11 +2603,12 @@ pub(crate) mod shader_resources {
                         | DataLayout::MonochromeSprites
                         | DataLayout::SubpixelSprites
                 );
-                let bytecode = module.bytecode().unwrap();
+                let bytecode = dx11_bytecode(shader).unwrap();
                 assert_eq!(
                     bytecode.draw_constants.is_some(),
                     instanced,
-                    "{module:?} draw-constants contract does not match its data layout"
+                    "{} draw-constants contract does not match its data layout",
+                    shader.label,
                 );
             }
         }

@@ -7,11 +7,15 @@ use gpui_parley::{ParleyTextSystem, SystemFonts};
 #[cfg(test)]
 use std::borrow::Cow;
 
+#[cfg(test)]
+use crate::DirectXDevices;
+
+use crate::glyph_compositor::{ColorGlyphLayer, GlyphCompositor};
 use anyhow::{Context as _, Result, bail, ensure};
 use gpui::{
     Bounds, DevicePixels, GlyphRenderMode, PreparedRasterStyle, RasterColorEffect,
     RasterStyleRequest, RasterizedGlyph, RasterizedGlyphFormat, RenderGlyphParams, Rgba8,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, TextRenderingMode, point, size,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, Size, TextRenderingMode, point, size,
 };
 use gpui_parley::{ColorGlyphKind, GlyphRasterizer, RasterFace, SwashGlyphRasterizer};
 use std::{
@@ -20,6 +24,7 @@ use std::{
     ffi::{c_uint, c_void},
     fmt,
     mem::ManuallyDrop,
+    sync::Arc,
 };
 use windows::{
     Win32::{
@@ -74,8 +79,8 @@ impl fmt::Display for NativeRasterUnsupported {
 impl Error for NativeRasterUnsupported {}
 
 impl WindowsGlyphRasterizer {
-    pub(crate) fn new() -> Self {
-        let backend = match DirectWriteGlyphRasterizer::new() {
+    pub(crate) fn new(compositor: Option<Arc<GlyphCompositor>>) -> Self {
+        let backend = match DirectWriteGlyphRasterizer::new(compositor) {
             Ok(rasterizer) => WindowsRasterBackend::DirectWrite {
                 rasterizer,
                 fallback: SwashGlyphRasterizer::default(),
@@ -146,6 +151,7 @@ pub(crate) struct DirectWriteGlyphRasterizer {
     faces: HashMap<gpui::FontId, NativeFace>,
     sources: HashMap<u64, NativeSource>,
     color_rendering: ColorRenderingParams,
+    compositor: Option<Arc<GlyphCompositor>>,
     system_subpixel_rendering: bool,
 }
 
@@ -178,7 +184,7 @@ struct LayerColor {
 }
 
 impl DirectWriteGlyphRasterizer {
-    pub(crate) fn new() -> Result<Self> {
+    pub(crate) fn new(compositor: Option<Arc<GlyphCompositor>>) -> Result<Self> {
         let factory: IDWriteFactory5 = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }
             .context("creating the DirectWrite factory")?;
         let variable_factory = factory.cast().ok();
@@ -208,6 +214,7 @@ impl DirectWriteGlyphRasterizer {
             faces: HashMap::default(),
             sources: HashMap::default(),
             color_rendering,
+            compositor,
             system_subpixel_rendering: get_system_subpixel_rendering(),
         })
     }
@@ -466,7 +473,7 @@ impl DirectWriteGlyphRasterizer {
             unreachable!("color layer bounds were validated above");
         };
 
-        let mut premultiplied = vec![[0.0f32; 4]; width as usize * height as usize];
+        let mut layers = Vec::new();
         let enumerator = enumerate()?;
         while unsafe { enumerator.MoveNext() }?.as_bool() {
             let run = unsafe { &*enumerator.GetCurrentRun()? };
@@ -507,55 +514,51 @@ impl DirectWriteGlyphRasterizer {
             }
 
             let color = layer_color(run, current_color);
-            for layer_y in 0..layer_height {
-                let target_y = layer_bounds.top - raster_bounds.top + layer_y;
-
-                if !(0..height).contains(&target_y) {
-                    continue;
-                }
-
-                for layer_x in 0..layer_width {
-                    let target_x = layer_bounds.left - raster_bounds.left + layer_x;
-
-                    if !(0..width).contains(&target_x) {
-                        continue;
-                    }
-
-                    let source_idx = (layer_y as usize * layer_width as usize) + layer_x as usize;
-                    let target_idx = target_y as usize * width as usize + target_x as usize;
-                    let corrected = corrected_coverage(
-                        f32::from(coverage[source_idx]) / 255.0,
-                        color,
-                        &self.color_rendering,
-                    );
-                    composite_color(&mut premultiplied[target_idx], color, corrected);
-                }
-            }
+            layers.push(ColorGlyphLayer {
+                bounds: Bounds {
+                    origin: point(
+                        DevicePixels(layer_bounds.left - raster_bounds.left),
+                        DevicePixels(layer_bounds.top - raster_bounds.top),
+                    ),
+                    size: size(DevicePixels(layer_width), DevicePixels(layer_height)),
+                },
+                color: [color.red, color.green, color.blue, color.alpha],
+                coverage,
+            });
         }
 
-        let mut pixels = Vec::with_capacity(premultiplied.len() * 4);
-        for pixel in premultiplied {
-            let alpha = pixel[3].clamp(0.0, 1.0);
-
-            if alpha == 0.0 {
-                pixels.extend_from_slice(&[0, 0, 0, 0]);
-                continue;
-            }
-
-            pixels.extend_from_slice(&[
-                float_channel(pixel[2] / alpha),
-                float_channel(pixel[1] / alpha),
-                float_channel(pixel[0] / alpha),
-                float_channel(alpha),
-            ]);
-        }
+        let bitmap_size = size(DevicePixels(width), DevicePixels(height));
+        let pixels = self.composite_layers(&layers, bitmap_size)?;
 
         Ok(RasterizedGlyph {
             bounds,
-            size: size(DevicePixels(width), DevicePixels(height)),
+            size: bitmap_size,
             format: RasterizedGlyphFormat::BgraColor,
             pixels,
         })
+    }
+
+    fn composite_layers(
+        &self,
+        layers: &[ColorGlyphLayer],
+        bitmap_size: Size<DevicePixels>,
+    ) -> Result<Vec<u8>> {
+        if let Some(compositor) = &self.compositor
+            && let Some(pixels) = compositor.composite(
+                layers,
+                bitmap_size,
+                self.color_rendering.gamma_ratios,
+                self.color_rendering.grayscale_enhanced_contrast,
+            )?
+        {
+            return Ok(pixels);
+        }
+
+        Ok(composite_layers_cpu(
+            layers,
+            bitmap_size,
+            &self.color_rendering,
+        ))
     }
 
     fn rasterize_native_monochrome_color(
@@ -819,6 +822,61 @@ fn corrected_coverage(sample: f32, color: LayerColor, rendering: &ColorRendering
     (contrasted + contrasted * (1.0 - contrasted) * correction).clamp(0.0, 1.0)
 }
 
+fn composite_layers_cpu(
+    layers: &[ColorGlyphLayer],
+    bitmap_size: Size<DevicePixels>,
+    rendering: &ColorRenderingParams,
+) -> Vec<u8> {
+    let width = bitmap_size.width.0;
+    let height = bitmap_size.height.0;
+    let mut premultiplied = vec![[0.0f32; 4]; width as usize * height as usize];
+
+    for layer in layers {
+        let [red, green, blue, alpha] = layer.color;
+        let color = LayerColor {
+            red,
+            green,
+            blue,
+            alpha,
+        };
+        let layer_width = layer.bounds.size.width.0 as usize;
+
+        for (source_idx, coverage) in layer.coverage.iter().enumerate() {
+            let target_x = layer.bounds.origin.x.0 + (source_idx % layer_width) as i32;
+            let target_y = layer.bounds.origin.y.0 + (source_idx / layer_width) as i32;
+
+            if !(0..width).contains(&target_x) || !(0..height).contains(&target_y) {
+                continue;
+            }
+
+            let target_idx = target_y as usize * width as usize + target_x as usize;
+            let corrected = corrected_coverage(f32::from(*coverage) / 255.0, color, rendering);
+            composite_color(&mut premultiplied[target_idx], color, corrected);
+        }
+    }
+
+    let mut pixels = Vec::with_capacity(premultiplied.len() * 4);
+
+    for pixel in premultiplied {
+        let alpha = pixel[3].clamp(0.0, 1.0);
+
+        if alpha == 0.0 {
+            pixels.extend_from_slice(&[0, 0, 0, 0]);
+
+            continue;
+        }
+
+        pixels.extend_from_slice(&[
+            float_channel(pixel[2] / alpha),
+            float_channel(pixel[1] / alpha),
+            float_channel(pixel[0] / alpha),
+            float_channel(alpha),
+        ]);
+    }
+
+    pixels
+}
+
 fn composite_color(destination: &mut [f32; 4], color: LayerColor, coverage: f32) {
     let source_alpha = (coverage * color.alpha).clamp(0.0, 1.0);
     let inverse_alpha = 1.0 - source_alpha;
@@ -873,11 +931,60 @@ mod tests {
         include_bytes!("../../../assets/fonts/noto-color-emoji/NotoColorEmoji.subset.ttf");
 
     #[test]
+    fn gpu_color_layers_match_cpu_and_fall_back_off_thread() -> Result<()> {
+        let devices = DirectXDevices::new()?;
+        let compositor = Arc::new(GlyphCompositor::new(&devices)?);
+        let rasterizer = DirectWriteGlyphRasterizer::new(Some(compositor))?;
+        let bitmap_size = size(DevicePixels(8), DevicePixels(6));
+        let layers = vec![
+            ColorGlyphLayer {
+                bounds: Bounds {
+                    origin: point(DevicePixels(1), DevicePixels(1)),
+                    size: size(DevicePixels(4), DevicePixels(3)),
+                },
+                color: [0.8, 0.2, 0.1, 0.75],
+                coverage: vec![0, 64, 128, 255, 255, 192, 128, 64, 64, 128, 192, 255],
+            },
+            ColorGlyphLayer {
+                bounds: Bounds {
+                    origin: point(DevicePixels(3), DevicePixels(2)),
+                    size: size(DevicePixels(3), DevicePixels(2)),
+                },
+                color: [0.1, 0.3, 0.9, 0.5],
+                coverage: vec![255, 192, 128, 64, 128, 255],
+            },
+        ];
+        let expected = composite_layers_cpu(&layers, bitmap_size, &rasterizer.color_rendering);
+        let actual = rasterizer.composite_layers(&layers, bitmap_size)?;
+        assert_eq!(actual.len(), expected.len());
+
+        // The GPU rounds each blended layer into BGRA8. Compare visible contributions
+        // so low-alpha pixels do not magnify harmless unpremultiplication differences.
+        for (actual, expected) in actual.chunks_exact(4).zip(expected.chunks_exact(4)) {
+            assert!(actual[3].abs_diff(expected[3]) <= 3);
+
+            for channel_idx in 0..3 {
+                let actual = f32::from(actual[channel_idx]) * f32::from(actual[3]) / 255.0;
+                let expected = f32::from(expected[channel_idx]) * f32::from(expected[3]) / 255.0;
+                assert!((actual - expected).abs() <= 4.0);
+            }
+        }
+
+        let background =
+            std::thread::spawn(move || rasterizer.composite_layers(&layers, bitmap_size))
+                .join()
+                .expect("background glyph composition panicked")?;
+        assert_eq!(background, expected);
+
+        Ok(())
+    }
+
+    #[test]
     fn windows_rasterizer_covers_native_masks_current_color_and_color_fallbacks() {
         let system = ParleyTextSystem::new_with_rasterizer(
             SystemFonts::Skip,
             "Source Serif 4",
-            WindowsGlyphRasterizer::new(),
+            WindowsGlyphRasterizer::new(None),
         );
         system
             .add_fonts(vec![

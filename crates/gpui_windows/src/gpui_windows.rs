@@ -10,6 +10,7 @@ mod dispatcher;
 mod display;
 mod events;
 mod font_rasterizer;
+mod glyph_compositor;
 mod keyboard;
 mod platform;
 mod system_notifications;

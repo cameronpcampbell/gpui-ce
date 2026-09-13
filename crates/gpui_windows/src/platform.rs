@@ -29,6 +29,7 @@ use windows::{
     core::*,
 };
 
+use crate::glyph_compositor::GlyphCompositor;
 use crate::*;
 use gpui::*;
 
@@ -74,6 +75,7 @@ pub(crate) struct WindowsPlatformState {
     /// thread; see [`DrawCoordinator`].
     pub(crate) draw_coordinator: Rc<DrawCoordinator>,
     directx_devices: RefCell<Option<DirectXDevices>>,
+    glyph_compositor: Option<Arc<GlyphCompositor>>,
 }
 
 #[derive(Default)]
@@ -89,7 +91,10 @@ struct PlatformCallbacks {
 }
 
 impl WindowsPlatformState {
-    fn new(directx_devices: Option<DirectXDevices>) -> Self {
+    fn new(
+        directx_devices: Option<DirectXDevices>,
+        glyph_compositor: Option<Arc<GlyphCompositor>>,
+    ) -> Self {
         let callbacks = PlatformCallbacks::default();
         let jump_list = JumpList::new();
         let current_cursor = load_cursor(CursorStyle::Arrow);
@@ -101,6 +106,7 @@ impl WindowsPlatformState {
             cursor_visible: Arc::new(AtomicBool::new(true)),
             draw_coordinator: Rc::new(DrawCoordinator::new()),
             directx_devices: RefCell::new(directx_devices),
+            glyph_compositor,
             menus: RefCell::new(Vec::new()),
         }
     }
@@ -118,11 +124,22 @@ impl WindowsPlatform {
             None
         };
 
+        let glyph_compositor =
+            directx_devices
+                .as_ref()
+                .and_then(|devices| match GlyphCompositor::new(devices) {
+                    Ok(compositor) => Some(Arc::new(compositor)),
+                    Err(error) => {
+                        log::warn!("GPU glyph composition is unavailable; using CPU: {error:#}");
+
+                        None
+                    }
+                });
         let text_system = Arc::new(
             gpui_parley::ParleyTextSystem::new_with_rasterizer(
                 gpui_parley::SystemFonts::Load,
                 "Segoe UI",
-                WindowsGlyphRasterizer::new(),
+                WindowsGlyphRasterizer::new(glyph_compositor.clone()),
             )
             .with_fallback_families(["Lilex", "IBM Plex Sans", "Arial"]),
         ) as Arc<dyn PlatformTextSystem>;
@@ -143,6 +160,7 @@ impl WindowsPlatform {
             main_sender: Some(main_sender),
             main_receiver: Some(main_receiver),
             directx_devices,
+            glyph_compositor,
             dispatcher: None,
         };
         let result = unsafe {
@@ -954,7 +972,11 @@ impl Platform for WindowsPlatform {
 
 impl WindowsPlatformInner {
     fn new(context: &mut PlatformWindowCreateContext) -> Result<Rc<Self>> {
-        let state = WindowsPlatformState::new(context.directx_devices.take());
+        let state = WindowsPlatformState::new(
+            context.directx_devices.take(),
+            context.glyph_compositor.take(),
+        );
+
         Ok(Rc::new(Self {
             state,
             raw_window_handles: context.raw_window_handles.clone(),
@@ -1164,6 +1186,14 @@ impl WindowsPlatformInner {
     fn handle_device_lost(&self, lparam: LPARAM) -> Option<isize> {
         let directx_devices = lparam.0 as *const DirectXDevices;
         let directx_devices = unsafe { &*directx_devices };
+
+        if let Some(compositor) = &self.state.glyph_compositor {
+            // This message runs on the UI thread before window renderers adopt the device.
+            if let Err(error) = compositor.reset(directx_devices) {
+                log::warn!("Failed to restore GPU glyph composition; using CPU: {error:#}");
+            }
+        }
+
         self.state.directx_devices.borrow_mut().take();
         *self.state.directx_devices.borrow_mut() = Some(directx_devices.clone());
 
@@ -1211,6 +1241,7 @@ struct PlatformWindowCreateContext {
     main_sender: Option<PriorityQueueSender<RunnableVariant>>,
     main_receiver: Option<PriorityQueueReceiver<RunnableVariant>>,
     directx_devices: Option<DirectXDevices>,
+    glyph_compositor: Option<Arc<GlyphCompositor>>,
     dispatcher: Option<Arc<WindowsDispatcher>>,
 }
 
