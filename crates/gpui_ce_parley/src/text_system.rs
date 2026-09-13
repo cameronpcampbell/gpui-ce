@@ -3865,8 +3865,10 @@ mod tests {
         const OVERFLOW_TEXT: &str =
             "Begin café e\u{301} 👩‍👩‍👧‍👦 and several words that need room before the ending";
         const OVERFLOW_MIDDLE: &str = "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW";
+        const LINE_CLAMP_TEXT: &str = "A paragraph can wrap at word boundaries while keeping styled text, punctuation, and spacing together. Resize the window and this sample will follow the available width.";
 
         struct OverflowParagraph {
+            text: &'static str,
             width: f32,
             direction: gpui::TruncateFrom,
             max_lines: Option<usize>,
@@ -3880,6 +3882,7 @@ mod tests {
         impl OverflowParagraph {
             fn new(direction: gpui::TruncateFrom) -> Self {
                 Self {
+                    text: OVERFLOW_TEXT,
                     width: 180.,
                     direction,
                     max_lines: None,
@@ -3939,7 +3942,7 @@ mod tests {
                             .child(" end"),
                     )
                 } else {
-                    paragraph.child(OVERFLOW_TEXT)
+                    paragraph.child(self.text)
                 };
 
                 div()
@@ -3962,11 +3965,7 @@ mod tests {
                 layout.lines
             );
             assert!(
-                layout
-                    .layout
-                    .visual_lines
-                    .iter()
-                    .all(|line| line.advance <= px(width + 0.01)),
+                layout.layout.platform_layout.size().width <= px(width + 0.01),
                 "{text:?}: {:?}",
                 layout.layout.visual_lines
             );
@@ -4067,6 +4066,48 @@ mod tests {
             let captured = painted.borrow();
             assert_eq!(captured[0].0.as_ref(), OVERFLOW_TEXT);
             assert_eq!(captured[0].1.lines.len(), 2);
+        }
+
+        #[test]
+        fn block_line_clamp_ignores_wrapped_trailing_whitespace() {
+            let system = test_system();
+            let runs = [text_run(LINE_CLAMP_TEXT, "IBM Plex Sans")];
+            let width = (300..800)
+                .map(|width| px(width as f32))
+                .find(|width| {
+                    let layout = system.layout_text(TextLayoutRequest {
+                        text: LINE_CLAMP_TEXT,
+                        font_size: px(14.),
+                        runs: &runs,
+                        wrap_width: Some(*width),
+                        line_clamp: None,
+                    });
+
+                    layout.visual_lines.len() == 2
+                        && layout.platform_layout.size().width <= *width + px(0.01)
+                        && layout
+                            .visual_lines
+                            .iter()
+                            .any(|line| line.advance > *width + px(0.01))
+                })
+                .expect("sample text should have a two-line width with hanging whitespace");
+            let mut context = headless();
+            let mut view = OverflowParagraph::new(gpui::TruncateFrom::End);
+            view.text = LINE_CLAMP_TEXT;
+            view.max_lines = Some(2);
+            view.width = f32::from(width);
+            let painted = view.painted.clone();
+            context
+                .open_window(size(px(900.), px(180.)), |_window, context| {
+                    context.new(|_context| view)
+                })
+                .unwrap();
+            context.run_until_parked();
+
+            let captured = painted.borrow();
+            let (text, layout) = &captured[0];
+            assert_eq!(text.as_ref(), LINE_CLAMP_TEXT);
+            assert_paragraph_fits(text, layout, f32::from(width), 2);
         }
 
         #[test]

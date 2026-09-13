@@ -1,10 +1,12 @@
 use crate::elements::div::{ScrollHandle, StackSafe};
-use crate::elements::text::{TruncationCandidate, truncate_with_measured_candidates};
+use crate::elements::text::{
+    TruncationCandidate, text_layout_fits, truncate_with_measured_candidates,
+};
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, Display, InlineBoxRequest, InlineLayout,
     InlineLayoutRequest, InlineTextMetrics, InlineTextStyle, LayoutId, Pixels, Point, Position,
     SharedString, Size, Style, TextLayout, TextLayoutTruncation, TextRun, TextStyle, Window,
-    WindowTextSystem, place_inline_layout, px, size,
+    WindowTextSystem, place_inline_layout, size,
 };
 
 use collections::FxHashMap;
@@ -65,14 +67,7 @@ impl InlineDocument {
             ..request
         };
         let probe = text_system.layout_inline(request);
-        let fits = |layout: &InlineLayout| {
-            max_lines.is_none_or(|count| layout.lines.len() <= count.max(1))
-                && layout
-                    .layout
-                    .visual_lines
-                    .iter()
-                    .all(|line| line.advance <= width + px(0.01))
-        };
+        let fits = |layout: &InlineLayout| text_layout_fits(&layout.layout, width, max_lines);
 
         if fits(&probe) {
             return (self.clone(), probe);

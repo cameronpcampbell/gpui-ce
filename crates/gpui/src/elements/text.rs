@@ -7,9 +7,10 @@ use std::collections::HashSet;
 use crate::{
     ActiveTooltip, AnyView, App, AppContext, Bounds, DispatchPhase, Element, ElementId,
     GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
-    LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size,
-    TextOverflow, TextRun, TextStyle, TextTransform, TooltipId, WhiteSpace, Window, WrappedLine,
-    WrappedLineLayout, px, register_tooltip_mouse_handlers, set_tooltip_on_window,
+    LayoutId, LineLayout, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    SharedString, Size, TextOverflow, TextRun, TextStyle, TextTransform, TooltipId, WhiteSpace,
+    Window, WrappedLine, WrappedLineLayout, px, register_tooltip_mouse_handlers,
+    set_tooltip_on_window,
 };
 use anyhow::Context as _;
 use gpui_util::ResultExt;
@@ -1199,11 +1200,7 @@ fn truncate_to_shaped_layout<'a>(
         return (text, Cow::Borrowed(runs));
     };
     let width = wrap_width.unwrap_or(truncate_width);
-    let fits = max_lines.is_none_or(|max_lines| document.line_count() <= max_lines.max(1))
-        && document
-            .visual_lines()
-            .iter()
-            .all(|visual| visual.advance <= width + px(0.01));
+    let fits = text_layout_fits(&document.layout.layout, width, max_lines);
 
     if fits {
         return (text, Cow::Borrowed(runs));
@@ -1312,19 +1309,22 @@ fn truncate_to_shaped_layout<'a>(
                     wrap_width,
                     None,
                 )
-                .is_ok_and(|document| {
-                    max_lines.is_none_or(|count| document.line_count() <= count.max(1))
-                        && document
-                            .visual_lines()
-                            .iter()
-                            .all(|line| line.advance <= width + px(0.01))
-                });
+                .is_ok_and(|document| text_layout_fits(&document.layout.layout, width, max_lines));
 
             ((), fits)
         },
     );
 
     (candidate.text, Cow::Owned(candidate.runs))
+}
+
+pub(crate) fn text_layout_fits(
+    layout: &LineLayout,
+    width: Pixels,
+    max_lines: Option<usize>,
+) -> bool {
+    max_lines.is_none_or(|count| layout.platform_layout.line_count() <= count.max(1))
+        && layout.platform_layout.size().width <= width + px(0.01)
 }
 
 pub(crate) struct TruncationCandidate {
