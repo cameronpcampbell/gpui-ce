@@ -1196,26 +1196,21 @@ fn truncate_to_shaped_layout<'a>(
     direction: TruncateFrom,
     window: &mut Window,
 ) -> (SharedString, Cow<'a, [TextRun]>) {
-    let fits = |candidate: &str, candidate_runs: &[TextRun], window: &mut Window| {
-        let Ok(document) = window.text_system().shape_text(
-            SharedString::from(candidate.to_owned()),
-            font_size,
-            candidate_runs,
-            wrap_width,
-            None,
-        ) else {
-            return false;
-        };
-
-        let width = wrap_width.unwrap_or(truncate_width);
-        max_lines.is_none_or(|max_lines| document.line_count() <= max_lines.max(1))
-            && document
-                .visual_lines()
-                .iter()
-                .all(|visual| visual.advance <= width + px(0.01))
+    let Ok(document) =
+        window
+            .text_system()
+            .shape_text(text.clone(), font_size, runs, wrap_width, None)
+    else {
+        return (text, Cow::Borrowed(runs));
     };
+    let width = wrap_width.unwrap_or(truncate_width);
+    let fits = max_lines.is_none_or(|max_lines| document.line_count() <= max_lines.max(1))
+        && document
+            .visual_lines()
+            .iter()
+            .all(|visual| visual.advance <= width + px(0.01));
 
-    if fits(&text, runs, window) {
+    if fits {
         return (text, Cow::Borrowed(runs));
     }
 
@@ -1225,23 +1220,88 @@ fn truncate_to_shaped_layout<'a>(
         .collect::<Vec<_>>();
     boundaries.push(text.len());
     let grapheme_count = boundaries.len().saturating_sub(1);
-    let candidate =
-        |keep| make_truncation_candidate(&text, &boundaries, keep, affix, runs, direction);
-
-    let mut low = 0usize;
-    let mut high = grapheme_count.saturating_sub(1);
-    while low < high {
-        let middle = low + (high - low).div_ceil(2);
-        let (candidate_text, candidate_runs) = candidate(middle);
-
-        if fits(&candidate_text, &candidate_runs, window) {
-            low = middle;
-        } else {
-            high = middle - 1;
-        }
+    let grapheme_ranges = boundaries
+        .windows(2)
+        .map(|boundary| boundary[0]..boundary[1])
+        .collect::<Vec<_>>();
+    let grapheme_widths = document
+        .platform_layout
+        .inline_geometry_for_ranges(&grapheme_ranges)
+        .into_iter()
+        .map(|regions| {
+            regions
+                .into_iter()
+                .map(|(bounds, _line_idx)| bounds.size.width)
+                .sum::<Pixels>()
+        })
+        .collect::<Vec<_>>();
+    let mut prefix_widths = Vec::with_capacity(grapheme_widths.len() + 1);
+    prefix_widths.push(Pixels::ZERO);
+    for width in &grapheme_widths {
+        prefix_widths.push(prefix_widths.last().copied().unwrap_or_default() + *width);
     }
 
-    let (result, result_runs) = candidate(low);
+    let affix_width = if affix.is_empty() {
+        Pixels::ZERO
+    } else {
+        let (_affix_text, affix_runs) =
+            make_truncation_candidate(&text, &boundaries, 0, affix, runs, direction);
+        window
+            .text_system()
+            .shape_text(
+                SharedString::from(affix),
+                font_size,
+                &affix_runs,
+                None,
+                None,
+            )
+            .map_or(Pixels::ZERO, |layout| layout.width())
+    };
+    let available_width = (width - affix_width).max(Pixels::ZERO);
+
+    let keep = if direction == TruncateFrom::End
+        && let (Some(wrap_width), Some(max_lines)) = (wrap_width, max_lines)
+    {
+        let last_line_idx = max_lines.max(1).saturating_sub(1);
+        let line_start = document
+            .visual_lines()
+            .get(last_line_idx)
+            .map_or(0, |line| line.text_range.start);
+        let fixed_count = grapheme_ranges.partition_point(|range| range.end <= line_start);
+        fixed_count
+            + grapheme_widths[fixed_count..]
+                .iter()
+                .scan(Pixels::ZERO, |used, advance| {
+                    *used += *advance;
+                    Some(*used <= (wrap_width - affix_width).max(Pixels::ZERO))
+                })
+                .take_while(|fits| *fits)
+                .count()
+    } else {
+        (0..grapheme_count)
+            .take_while(|keep| {
+                let candidate_count = keep + 1;
+                let width: Pixels = match direction {
+                    TruncateFrom::End => prefix_widths[candidate_count],
+                    TruncateFrom::Start => {
+                        prefix_widths[grapheme_count]
+                            - prefix_widths[grapheme_count - candidate_count]
+                    }
+                    TruncateFrom::Middle => {
+                        let front_count = candidate_count.saturating_mul(2).div_ceil(3);
+                        let back_count = candidate_count - front_count;
+                        prefix_widths[front_count] + prefix_widths[grapheme_count]
+                            - prefix_widths[grapheme_count - back_count]
+                    }
+                };
+
+                width <= available_width
+            })
+            .count()
+    };
+
+    let (result, result_runs) =
+        make_truncation_candidate(&text, &boundaries, keep, affix, runs, direction);
     (result, Cow::Owned(result_runs))
 }
 

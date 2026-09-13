@@ -514,7 +514,7 @@ pub enum TextOverflow {
 }
 
 /// How to align text within the element
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum TextAlign {
     /// Align the text to the left of the element
     #[default]
@@ -1236,7 +1236,7 @@ pub type JustifySelf = AlignItems;
 /// Controls the vertical position of an element box in an inline formatting context.
 ///
 /// This property has no effect on ordinary block, flex, or grid layout.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default, Serialize, Deserialize, JsonSchema)]
 pub enum VerticalAlign {
     /// Align the bottom of the box with the text baseline.
     #[default]

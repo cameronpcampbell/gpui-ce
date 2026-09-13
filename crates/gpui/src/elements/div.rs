@@ -1969,13 +1969,22 @@ impl Element for Div {
                 cx,
                 |style, window, cx| {
                     window.with_text_style(style.text_style().cloned(), |window| {
+                        let display = style.display;
+                        let collected_by_ancestor =
+                            window.collecting_inline && display == Display::Inline;
+                        let previous_collecting_inline = std::mem::replace(
+                            &mut window.collecting_inline,
+                            matches!(display, Display::Block | Display::Inline),
+                        );
                         child_layout_ids = self
                             .children
                             .iter_mut()
                             .map(|child| child.request_layout(window, cx))
                             .collect();
+                        window.collecting_inline = previous_collecting_inline;
 
-                        let layout_id = if matches!(style.display, Display::Block | Display::Inline)
+                        let layout_id = if matches!(display, Display::Block | Display::Inline)
+                            && !collected_by_ancestor
                         {
                             let (node_id, state) = InlineDivFrameState::request_layout(
                                 &style,
@@ -1986,16 +1995,21 @@ impl Element for Div {
 
                             inline = Some(state);
                             node_id
+                        } else if collected_by_ancestor {
+                            window.request_layout(style, std::iter::empty(), cx)
                         } else {
                             window.request_layout(style, child_layout_ids.iter().copied(), cx)
                         };
 
-                        window.publish_inline_content(
-                            layout_id,
-                            InlineContent::Container {
-                                children: child_layout_ids.clone(),
-                            },
-                        );
+                        if display == Display::Inline {
+                            window.publish_inline_content(
+                                layout_id,
+                                InlineContent::Container {
+                                    children: child_layout_ids.clone(),
+                                },
+                            );
+                        }
+
                         layout_id
                     })
                 },
@@ -2111,6 +2125,7 @@ impl Element for Div {
                             &request_layout.child_layout_ids,
                             scroll_offset,
                             order.as_deref(),
+                            self.prepaint_listener.is_some(),
                             window,
                             cx,
                         );

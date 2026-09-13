@@ -46,7 +46,7 @@ struct InlineDocument {
 
 struct InlineParagraphMeasurement {
     wrap_width: Option<Pixels>,
-    layout: InlineLayout,
+    layout: Arc<InlineLayout>,
 }
 
 struct InlineParagraph {
@@ -70,6 +70,7 @@ pub(super) struct InlineDivFrameState {
 struct InlineParagraphCollector<'a> {
     frame_state: InlineDivFrameState,
     current_document: InlineDocument,
+    current_span_indices: FxHashMap<LayoutId, usize>,
     open_span_layout_ids: Vec<LayoutId>,
     text_style: TextStyle,
     window: &'a mut Window,
@@ -167,15 +168,13 @@ impl InlineParagraphCollector<'_> {
         let text_end = self.current_document.text.len();
         let box_end = self.current_document.boxes.len();
 
-        if let Some(span) = self
-            .current_document
-            .spans
-            .iter_mut()
-            .find(|span| span.layout_id == layout_id)
-        {
+        if let Some(span_idx) = self.current_span_indices.get(&layout_id).copied() {
+            let span = &mut self.current_document.spans[span_idx];
             span.text_range.end = text_end;
             span.box_range.end = box_end;
         } else {
+            self.current_span_indices
+                .insert(layout_id, self.current_document.spans.len());
             self.current_document.spans.push(InlineSpan {
                 layout_id,
                 text_range: text_start..text_end,
@@ -190,6 +189,7 @@ impl InlineParagraphCollector<'_> {
         }
 
         let document = Arc::new(std::mem::take(&mut self.current_document));
+        self.current_span_indices.clear();
         let measurement = Rc::new(RefCell::new(None));
 
         let text_style = self.text_style.clone();
@@ -272,6 +272,7 @@ impl InlineDivFrameState {
         let mut paragraph_collector = InlineParagraphCollector {
             frame_state: Self::default(),
             current_document: InlineDocument::default(),
+            current_span_indices: FxHashMap::default(),
             open_span_layout_ids: Vec::new(),
             text_style: window.text_style(),
             window,
@@ -332,60 +333,33 @@ impl InlineDivFrameState {
                 );
             }
 
-            for span in &paragraph.document.spans {
+            let text_ranges = paragraph
+                .document
+                .spans
+                .iter()
+                .map(|span| span.text_range.clone())
+                .collect::<Vec<_>>();
+            let text_geometry = layout
+                .layout
+                .platform_layout
+                .inline_geometry_for_ranges(&text_ranges);
+            let mut boxes_by_id = vec![None; paragraph.document.box_layout_ids.len()];
+
+            for inline_box in &layout.boxes {
+                if let Some(slot) = boxes_by_id.get_mut(inline_box.id as usize) {
+                    *slot = Some(inline_box);
+                }
+            }
+
+            for (span, text_regions) in paragraph.document.spans.iter().zip(text_geometry) {
                 let regions = fragments.get_mut(&span.layout_id).unwrap();
 
-                for (native, line_idx) in layout
-                    .layout
-                    .platform_layout
-                    .inline_geometry(span.text_range.clone())
-                {
-                    let Some(line) = layout.lines.get(line_idx) else {
-                        continue;
-                    };
-
-                    // Selection geometry can include boxes attached to a neighboring cluster.
-                    // Remove every box first, then add exactly the boxes owned by this span.
-                    let mut ranges = vec![native.origin.x..native.right()];
-
-                    for inline_box in layout
-                        .boxes
-                        .iter()
-                        .filter(|right| right.line_index == line_idx)
-                    {
-                        let left = inline_box.bounds.origin.x;
-                        let right = inline_box.bounds.right();
-
-                        ranges = ranges
-                            .into_iter()
-                            .flat_map(|range| {
-                                let mut pieces = Vec::new();
-
-                                if range.start < left {
-                                    pieces.push(range.start..range.end.min(left));
-                                }
-
-                                if range.end > right {
-                                    pieces.push(range.start.max(right)..range.end);
-                                }
-
-                                pieces
-                            })
-                            .collect();
-                    }
-
-                    for range in ranges {
-                        if range.end > range.start {
-                            regions.push(Bounds::new(
-                                origin + crate::point(range.start, line.origin.y),
-                                size(range.end - range.start, line.size.height),
-                            ));
-                        }
-                    }
+                for (native, _line_idx) in text_regions {
+                    regions.push(Bounds::new(origin + native.origin, native.size));
                 }
 
-                for inline_box in &layout.boxes {
-                    if span.box_range.contains(&(inline_box.id as usize)) {
+                for box_idx in span.box_range.clone() {
+                    if let Some(inline_box) = boxes_by_id.get(box_idx).and_then(|slot| *slot) {
                         regions.push(Bounds::new(
                             origin + inline_box.bounds.origin,
                             inline_box.bounds.size,
@@ -434,6 +408,7 @@ impl InlineDivFrameState {
         child_ids: &[LayoutId],
         scroll_offset: Point<Pixels>,
         order: Option<&[usize]>,
+        collect_bounds: bool,
         window: &mut Window,
         context: &mut App,
     ) -> Vec<Bounds<Pixels>> {
@@ -454,10 +429,14 @@ impl InlineDivFrameState {
                 }
             }
 
-            child_ids
-                .iter()
-                .map(|node_id| window.layout_bounds(*node_id))
-                .collect()
+            if collect_bounds {
+                child_ids
+                    .iter()
+                    .map(|node_id| window.layout_bounds(*node_id))
+                    .collect()
+            } else {
+                Vec::new()
+            }
         })
     }
 
