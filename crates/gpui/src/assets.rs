@@ -6,7 +6,10 @@ use std::{
     borrow::Cow,
     fmt,
     hash::Hash,
-    sync::atomic::{AtomicUsize, Ordering::SeqCst},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering::SeqCst},
+    },
 };
 
 /// A source of assets for this app to use.
@@ -27,6 +30,94 @@ impl AssetSource for () {
         Ok(vec![])
     }
 }
+
+/// A dynamically sized collection of asset sources.
+#[derive(Default)]
+pub struct AssetSourceCollection {
+    sources: SmallVec<[Arc<dyn AssetSource>; 2]>,
+}
+
+impl AssetSourceCollection {
+    /// Creates an empty collection.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds an asset source to the end of the collection.
+    pub fn push(&mut self, asset_source: impl AssetSource) {
+        self.sources.push(Arc::new(asset_source));
+    }
+}
+
+impl AssetSource for AssetSourceCollection {
+    fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        for source in &self.sources {
+            if let Some(asset) = source.load(path)? {
+                return Ok(Some(asset));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        let mut assets = Vec::new();
+
+        for source in &self.sources {
+            assets.extend(source.list(path)?);
+        }
+
+        Ok(assets)
+    }
+}
+
+/// Creates an [`AssetSourceCollection`] from a list of asset sources.
+#[macro_export]
+macro_rules! asset_source_collection {
+    ($($asset_source:expr),* $(,)?) => {{
+        let mut collection = $crate::AssetSourceCollection::new();
+        $(collection.push($asset_source);)*
+        collection
+    }};
+}
+
+macro_rules! impl_asset_source_for_tuples {
+    ($(($($source:ident: $index:tt),+)),+ $(,)?) => {
+        $(
+            impl<$($source: AssetSource),+> AssetSource for ($($source,)+) {
+                fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+                    $(
+                        if let Some(asset) = self.$index.load(path)? {
+                            return Ok(Some(asset));
+                        }
+                    )+
+
+                    Ok(None)
+                }
+
+                fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+                    let mut assets = Vec::new();
+
+                    $(
+                        assets.extend(self.$index.list(path)?);
+                    )+
+
+                    Ok(assets)
+                }
+            }
+        )+
+    };
+}
+
+impl_asset_source_for_tuples!(
+    (T0: 0, T1: 1),
+    (T0: 0, T1: 1, T2: 2),
+    (T0: 0, T1: 1, T2: 2, T3: 3),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6),
+    (T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7),
+);
 
 /// A unique identifier for the image cache
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -119,6 +210,164 @@ impl fmt::Debug for RenderImage {
 mod tests {
     use super::*;
     use smallvec::SmallVec;
+    use std::sync::{Arc, Mutex};
+
+    struct TestAssetSource<const INDEX: usize> {
+        asset: Option<&'static [u8]>,
+        files: &'static [&'static str],
+        loads: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl<const INDEX: usize> AssetSource for TestAssetSource<INDEX> {
+        fn load(&self, _path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+            self.loads.lock().unwrap().push(INDEX);
+            Ok(self.asset.map(Cow::Borrowed))
+        }
+
+        fn list(&self, _path: &str) -> Result<Vec<SharedString>> {
+            Ok(self.files.iter().copied().map(SharedString::from).collect())
+        }
+    }
+
+    #[test]
+    fn asset_source_collection_loads_and_lists_in_order() {
+        let loads = Arc::new(Mutex::new(Vec::new()));
+
+        let mut sources = AssetSourceCollection::new();
+        sources.push(TestAssetSource::<0> {
+            asset: None,
+            files: &["a", "shared"],
+            loads: loads.clone(),
+        });
+        sources.push(TestAssetSource::<1> {
+            asset: Some(b"asset"),
+            files: &["b", "shared"],
+            loads: loads.clone(),
+        });
+        sources.push(TestAssetSource::<2> {
+            asset: Some(b"shadowed"),
+            files: &["c"],
+            loads: loads.clone(),
+        });
+
+        assert_eq!(
+            sources.list("").unwrap(),
+            vec![
+                SharedString::from("a"),
+                SharedString::from("shared"),
+                SharedString::from("b"),
+                SharedString::from("shared"),
+                SharedString::from("c"),
+            ]
+        );
+        assert_eq!(
+            sources.load("asset").unwrap().as_deref(),
+            Some(b"asset".as_slice())
+        );
+        assert_eq!(*loads.lock().unwrap(), vec![0, 1]);
+    }
+
+    #[test]
+    fn asset_source_collection_macro_builds_collection() {
+        let loads = Arc::new(Mutex::new(Vec::new()));
+
+        let sources: AssetSourceCollection = asset_source_collection![
+            TestAssetSource::<0> {
+                asset: None,
+                files: &[],
+                loads: loads.clone(),
+            },
+            TestAssetSource::<1> {
+                asset: Some(b"asset"),
+                files: &[],
+                loads: loads.clone(),
+            },
+        ];
+
+        assert_eq!(
+            sources.load("asset").unwrap().as_deref(),
+            Some(b"asset".as_slice())
+        );
+        assert_eq!(*loads.lock().unwrap(), vec![0, 1]);
+    }
+
+    #[test]
+    fn tuple_asset_sources_list_assets_in_order() {
+        let loads = Arc::new(Mutex::new(Vec::new()));
+
+        let sources = (
+            TestAssetSource::<0> {
+                asset: None,
+                files: &["a", "shared"],
+                loads: loads.clone(),
+            },
+            TestAssetSource::<1> {
+                asset: None,
+                files: &["b", "shared"],
+                loads,
+            },
+        );
+
+        assert_eq!(
+            sources.list("").unwrap(),
+            vec![
+                SharedString::from("a"),
+                SharedString::from("shared"),
+                SharedString::from("b"),
+                SharedString::from("shared"),
+            ]
+        );
+    }
+
+    #[test]
+    fn tuple_asset_sources_load_first_match() {
+        let loads = Arc::new(Mutex::new(Vec::new()));
+
+        let sources = (
+            TestAssetSource::<0> {
+                asset: None,
+                files: &[],
+                loads: loads.clone(),
+            },
+            TestAssetSource::<1> {
+                asset: Some(b"asset"),
+                files: &[],
+                loads: loads.clone(),
+            },
+            TestAssetSource::<2> {
+                asset: Some(b"shadowed"),
+                files: &[],
+                loads: loads.clone(),
+            },
+        );
+
+        assert_eq!(
+            sources.load("asset").unwrap().as_deref(),
+            Some(b"asset".as_slice())
+        );
+        assert_eq!(*loads.lock().unwrap(), vec![0, 1]);
+    }
+
+    #[test]
+    fn tuple_asset_sources_return_none_when_all_sources_miss() {
+        let loads = Arc::new(Mutex::new(Vec::new()));
+
+        let sources = (
+            TestAssetSource::<0> {
+                asset: None,
+                files: &[],
+                loads: loads.clone(),
+            },
+            TestAssetSource::<1> {
+                asset: None,
+                files: &[],
+                loads: loads.clone(),
+            },
+        );
+
+        assert_eq!(sources.load("missing").unwrap(), None);
+        assert_eq!(*loads.lock().unwrap(), vec![0, 1]);
+    }
 
     #[test]
     fn empty_render_image_does_not_panic() {
