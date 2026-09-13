@@ -1155,6 +1155,9 @@ pub struct Window {
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
+    /// Bounds of the parent `Div` currently prepainting this element as one of its children.
+    /// Inset transitions use these bounds to resolve `auto` from the child's rendered position.
+    style_transition_containing_bounds: Option<Bounds<Pixels>>,
     pub(crate) element_opacity: f32,
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
@@ -1856,6 +1859,7 @@ impl Window {
             text_style_stack: Vec::new(),
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
+            style_transition_containing_bounds: None,
             content_mask_stack: Vec::new(),
             element_opacity: 1.0,
             requested_autoscroll: None,
@@ -3341,13 +3345,22 @@ impl Window {
             traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
 
             for deferred_draw_ix in traversal_order {
-                let (element, parent_node, current_view, rem_size, absolute_offset, prepaint_range) = {
+                let (
+                    priority,
+                    element,
+                    parent_node,
+                    current_view,
+                    rem_size,
+                    absolute_offset,
+                    prepaint_range,
+                ) = {
                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                     self.element_id_stack
                         .clone_from(&deferred_draw.element_id_stack);
                     self.text_style_stack
                         .clone_from(&deferred_draw.text_style_stack);
                     (
+                        deferred_draw.priority,
                         deferred_draw.element.take(),
                         deferred_draw.parent_node,
                         deferred_draw.current_view,
@@ -3363,7 +3376,9 @@ impl Window {
                     self.with_rendered_view(current_view, |window| {
                         window.with_rem_size(Some(rem_size), |window| {
                             window.with_absolute_element_offset(absolute_offset, |window| {
+                                crate::DeferredPriorityStackCache::push(priority, cx);
                                 element.prepaint(window, cx);
+                                crate::DeferredPriorityStackCache::pop(cx);
                             });
                         });
                     });
@@ -3633,6 +3648,22 @@ impl Window {
 
         let abs_offset = self.element_offset() + offset;
         self.with_absolute_element_offset(abs_offset, f)
+    }
+
+    pub(crate) fn with_style_transition_containing_bounds<R>(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_prepaint();
+        let previous_bounds = self.style_transition_containing_bounds.replace(bounds);
+        let result = f(self);
+        self.style_transition_containing_bounds = previous_bounds;
+        result
+    }
+
+    pub(crate) fn style_transition_containing_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.style_transition_containing_bounds
     }
 
     /// Updates the global element offset based on the given offset. This is used to implement
@@ -6121,6 +6152,14 @@ impl Window {
         self.platform_window.minimize();
     }
 
+    /// Show or hide the current window at the platform level.
+    ///
+    /// Call [`Window::activate_window`] separately when the window should also receive focus.
+    /// The window manager may still focus a window when it is shown.
+    pub fn set_visible(&self, visible: bool) {
+        self.platform_window.set_visible(visible);
+    }
+
     /// Toggle full screen status on the current window at the platform level.
     pub fn toggle_fullscreen(&self) {
         self.platform_window.toggle_fullscreen();
@@ -7496,6 +7535,31 @@ mod tests {
                 ));
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_window_visibility_can_be_changed(cx: &mut TestAppContext) {
+        for show in [false, true] {
+            let window = cx.update(|cx| {
+                cx.open_window(
+                    WindowOptions {
+                        show,
+                        ..Default::default()
+                    },
+                    |_, cx| cx.new(|_| EmptyView),
+                )
+                .unwrap()
+            });
+            let platform_window = cx.test_window(window.into());
+            assert_eq!(platform_window.is_visible(), show);
+
+            for visible in [false, false, true, true, false, true] {
+                window
+                    .update(cx, |_, window, _| window.set_visible(visible))
+                    .unwrap();
+                assert_eq!(platform_window.is_visible(), visible);
+            }
+        }
     }
 
     #[gpui::test]
