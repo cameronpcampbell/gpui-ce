@@ -58,7 +58,10 @@ futures.workspace = true
 gpui.workspace = true
 gpui_util.workspace = true
 gpui_wgpu = { workspace = true, optional = true }
-gpui_parley = { workspace = true, features = ["system-fonts", "fontconfig-dlopen"] }
+gpui_parley = { workspace = true, features = [
+  "system-fonts",
+  "fontconfig-dlopen",
+] }
 itertools.workspace = true
 libc.workspace = true
 log.workspace = true

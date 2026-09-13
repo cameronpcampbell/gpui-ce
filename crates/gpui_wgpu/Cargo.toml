@@ -24,7 +24,6 @@ gpui_render.workspace = true
 anyhow.workspace = true
 collections.workspace = true
 etagere.workspace = true
-itertools.workspace = true
 image = { workspace = true, optional = true }
 log.workspace = true
 parking_lot.workspace = true
