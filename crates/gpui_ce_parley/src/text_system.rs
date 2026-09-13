@@ -4456,13 +4456,13 @@ mod tests {
                     .unwrap();
 
                 match parent_context {
-                    ParentContext::Block => {
+                    ParentContext::Block | ParentContext::Default => {
                         assert!(span.size.width > px(80.));
                         assert!(span.size.height >= px(48.));
                         assert!(badge.origin.y > span.origin.y);
                     }
 
-                    _ => {
+                    ParentContext::Flex | ParentContext::Grid => {
                         assert_close(span.size.width, px(80.), "independent inline width");
                         assert!((span.size.height - px(31.)).abs() < px(1.));
                         assert!(badge.origin.x >= span.right());

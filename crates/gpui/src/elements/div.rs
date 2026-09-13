@@ -4681,6 +4681,50 @@ mod tests {
         );
     }
 
+    #[gpui::test]
+    fn default_block_preserves_grid_flow_and_hides_none_descendants(context: &mut TestAppContext) {
+        let hidden_prepainted = Rc::new(Cell::new(false));
+        let hidden_prepaint = hidden_prepainted.clone();
+        let window = context.add_empty_window();
+
+        window.draw(
+            point(px(10.), px(20.)),
+            size(px(200.), px(100.)),
+            move |_, _| {
+                div()
+                    .w(px(200.))
+                    .child(
+                        div()
+                            .grid()
+                            .w_full()
+                            .grid_cols(2)
+                            .debug_selector(|| "grid".into())
+                            .child(div().h(px(20.)).debug_selector(|| "grid-cell-1".into()))
+                            .child(div().h(px(30.)).debug_selector(|| "grid-cell-2".into())),
+                    )
+                    .child(div().hidden().h(px(300.)).child(canvas(
+                        move |_, _, _| hidden_prepaint.set(true),
+                        |_, _, _, _| {},
+                    )))
+                    .child(div().h(px(10.)).debug_selector(|| "following-block".into()))
+                    .into_any_element()
+            },
+        );
+
+        let [grid, first_cell, second_cell, following] =
+            ["grid", "grid-cell-1", "grid-cell-2", "following-block"].map(|selector| {
+                window
+                    .update(|window, _| window.rendered_frame.debug_bounds.get(selector).copied())
+                    .unwrap_or_else(|| panic!("{selector} was not rendered"))
+            });
+
+        assert_eq!(first_cell.origin.y, grid.origin.y);
+        assert_eq!(second_cell.origin.y, grid.origin.y);
+        assert!(second_cell.origin.x > first_cell.origin.x);
+        assert_eq!(following.origin.y, grid.bottom());
+        assert!(!hidden_prepainted.get());
+    }
+
     struct GroupHoverTestView {
         render_count: Rc<Cell<usize>>,
         anonymous_paint_count: Rc<Cell<usize>>,
