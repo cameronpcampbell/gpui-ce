@@ -18,9 +18,7 @@ fontconfig-dlopen = ["fontique/fontconfig-dlopen"]
 anyhow.workspace = true
 fontique = { workspace = true, features = ["std"] }
 gpui.workspace = true
-log.workspace = true
 parking_lot.workspace = true
-palette.workspace = true
 parley = { workspace = true, features = ["complex-scripts"] }
 skrifa = { workspace = true, features = ["std"] }
 swash.workspace = true
