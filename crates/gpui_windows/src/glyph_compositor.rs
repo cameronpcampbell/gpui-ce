@@ -7,16 +7,22 @@ use anyhow::{Context, Result, ensure};
 use gpui::{Bounds, DevicePixels, Size};
 use gpui_render::shaders::emoji_rasterization::GlyphLayerTextureParams;
 use parking_lot::Mutex;
-use wgsl_rs::std::{vec2i, vec3f, vec4f};
+use wgsl_rs::std::vec4f;
 use windows::Win32::Graphics::{
     Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, Direct3D11::*, Dxgi::Common::*,
 };
 
-use crate::{directx_devices::DirectXDevices, directx_renderer::shader_resources::ShaderModule};
+use crate::{
+    directx_devices::DirectXDevices,
+    directx_renderer::{
+        create_constant_buffer, create_fragment_shader, create_premultiplied_blend_state,
+        create_vertex_shader, shader_resources::ShaderModule,
+    },
+};
 
 const MAX_TEXTURE_DIMENSION: i32 = 16384;
-// HLSL aligns the trailing float3 to a new register; the shared Rust struct is 64 bytes.
-const PARAMS_BUFFER_SIZE: u32 = 80;
+const PARAMS_BUFFER_SIZE: u32 =
+    std::mem::size_of::<GlyphLayerTextureParams>().next_multiple_of(16) as u32;
 
 pub(crate) struct ColorGlyphLayer {
     /// Layer placement relative to the complete glyph bitmap's top-left corner.
@@ -115,12 +121,8 @@ impl CompositorState {
     fn new(devices: &DirectXDevices) -> Result<Self> {
         let device = &devices.device;
         let bytecode = ShaderModule::EmojiRasterization.bytecode()?;
-        let mut vertex = None;
-        let mut fragment = None;
-        unsafe {
-            device.CreateVertexShader(bytecode.vertex, None, Some(&mut vertex))?;
-            device.CreatePixelShader(bytecode.fragment, None, Some(&mut fragment))?;
-        }
+        let vertex = create_vertex_shader(device, bytecode.vertex)?;
+        let fragment = create_fragment_shader(device, bytecode.fragment)?;
 
         let mut sampler = None;
         let sampler_desc = D3D11_SAMPLER_DESC {
@@ -133,20 +135,7 @@ impl CompositorState {
             ..Default::default()
         };
         unsafe { device.CreateSamplerState(&sampler_desc, Some(&mut sampler)) }?;
-
-        let mut blend = None;
-        let mut blend_desc = D3D11_BLEND_DESC::default();
-        blend_desc.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
-            BlendEnable: true.into(),
-            SrcBlend: D3D11_BLEND_ONE,
-            DestBlend: D3D11_BLEND_INV_SRC_ALPHA,
-            BlendOp: D3D11_BLEND_OP_ADD,
-            SrcBlendAlpha: D3D11_BLEND_ONE,
-            DestBlendAlpha: D3D11_BLEND_INV_SRC_ALPHA,
-            BlendOpAlpha: D3D11_BLEND_OP_ADD,
-            RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
-        };
-        unsafe { device.CreateBlendState(&blend_desc, Some(&mut blend)) }?;
+        let blend = create_premultiplied_blend_state(device)?;
 
         let mut rasterizer = None;
         let rasterizer_desc = D3D11_RASTERIZER_DESC {
@@ -156,26 +145,17 @@ impl CompositorState {
             ..Default::default()
         };
         unsafe { device.CreateRasterizerState(&rasterizer_desc, Some(&mut rasterizer)) }?;
-
-        let mut params = None;
-        let params_desc = D3D11_BUFFER_DESC {
-            ByteWidth: PARAMS_BUFFER_SIZE,
-            Usage: D3D11_USAGE_DYNAMIC,
-            BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-            ..Default::default()
-        };
-        unsafe { device.CreateBuffer(&params_desc, None, Some(&mut params)) }?;
+        let params = create_constant_buffer(device, PARAMS_BUFFER_SIZE as usize)?;
 
         Ok(Self {
             device: device.clone(),
             context: devices.device_context.clone(),
             sampler: sampler.context("missing glyph sampler")?,
-            blend: blend.context("missing glyph blend state")?,
+            blend,
             rasterizer: rasterizer.context("missing glyph rasterizer state")?,
-            vertex: vertex.context("missing glyph vertex shader")?,
-            fragment: fragment.context("missing glyph fragment shader")?,
-            params: params.context("missing glyph constants buffer")?,
+            vertex,
+            fragment,
+            params,
             target: None,
         })
     }
@@ -208,7 +188,6 @@ impl CompositorState {
                 .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
             self.context.VSSetShader(&self.vertex, None);
             self.context.PSSetShader(&self.fragment, None);
-            self.context.VSSetConstantBuffers(0, Some(&params_buffer));
             self.context.PSSetConstantBuffers(0, Some(&params_buffer));
             self.context
                 .OMSetRenderTargets(Some(&[Some(target.view.clone())]), None);
@@ -221,8 +200,6 @@ impl CompositorState {
         for layer in layers {
             let layer_view = upload_layer(&self.device, layer)?;
             let params = GlyphLayerTextureParams {
-                bounds_origin: vec2i(layer.bounds.origin.x.0, layer.bounds.origin.y.0),
-                bounds_size: vec2i(layer.bounds.size.width.0, layer.bounds.size.height.0),
                 run_color: vec4f(
                     layer.color[0],
                     layer.color[1],
@@ -236,7 +213,6 @@ impl CompositorState {
                     gamma_ratios[3],
                 ),
                 grayscale_enhanced_contrast,
-                padding: vec3f(0.0, 0.0, 0.0),
             };
 
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();

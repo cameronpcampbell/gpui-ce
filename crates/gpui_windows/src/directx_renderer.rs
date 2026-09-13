@@ -1634,7 +1634,7 @@ impl DirectXRenderPipelines {
             "path_rasterization_pipeline",
             ShaderModule::PathRasterization,
             32,
-            create_blend_state_for_path_rasterization(device)?,
+            create_premultiplied_blend_state(device)?,
         )?;
         let path_sprite_pipeline = PipelineState::new(
             device,
@@ -2331,7 +2331,7 @@ fn create_blend_state_for_subpixel_rendering(device: &ID3D11Device) -> Result<ID
 }
 
 #[inline]
-fn create_blend_state_for_path_rasterization(device: &ID3D11Device) -> Result<ID3D11BlendState> {
+pub(crate) fn create_premultiplied_blend_state(device: &ID3D11Device) -> Result<ID3D11BlendState> {
     // If the feature level is set to greater than D3D_FEATURE_LEVEL_9_3, the display
     // device performs the blend in linear space, which is ideal.
     let mut desc = D3D11_BLEND_DESC::default();
@@ -2372,7 +2372,10 @@ fn create_blend_state_for_path_sprite(device: &ID3D11Device) -> Result<ID3D11Ble
 
 /// Create a CPU-writable dynamic constant buffer of the given byte size (rounded up to 16).
 #[inline]
-fn create_constant_buffer(device: &ID3D11Device, byte_size: usize) -> Result<ID3D11Buffer> {
+pub(crate) fn create_constant_buffer(
+    device: &ID3D11Device,
+    byte_size: usize,
+) -> Result<ID3D11Buffer> {
     let desc = D3D11_BUFFER_DESC {
         ByteWidth: byte_size.next_multiple_of(16) as u32,
         Usage: D3D11_USAGE_DYNAMIC,
@@ -2400,7 +2403,10 @@ fn create_blend_state_no_blend(device: &ID3D11Device) -> Result<ID3D11BlendState
 }
 
 #[inline]
-fn create_vertex_shader(device: &ID3D11Device, bytes: &[u8]) -> Result<ID3D11VertexShader> {
+pub(crate) fn create_vertex_shader(
+    device: &ID3D11Device,
+    bytes: &[u8],
+) -> Result<ID3D11VertexShader> {
     unsafe {
         let mut shader = None;
         device.CreateVertexShader(bytes, None, Some(&mut shader))?;
@@ -2409,7 +2415,10 @@ fn create_vertex_shader(device: &ID3D11Device, bytes: &[u8]) -> Result<ID3D11Ver
 }
 
 #[inline]
-fn create_fragment_shader(device: &ID3D11Device, bytes: &[u8]) -> Result<ID3D11PixelShader> {
+pub(crate) fn create_fragment_shader(
+    device: &ID3D11Device,
+    bytes: &[u8],
+) -> Result<ID3D11PixelShader> {
     unsafe {
         let mut shader = None;
         device.CreatePixelShader(bytes, None, Some(&mut shader))?;
