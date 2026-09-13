@@ -8,14 +8,10 @@ use gpui::{GlyphId, PlatformTextSystem, font as gpui_font, px, rgba};
 #[cfg(test)]
 use gpui_parley::{ParleyTextSystem, SystemFonts};
 
-#[cfg(test)]
-use std::borrow::Cow;
-
 use anyhow::{Context as _, Result, anyhow, ensure};
 use core_foundation::{
-    array::{CFArray, CFArrayRef},
-    base::{CFIndex, CFType, TCFType},
-    data::{CFData, CFDataRef},
+    base::{CFType, TCFType},
+    data::CFData,
     dictionary::CFDictionary,
     number::CFNumber,
     string::CFString,
@@ -39,10 +35,13 @@ use gpui::{
 use gpui_parley::{GlyphRasterizer, RasterFace};
 use objc2::rc::autoreleasepool;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     f64::consts::PI,
     sync::{Arc, OnceLock},
 };
+
+const TTC_TAG: &[u8; 4] = b"ttcf";
 
 #[allow(non_upper_case_globals)]
 const kCGImageAlphaOnly: u32 = 7;
@@ -50,7 +49,7 @@ const kCGImageAlphaOnly: u32 = 7;
 /// CoreText and CoreGraphics rasterization for the exact face selected by Parley.
 pub(crate) struct MacGlyphRasterizer {
     faces: HashMap<gpui::FontId, NativeFace>,
-    sources: HashMap<u64, Arc<SendCFData>>,
+    sources: HashMap<(u64, u32), Arc<SendCFData>>,
 }
 
 struct NativeFace {
@@ -85,15 +84,19 @@ impl MacGlyphRasterizer {
             return Ok(&self.faces[&face.font_id]);
         }
 
-        let source = self
-            .sources
-            .entry(face.source_id)
-            .or_insert_with(|| {
-                Arc::new(SendCFData {
-                    data: CFData::from_buffer(face.data),
-                })
-            })
-            .clone();
+        let source_key = (face.source_id, face.face_index);
+        let source = if let Some(source) = self.sources.get(&source_key) {
+            source.clone()
+        } else {
+            let sfnt = sfnt_for_face(face.data, face.face_index)?;
+            let source = Arc::new(SendCFData {
+                data: CFData::from_buffer(sfnt.as_ref()),
+            });
+            self.sources.insert(source_key, source.clone());
+
+            source
+        };
+
         let native = autoreleasepool(|_| NativeFace::new(face, source)).with_context(|| {
             format!(
                 "CoreText could not create FontId {:?}, face index {}, variations {:?}",
@@ -275,27 +278,9 @@ impl GlyphRasterizer for MacGlyphRasterizer {
 
 impl NativeFace {
     fn new(face: &RasterFace<'_>, source_data: Arc<SendCFData>) -> Result<Self> {
-        let descriptors_ref = unsafe {
-            CTFontManagerCreateFontDescriptorsFromData(source_data.data.as_concrete_TypeRef())
-        };
-
-        ensure!(
-            !descriptors_ref.is_null(),
-            "CoreText rejected the supplied font bytes"
-        );
-        let descriptors: CFArray<CTFontDescriptor> =
-            unsafe { CFArray::wrap_under_create_rule(descriptors_ref) };
-
-        let descriptor = descriptors.get(face.face_index as CFIndex).ok_or_else(|| {
-            anyhow!(
-                "collection contains {} faces, requested {}",
-                descriptors.len(),
-                face.face_index
-            )
-        })?;
-
         let mut descriptor =
-            unsafe { CTFontDescriptor::wrap_under_get_rule(descriptor.as_concrete_TypeRef()) };
+            core_text::font_manager::create_font_descriptor_with_data(source_data.data.clone())
+                .map_err(|()| anyhow!("CoreText rejected the selected font face"))?;
 
         if !face.variations.is_empty() {
             let variations = face
@@ -328,6 +313,63 @@ impl NativeFace {
             _source_data: source_data,
         })
     }
+}
+
+fn sfnt_for_face(data: &[u8], face_index: u32) -> Result<Cow<'_, [u8]>> {
+    if data.get(..4) != Some(TTC_TAG) {
+        ensure!(
+            face_index == 0,
+            "single font contains only face 0, requested {face_index}"
+        );
+
+        return Ok(Cow::Borrowed(data));
+    }
+
+    let face_count = read_u32(data, 8).context("truncated font collection header")?;
+    ensure!(
+        face_index < face_count,
+        "collection contains {face_count} faces, requested {face_index}"
+    );
+
+    let face_offset_position = 12usize
+        .checked_add(face_index as usize * 4)
+        .context("font collection face offset overflow")?;
+    let face_offset = read_u32(data, face_offset_position)
+        .context("truncated font collection face offsets")? as usize;
+    let table_count =
+        read_u16(data, face_offset + 4).context("truncated selected SFNT header")? as usize;
+    let directory_len = 12usize
+        .checked_add(
+            table_count
+                .checked_mul(16)
+                .context("selected SFNT table count overflow")?,
+        )
+        .context("selected SFNT directory length overflow")?;
+    let directory_end = face_offset
+        .checked_add(directory_len)
+        .context("selected SFNT directory offset overflow")?;
+    let directory = data
+        .get(face_offset..directory_end)
+        .context("truncated selected SFNT directory")?;
+
+    // Collection table offsets refer to the complete file. Keep that backing data and replace
+    // only the collection header with the selected face's SFNT directory.
+    let mut sfnt = data.to_vec();
+    sfnt[..directory_len].copy_from_slice(directory);
+
+    Ok(Cow::Owned(sfnt))
+}
+
+fn read_u16(data: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(
+        data.get(offset..offset + 2)?.try_into().ok()?,
+    ))
+}
+
+fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(
+        data.get(offset..offset + 4)?.try_into().ok()?,
+    ))
 }
 
 fn configure_context(
@@ -405,17 +447,64 @@ fn font_smoothing_allowed_by_user() -> bool {
     })
 }
 
-#[link(name = "CoreText", kind = "framework")]
-unsafe extern "C" {
-    fn CTFontManagerCreateFontDescriptorsFromData(data: CFDataRef) -> CFArrayRef;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const IBM_PLEX: &[u8] =
+        include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf");
     const SOURCE_SERIF: &[u8] =
         include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
+
+    #[test]
+    fn collection_face_selection_uses_the_physical_face_index() {
+        let collection = test_collection(&[SOURCE_SERIF, IBM_PLEX]);
+        let sfnt = sfnt_for_face(&collection, 1).unwrap();
+        let data = CFData::from_buffer(sfnt.as_ref());
+        let descriptor = core_text::font_manager::create_font_descriptor_with_data(data).unwrap();
+        let font = font::new_from_descriptor(&descriptor, 16.0);
+
+        assert_eq!(font.postscript_name(), "IBMPlexSans");
+
+        let character = ['A' as u16];
+        let mut glyph = [0];
+        let mapped =
+            unsafe { font.get_glyphs_for_characters(character.as_ptr(), glyph.as_mut_ptr(), 1) };
+
+        assert!(mapped);
+        assert_ne!(glyph[0], 0);
+    }
+
+    fn test_collection(faces: &[&[u8]]) -> Vec<u8> {
+        let header_len = 12 + faces.len() * 4;
+        let mut collection = vec![0; header_len];
+        collection[..4].copy_from_slice(TTC_TAG);
+        collection[4..8].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        collection[8..12].copy_from_slice(&(faces.len() as u32).to_be_bytes());
+
+        for (face_idx, face) in faces.iter().enumerate() {
+            while collection.len() % 4 != 0 {
+                collection.push(0);
+            }
+
+            let face_offset = collection.len();
+            let offset_position = 12 + face_idx * 4;
+            collection[offset_position..offset_position + 4]
+                .copy_from_slice(&(face_offset as u32).to_be_bytes());
+            collection.extend_from_slice(face);
+
+            let table_count = read_u16(face, 4).unwrap() as usize;
+            for table_idx in 0..table_count {
+                let table_offset_position = face_offset + 12 + table_idx * 16 + 8;
+                let table_offset = read_u32(&collection, table_offset_position).unwrap();
+                let collection_offset = table_offset + face_offset as u32;
+                collection[table_offset_position..table_offset_position + 4]
+                    .copy_from_slice(&collection_offset.to_be_bytes());
+            }
+        }
+
+        collection
+    }
 
     #[test]
     fn in_memory_variable_font_renders_stably_across_glyphs_and_sizes() {

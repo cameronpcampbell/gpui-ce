@@ -103,13 +103,7 @@ impl GlyphCompositor {
         let Some(state) = state.as_mut() else {
             return Ok(None);
         };
-        validate_layers(layers, size)?;
-        ensure!(
-            gamma_ratios.iter().all(|ratio| ratio.is_finite())
-                && grayscale_enhanced_contrast.is_finite()
-                && grayscale_enhanced_contrast >= 0.0,
-            "invalid glyph contrast or gamma settings"
-        );
+        validate_composition_inputs(layers, size, gamma_ratios, grayscale_enhanced_contrast)?;
 
         state
             .composite(layers, size, gamma_ratios, grayscale_enhanced_contrast)
@@ -399,6 +393,23 @@ fn validate_layers(layers: &[ColorGlyphLayer], size: Size<DevicePixels>) -> Resu
             "glyph layer origin exceeds the Direct3D 11 viewport limits"
         );
     }
+
+    Ok(())
+}
+
+pub(crate) fn validate_composition_inputs(
+    layers: &[ColorGlyphLayer],
+    size: Size<DevicePixels>,
+    gamma_ratios: [f32; 4],
+    grayscale_enhanced_contrast: f32,
+) -> Result<()> {
+    validate_layers(layers, size)?;
+    ensure!(
+        gamma_ratios.iter().all(|ratio| ratio.is_finite())
+            && grayscale_enhanced_contrast.is_finite()
+            && grayscale_enhanced_contrast >= 0.0,
+        "invalid glyph contrast or gamma settings"
+    );
 
     Ok(())
 }

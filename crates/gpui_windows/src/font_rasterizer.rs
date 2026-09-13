@@ -8,9 +8,12 @@ use gpui_parley::{ParleyTextSystem, SystemFonts};
 use std::borrow::Cow;
 
 #[cfg(test)]
+use anyhow::anyhow;
+
+#[cfg(test)]
 use crate::DirectXDevices;
 
-use crate::glyph_compositor::{ColorGlyphLayer, GlyphCompositor};
+use crate::glyph_compositor::{ColorGlyphLayer, GlyphCompositor, validate_composition_inputs};
 use anyhow::{Context as _, Result, bail, ensure};
 use gpui::{
     Bounds, DevicePixels, GlyphRenderMode, PreparedRasterStyle, RasterColorEffect,
@@ -58,7 +61,6 @@ enum WindowsRasterBackend {
 enum NativeRasterUnsupported {
     VariableAxesOnLegacyDirectWrite,
     BitmapColorGlyph,
-    ColrV1Glyph,
 }
 
 impl fmt::Display for NativeRasterUnsupported {
@@ -69,9 +71,6 @@ impl fmt::Display for NativeRasterUnsupported {
             }
             Self::BitmapColorGlyph => formatter
                 .write_str("the DirectWrite layer rasterizer does not handle bitmap glyphs"),
-            Self::ColrV1Glyph => {
-                formatter.write_str("the DirectWrite layer rasterizer does not handle COLRv1")
-            }
         }
     }
 }
@@ -100,7 +99,7 @@ impl WindowsGlyphRasterizer {
 
 impl GlyphRasterizer for WindowsGlyphRasterizer {
     fn supports_color_glyph(&self, kind: ColorGlyphKind) -> bool {
-        matches!(kind, ColorGlyphKind::ColrV0 | ColorGlyphKind::Bitmap)
+        supports_windows_color_glyph(kind)
     }
 
     fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
@@ -161,7 +160,6 @@ struct NativeFace {
 
 struct NativeSource {
     file: IDWriteFontFile,
-    _data: Box<[u8]>,
 }
 
 struct GlyphAnalysis {
@@ -543,18 +541,25 @@ impl DirectWriteGlyphRasterizer {
         layers: &[ColorGlyphLayer],
         bitmap_size: Size<DevicePixels>,
     ) -> Result<Vec<u8>> {
-        if let Some(compositor) = &self.compositor
-            && let Some(pixels) = compositor.composite(
+        validate_composition_inputs(
+            layers,
+            bitmap_size,
+            self.color_rendering.gamma_ratios,
+            self.color_rendering.grayscale_enhanced_contrast,
+        )?;
+        let gpu_result = if let Some(compositor) = &self.compositor {
+            compositor.composite(
                 layers,
                 bitmap_size,
                 self.color_rendering.gamma_ratios,
                 self.color_rendering.grayscale_enhanced_contrast,
-            )?
-        {
-            return Ok(pixels);
-        }
+            )
+        } else {
+            Ok(None)
+        };
 
-        Ok(composite_layers_cpu(
+        Ok(resolve_color_composition(
+            gpu_result,
             layers,
             bitmap_size,
             &self.color_rendering,
@@ -631,17 +636,13 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
             "invalid raster scale factor"
         );
         let color_kind = if params.raster_style.mode == GlyphRenderMode::Color {
-            face.color_glyph_kind(params.glyph_id)?
+            face.supported_color_glyph_kind(params.glyph_id, supports_windows_color_glyph)?
         } else {
             None
         };
 
         if color_kind == Some(ColorGlyphKind::Bitmap) {
             return Err(NativeRasterUnsupported::BitmapColorGlyph.into());
-        }
-
-        if color_kind == Some(ColorGlyphKind::ColrV1) {
-            return Err(NativeRasterUnsupported::ColrV1Glyph.into());
         }
 
         let font_face = self.native_face(&face)?;
@@ -670,6 +671,10 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
             TextRenderingMode::Grayscale
         }
     }
+}
+
+fn supports_windows_color_glyph(kind: ColorGlyphKind) -> bool {
+    matches!(kind, ColorGlyphKind::ColrV0 | ColorGlyphKind::Bitmap)
 }
 
 impl NativeFace {
@@ -729,18 +734,20 @@ impl NativeSource {
         loader: &IDWriteInMemoryFontFileLoader,
         bytes: &[u8],
     ) -> Result<Self> {
-        let data: Box<[u8]> = bytes.into();
-        let data_len = u32::try_from(data.len()).context("font data exceeds DirectWrite limits")?;
+        let data_len =
+            u32::try_from(bytes.len()).context("font data exceeds DirectWrite limits")?;
+
+        // A null owner makes DirectWrite copy the bytes before this call returns.
         let file = unsafe {
             loader.CreateInMemoryFontFileReference(
                 factory,
-                data.as_ptr().cast(),
+                bytes.as_ptr().cast(),
                 data_len,
                 None::<&windows::core::IUnknown>,
             )
         }?;
 
-        Ok(Self { file, _data: data })
+        Ok(Self { file })
     }
 }
 
@@ -820,6 +827,23 @@ fn corrected_coverage(sample: f32, color: LayerColor, rendering: &ColorRendering
     let brightness_adjustment = ratios[0] * brightness + ratios[1];
     let correction = brightness_adjustment * contrasted + ratios[2] * brightness + ratios[3];
     (contrasted + contrasted * (1.0 - contrasted) * correction).clamp(0.0, 1.0)
+}
+
+fn resolve_color_composition(
+    gpu_result: Result<Option<Vec<u8>>>,
+    layers: &[ColorGlyphLayer],
+    bitmap_size: Size<DevicePixels>,
+    rendering: &ColorRenderingParams,
+) -> Vec<u8> {
+    match gpu_result {
+        Ok(Some(pixels)) => pixels,
+        Ok(None) => composite_layers_cpu(layers, bitmap_size, rendering),
+        Err(error) => {
+            log::warn!("GPU glyph composition failed; using CPU: {error:#}");
+
+            composite_layers_cpu(layers, bitmap_size, rendering)
+        }
+    }
 }
 
 fn composite_layers_cpu(
@@ -955,6 +979,15 @@ mod tests {
             },
         ];
         let expected = composite_layers_cpu(&layers, bitmap_size, &rasterizer.color_rendering);
+        let recovered = resolve_color_composition(
+            Err(anyhow!("injected GPU composition failure")),
+            &layers,
+            bitmap_size,
+            &rasterizer.color_rendering,
+        );
+
+        assert_eq!(recovered, expected);
+
         let actual = rasterizer.composite_layers(&layers, bitmap_size)?;
         assert_eq!(actual.len(), expected.len());
 

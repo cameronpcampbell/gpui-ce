@@ -1612,8 +1612,8 @@ impl ParleyTextSystem {
                                 id: glyph_id,
                                 position: point(px(glyph.x) - line_x, px(glyph.y - baseline)),
                                 is_emoji: color_glyphs
-                                    .kind(glyph_id)
-                                    .is_some_and(|kind| self.color_glyph_support.supports(kind)),
+                                    .available_kinds(glyph_id)
+                                    .any(|kind| self.color_glyph_support.supports(kind)),
                             }
                         })
                         .collect()

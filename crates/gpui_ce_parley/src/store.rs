@@ -80,11 +80,19 @@ pub struct RasterFace<'a> {
 }
 
 impl RasterFace<'_> {
-    /// Returns the color artwork format carried by one glyph in this face.
-    pub fn color_glyph_kind(&self, glyph_id: GlyphId) -> Result<Option<ColorGlyphKind>> {
+    /// Returns the preferred color artwork format supported by the rasterizer.
+    pub fn supported_color_glyph_kind(
+        &self,
+        glyph_id: GlyphId,
+        supports: impl FnMut(ColorGlyphKind) -> bool,
+    ) -> Result<Option<ColorGlyphKind>> {
         let font = FontRef::from_index(self.data, self.face_index)
             .context("cannot inspect color glyph data in the selected face")?;
-        Ok(ColorGlyphClassifier::new(font).kind(glyph_id))
+
+        Ok(first_supported_color_kind(
+            ColorGlyphClassifier::new(font).available_kinds(glyph_id),
+            supports,
+        ))
     }
 }
 
@@ -200,16 +208,20 @@ impl ColorGlyphClassifier<'_> {
         }
     }
 
-    /// Returns the artwork format used by this glyph.
-    pub(crate) fn kind(&self, glyph_id: GlyphId) -> Option<ColorGlyphKind> {
+    /// Returns every artwork format available for this glyph in preference order.
+    pub(crate) fn available_kinds(
+        &self,
+        glyph_id: GlyphId,
+    ) -> impl Iterator<Item = ColorGlyphKind> {
         let skrifa_id = skrifa::GlyphId::new(glyph_id.0);
-
-        if let Some(glyph) = self.colr.get(skrifa_id) {
-            return Some(match glyph.format() {
-                skrifa::color::ColorGlyphFormat::ColrV0 => ColorGlyphKind::ColrV0,
-                skrifa::color::ColorGlyphFormat::ColrV1 => ColorGlyphKind::ColrV1,
-            });
-        }
+        let has_colr_v1 = self
+            .colr
+            .get_with_format(skrifa_id, skrifa::color::ColorGlyphFormat::ColrV1)
+            .is_some();
+        let has_colr_v0 = self
+            .colr
+            .get_with_format(skrifa_id, skrifa::color::ColorGlyphFormat::ColrV0)
+            .is_some();
 
         let has_color_bitmap = matches!(
             self.bitmap_strikes.format(),
@@ -218,16 +230,27 @@ impl ColorGlyphClassifier<'_> {
             .bitmap_strikes
             .iter()
             .any(|strike| strike.get(skrifa_id).is_some());
-
-        if has_color_bitmap {
-            return Some(ColorGlyphKind::Bitmap);
-        }
-
-        self.svg_ranges
+        let has_svg = self
+            .svg_ranges
             .iter()
-            .any(|&(start, end)| (start..=end).contains(&glyph_id.0))
-            .then_some(ColorGlyphKind::Svg)
+            .any(|&(start, end)| (start..=end).contains(&glyph_id.0));
+
+        [
+            has_colr_v1.then_some(ColorGlyphKind::ColrV1),
+            has_colr_v0.then_some(ColorGlyphKind::ColrV0),
+            has_color_bitmap.then_some(ColorGlyphKind::Bitmap),
+            has_svg.then_some(ColorGlyphKind::Svg),
+        ]
+        .into_iter()
+        .flatten()
     }
+}
+
+fn first_supported_color_kind(
+    kinds: impl IntoIterator<Item = ColorGlyphKind>,
+    mut supports: impl FnMut(ColorGlyphKind) -> bool,
+) -> Option<ColorGlyphKind> {
+    kinds.into_iter().find(|&kind| supports(kind))
 }
 
 impl LoadedFont {
@@ -579,6 +602,8 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
                 (RasterizedGlyphFormat::BgraColor, image.data)
             }
             swash::scale::image::Content::SubpixelMask => {
+                convert_subpixel_mask_to_bgra(&mut image.data);
+
                 (RasterizedGlyphFormat::BgraSubpixelMask, image.data)
             }
             swash::scale::image::Content::Mask
@@ -709,6 +734,12 @@ fn subpixel_offset(params: &RenderGlyphParams) -> Vector {
     )
 }
 
+fn convert_subpixel_mask_to_bgra(pixels: &mut [u8]) {
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -796,5 +827,21 @@ mod tests {
 
             assert_eq!(subpixel_offset(&params), Vector::new(0.75, 0.0));
         }
+    }
+
+    #[test]
+    fn supported_color_artwork_is_selected_when_a_preferred_format_is_unsupported() {
+        let available = [ColorGlyphKind::ColrV1, ColorGlyphKind::ColrV0];
+        let selected = first_supported_color_kind(available, |kind| kind == ColorGlyphKind::ColrV0);
+
+        assert_eq!(selected, Some(ColorGlyphKind::ColrV0));
+    }
+
+    #[test]
+    fn subpixel_coverage_is_converted_from_swash_to_atlas_channel_order() {
+        let mut pixels = vec![204, 127, 51, 0];
+        convert_subpixel_mask_to_bgra(&mut pixels);
+
+        assert_eq!(pixels, [51, 127, 204, 0]);
     }
 }
