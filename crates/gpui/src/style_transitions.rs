@@ -156,6 +156,7 @@ pub(crate) struct StyleTransitionState {
     border_widths: EdgesTransitionState<AbsoluteLength>,
     gap: SizeTransitionState<DefiniteLength>,
     corner_radii: CornersTransitionState<AbsoluteLength>,
+    corner_smoothing: Option<StyleTransitionPropertyState<f32>>,
     scrollbar_width: Option<StyleTransitionPropertyState<AbsoluteLength>>,
     aspect_ratio: Option<StyleTransitionPropertyState<f32>>,
     flex_basis: Option<StyleTransitionPropertyState<Length>>,
@@ -865,6 +866,7 @@ mod tests {
         let transitions = StyleTransitions::new()
             .opacity(Duration::from_secs(1))
             .rounded(Duration::from_secs(1))
+            .rounded_smoothing(Duration::from_secs(1))
             .p(Duration::from_secs(1))
             .border(Duration::from_secs(1))
             .gap(Duration::from_secs(1))
@@ -878,15 +880,18 @@ mod tests {
         );
         let mut style = Style {
             corner_radii: corners(30.0),
+            corner_smoothing: Some(0.0),
             ..Style::default()
         };
 
         assert!(!transitions.apply(&mut style, &mut state, context, started_at, false,));
         assert_eq!(style.opacity, None);
         assert_eq!(style.corner_radii, corners(30.0));
+        assert_eq!(style.corner_smoothing, Some(0.0));
 
         style.opacity = Some(0.5);
         style.corner_radii = corners(0.0);
+        style.corner_smoothing = Some(1.0);
         style.padding = Edges::all(DefiniteLength::Absolute(AbsoluteLength::Pixels(px(20.0))));
         style.border_widths = Edges::all(AbsoluteLength::Pixels(px(10.0)));
         style.gap = size(
@@ -898,6 +903,7 @@ mod tests {
 
         style.opacity = Some(0.5);
         style.corner_radii = corners(0.0);
+        style.corner_smoothing = Some(1.0);
         style.padding = Edges::all(DefiniteLength::Absolute(AbsoluteLength::Pixels(px(20.0))));
         style.border_widths = Edges::all(AbsoluteLength::Pixels(px(10.0)));
         style.gap = size(
@@ -914,6 +920,7 @@ mod tests {
         ));
         assert_eq!(style.opacity, Some(0.25));
         assert_eq!(style.corner_radii, corners(15.0));
+        assert_eq!(style.corner_smoothing, Some(0.5));
         assert_eq!(
             style.padding,
             Edges::all(DefiniteLength::Absolute(AbsoluteLength::Pixels(px(10.0))))
