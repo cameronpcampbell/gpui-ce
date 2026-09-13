@@ -1,14 +1,17 @@
 use crate::elements::div::{ScrollHandle, StackSafe};
+use crate::elements::text::{TruncationCandidate, truncate_with_measured_candidates};
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, Display, InlineBoxRequest, InlineLayout,
     InlineLayoutRequest, InlineTextMetrics, InlineTextStyle, LayoutId, Pixels, Point, Position,
-    SharedString, Size, Style, TextLayout, TextRun, TextStyle, Window, place_inline_layout, size,
+    SharedString, Size, Style, TextLayout, TextLayoutTruncation, TextRun, TextStyle, Window,
+    WindowTextSystem, place_inline_layout, px, size,
 };
 
 use collections::FxHashMap;
 use gpui_util::ResultExt;
 use smallvec::SmallVec;
 use std::{cell::RefCell, ops::Range, rc::Rc, sync::Arc};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Resolved content published by the element's ordinary layout request. Wrappers that return
 /// the same layout ID automatically retain this content and the element's normal lifecycle.
@@ -44,8 +47,111 @@ struct InlineDocument {
     spans: Vec<InlineSpan>,
 }
 
+impl InlineDocument {
+    fn layout(
+        self: &Arc<Self>,
+        request: InlineLayoutRequest<'_>,
+        truncation: &TextLayoutTruncation,
+        text_system: &WindowTextSystem,
+    ) -> (Arc<Self>, Arc<InlineLayout>) {
+        // Removing embedded widgets also requires suppressing their painting and hit regions.
+        let Some(width) = truncation.width.filter(|_width| self.boxes.is_empty()) else {
+            return (self.clone(), text_system.layout_inline(request));
+        };
+
+        let max_lines = request.line_clamp;
+        let request = InlineLayoutRequest {
+            line_clamp: None,
+            ..request
+        };
+        let probe = text_system.layout_inline(request);
+        let fits = |layout: &InlineLayout| {
+            max_lines.is_none_or(|count| layout.lines.len() <= count.max(1))
+                && layout
+                    .layout
+                    .visual_lines
+                    .iter()
+                    .all(|line| line.advance <= width + px(0.01))
+        };
+
+        if fits(&probe) {
+            return (self.clone(), probe);
+        }
+
+        let mut boundaries = self
+            .text
+            .grapheme_indices(true)
+            .map(|(idx, _grapheme)| idx)
+            .collect::<Vec<_>>();
+        boundaries.push(self.text.len());
+
+        let (_candidate, measurement) = truncate_with_measured_candidates(
+            &self.text,
+            &boundaries,
+            boundaries.len() / 2,
+            &truncation.affix,
+            &self.runs,
+            truncation.source,
+            |candidate| {
+                let document = self.truncated(candidate);
+                let layout = text_system.layout_inline(InlineLayoutRequest {
+                    text: &document.text,
+                    runs: &document.runs,
+                    text_styles: &document.text_styles,
+                    ..request
+                });
+                let fits = fits(&layout);
+
+                ((Arc::new(document), layout), fits)
+            },
+        );
+
+        measurement
+    }
+
+    fn truncated(&self, candidate: &TruncationCandidate) -> Self {
+        let text_styles = self
+            .text_styles
+            .iter()
+            .flat_map(|style| {
+                candidate
+                    .display_ranges(&style.range)
+                    .into_iter()
+                    .map(|range| InlineTextStyle {
+                        range,
+                        ..style.clone()
+                    })
+            })
+            .collect();
+        let spans = self
+            .spans
+            .iter()
+            .flat_map(|span| {
+                candidate
+                    .display_ranges(&span.text_range)
+                    .into_iter()
+                    .map(|text_range| InlineSpan {
+                        layout_id: span.layout_id,
+                        text_range,
+                        box_range: 0..0,
+                    })
+            })
+            .collect();
+
+        Self {
+            text: candidate.text.to_string(),
+            runs: candidate.runs.clone(),
+            text_styles,
+            spans,
+            ..Self::default()
+        }
+    }
+}
+
 struct InlineParagraphMeasurement {
     wrap_width: Option<Pixels>,
+    truncate_width: Option<Pixels>,
+    document: Arc<InlineDocument>,
     layout: Arc<InlineLayout>,
 }
 
@@ -223,14 +329,18 @@ impl InlineParagraphCollector<'_> {
                     available_space,
                 );
 
+                let truncation =
+                    TextLayout::evaluate_overflow(&text_style, known_dimensions, available_space);
+
                 if let Some(measurement) =
                     measurement_cache.borrow().as_ref() as Option<&InlineParagraphMeasurement>
                     && measurement.wrap_width == wrap_width
+                    && measurement.truncate_width == truncation.width
                 {
                     return measurement.layout.size;
                 }
 
-                let layout = window.text_system().layout_inline(InlineLayoutRequest {
+                let request = InlineLayoutRequest {
                     text: &measured_document.text,
                     runs: &measured_document.runs,
                     text_styles: &measured_document.text_styles,
@@ -241,12 +351,19 @@ impl InlineParagraphCollector<'_> {
                     wrap_width,
                     line_clamp: text_style.line_clamp,
                     text_align: text_style.text_align,
-                });
+                };
+                let (document, layout) =
+                    measured_document.layout(request, &truncation, window.text_system());
 
                 let size = layout.size;
                 measurement_cache
                     .borrow_mut()
-                    .replace(InlineParagraphMeasurement { wrap_width, layout });
+                    .replace(InlineParagraphMeasurement {
+                        wrap_width,
+                        truncate_width: truncation.width,
+                        document,
+                        layout,
+                    });
 
                 size
             },
@@ -263,6 +380,22 @@ impl InlineParagraphCollector<'_> {
 }
 
 impl InlineDivFrameState {
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn measured_paragraphs(&self) -> Vec<(SharedString, Arc<InlineLayout>)> {
+        self.paragraphs
+            .iter()
+            .map(|paragraph| {
+                let measurement = paragraph.measurement.borrow();
+                let measurement = measurement.as_ref().expect("paragraph was not measured");
+
+                (
+                    measurement.document.text.clone().into(),
+                    measurement.layout.clone(),
+                )
+            })
+            .collect()
+    }
+
     pub(super) fn request_layout(
         style: &Style,
         children: &[LayoutId],
@@ -314,10 +447,9 @@ impl InlineDivFrameState {
         for paragraph in &self.paragraphs {
             let origin = window.layout_bounds(paragraph.layout_id).origin;
             let measurement = paragraph.measurement.borrow();
-            let layout = &measurement
-                .as_ref()
-                .expect("paragraph was not measured")
-                .layout;
+            let measurement = measurement.as_ref().expect("paragraph was not measured");
+            let layout = &measurement.layout;
+            let document = &measurement.document;
 
             let placement = place_inline_layout(origin, layout.alignment_offset, window);
             let origin = origin + placement.delta;
@@ -333,8 +465,7 @@ impl InlineDivFrameState {
                 );
             }
 
-            let text_ranges = paragraph
-                .document
+            let text_ranges = document
                 .spans
                 .iter()
                 .map(|span| span.text_range.clone())
@@ -351,7 +482,7 @@ impl InlineDivFrameState {
                 }
             }
 
-            for (span, text_regions) in paragraph.document.spans.iter().zip(text_geometry) {
+            for (span, text_regions) in document.spans.iter().zip(text_geometry) {
                 let regions = fragments.get_mut(&span.layout_id).unwrap();
 
                 for (native, _line_idx) in text_regions {

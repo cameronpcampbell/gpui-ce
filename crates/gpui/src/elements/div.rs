@@ -1876,6 +1876,16 @@ pub struct DivFrameState {
     contents_in_parent_paragraph: bool,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl DivFrameState {
+    /// Returns the display text and layout used to paint each inline paragraph.
+    pub fn measured_inline_paragraphs(&self) -> Vec<(SharedString, Arc<crate::InlineLayout>)> {
+        self.inline
+            .as_ref()
+            .map_or_else(Vec::new, |inline| inline.measured_paragraphs())
+    }
+}
+
 /// Interactivity state displayed an manipulated in the inspector.
 #[derive(Clone)]
 pub struct DivInspectorState {

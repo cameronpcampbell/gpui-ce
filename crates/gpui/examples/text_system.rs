@@ -349,6 +349,7 @@ fn paragraph_layout() -> impl IntoElement {
                         .block()
                         .w_full()
                         .min_w_0()
+                        .text_ellipsis()
                         .line_clamp(2)
                         .child(PARAGRAPH),
                 )),
