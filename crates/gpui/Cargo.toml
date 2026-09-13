@@ -161,13 +161,7 @@ embed-resource = { version = "3.0", optional = true }
 bindgen = "0.72"
 
 [package.metadata.cargo-shear]
-ignored = [
-  "bindgen",
-  "getrandom",
-  "objc2",
-  "objc2-metal",
-  "tracing",
-]
+ignored = ["bindgen", "getrandom", "objc2", "objc2-metal", "tracing"]
 ignored-paths = ["src/_ownership_and_data_flow.rs"]
 
 # ============================================================================
@@ -273,10 +267,6 @@ path = "examples/legacy/hello_world.rs"
 [[example]]
 name = "image_loading"
 path = "examples/legacy/image_loading.rs"
-
-[[example]]
-name = "inline_layout"
-path = "examples/legacy/inline_layout.rs"
 
 [[example]]
 name = "layer_shell"
