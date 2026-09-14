@@ -3287,9 +3287,22 @@ impl TryFrom<&'_ str> for Rems {
     }
 }
 
-/// Represents a length relative to another length, expressed as a fraction.
+/// A length stored as a fraction of another length.
 ///
-/// A value of `1.0` represents the full reference length, while `0.5` represents half of it.
+/// `1.0` uses the full reference length, and `0.5` uses half. Fractions may be negative or greater
+/// than `1.0`.
+///
+/// # Examples
+///
+/// ```
+/// use gpui::{AbsoluteLength, Relative, px};
+///
+/// let half = Relative::from(0.5);
+/// let base_size = AbsoluteLength::Pixels(px(200.0));
+///
+/// assert_eq!(half.to_pixels(base_size, px(16.0)), px(100.0));
+/// assert_eq!(half.to_string(), "50%");
+/// ```
 #[derive(Clone, Copy, Default, Add, Sub, Mul, Div, Neg, PartialEq)]
 #[repr(transparent)]
 pub struct Relative(pub(crate) f32);
@@ -3303,12 +3316,20 @@ impl Relative {
         self.0
     }
 
-    /// Resolves this relative length against a base size.
+    /// Resolves this fraction against `base_size`.
+    ///
+    /// When `base_size` is in rems, `rem_size` supplies the pixel size of one rem.
     pub fn to_pixels(self, base_size: AbsoluteLength, rem_size: Pixels) -> Pixels {
         match base_size {
             AbsoluteLength::Pixels(pixels) => pixels * self.0,
             AbsoluteLength::Rems(rems) => rems * rem_size * self.0,
         }
+    }
+}
+
+impl From<f32> for Relative {
+    fn from(fraction: f32) -> Self {
+        Self(fraction)
     }
 }
 
@@ -3320,7 +3341,7 @@ impl AddAssign<Relative> for Relative {
 
 impl Display for Relative {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}%", (self.0 * 100.0) as i32)
+        write!(f, "{}%", self.0 * 100.0)
     }
 }
 
