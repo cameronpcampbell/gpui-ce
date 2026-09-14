@@ -938,8 +938,8 @@ impl SwashGlyphRasterizer {
 
 fn subpixel_offset(params: &RenderGlyphParams) -> Vector {
     Vector::new(
-        params.subpixel_variant.x as f32 / SUBPIXEL_VARIANTS_X as f32,
-        params.subpixel_variant.y as f32 / SUBPIXEL_VARIANTS_Y as f32,
+        params.subpixel_variant.x as f32 / SUBPIXEL_VARIANTS_X as f32 / params.scale_factor,
+        params.subpixel_variant.y as f32 / SUBPIXEL_VARIANTS_Y as f32 / params.scale_factor,
     )
 }
 
@@ -1122,7 +1122,7 @@ mod tests {
     }
 
     #[test]
-    fn portable_rasterization_preserves_current_color_and_device_pixel_offsets() {
+    fn portable_rasterization_preserves_current_color_and_legacy_subpixel_offsets() {
         let rasterizer = SwashGlyphRasterizer::default();
         let style = rasterizer.prepare_style(RasterStyleRequest {
             font_id: FontId(1),
@@ -1148,7 +1148,10 @@ mod tests {
                 raster_style: style,
             };
 
-            assert_eq!(subpixel_offset(&params), Vector::new(0.75, 0.0));
+            assert_eq!(
+                subpixel_offset(&params),
+                Vector::new(0.75 / scale_factor, 0.0)
+            );
         }
     }
 
