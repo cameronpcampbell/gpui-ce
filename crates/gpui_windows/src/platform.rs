@@ -29,7 +29,6 @@ use windows::{
     core::*,
 };
 
-use crate::glyph_compositor::GlyphCompositor;
 use crate::*;
 use gpui::*;
 
@@ -42,6 +41,7 @@ pub struct WindowsPlatform {
     background_executor: BackgroundExecutor,
     foreground_executor: ForegroundExecutor,
     text_system: Arc<dyn PlatformTextSystem>,
+    direct_write_text_system: Option<Arc<DirectWriteTextSystem>>,
     drop_target_helper: Option<IDropTargetHelper>,
     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
     /// as resizing them has failed, causing us to have lost at least the render target.
@@ -75,7 +75,6 @@ pub(crate) struct WindowsPlatformState {
     /// thread; see [`DrawCoordinator`].
     pub(crate) draw_coordinator: Rc<DrawCoordinator>,
     directx_devices: RefCell<Option<DirectXDevices>>,
-    glyph_compositor: Option<Arc<GlyphCompositor>>,
 }
 
 #[derive(Default)]
@@ -91,10 +90,7 @@ struct PlatformCallbacks {
 }
 
 impl WindowsPlatformState {
-    fn new(
-        directx_devices: Option<DirectXDevices>,
-        glyph_compositor: Option<Arc<GlyphCompositor>>,
-    ) -> Self {
+    fn new(directx_devices: Option<DirectXDevices>) -> Self {
         let callbacks = PlatformCallbacks::default();
         let jump_list = JumpList::new();
         let current_cursor = load_cursor(CursorStyle::Arrow);
@@ -106,7 +102,6 @@ impl WindowsPlatformState {
             cursor_visible: Arc::new(AtomicBool::new(true)),
             draw_coordinator: Rc::new(DrawCoordinator::new()),
             directx_devices: RefCell::new(directx_devices),
-            glyph_compositor,
             menus: RefCell::new(Vec::new()),
         }
     }
@@ -117,33 +112,24 @@ impl WindowsPlatform {
         unsafe {
             OleInitialize(None).context("unable to initialize Windows OLE")?;
         }
-
-        let directx_devices = if !headless {
-            Some(DirectXDevices::new().context("Creating DirectX devices")?)
-        } else {
-            None
-        };
-
-        let glyph_compositor =
-            directx_devices
-                .as_ref()
-                .and_then(|devices| match GlyphCompositor::new(devices) {
-                    Ok(compositor) => Some(Arc::new(compositor)),
-                    Err(error) => {
-                        log::warn!("GPU glyph composition is unavailable; using CPU: {error:#}");
-
-                        None
-                    }
-                });
-        let text_system = Arc::new(
-            gpui_parley::ParleyTextSystem::new_with_rasterizer(
-                gpui_parley::SystemFonts::Load,
-                "Segoe UI",
-                WindowsGlyphRasterizer::new(glyph_compositor.clone()),
+        let (directx_devices, text_system, direct_write_text_system) = if !headless {
+            let devices = DirectXDevices::new().context("Creating DirectX devices")?;
+            let dw_text_system = Arc::new(
+                DirectWriteTextSystem::new(&devices)
+                    .context("Error creating DirectWriteTextSystem")?,
+            );
+            (
+                Some(devices),
+                dw_text_system.clone() as Arc<dyn PlatformTextSystem>,
+                Some(dw_text_system),
             )
-            .with_fallback_families(["Lilex", "IBM Plex Sans", "Arial"]),
-        ) as Arc<dyn PlatformTextSystem>;
-
+        } else {
+            (
+                None,
+                Arc::new(gpui::NoopTextSystem::new()) as Arc<dyn PlatformTextSystem>,
+                None,
+            )
+        };
         let (main_sender, main_receiver) = PriorityQueueReceiver::new();
         let validation_number = if usize::BITS == 64 {
             rand::random::<u64>() as usize
@@ -160,7 +146,6 @@ impl WindowsPlatform {
             main_sender: Some(main_sender),
             main_receiver: Some(main_receiver),
             directx_devices,
-            glyph_compositor,
             dispatcher: None,
         };
         let result = unsafe {
@@ -217,6 +202,7 @@ impl WindowsPlatform {
             background_executor,
             foreground_executor,
             text_system,
+            direct_write_text_system,
             suspend_resume_notification: RefCell::new(None),
             disable_direct_composition,
             has_package_identity: has_package_identity(),
@@ -327,10 +313,14 @@ impl WindowsPlatform {
         let Some(directx_devices) = self.inner.state.directx_devices.borrow().clone() else {
             return;
         };
+        let Some(direct_write_text_system) = &self.direct_write_text_system else {
+            return;
+        };
         let mut directx_device = directx_devices;
         let platform_window: SafeHwnd = self.handle.into();
         let validation_number = self.inner.validation_number;
         let all_windows = Arc::downgrade(&self.raw_window_handles);
+        let text_system = Arc::downgrade(direct_write_text_system);
         let invalidate_devices = self.invalidate_devices.clone();
 
         std::thread::Builder::new()
@@ -347,6 +337,7 @@ impl WindowsPlatform {
                             platform_window.as_raw(),
                             validation_number,
                             &all_windows,
+                            &text_system,
                         ) {
                             panic!("Device lost: {err}");
                         }
@@ -972,11 +963,7 @@ impl Platform for WindowsPlatform {
 
 impl WindowsPlatformInner {
     fn new(context: &mut PlatformWindowCreateContext) -> Result<Rc<Self>> {
-        let state = WindowsPlatformState::new(
-            context.directx_devices.take(),
-            context.glyph_compositor.take(),
-        );
-
+        let state = WindowsPlatformState::new(context.directx_devices.take());
         Ok(Rc::new(Self {
             state,
             raw_window_handles: context.raw_window_handles.clone(),
@@ -1186,14 +1173,6 @@ impl WindowsPlatformInner {
     fn handle_device_lost(&self, lparam: LPARAM) -> Option<isize> {
         let directx_devices = lparam.0 as *const DirectXDevices;
         let directx_devices = unsafe { &*directx_devices };
-
-        if let Some(compositor) = &self.state.glyph_compositor {
-            // This message runs on the UI thread before window renderers adopt the device.
-            if let Err(error) = compositor.reset(directx_devices) {
-                log::warn!("Failed to restore GPU glyph composition; using CPU: {error:#}");
-            }
-        }
-
         self.state.directx_devices.borrow_mut().take();
         *self.state.directx_devices.borrow_mut() = Some(directx_devices.clone());
 
@@ -1241,7 +1220,6 @@ struct PlatformWindowCreateContext {
     main_sender: Option<PriorityQueueSender<RunnableVariant>>,
     main_receiver: Option<PriorityQueueReceiver<RunnableVariant>>,
     directx_devices: Option<DirectXDevices>,
-    glyph_compositor: Option<Arc<GlyphCompositor>>,
     dispatcher: Option<Arc<WindowsDispatcher>>,
 }
 
@@ -1462,6 +1440,7 @@ fn handle_gpu_device_lost(
     platform_window: HWND,
     validation_number: usize,
     all_windows: &std::sync::Weak<RwLock<SmallVec<[SafeHwnd; 4]>>>,
+    text_system: &std::sync::Weak<DirectWriteTextSystem>,
 ) -> Result<()> {
     // Here we wait a bit to ensure the system has time to recover from the device lost state.
     // If we don't wait, the final drawing result will be blank.
@@ -1482,6 +1461,9 @@ fn handle_gpu_device_lost(
         );
     }
 
+    if let Some(text_system) = text_system.upgrade() {
+        text_system.handle_gpu_lost(&directx_devices)?;
+    }
     if let Some(all_windows) = all_windows.upgrade() {
         for window in all_windows.read().iter() {
             unsafe {
