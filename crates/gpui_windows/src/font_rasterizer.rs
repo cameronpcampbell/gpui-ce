@@ -547,20 +547,21 @@ impl DirectWriteGlyphRasterizer {
         match self.try_rasterize_colr(font_face, params) {
             Ok(glyph) => Ok(glyph),
             Err(error) => {
-                log::warn!(
-                    "DirectWrite color glyph rasterization failed; using a black silhouette: {error:#}"
-                );
+                let fallback = self.rasterize_mask(font_face, params, GlyphRenderMode::Grayscale);
 
-                self.rasterize_monochrome_color(
-                    font_face,
-                    params,
-                    Rgba8 {
-                        red: 0,
-                        green: 0,
-                        blue: 0,
-                        alpha: 255,
-                    },
-                )
+                match fallback {
+                    Ok(glyph) if glyph.size != Size::default() => {
+                        log::warn!(
+                            "DirectWrite color glyph rasterization failed; using a tintable silhouette: {error:#}"
+                        );
+
+                        Ok(glyph)
+                    }
+                    Ok(_) => Err(error),
+                    Err(fallback_error) => Err(error).context(format!(
+                        "the silhouette fallback also failed: {fallback_error:#}"
+                    )),
+                }
             }
         }
     }
@@ -673,10 +674,7 @@ impl GlyphRasterizer for DirectWriteGlyphRasterizer {
 
     fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
         if request.requested_mode == GlyphRenderMode::Color {
-            PreparedRasterStyle {
-                mode: GlyphRenderMode::Color,
-                color_effect: RasterColorEffect::Preblend(request.scene_color.into()),
-            }
+            PreparedRasterStyle::preblend(request)
         } else {
             PreparedRasterStyle::independent(request.requested_mode)
         }
@@ -1007,6 +1005,7 @@ fn get_system_subpixel_rendering() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::PlatformAtlas as _;
 
     const SOURCE_SERIF: &[u8] =
         include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
@@ -1093,6 +1092,10 @@ mod tests {
     #[test]
     fn native_colr_recovers_from_failure_and_is_stable_across_batches() -> Result<()> {
         let devices = DirectXDevices::new()?;
+        let first_atlas =
+            crate::directx_atlas::DirectXAtlas::new(&devices.device, &devices.device_context);
+        let second_atlas =
+            crate::directx_atlas::DirectXAtlas::new(&devices.device, &devices.device_context);
         let compositor = Arc::new(GlyphCompositor::new(&devices)?);
         let mut rasterizer = WindowsGlyphRasterizer::new(Some(compositor));
         let WindowsRasterBackend::DirectWrite {
@@ -1109,34 +1112,59 @@ mod tests {
         system.add_fonts(vec![Cow::Borrowed(SOURCE_SERIF)])?;
 
         let emoji_font = system.font_id(&font("Segoe UI Emoji"))?;
-        let render = |font_id: FontId, glyph_id: GlyphId, mode| {
+        let render_params = |font_id: FontId, glyph_id: GlyphId, mode| {
             let raster_style = system.prepare_raster_style(RasterStyleRequest {
+                font_id,
+                glyph_id,
                 scene_color: rgba(0xffffffff),
                 requested_mode: mode,
+                foreground_dependency: gpui::ForegroundDependency::Full,
             });
 
-            system.rasterize_glyph(&RenderGlyphParams {
+            RenderGlyphParams {
                 font_id,
                 glyph_id,
                 font_size: gpui::px(48.0),
                 subpixel_variant: point(0, 0),
                 scale_factor: 1.0,
                 raster_style,
-            })
+            }
+        };
+        let render = |font_id: FontId, glyph_id: GlyphId, mode| {
+            system.rasterize_glyph(&render_params(font_id, glyph_id, mode))
         };
 
         let first_emoji = system
             .glyph_for_char(emoji_font, '😀')
             .context("Segoe UI Emoji has no grinning-face glyph")?;
-        let silhouette = render(emoji_font, first_emoji, GlyphRenderMode::Color)?;
-        silhouette.validate()?;
-        assert!(silhouette.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
-        assert!(
-            silhouette
-                .pixels
-                .chunks_exact(4)
-                .all(|pixel| pixel[..3] == [0, 0, 0])
-        );
+        let emoji_params = render_params(emoji_font, first_emoji, GlyphRenderMode::Color);
+        let silhouette = first_atlas.get_or_insert_glyph_with(&emoji_params, &mut || {
+            system.rasterize_glyph(&emoji_params)
+        })?;
+        let silhouette_hit = first_atlas.get_or_insert_glyph_with(&emoji_params, &mut || {
+            bail!("an atlas hit must not rasterize again")
+        })?;
+        assert_eq!(silhouette_hit, silhouette);
+        assert_eq!(silhouette.format, RasterizedGlyphFormat::AlphaMask);
+
+        let recovered = second_atlas.get_or_insert_glyph_with(&emoji_params, &mut || {
+            system.rasterize_glyph(&emoji_params)
+        })?;
+        assert_ne!(recovered.bounds, silhouette.bounds);
+        assert_eq!(recovered.format, RasterizedGlyphFormat::BgraColor);
+
+        let first_atlas_again = first_atlas.get_or_insert_glyph_with(&emoji_params, &mut || {
+            bail!("an atlas hit must not rasterize again")
+        })?;
+        assert_eq!(first_atlas_again, silhouette);
+
+        let recreated_atlas =
+            crate::directx_atlas::DirectXAtlas::new(&devices.device, &devices.device_context);
+        let recreated = recreated_atlas.get_or_insert_glyph_with(&emoji_params, &mut || {
+            system.rasterize_glyph(&emoji_params)
+        })?;
+        assert_eq!(recreated.bounds, recovered.bounds);
+        assert_eq!(recreated.format, recovered.format);
 
         let text_font = system.font_id(&font("Source Serif 4"))?;
         let letter = system
@@ -1200,8 +1228,11 @@ mod tests {
 
         let render = |font_id, glyph_id: GlyphId, mode, color, variant| {
             let raster_style = system.prepare_raster_style(RasterStyleRequest {
+                font_id,
+                glyph_id,
                 scene_color: color,
                 requested_mode: mode,
+                foreground_dependency: gpui::ForegroundDependency::Full,
             });
 
             system

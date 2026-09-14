@@ -4623,9 +4623,9 @@ impl Window {
             GlyphRenderMode::Grayscale
         };
 
-        let raster_style = self
-            .text_system()
-            .prepare_raster_style(color, requested_mode);
+        let raster_style =
+            self.text_system()
+                .prepare_raster_style(font_id, glyph_id, color, requested_mode);
         let params = RenderGlyphParams {
             font_id,
             glyph_id,
@@ -4646,51 +4646,22 @@ impl Window {
         opacity: f32,
     ) -> Result<()> {
         let text_system = self.text_system().clone();
-        let mut eager_raster = None;
-        let metadata = match text_system.raster_metadata(&params) {
-            Some(metadata) => metadata,
-            None => {
-                let rasterized = text_system.rasterize_glyph(&params)?;
-                let metadata = rasterized.metadata();
-                eager_raster = Some(rasterized);
-                metadata
-            }
-        };
-
-        if metadata.bounds.is_zero() {
-            return Ok(());
-        }
-
-        let atlas_key = (params.clone(), metadata.format).into();
-        let mut uploaded_metadata = None;
-        let Some(tile) = self.sprite_atlas.get_or_insert_with(&atlas_key, &mut || {
-            let rasterized = match eager_raster.take() {
-                Some(rasterized) => rasterized,
-                None => text_system.rasterize_glyph(&params)?,
-            };
-
-            uploaded_metadata = Some(rasterized.metadata());
-
-            if rasterized.bounds.is_zero() {
-                return Ok(None);
-            }
-
-            Ok(Some((rasterized.size, Cow::Owned(rasterized.pixels))))
-        })?
-        else {
+        let entry = self
+            .sprite_atlas
+            .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))?;
+        let Some(tile) = entry.tile else {
             return Ok(());
         };
 
-        let metadata = uploaded_metadata.unwrap_or(metadata);
-        debug_assert_eq!(metadata.bounds.size, tile.bounds.size.map(Into::into));
+        debug_assert_eq!(entry.bounds.size, tile.bounds.size.map(Into::into));
         let bounds = Bounds {
-            origin: integer_origin + metadata.bounds.origin.map(Into::into),
+            origin: integer_origin + entry.bounds.origin.map(Into::into),
             size: tile.bounds.size.map(Into::into),
         };
 
         let content_mask = self.snapped_content_mask();
 
-        match metadata.format {
+        match entry.format {
             RasterizedGlyphFormat::AlphaMask => {
                 self.next_frame.scene.insert_primitive(MonochromeSprite {
                     order: 0,
@@ -4780,9 +4751,12 @@ impl Window {
         let scale_factor = self.scale_factor();
         let glyph_origin = origin.scale(scale_factor);
         let (integer_origin, subpixel_variant) = quantize_color_glyph_origin(glyph_origin);
-        let raster_style = self
-            .text_system()
-            .prepare_raster_style(color, GlyphRenderMode::Color);
+        let raster_style = self.text_system().prepare_raster_style(
+            font_id,
+            glyph_id,
+            color,
+            GlyphRenderMode::Color,
+        );
         let params = RenderGlyphParams {
             font_id,
             glyph_id,
@@ -7676,6 +7650,7 @@ mod tests {
     #[derive(Default)]
     struct RasterFormatTextSystem {
         rasterized: StdMutex<Vec<RenderGlyphParams>>,
+        fail_next: AtomicBool,
     }
 
     impl PlatformTextSystem for RasterFormatTextSystem {
@@ -7713,6 +7688,9 @@ mod tests {
 
         fn rasterize_glyph(&self, params: &RenderGlyphParams) -> anyhow::Result<RasterizedGlyph> {
             self.rasterized.lock().unwrap().push(params.clone());
+            if self.fail_next.swap(false, SeqCst) {
+                anyhow::bail!("injected glyph rasterization failure");
+            }
 
             let (format, pixels) = match params.glyph_id.0 {
                 1 => (RasterizedGlyphFormat::AlphaMask, vec![0, 255]),
@@ -7720,7 +7698,7 @@ mod tests {
                     RasterizedGlyphFormat::BgraSubpixelMask,
                     vec![1, 2, 3, 0, 4, 5, 6, 0],
                 ),
-                3 => (
+                3 | 5 => (
                     RasterizedGlyphFormat::BgraColor,
                     vec![10, 20, 30, 128, 40, 50, 60, 255],
                 ),
@@ -7739,12 +7717,13 @@ mod tests {
             })
         }
 
-        fn prepare_raster_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
+        fn prepare_raster_style(&self, mut request: RasterStyleRequest) -> PreparedRasterStyle {
             if request.requested_mode == GlyphRenderMode::Color {
-                return PreparedRasterStyle {
-                    mode: GlyphRenderMode::Color,
-                    color_effect: RasterColorEffect::Preblend(request.scene_color.into()),
-                };
+                if request.glyph_id == GlyphId(3) {
+                    request.foreground_dependency = crate::ForegroundDependency::AlphaOnly;
+                }
+
+                return PreparedRasterStyle::preblend(request);
             }
 
             PreparedRasterStyle::independent(request.requested_mode)
@@ -7768,7 +7747,7 @@ mod tests {
             _context: &mut Context<Self>,
         ) -> impl IntoElement {
             let color = hsla(0.6, 0.7, 0.4, 0.8);
-            let alternate_color = hsla(0.1, 0.6, 0.3, 0.4);
+            let alternate_color = hsla(0.1, 0.6, 0.3, 0.8);
             div().size_full().opacity(0.5).child(
                 canvas(
                     |_, _, _| (),
@@ -7782,16 +7761,17 @@ mod tests {
                                 .unwrap();
                         }
 
-                        for (origin, foreground) in [
-                            (point(px(15.0), px(20.0)), color),
-                            (point(px(20.0), px(25.0)), alternate_color),
-                            (point(px(25.0), px(30.0)), color),
+                        for (glyph_id, origin, foreground) in [
+                            (GlyphId(3), point(px(15.0), px(20.0)), color),
+                            (GlyphId(3), point(px(20.0), px(25.0)), alternate_color),
+                            (GlyphId(5), point(px(25.0), px(30.0)), color),
+                            (GlyphId(5), point(px(30.0), px(35.0)), alternate_color),
                         ] {
                             window
                                 .paint_emoji_with_color(
                                     origin,
                                     FontId(7),
-                                    GlyphId(3),
+                                    glyph_id,
                                     px(16.0),
                                     foreground,
                                 )
@@ -7812,7 +7792,7 @@ mod tests {
         test_window.draw();
 
         test_window.update(|_, window, _| {
-            assert_eq!(window.rendered_primitive_counts(), (0, 1, 1, 3));
+            assert_eq!(window.rendered_primitive_counts(), (0, 1, 1, 4));
             let scene = &window.rendered_frame.scene;
             let expected_color = hsla(0.6, 0.7, 0.4, 0.8).opacity(0.5).into();
 
@@ -7843,10 +7823,9 @@ mod tests {
             let first_tile = scene.polychrome_sprites[0].tile;
             let second_tile = scene.polychrome_sprites[1].tile;
             let third_tile = scene.polychrome_sprites[2].tile;
-            assert!(
-                first_tile == second_tile || first_tile == third_tile || second_tile == third_tile
-            );
-            assert!(first_tile != second_tile || second_tile != third_tile);
+            let fourth_tile = scene.polychrome_sprites[3].tile;
+            assert_eq!(first_tile, second_tile);
+            assert_ne!(third_tile, fourth_tile);
         });
 
         let rasterized = text_system.rasterized.lock().unwrap();
@@ -7858,11 +7837,57 @@ mod tests {
         assert_eq!(
             color_styles,
             [
+                RasterColorEffect::Preblend(crate::Rgba8 {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                    alpha: 204,
+                }),
                 RasterColorEffect::Preblend(hsla_to_rgba(hsla(0.6, 0.7, 0.4, 0.8)).into()),
-                RasterColorEffect::Preblend(hsla_to_rgba(hsla(0.1, 0.6, 0.3, 0.4)).into()),
+                RasterColorEffect::Preblend(hsla_to_rgba(hsla(0.1, 0.6, 0.3, 0.8)).into()),
             ]
         );
     }
+
+    struct FragmentFailureView;
+
+    impl Render for FragmentFailureView {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _context: &mut Context<Self>,
+        ) -> impl IntoElement {
+            div().size_full().child("x😀")
+        }
+    }
+
+    #[test]
+    fn a_failed_glyph_does_not_hide_the_rest_of_its_fragment() {
+        let text_system = Arc::new(RasterFormatTextSystem {
+            rasterized: StdMutex::default(),
+            fail_next: AtomicBool::new(true),
+        });
+        let mut app = TestApp::with_text_system(text_system.clone());
+        let mut test_window = app.open_window(|_, _| FragmentFailureView);
+        test_window.draw();
+
+        test_window.update(|_, window, _| {
+            assert!(!window.rendered_frame.scene.subpixel_sprites.is_empty());
+        });
+
+        let glyph_ids = text_system
+            .rasterized
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|params| params.glyph_id)
+            .collect::<Vec<_>>();
+        assert!(
+            glyph_ids.starts_with(&[GlyphId(1), GlyphId(2)]),
+            "unexpected rasterization sequence: {glyph_ids:?}"
+        );
+    }
+
     struct EmptyView;
 
     impl Render for EmptyView {

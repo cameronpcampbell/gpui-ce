@@ -266,10 +266,7 @@ impl MacGlyphRasterizer {
 impl GlyphRasterizer for MacGlyphRasterizer {
     fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
         if request.requested_mode == GlyphRenderMode::Color {
-            return PreparedRasterStyle {
-                mode: GlyphRenderMode::Color,
-                color_effect: RasterColorEffect::Preblend(request.scene_color.into()),
-            };
+            return PreparedRasterStyle::preblend(request);
         }
 
         let color_effect = if font_smoothing_allowed_by_user() {
@@ -284,6 +281,7 @@ impl GlyphRasterizer for MacGlyphRasterizer {
         PreparedRasterStyle {
             mode: GlyphRenderMode::Grayscale,
             color_effect,
+            foreground_dependency: request.foreground_dependency,
         }
     }
 
@@ -794,6 +792,7 @@ mod tests {
                             raster_style: PreparedRasterStyle {
                                 mode: GlyphRenderMode::Grayscale,
                                 color_effect: RasterColorEffect::Dilation(step * 2),
+                                foreground_dependency: gpui::ForegroundDependency::Full,
                             },
                         })
                         .unwrap();
@@ -876,6 +875,179 @@ mod tests {
     }
 
     #[test]
+    fn shaped_optical_instances_reach_core_text_unchanged() {
+        let system = ParleyTextSystem::new_with_rasterizer(
+            SystemFonts::Skip,
+            "Source Serif 4",
+            MacGlyphRasterizer::new(),
+        )
+        .with_automatic_optical_sizing();
+        system.add_fonts(vec![Cow::Borrowed(SOURCE_SERIF)]).unwrap();
+
+        let shaped_glyph = |font_size| {
+            let layout = system.layout_text(TextLayoutRequest {
+                text: "A",
+                font_size,
+                runs: &[TextRun {
+                    len: 1,
+                    font: gpui_font("Source Serif 4"),
+                    ..Default::default()
+                }],
+                wrap_width: None,
+                line_clamp: None,
+            });
+            let fragment = &layout.paint_fragments[0];
+
+            (fragment.font_id, fragment.glyphs[0].id)
+        };
+        let small = shaped_glyph(px(12.0));
+        let large = shaped_glyph(px(48.0));
+
+        assert_ne!(small.0, large.0);
+        assert_eq!(small.1, large.1);
+
+        let rasterize = |(font_id, glyph_id)| {
+            system
+                .rasterize_glyph(&RenderGlyphParams {
+                    font_id,
+                    glyph_id,
+                    font_size: px(32.0),
+                    subpixel_variant: point(0, 0),
+                    scale_factor: 1.0,
+                    raster_style: PreparedRasterStyle::independent(GlyphRenderMode::Grayscale),
+                })
+                .unwrap()
+        };
+        let small_raster = rasterize(small);
+        let large_raster = rasterize(large);
+
+        small_raster.validate().unwrap();
+        large_raster.validate().unwrap();
+        assert_ne!(
+            (small_raster.bounds, small_raster.pixels),
+            (large_raster.bounds, large_raster.pixels)
+        );
+    }
+
+    #[test]
+    fn explicit_optical_outlines_match_core_texts_automatic_reference() {
+        let source = FontDataBlob::from(SOURCE_SERIF.to_vec());
+        let source_data = source_from_blob(source.clone());
+        let descriptor =
+            core_text::font_manager::create_font_descriptor_with_data(source_data.data.clone())
+                .unwrap();
+        let weight_tag = CFNumber::from(i64::from(u32::from_be_bytes(*b"wght")));
+        let weight_value = CFNumber::from(340.0f64);
+        let weight_variations = CFDictionary::from_CFType_pairs(&[(weight_tag, weight_value)]);
+        let variation_key =
+            unsafe { CFString::wrap_under_get_rule(font_descriptor::kCTFontVariationAttribute) };
+        let variation_value =
+            unsafe { CFType::wrap_under_get_rule(weight_variations.as_CFTypeRef()) };
+        let automatic_descriptor = descriptor
+            .create_copy_with_attributes(
+                CFDictionary::from_CFType_pairs(&[(variation_key, variation_value)]).into_untyped(),
+            )
+            .unwrap();
+        let glyph_for_a = |font: &core_text::font::CTFont| {
+            let mut glyph = [0];
+            let mapped = unsafe {
+                font.get_glyphs_for_characters(['A' as u16].as_ptr(), glyph.as_mut_ptr(), 1)
+            };
+            assert!(mapped);
+
+            glyph[0]
+        };
+
+        for font_size in [12.0, 48.0] {
+            let automatic_font = font::new_from_descriptor(&automatic_descriptor, font_size);
+            let variations = [
+                FontVariation::new(*b"wght", 340.0),
+                FontVariation::new(*b"opsz", font_size as f32),
+            ];
+            let explicit_face = RasterFace {
+                font_id: FontId(1),
+                source_id: source.id(),
+                source: &source,
+                face_index: 0,
+                normalized_coords: &[],
+                variations: &variations,
+                synthesis: FontSynthesis::default(),
+                has_color_glyphs: false,
+            };
+            let explicit_native = NativeFace::new(&explicit_face, source_data.clone()).unwrap();
+            let explicit_font = font::new_from_descriptor(&explicit_native.descriptor, font_size);
+            let automatic_glyph = glyph_for_a(&automatic_font);
+            let explicit_glyph = glyph_for_a(&explicit_font);
+
+            assert_eq!(explicit_glyph, automatic_glyph);
+            assert_eq!(
+                glyph_outline(&explicit_font, explicit_glyph),
+                glyph_outline(&automatic_font, automatic_glyph),
+                "explicit opsz={font_size} changed the CoreText reference outline"
+            );
+        }
+    }
+
+    #[test]
+    fn system_optical_families_shape_and_rasterize() {
+        let system = ParleyTextSystem::new_with_rasterizer(
+            SystemFonts::Load,
+            ".AppleSystemUIFont",
+            MacGlyphRasterizer::new(),
+        )
+        .with_automatic_optical_sizing();
+        let text = "Hamburgefontsiv";
+
+        for family in [".AppleSystemUIFont", "New York"] {
+            for font_size in [px(12.0), px(48.0)] {
+                let layout = system.layout_text(TextLayoutRequest {
+                    text,
+                    font_size,
+                    runs: &[TextRun {
+                        len: text.len(),
+                        font: gpui_font(family),
+                        ..Default::default()
+                    }],
+                    wrap_width: None,
+                    line_clamp: None,
+                });
+                let fragment = layout
+                    .paint_fragments
+                    .first()
+                    .unwrap_or_else(|| panic!("{family} produced no shaped text"));
+                let glyph = fragment
+                    .glyphs
+                    .first()
+                    .unwrap_or_else(|| panic!("{family} produced no shaped glyphs"));
+
+                for scale_factor in [1.0, 2.0] {
+                    let raster = system
+                        .rasterize_glyph(&RenderGlyphParams {
+                            font_id: fragment.font_id,
+                            glyph_id: glyph.id,
+                            font_size,
+                            subpixel_variant: point(0, 0),
+                            scale_factor,
+                            raster_style: PreparedRasterStyle::independent(
+                                GlyphRenderMode::Grayscale,
+                            ),
+                        })
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "failed to rasterize {family} at {font_size:?} and scale {scale_factor}: {error:#}"
+                            )
+                        });
+                    raster.validate().unwrap();
+                    assert!(
+                        raster.pixels.iter().any(|coverage| *coverage != 0),
+                        "{family} produced an empty glyph at {font_size:?} and scale {scale_factor}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn synthetic_bold_keeps_stroked_tips_inside_the_raster() {
         let system = ParleyTextSystem::new_with_rasterizer(
             SystemFonts::Skip,
@@ -895,6 +1067,7 @@ mod tests {
                 raster_style: PreparedRasterStyle {
                     mode: GlyphRenderMode::Grayscale,
                     color_effect: RasterColorEffect::Dilation(0),
+                    foreground_dependency: gpui::ForegroundDependency::Full,
                 },
             })
             .unwrap();
@@ -975,8 +1148,11 @@ mod tests {
             render_style(
                 glyph_id,
                 system.prepare_raster_style(RasterStyleRequest {
+                    font_id,
+                    glyph_id,
                     scene_color: color,
                     requested_mode: mode,
+                    foreground_dependency: gpui::ForegroundDependency::Full,
                 }),
                 variant,
             )
@@ -984,15 +1160,21 @@ mod tests {
 
         let letter = system.glyph_for_char(font_id, 'A').unwrap();
         let normalized_subpixel = system.prepare_raster_style(RasterStyleRequest {
+            font_id,
+            glyph_id: letter,
             scene_color: rgba(0x303030ff),
             requested_mode: GlyphRenderMode::Subpixel,
+            foreground_dependency: gpui::ForegroundDependency::Full,
         });
 
         assert_eq!(normalized_subpixel.mode, GlyphRenderMode::Grayscale);
 
         let light_style = system.prepare_raster_style(RasterStyleRequest {
+            font_id,
+            glyph_id: letter,
             scene_color: rgba(0xffffffff),
             requested_mode: GlyphRenderMode::Grayscale,
+            foreground_dependency: gpui::ForegroundDependency::Full,
         });
 
         let expected_light_effect = if font_smoothing_allowed_by_user() {
@@ -1004,8 +1186,11 @@ mod tests {
 
         for (color, expected_level) in [(0x000000ff, 0), (0x1e1e1eff, 0), (0x222222ff, 1)] {
             let style = system.prepare_raster_style(RasterStyleRequest {
+                font_id,
+                glyph_id: letter,
                 scene_color: rgba(color),
                 requested_mode: GlyphRenderMode::Grayscale,
+                foreground_dependency: gpui::ForegroundDependency::Full,
             });
             let expected_effect = if font_smoothing_allowed_by_user() {
                 RasterColorEffect::Dilation(expected_level)
@@ -1021,6 +1206,7 @@ mod tests {
             PreparedRasterStyle {
                 mode: GlyphRenderMode::Grayscale,
                 color_effect: RasterColorEffect::Dilation(0),
+                foreground_dependency: gpui::ForegroundDependency::Full,
             },
             point(0, 0),
         );
@@ -1029,6 +1215,7 @@ mod tests {
             PreparedRasterStyle {
                 mode: GlyphRenderMode::Grayscale,
                 color_effect: RasterColorEffect::Dilation(4),
+                foreground_dependency: gpui::ForegroundDependency::Full,
             },
             point(0, 0),
         );
@@ -1057,6 +1244,7 @@ mod tests {
             PreparedRasterStyle {
                 mode: GlyphRenderMode::Grayscale,
                 color_effect: RasterColorEffect::Dilation(0),
+                foreground_dependency: gpui::ForegroundDependency::Full,
             },
             point(SUBPIXEL_VARIANTS_X - 1, 0),
         );
@@ -1122,16 +1310,20 @@ mod tests {
         let emoji_font = emoji_system
             .font_id(&gpui_font("Apple Color Emoji"))
             .expect("Apple Color Emoji is available on macOS");
+        let emoji_glyph = emoji_system.glyph_for_char(emoji_font, '😀').unwrap();
         let emoji = emoji_system
             .rasterize_glyph(&RenderGlyphParams {
                 font_id: emoji_font,
-                glyph_id: emoji_system.glyph_for_char(emoji_font, '😀').unwrap(),
+                glyph_id: emoji_glyph,
                 font_size: px(24.0),
                 subpixel_variant: point(2, 0),
                 scale_factor: 2.0,
                 raster_style: emoji_system.prepare_raster_style(RasterStyleRequest {
+                    font_id: emoji_font,
+                    glyph_id: emoji_glyph,
                     scene_color: rgba(0xffffffff),
                     requested_mode: GlyphRenderMode::Color,
+                    foreground_dependency: gpui::ForegroundDependency::Full,
                 }),
             })
             .unwrap();
@@ -1143,6 +1335,40 @@ mod tests {
                     || pixel[1].abs_diff(pixel[2]) > 20
                     || pixel[0].abs_diff(pixel[2]) > 20)
         }));
+
+        let transparent_style = emoji_system.prepare_raster_style(RasterStyleRequest {
+            font_id: emoji_font,
+            glyph_id: emoji_glyph,
+            scene_color: rgba(0xff000000),
+            requested_mode: GlyphRenderMode::Color,
+            foreground_dependency: gpui::ForegroundDependency::Full,
+        });
+        assert_eq!(
+            transparent_style.color_effect,
+            RasterColorEffect::Preblend(Rgba8 {
+                red: 0,
+                green: 0,
+                blue: 0,
+                alpha: 0,
+            })
+        );
+        let transparent_emoji = emoji_system
+            .rasterize_glyph(&RenderGlyphParams {
+                font_id: emoji_font,
+                glyph_id: emoji_glyph,
+                font_size: px(24.0),
+                subpixel_variant: point(2, 0),
+                scale_factor: 2.0,
+                raster_style: transparent_style,
+            })
+            .unwrap();
+        transparent_emoji.validate().unwrap();
+        assert!(
+            transparent_emoji
+                .pixels
+                .chunks_exact(4)
+                .all(|pixel| pixel[3] == 0)
+        );
 
         let directional_text = "🏃‍➡️";
         let directional_layout = emoji_system.layout_text(TextLayoutRequest {
@@ -1175,8 +1401,11 @@ mod tests {
                 subpixel_variant: point(0, 0),
                 scale_factor: 2.0,
                 raster_style: emoji_system.prepare_raster_style(RasterStyleRequest {
+                    font_id: directional_glyph.0,
+                    glyph_id: directional_glyph.1.id,
                     scene_color: rgba(0xffffffff),
                     requested_mode: GlyphRenderMode::Color,
+                    foreground_dependency: gpui::ForegroundDependency::Full,
                 }),
             })
             .unwrap();

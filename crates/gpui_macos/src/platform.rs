@@ -232,6 +232,7 @@ impl MacPlatform {
                 ".AppleSystemUIFont",
                 MacGlyphRasterizer::new(),
             )
+            .with_automatic_optical_sizing()
             .with_fallback_families(["Lilex", "IBM Plex Sans", "Helvetica", "Arial"]),
         );
 
