@@ -149,13 +149,19 @@ include!(concat!(env!("OUT_DIR"), "/native_shaders.rs"));
 mod tests {
     use super::BASE_DOWNLEVEL_WGSL;
 
-    #[test]
-    fn downlevel_background_array_uses_host_element_stride() {
-        let decoder = BASE_DOWNLEVEL_WGSL
-            .split_once("fn dl_load_Background_impl")
+    fn generated_function<'a>(source: &'a str, name: &str) -> &'a str {
+        let marker = format!("fn {name}");
+
+        source
+            .split_once(&marker)
             .and_then(|(_, source)| source.split_once("\n}"))
             .map(|(source, _)| source)
-            .expect("generated Background decoder must exist");
+            .unwrap_or_else(|| panic!("generated {name} function must exist"))
+    }
+
+    #[test]
+    fn downlevel_background_array_uses_host_element_stride() {
+        let decoder = generated_function(BASE_DOWNLEVEL_WGSL, "dl_load_Background_impl");
         let element_stride = std::mem::size_of::<gpui::LinearColorStop>() / 4;
         let second_element_offset = 7 + element_stride;
 
@@ -170,6 +176,28 @@ mod tests {
         assert!(
             !decoder.contains("base + 17u)), dl_scene_word"),
             "Background decoder must not read padding as the second color stop"
+        );
+    }
+
+    #[test]
+    fn downlevel_quad_decoder_uses_host_dash_offsets_and_stride() {
+        let decoder = generated_function(BASE_DOWNLEVEL_WGSL, "dl_load_Quad_impl");
+        let loader = generated_function(BASE_DOWNLEVEL_WGSL, "dl_load_QUADS");
+        let dash_length_word = std::mem::offset_of!(gpui::Quad, border_dashed_length) / 4;
+        let dash_gap_word = std::mem::offset_of!(gpui::Quad, border_dashed_gap) / 4;
+        let stride_words = std::mem::size_of::<gpui::Quad>() / 4;
+
+        assert!(
+            decoder.contains(&format!("base, {dash_length_word}u")),
+            "Quad decoder must load border_dashed_length from its host offset"
+        );
+        assert!(
+            decoder.contains(&format!("base, {dash_gap_word}u")),
+            "Quad decoder must load border_dashed_gap from its host offset"
+        );
+        assert!(
+            loader.contains(&format!("i * {stride_words}u")),
+            "Quad decoder must advance by the host Quad stride"
         );
     }
 }

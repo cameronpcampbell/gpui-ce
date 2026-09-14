@@ -576,6 +576,20 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets the length of each border dash as a multiple of the border width.
+    fn border_dashed_length(mut self, length_per_border_width: f32) -> Self {
+        self.style().border_dashed_length = Some(length_per_border_width.max(0.0));
+
+        self
+    }
+
+    /// Sets the gap between border dashes as a multiple of the border width.
+    fn border_dashed_gap(mut self, gap_per_border_width: f32) -> Self {
+        self.style().border_dashed_gap = Some(gap_per_border_width.max(0.0));
+
+        self
+    }
+
     /// Returns a mutable reference to the text style that has been configured on this element.
     fn text_style(&mut self) -> &mut TextStyleRefinement {
         let style: &mut StyleRefinement = self.style();

@@ -299,6 +299,63 @@ mod tests {
     use super::*;
     use crate::wgpu_renderer::filters::FrameUniformRequirements;
 
+    #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+    fn dashed_border_scene(dash_length: f32, dash_gap: f32) -> Scene {
+        let full_bounds = Bounds {
+            origin: Point {
+                x: ScaledPixels(0.0),
+                y: ScaledPixels(0.0),
+            },
+            size: Size {
+                width: ScaledPixels(40.0),
+                height: ScaledPixels(20.0),
+            },
+        };
+        let quad_bounds = |left| Bounds {
+            origin: Point {
+                x: ScaledPixels(left),
+                y: ScaledPixels(4.0),
+            },
+            size: Size {
+                width: ScaledPixels(12.0),
+                height: ScaledPixels(12.0),
+            },
+        };
+        let mut scene = Scene::default();
+
+        for (bounds, corner_smoothing) in [(quad_bounds(4.0), 0.0), (quad_bounds(24.0), 0.6)] {
+            scene.insert_primitive(Quad {
+                bounds,
+                content_mask: gpui::ContentMask {
+                    bounds: full_bounds,
+                },
+                background: gpui::solid_background(gpui::hsla(0.05, 0.8, 0.45, 1.0)),
+                border_style: gpui::BorderStyle::Dashed,
+                border_dashed_length: dash_length,
+                border_dashed_gap: dash_gap,
+                border_color: gpui::hsla(0.6, 0.9, 0.7, 1.0).into(),
+                corner_radii: gpui::Corners::all(ScaledPixels(4.0)),
+                border_widths: gpui::Edges::all(ScaledPixels(2.0)),
+                corner_smoothing,
+                ..Default::default()
+            });
+        }
+
+        scene.finish();
+
+        scene
+    }
+
+    #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+    fn images_differ_in_region(
+        first: &image::RgbaImage,
+        second: &image::RgbaImage,
+        left: u32,
+        right: u32,
+    ) -> bool {
+        (4..16).any(|y| (left..right).any(|x| first.get_pixel(x, y) != second.get_pixel(x, y)))
+    }
+
     #[test]
     fn rust_storage_types_match_shader_strides() {
         fn module_layout(source: &wgsl_rs::Source) -> (naga::Module, naga::proc::Layouter) {
@@ -426,6 +483,30 @@ mod tests {
             [128, 0, 0, 255],
             "must match the retired Metal renderer's mixed primitive baseline"
         );
+        Ok(())
+    }
+
+    #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+    #[test]
+    fn configurable_dashes_reach_both_wgpu_quad_pipelines() -> anyhow::Result<()> {
+        let context = WgpuContext::new_headless(None)?;
+        let size = Size {
+            width: DevicePixels(40),
+            height: DevicePixels(20),
+        };
+        let mut renderer = WgpuRenderer::new_headless(&context, size)?;
+        let default_image = renderer.render_to_image(&dashed_border_scene(2.0, 1.0))?;
+        let custom_image = renderer.render_to_image(&dashed_border_scene(4.0, 0.5))?;
+
+        assert!(
+            images_differ_in_region(&default_image, &custom_image, 4, 16),
+            "custom dash length and gap must change the ordinary quad pipeline"
+        );
+        assert!(
+            images_differ_in_region(&default_image, &custom_image, 24, 36),
+            "custom dash length and gap must change the smoothed quad pipeline"
+        );
+
         Ok(())
     }
 

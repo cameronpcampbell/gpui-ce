@@ -8,6 +8,8 @@ pub mod quad {
     pub struct Quad {
         pub order: u32,
         pub border_style: BorderStyle,
+        pub border_dashed_length: f32,
+        pub border_dashed_gap: f32,
         pub bounds: Bounds,
         pub content_mask: Bounds,
         pub background: Background,
@@ -19,8 +21,6 @@ pub mod quad {
     }
     storage!(group(1), binding(0), QUADS: RuntimeArray<Quad>);
 
-    pub const DASH_LENGTH_PER_BORDER_WIDTH: f32 = 2.0;
-    pub const DASH_GAP_PER_BORDER_WIDTH: f32 = 1.0;
     pub const DEFINITELY_OUTSIDE_INNER_BORDER: f32 = -1.0;
 
     #[derive(Clone, Copy, Wgsl)]
@@ -135,11 +135,15 @@ pub mod quad {
         }
     }
 
-    pub fn dash_velocity(border_width: f32) -> f32 {
-        if border_width <= 0.0 {
+    pub fn dash_period_per_border_width(quad: Quad) -> f32 {
+        max(quad.border_dashed_length, 0.0) + max(quad.border_dashed_gap, 0.0)
+    }
+
+    pub fn dash_velocity(border_width: f32, period_per_border_width: f32) -> f32 {
+        if border_width <= 0.0 || period_per_border_width <= 0.0 {
             0.0
         } else {
-            1.0 / (DASH_LENGTH_PER_BORDER_WIDTH + DASH_GAP_PER_BORDER_WIDTH) / border_width
+            1.0 / period_per_border_width / border_width
         }
     }
 
@@ -150,7 +154,8 @@ pub mod quad {
             max(quad.border_widths.bottom, quad.border_widths.top),
             horizontal,
         );
-        let velocity = dash_velocity(border_width);
+        let velocity = dash_velocity(border_width, dash_period_per_border_width(quad));
+
         DashPosition {
             position: select(geometry.point.y, geometry.point.x, horizontal) * velocity,
             perimeter: select(quad.bounds.size.y, quad.bounds.size.x, horizontal) * velocity,
@@ -158,12 +163,12 @@ pub mod quad {
         }
     }
 
-    pub fn side_dash_velocities(border_widths: Edges) -> Edges {
+    pub fn side_dash_velocities(border_widths: Edges, period_per_border_width: f32) -> Edges {
         Edges {
-            top: dash_velocity(border_widths.top),
-            right: dash_velocity(border_widths.right),
-            bottom: dash_velocity(border_widths.bottom),
-            left: dash_velocity(border_widths.left),
+            top: dash_velocity(border_widths.top, period_per_border_width),
+            right: dash_velocity(border_widths.right, period_per_border_width),
+            bottom: dash_velocity(border_widths.bottom, period_per_border_width),
+            left: dash_velocity(border_widths.left, period_per_border_width),
         }
     }
 
@@ -196,7 +201,8 @@ pub mod quad {
     }
 
     pub fn rounded_dash_layout(quad: Quad) -> RoundedDashLayout {
-        let side_velocities = side_dash_velocities(quad.border_widths);
+        let side_velocities =
+            side_dash_velocities(quad.border_widths, dash_period_per_border_width(quad));
         let side_lengths =
             straight_side_dash_lengths(quad.bounds, quad.corner_radii, side_velocities);
         let corner_velocities = corner_dash_velocities(side_velocities);
@@ -207,6 +213,7 @@ pub mod quad {
             bottom_right_start + corner_lengths.bottom_right + side_lengths.bottom;
         let left_start = bottom_left_start + corner_lengths.bottom_left;
         let top_left_start = left_start + side_lengths.left;
+
         RoundedDashLayout {
             side_velocities,
             corner_velocities,
@@ -258,7 +265,8 @@ pub mod quad {
         prepared: PreparedCorners,
         corner_lengths: Vec4f,
     ) -> RoundedDashLayout {
-        let side_velocities = side_dash_velocities(quad.border_widths);
+        let side_velocities =
+            side_dash_velocities(quad.border_widths, dash_period_per_border_width(quad));
         let side_lengths = Edges {
             top: (quad.bounds.size.x
                 - prepared.horizontal_reaches.x
@@ -305,6 +313,12 @@ pub mod quad {
         border: Vec2f,
         straight_border_inner_corner_to_point: Vec2f,
     ) -> f32 {
+        let dash_period_per_width = dash_period_per_border_width(quad);
+
+        if dash_period_per_width <= 0.0 {
+            return 1.0;
+        }
+
         let dash_layout = smoothed_dash_layout(quad, prepared, corner_lengths);
         let mut dash_position = 0.0;
         let mut dash_velocity = 0.0;
@@ -400,8 +414,7 @@ pub mod quad {
             }
         }
 
-        let dash_period_per_width = DASH_LENGTH_PER_BORDER_WIDTH + DASH_GAP_PER_BORDER_WIDTH;
-        let dash_length = DASH_LENGTH_PER_BORDER_WIDTH / dash_period_per_width;
+        let dash_length = max(quad.border_dashed_length, 0.0) / dash_period_per_width;
 
         if dash_layout.perimeter >= 1.0 {
             let period = dash_layout.perimeter / floor(dash_layout.perimeter);
@@ -481,18 +494,25 @@ pub mod quad {
     }
 
     pub fn dashed_border_alpha(quad: Quad, geometry: QuadGeometry) -> f32 {
+        let dash_period_per_width = dash_period_per_border_width(quad);
+
+        if dash_period_per_width <= 0.0 {
+            return 1.0;
+        }
+
         let mut dash = DashPosition {
             position: 0.0,
             perimeter: 0.0,
             velocity: 0.0,
         };
+
         if geometry.unrounded {
             dash = straight_dash_position(quad, geometry);
         } else {
             dash = rounded_dash_position(quad, geometry);
         }
-        let dash_period_per_width = DASH_LENGTH_PER_BORDER_WIDTH + DASH_GAP_PER_BORDER_WIDTH;
-        let dash_length = DASH_LENGTH_PER_BORDER_WIDTH / dash_period_per_width;
+
+        let dash_length = max(quad.border_dashed_length, 0.0) / dash_period_per_width;
         let perimeter = dash.perimeter - select(0.0, dash_length, geometry.unrounded);
 
         if perimeter >= 1.0 {

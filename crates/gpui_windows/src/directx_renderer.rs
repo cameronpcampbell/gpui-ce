@@ -2840,10 +2840,10 @@ mod tests {
     use crate::directx_devices::DirectXDevices;
     use anyhow::Result;
     use gpui::{
-        AtlasKey, AtlasTile, Bounds, ContentMask, DevicePixels, ImageId, MonochromeSprite,
-        PlatformAtlas, Point, PolychromeSprite, PrimitiveBatch, Quad, RenderCommand,
-        RenderImageParams, RenderSvgParams, ScaledPixels, Scene, ShaderBool, Size,
-        WindowBackgroundAppearance, rgb, rgb_to_hsla, solid_background,
+        AtlasKey, AtlasTile, BorderStyle, Bounds, ContentMask, Corners, DevicePixels, Edges,
+        ImageId, MonochromeSprite, PlatformAtlas, Point, PolychromeSprite, PrimitiveBatch, Quad,
+        RenderCommand, RenderImageParams, RenderSvgParams, ScaledPixels, Scene, ShaderBool, Size,
+        WindowBackgroundAppearance, hsla, rgb, rgb_to_hsla, solid_background,
     };
     use std::borrow::Cow;
     use windows::Win32::Foundation::HWND;
@@ -2901,6 +2901,42 @@ mod tests {
         }
     }
 
+    fn dashed_border_scene(dash_length: f32, dash_gap: f32) -> Scene {
+        let mut scene = Scene::default();
+
+        for (bounds, corner_smoothing) in [
+            (scaled(4.0, 4.0, 12.0, 12.0), 0.0),
+            (scaled(24.0, 4.0, 12.0, 12.0), 0.6),
+        ] {
+            scene.insert_primitive(Quad {
+                bounds,
+                content_mask: full_mask(),
+                background: solid_background(hsla(0.05, 0.8, 0.45, 1.0)),
+                border_style: BorderStyle::Dashed,
+                border_dashed_length: dash_length,
+                border_dashed_gap: dash_gap,
+                border_color: hsla(0.6, 0.9, 0.7, 1.0).into(),
+                corner_radii: Corners::all(ScaledPixels(4.0)),
+                border_widths: Edges::all(ScaledPixels(2.0)),
+                corner_smoothing,
+                ..Default::default()
+            });
+        }
+
+        scene.finish();
+
+        scene
+    }
+
+    fn images_differ_in_region(
+        first: &image::RgbaImage,
+        second: &image::RgbaImage,
+        left: u32,
+        right: u32,
+    ) -> bool {
+        (4..16).any(|y| (left..right).any(|x| first.get_pixel(x, y) != second.get_pixel(x, y)))
+    }
+
     fn tile(atlas: &dyn PlatformAtlas, key: AtlasKey, bytes: Vec<u8>) -> AtlasTile {
         atlas
             .get_or_insert_with(&key, &mut || {
@@ -2914,6 +2950,37 @@ mod tests {
             })
             .expect("atlas insert must succeed")
             .expect("atlas insert must produce a tile")
+    }
+
+    #[test]
+    fn configurable_dashes_reach_both_directx_quad_pipelines() -> Result<()> {
+        let window = HiddenWindow::new()?;
+        let devices = DirectXDevices::new()?;
+        let mut renderer = DirectXRenderer::new(window.0, &devices, true)?;
+        renderer.resize(Size {
+            width: DevicePixels(40),
+            height: DevicePixels(20),
+        })?;
+
+        let default_image = renderer.render_to_image(
+            &dashed_border_scene(2.0, 1.0),
+            WindowBackgroundAppearance::Opaque,
+        )?;
+        let custom_image = renderer.render_to_image(
+            &dashed_border_scene(4.0, 0.5),
+            WindowBackgroundAppearance::Opaque,
+        )?;
+
+        assert!(
+            images_differ_in_region(&default_image, &custom_image, 4, 16),
+            "custom dash length and gap must change the ordinary quad pipeline"
+        );
+        assert!(
+            images_differ_in_region(&default_image, &custom_image, 24, 36),
+            "custom dash length and gap must change the smoothed quad pipeline"
+        );
+
+        Ok(())
     }
 
     #[test]
