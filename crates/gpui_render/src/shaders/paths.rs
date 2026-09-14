@@ -59,12 +59,8 @@ pub mod path_rasterization {
             return transparent();
         }
         let vertex = get!(PATH_VERTICES)[input.vertex_id as usize];
-        let color = background_color(
-            vertex.color,
-            input.position.xy(),
-            vertex.bounds,
-            prepare_background(vertex.color),
-        );
+        let paint = Paint::new(vertex.color, vertex.bounds);
+        let color = paint_color(paint, input.position.xy(), prepare_paint(paint));
         premultiply(color, coverage)
     }
 }

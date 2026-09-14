@@ -239,9 +239,10 @@ fn linear_gradients_preserve_native_dithering() {
         origin: vec2f(0.0, 0.0),
         size: vec2f(100.0, 100.0),
     };
-    let prepared = prepare_background(background);
-    let first = background_color(background, vec2f(10.0, 10.0), bounds, prepared);
-    let second = background_color(background, vec2f(11.0, 10.0), bounds, prepared);
+    let paint = Paint::new(background, bounds);
+    let prepared = prepare_paint(paint);
+    let first = paint_color(paint, vec2f(10.0, 10.0), prepared);
+    let second = paint_color(paint, vec2f(11.0, 10.0), prepared);
 
     assert_ne!(first.w, second.w);
 }

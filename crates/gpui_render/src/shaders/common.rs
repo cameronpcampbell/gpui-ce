@@ -571,23 +571,41 @@ mod source {
     }
 
     #[derive(Clone, Copy, Wgsl)]
-    pub struct PreparedBackground {
+    pub struct Paint {
+        pub background: Background,
+        pub bounds: Bounds,
+    }
+
+    impl Paint {
+        pub fn new(background: Background, bounds: Bounds) -> Paint {
+            Paint { background, bounds }
+        }
+    }
+
+    #[derive(Clone, Copy, Wgsl)]
+    pub struct PreparedPaint {
         pub solid: Vec4f,
         pub color0: Vec4f,
         pub color1: Vec4f,
     }
 
-    pub fn prepare_background(background: Background) -> PreparedBackground {
-        let mut prepared = PreparedBackground {
-            solid: transparent(),
-            color0: transparent(),
-            color1: transparent(),
-        };
+    impl PreparedPaint {
+        pub fn new(solid: Vec4f, color0: Vec4f, color1: Vec4f) -> PreparedPaint {
+            PreparedPaint {
+                solid,
+                color0,
+                color1,
+            }
+        }
+    }
 
-        if background.tag == BackgroundTag::LinearGradient {
-            prepared.color0 = hsla_to_rgba(background.colors[0usize].color);
-            prepared.color1 = hsla_to_rgba(background.colors[1usize].color);
-            if background.color_space == ColorSpace::Srgb {
+    pub fn prepare_paint(paint: Paint) -> PreparedPaint {
+        let mut prepared = PreparedPaint::new(transparent(), transparent(), transparent());
+
+        if paint.background.tag == BackgroundTag::LinearGradient {
+            prepared.color0 = hsla_to_rgba(paint.background.colors[0usize].color);
+            prepared.color1 = hsla_to_rgba(paint.background.colors[1usize].color);
+            if paint.background.color_space == ColorSpace::Srgb {
                 prepared.color0 = linear_to_srgba(prepared.color0);
                 prepared.color1 = linear_to_srgba(prepared.color1);
             } else {
@@ -595,33 +613,34 @@ mod source {
                 prepared.color1 = linear_srgb_to_oklab(prepared.color1);
             }
         } else {
-            prepared.solid = hsla_to_rgba(background.solid);
+            prepared.solid = hsla_to_rgba(paint.background.solid);
         }
+
         prepared
     }
 
-    pub fn linear_gradient_ratio(background: Background, position: Vec2f, bounds: Bounds) -> f32 {
-        let radians = (background.gradient_angle_or_pattern_height % FULL_TURN_DEGREES
+    pub fn linear_gradient_ratio(paint: Paint, position: Vec2f) -> f32 {
+        let radians = (paint.background.gradient_angle_or_pattern_height % FULL_TURN_DEGREES
             - CSS_GRADIENT_OFFSET_DEGREES)
             * PI
             / HALF_TURN_DEGREES;
         let mut direction = vec2f(cos(radians), sin(radians));
-        if bounds.size.x > bounds.size.y {
-            direction.y *= bounds.size.y / bounds.size.x;
+        if paint.bounds.size.x > paint.bounds.size.y {
+            direction.y *= paint.bounds.size.y / paint.bounds.size.x;
         } else {
-            direction.x *= bounds.size.x / bounds.size.y;
+            direction.x *= paint.bounds.size.x / paint.bounds.size.y;
         }
 
-        let half_size = Bounds::half_size(bounds);
-        let mut ratio = dot(position - Bounds::center(bounds), direction) / length(direction);
+        let half_size = Bounds::half_size(paint.bounds);
+        let mut ratio = dot(position - Bounds::center(paint.bounds), direction) / length(direction);
         if abs(direction.x) > abs(direction.y) {
-            ratio = (ratio + half_size.x) / bounds.size.x;
+            ratio = (ratio + half_size.x) / paint.bounds.size.x;
         } else {
-            ratio = (ratio + half_size.y) / bounds.size.y;
+            ratio = (ratio + half_size.y) / paint.bounds.size.y;
         }
 
-        let first_stop = background.colors[0usize].percentage;
-        let last_stop = background.colors[1usize].percentage;
+        let first_stop = paint.background.colors[0usize].percentage;
+        let last_stop = paint.background.colors[1usize].percentage;
         saturate((ratio - first_stop) / (last_stop - first_stop))
     }
 
@@ -638,17 +657,12 @@ mod source {
         )
     }
 
-    pub fn linear_gradient_color(
-        background: Background,
-        position: Vec2f,
-        bounds: Bounds,
-        prepared: PreparedBackground,
-    ) -> Vec4f {
-        let ratio = linear_gradient_ratio(background, position, bounds);
+    pub fn linear_gradient_color(paint: Paint, position: Vec2f, prepared: PreparedPaint) -> Vec4f {
+        let ratio = linear_gradient_ratio(paint, position);
         let ratio4 = vec4f(ratio, ratio, ratio, ratio);
         let interpolated = mix(prepared.color0, prepared.color1, ratio4);
         let mut color = transparent();
-        if background.color_space == ColorSpace::Oklab {
+        if paint.background.color_space == ColorSpace::Oklab {
             color = oklab_to_linear_srgb(interpolated);
         } else {
             color = srgba_to_linear(interpolated);
@@ -656,13 +670,8 @@ mod source {
         color + gradient_dither(position)
     }
 
-    pub fn slash_pattern_color(
-        background: Background,
-        position: Vec2f,
-        bounds: Bounds,
-        solid: Vec4f,
-    ) -> Vec4f {
-        let encoded = background.gradient_angle_or_pattern_height;
+    pub fn slash_pattern_color(paint: Paint, position: Vec2f, solid: Vec4f) -> Vec4f {
+        let encoded = paint.background.gradient_angle_or_pattern_height;
         let pattern_width = (encoded / PATTERN_PACKING_RADIX) / PATTERN_COMPONENT_SCALE;
         let pattern_interval = (encoded % PATTERN_PACKING_RADIX) / PATTERN_COMPONENT_SCALE;
         let pattern_height = pattern_width + pattern_interval;
@@ -671,7 +680,7 @@ mod source {
             vec2f(cos(DIAGONAL_STRIPE_ANGLE), -sin(DIAGONAL_STRIPE_ANGLE)),
             vec2f(sin(DIAGONAL_STRIPE_ANGLE), cos(DIAGONAL_STRIPE_ANGLE)),
         );
-        let pattern = (rotation * (position - bounds.origin)).x % period;
+        let pattern = (rotation * (position - paint.bounds.origin)).x % period;
         let distance =
             min(pattern, period - pattern) - period * (pattern_width / pattern_height) / 2.0;
         let mut color = solid;
@@ -679,40 +688,30 @@ mod source {
         color
     }
 
-    pub fn checkerboard_color(
-        background: Background,
-        position: Vec2f,
-        bounds: Bounds,
-        solid: Vec4f,
-    ) -> Vec4f {
-        let relative = position - bounds.origin;
-        let square_size = background.gradient_angle_or_pattern_height;
+    pub fn checkerboard_color(paint: Paint, position: Vec2f, solid: Vec4f) -> Vec4f {
+        let relative = position - paint.bounds.origin;
+        let square_size = paint.background.gradient_angle_or_pattern_height;
         let colored = (floor(relative.x / square_size) + floor(relative.y / square_size)) % 2.0;
         let mut color = solid;
         color.w *= saturate(colored);
         color
     }
 
-    pub fn background_color(
-        background: Background,
-        position: Vec2f,
-        bounds: Bounds,
-        prepared: PreparedBackground,
-    ) -> Vec4f {
+    pub fn paint_color(paint: Paint, position: Vec2f, prepared: PreparedPaint) -> Vec4f {
         let mut color = prepared.solid;
         #[wgsl_allow(non_literal_match_statement_patterns)]
-        match background.tag {
+        match paint.background.tag {
             BackgroundTag::Solid => {
                 color = prepared.solid;
             }
             BackgroundTag::LinearGradient => {
-                color = linear_gradient_color(background, position, bounds, prepared);
+                color = linear_gradient_color(paint, position, prepared);
             }
             BackgroundTag::PatternSlash => {
-                color = slash_pattern_color(background, position, bounds, prepared.solid);
+                color = slash_pattern_color(paint, position, prepared.solid);
             }
             BackgroundTag::Checkerboard => {
-                color = checkerboard_color(background, position, bounds, prepared.solid);
+                color = checkerboard_color(paint, position, prepared.solid);
             }
         }
         color
