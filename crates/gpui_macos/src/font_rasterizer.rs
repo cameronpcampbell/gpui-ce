@@ -1,13 +1,18 @@
 use core_foundation_sys::{
     array::CFArrayRef, data::CFDataRef, preferences::CFPreferencesCopyAppValue,
-    preferences::kCFPreferencesCurrentApplication,
+    preferences::kCFPreferencesCurrentApplication, string::CFStringRef,
 };
 
 #[cfg(test)]
-use gpui::{FontId, GlyphId, PlatformTextSystem, font as gpui_font, px, rgba};
+use core_foundation_sys::dictionary::CFDictionaryRef;
 
 #[cfg(test)]
-use gpui_parley::{FontSynthesis, ParleyTextSystem, SystemFonts};
+use gpui::{
+    FontId, GlyphId, PlatformTextSystem, TextLayoutRequest, TextRun, font as gpui_font, px, rgba,
+};
+
+#[cfg(test)]
+use gpui_parley::{FontSynthesis, FontVariation, ParleyTextSystem, SystemFonts};
 
 #[cfg(test)]
 use std::borrow::Cow;
@@ -24,7 +29,7 @@ use core_foundation::{
 use core_graphics::{
     base::{CGFloat, kCGImageAlphaPremultipliedLast},
     color_space::CGColorSpace,
-    context::{CGContext, CGTextDrawingMode},
+    context::{CGContext, CGLineJoin, CGTextDrawingMode},
     display::CGPoint,
     geometry::CGAffineTransform,
 };
@@ -37,7 +42,7 @@ use gpui::{
     RasterStyleRequest, RasterizedGlyph, RasterizedGlyphFormat, RenderGlyphParams, Rgba8,
     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, TextRenderingMode, point, size,
 };
-use gpui_parley::{GlyphRasterizer, RasterFace};
+use gpui_parley::{FontDataBlob, GlyphRasterizer, RasterFace};
 use objc2::rc::autoreleasepool;
 use std::{
     collections::HashMap,
@@ -51,6 +56,9 @@ const CHECKSUM_MAGIC: u32 = 0xb1b0_afba;
 #[link(name = "CoreText", kind = "framework")]
 unsafe extern "C" {
     fn CTFontManagerCreateFontDescriptorsFromData(data: CFDataRef) -> CFArrayRef;
+    #[cfg(test)]
+    fn CTFontCopyVariation(font: core_text::font::CTFontRef) -> CFDictionaryRef;
+    static kCTFontOpticalSizeAttribute: CFStringRef;
 }
 
 #[allow(non_upper_case_globals)]
@@ -97,7 +105,7 @@ impl MacGlyphRasterizer {
         let source = if let Some(source) = self.sources.get(&face.source_id) {
             source.clone()
         } else {
-            source_from_bytes(face.data.to_vec())
+            source_from_blob(face.source.clone())
         };
 
         let native =
@@ -121,7 +129,6 @@ impl MacGlyphRasterizer {
         face: &RasterFace<'_>,
         params: &RenderGlyphParams,
     ) -> Result<RasterizedGlyph> {
-        let native = self.native_face(face)?;
         let font_size = f64::from(params.font_size);
         let scale_factor = f64::from(params.scale_factor);
         ensure!(
@@ -132,6 +139,14 @@ impl MacGlyphRasterizer {
             scale_factor.is_finite() && scale_factor > 0.0,
             "invalid raster scale factor"
         );
+
+        if font_size == 0.0 {
+            return Ok(RasterizedGlyph::empty(format_for_mode(
+                params.raster_style.mode,
+            )));
+        }
+
+        let native = self.native_face(face)?;
         let font = font::new_from_descriptor(&native.descriptor, font_size);
         let glyph: u16 = params
             .glyph_id
@@ -263,7 +278,7 @@ impl GlyphRasterizer for MacGlyphRasterizer {
             let dilation = ((4.0 * luminance) + 0.5).floor().clamp(0.0, 4.0) as u8;
             RasterColorEffect::Dilation(dilation)
         } else {
-            RasterColorEffect::Dilation(0)
+            RasterColorEffect::Independent
         };
 
         PreparedRasterStyle {
@@ -287,8 +302,8 @@ impl GlyphRasterizer for MacGlyphRasterizer {
 
 impl NativeFace {
     fn new(face: &RasterFace<'_>, shared_source: Arc<SendCFData>) -> Result<Self> {
-        let (mut descriptor, source_data) = if face.data.get(..4) == Some(TTC_TAG) {
-            match collection_descriptor(&shared_source.data, face.data, face.face_index) {
+        let (mut descriptor, source_data) = if face.data().get(..4) == Some(TTC_TAG) {
+            match collection_descriptor(&shared_source.data, face.data(), face.face_index) {
                 Ok(descriptor) => (descriptor, shared_source),
                 Err(error) => {
                     log::debug!(
@@ -297,7 +312,7 @@ impl NativeFace {
                     );
 
                     let source =
-                        source_from_bytes(compact_sfnt_for_face(face.data, face.face_index)?);
+                        source_from_bytes(compact_sfnt_for_face(face.data(), face.face_index)?);
                     let descriptor = core_text::font_manager::create_font_descriptor_with_data(
                         source.data.clone(),
                     )
@@ -344,6 +359,15 @@ impl NativeFace {
                 .map_err(|()| anyhow!("CoreText rejected the variation coordinates"))?;
         }
 
+        let optical_size_key =
+            unsafe { CFString::wrap_under_get_rule(kCTFontOpticalSizeAttribute) };
+        let optical_size_value = CFString::new("none");
+        let attributes = CFDictionary::from_CFType_pairs(&[(optical_size_key, optical_size_value)])
+            .into_untyped();
+        descriptor = descriptor
+            .create_copy_with_attributes(attributes)
+            .map_err(|()| anyhow!("CoreText rejected disabled automatic optical sizing"))?;
+
         Ok(Self {
             descriptor,
             _source_data: source_data,
@@ -352,6 +376,10 @@ impl NativeFace {
 }
 
 fn source_from_bytes(bytes: Vec<u8>) -> Arc<SendCFData> {
+    source_from_blob(FontDataBlob::from(bytes))
+}
+
+fn source_from_blob(bytes: FontDataBlob<u8>) -> Arc<SendCFData> {
     Arc::new(SendCFData {
         data: CFData::from_arc(Arc::new(bytes)),
     })
@@ -584,12 +612,13 @@ fn configure_context(
     context.set_should_subpixel_position_fonts(true);
     context.set_allows_font_subpixel_quantization(false);
     context.set_should_subpixel_quantize_fonts(false);
+    context.set_line_join(CGLineJoin::CGLineJoinRound);
     context.set_line_width(embolden_amount * 2.0);
 
     match style.color_effect {
         RasterColorEffect::Dilation(level) => {
             let luminance = f64::from(level) * 0.25;
-            context.set_should_smooth_fonts(level > 0);
+            context.set_should_smooth_fonts(true);
             context.set_gray_fill_color(luminance, 1.0);
             context.set_rgb_stroke_color(luminance, luminance, luminance, 1.0);
         }
@@ -605,6 +634,7 @@ fn configure_context(
             context.set_rgb_stroke_color(red, green, blue, alpha);
         }
         RasterColorEffect::Independent => {
+            context.set_should_smooth_fonts(false);
             context.set_gray_fill_color(0.0, 1.0);
             context.set_rgb_stroke_color(0.0, 0.0, 0.0, 1.0);
         }
@@ -653,7 +683,8 @@ mod tests {
     #[test]
     fn collection_faces_are_selected_and_compacted_by_physical_index() {
         let collection = test_collection(&[SOURCE_SERIF, IBM_PLEX, IBM_PLEX_ITALIC]);
-        let source = source_from_bytes(collection.clone());
+        let collection_source = FontDataBlob::from(collection.clone());
+        let source = source_from_blob(collection_source.clone());
         let descriptor = collection_descriptor(&source.data, &collection, 1).unwrap();
         let font = font::new_from_descriptor(&descriptor, 16.0);
 
@@ -675,15 +706,20 @@ mod tests {
         let descriptor = core_text::font_manager::create_font_descriptor_with_data(data).unwrap();
         let font = font::new_from_descriptor(&descriptor, 16.0);
         assert_eq!(font.postscript_name(), "IBMPlexSans");
+        drop(font);
+        drop(descriptor);
+        drop(source);
 
+        let retained_before_rasterizer = collection_source.strong_count();
         let mut rasterizer = MacGlyphRasterizer::new();
         for (font_id, face_index) in [(FontId(1), 1), (FontId(2), 2)] {
             rasterizer
                 .native_face(&RasterFace {
                     font_id,
                     source_id: 1,
-                    data: &collection,
+                    source: &collection_source,
                     face_index,
+                    normalized_coords: &[],
                     variations: &[],
                     synthesis: FontSynthesis::default(),
                     has_color_glyphs: false,
@@ -696,6 +732,10 @@ mod tests {
             &rasterizer.faces[&FontId(1)]._source_data,
             &rasterizer.faces[&FontId(2)]._source_data,
         ));
+        assert_eq!(
+            collection_source.strong_count(),
+            retained_before_rasterizer + 1
+        );
     }
 
     fn test_collection(faces: &[&[u8]]) -> Vec<u8> {
@@ -784,6 +824,129 @@ mod tests {
     }
 
     #[test]
+    fn core_text_preserves_default_and_nondefault_optical_sizes() {
+        let source = FontDataBlob::from(SOURCE_SERIF.to_vec());
+        let source_data = source_from_blob(source.clone());
+        let default_variations = [
+            FontVariation::new(*b"opsz", 20.0),
+            FontVariation::new(*b"wght", 400.0),
+        ];
+        let default_face = RasterFace {
+            font_id: FontId(1),
+            source_id: source.id(),
+            source: &source,
+            face_index: 0,
+            normalized_coords: &[],
+            variations: &default_variations,
+            synthesis: FontSynthesis::default(),
+            has_color_glyphs: false,
+        };
+        let default_native = NativeFace::new(&default_face, source_data.clone()).unwrap();
+
+        let mut glyph = [0];
+        let default_font = font::new_from_descriptor(&default_native.descriptor, 12.0);
+        let mapped = unsafe {
+            default_font.get_glyphs_for_characters(['A' as u16].as_ptr(), glyph.as_mut_ptr(), 1)
+        };
+        assert!(mapped);
+
+        for font_size in [12.0, 48.0] {
+            let sized_font = font::new_from_descriptor(&default_native.descriptor, font_size);
+
+            assert_eq!(core_text_variation(&sized_font, *b"opsz"), None);
+        }
+
+        let nondefault_variations = [
+            FontVariation::new(*b"opsz", 12.0),
+            FontVariation::new(*b"wght", 400.0),
+        ];
+        let nondefault_face = RasterFace {
+            font_id: FontId(2),
+            variations: &nondefault_variations,
+            ..default_face
+        };
+        let nondefault_native = NativeFace::new(&nondefault_face, source_data).unwrap();
+        let nondefault_font = font::new_from_descriptor(&nondefault_native.descriptor, 12.0);
+
+        assert_eq!(core_text_variation(&nondefault_font, *b"opsz"), Some(12.0));
+        assert_ne!(
+            glyph_outline(&default_font, glyph[0]),
+            glyph_outline(&nondefault_font, glyph[0])
+        );
+    }
+
+    #[test]
+    fn synthetic_bold_keeps_stroked_tips_inside_the_raster() {
+        let system = ParleyTextSystem::new_with_rasterizer(
+            SystemFonts::Skip,
+            "IBM Plex Sans",
+            MacGlyphRasterizer::new(),
+        );
+        system.add_fonts(vec![Cow::Borrowed(IBM_PLEX)]).unwrap();
+        let font_id = system.font_id(&gpui_font("IBM Plex Sans").bold()).unwrap();
+        let glyph_id = system.glyph_for_char(font_id, 'A').unwrap();
+        let raster = system
+            .rasterize_glyph(&RenderGlyphParams {
+                font_id,
+                glyph_id,
+                font_size: px(48.0),
+                subpixel_variant: point(0, 0),
+                scale_factor: 2.0,
+                raster_style: PreparedRasterStyle {
+                    mode: GlyphRenderMode::Grayscale,
+                    color_effect: RasterColorEffect::Dilation(0),
+                },
+            })
+            .unwrap();
+        let width = raster.size.width.0 as usize;
+        let height = raster.size.height.0 as usize;
+
+        assert!(raster.pixels[..width].iter().all(|&pixel| pixel == 0));
+        assert!(
+            raster.pixels[(height - 1) * width..]
+                .iter()
+                .all(|&pixel| pixel == 0)
+        );
+        assert!(
+            raster
+                .pixels
+                .chunks_exact(width)
+                .all(|row| { row.first() == Some(&0) && row.last() == Some(&0) })
+        );
+    }
+
+    fn core_text_variation(font: &core_text::font::CTFont, tag: [u8; 4]) -> Option<f64> {
+        let variations_ref = unsafe { CTFontCopyVariation(font.as_concrete_TypeRef()) };
+        if variations_ref.is_null() {
+            return None;
+        }
+
+        let variations =
+            unsafe { CFDictionary::<CFNumber, CFNumber>::wrap_under_create_rule(variations_ref) };
+        let tag = CFNumber::from(i64::from(u32::from_be_bytes(tag)));
+
+        variations.find(tag).and_then(|value| value.to_f64())
+    }
+
+    fn glyph_outline(font: &core_text::font::CTFont, glyph: u16) -> Vec<(i32, Vec<(u64, u64)>)> {
+        let transform = CGAffineTransform::new(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        let path = font.create_path_for_glyph(glyph, &transform).unwrap();
+        let mut outline = Vec::new();
+        path.apply(&|element| {
+            outline.push((
+                element.element_type as i32,
+                element
+                    .points()
+                    .iter()
+                    .map(|point| (point.x.to_bits(), point.y.to_bits()))
+                    .collect(),
+            ));
+        });
+
+        outline
+    }
+
+    #[test]
     fn core_text_obeys_platform_style_mask_color_baseline_and_empty_glyph_behavior() {
         let system = ParleyTextSystem::new_with_rasterizer(
             SystemFonts::Skip,
@@ -832,14 +995,26 @@ mod tests {
             requested_mode: GlyphRenderMode::Grayscale,
         });
 
-        assert_eq!(
-            light_style.color_effect,
-            RasterColorEffect::Dilation(if font_smoothing_allowed_by_user() {
-                4
+        let expected_light_effect = if font_smoothing_allowed_by_user() {
+            RasterColorEffect::Dilation(4)
+        } else {
+            RasterColorEffect::Independent
+        };
+        assert_eq!(light_style.color_effect, expected_light_effect);
+
+        for (color, expected_level) in [(0x000000ff, 0), (0x1e1e1eff, 0), (0x222222ff, 1)] {
+            let style = system.prepare_raster_style(RasterStyleRequest {
+                scene_color: rgba(color),
+                requested_mode: GlyphRenderMode::Grayscale,
+            });
+            let expected_effect = if font_smoothing_allowed_by_user() {
+                RasterColorEffect::Dilation(expected_level)
             } else {
-                0
-            })
-        );
+                RasterColorEffect::Independent
+            };
+
+            assert_eq!(style.color_effect, expected_effect);
+        }
 
         let undilated = render_style(
             letter,
@@ -858,6 +1033,24 @@ mod tests {
             point(0, 0),
         );
         assert_ne!(undilated.pixels, dilated.pixels);
+
+        let smoothing_disabled = render_style(
+            letter,
+            PreparedRasterStyle::independent(GlyphRenderMode::Grayscale),
+            point(0, 0),
+        );
+        assert!(
+            undilated
+                .pixels
+                .iter()
+                .map(|&value| u64::from(value))
+                .sum::<u64>()
+                > smoothing_disabled
+                    .pixels
+                    .iter()
+                    .map(|&value| u64::from(value))
+                    .sum::<u64>()
+        );
 
         let shifted = render_style(
             letter,
@@ -908,6 +1101,19 @@ mod tests {
         assert_eq!(empty.size, gpui::Size::default());
         assert!(empty.pixels.is_empty());
 
+        let zero_size = system
+            .rasterize_glyph(&RenderGlyphParams {
+                font_id,
+                glyph_id: letter,
+                font_size: px(0.0),
+                subpixel_variant: point(0, 0),
+                scale_factor: 2.0,
+                raster_style: PreparedRasterStyle::independent(GlyphRenderMode::Grayscale),
+            })
+            .unwrap();
+        assert_eq!(zero_size.size, gpui::Size::default());
+        assert!(zero_size.pixels.is_empty());
+
         let emoji_system = ParleyTextSystem::new_with_rasterizer(
             SystemFonts::Load,
             ".AppleSystemUIFont",
@@ -932,6 +1138,51 @@ mod tests {
         assert_eq!(emoji.format, RasterizedGlyphFormat::BgraColor);
         emoji.validate().unwrap();
         assert!(emoji.pixels.chunks_exact(4).any(|pixel| {
+            pixel[3] > 128
+                && (pixel[0].abs_diff(pixel[1]) > 20
+                    || pixel[1].abs_diff(pixel[2]) > 20
+                    || pixel[0].abs_diff(pixel[2]) > 20)
+        }));
+
+        let directional_text = "🏃‍➡️";
+        let directional_layout = emoji_system.layout_text(TextLayoutRequest {
+            text: directional_text,
+            font_size: px(24.0),
+            runs: &[TextRun {
+                len: directional_text.len(),
+                font: gpui_font("Apple Color Emoji"),
+                ..Default::default()
+            }],
+            wrap_width: None,
+            line_clamp: None,
+        });
+        let directional_glyph = directional_layout
+            .paint_fragments
+            .iter()
+            .flat_map(|fragment| {
+                fragment
+                    .glyphs
+                    .iter()
+                    .map(move |glyph| (fragment.font_id, glyph))
+            })
+            .find(|(_, glyph)| glyph.is_emoji)
+            .expect("directional emoji should select native bitmap artwork");
+        let directional = emoji_system
+            .rasterize_glyph(&RenderGlyphParams {
+                font_id: directional_glyph.0,
+                glyph_id: directional_glyph.1.id,
+                font_size: px(24.0),
+                subpixel_variant: point(0, 0),
+                scale_factor: 2.0,
+                raster_style: emoji_system.prepare_raster_style(RasterStyleRequest {
+                    scene_color: rgba(0xffffffff),
+                    requested_mode: GlyphRenderMode::Color,
+                }),
+            })
+            .unwrap();
+        assert_eq!(directional.format, RasterizedGlyphFormat::BgraColor);
+        directional.validate().unwrap();
+        assert!(directional.pixels.chunks_exact(4).any(|pixel| {
             pixel[3] > 128
                 && (pixel[0].abs_diff(pixel[1]) > 20
                     || pixel[1].abs_diff(pixel[2]) > 20

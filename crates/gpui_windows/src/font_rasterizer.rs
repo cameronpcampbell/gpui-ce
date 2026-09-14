@@ -20,7 +20,9 @@ use gpui::{
     RasterStyleRequest, RasterizedGlyph, RasterizedGlyphFormat, RenderGlyphParams, Rgba8,
     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, Size, TextRenderingMode, point, size,
 };
-use gpui_parley::{ColorGlyphKind, GlyphRasterizer, RasterFace, SwashGlyphRasterizer};
+use gpui_parley::{
+    ColorGlyphKind, FontDataBlob, GlyphRasterizer, RasterFace, SwashGlyphRasterizer,
+};
 use std::{
     collections::HashMap,
     error::Error,
@@ -164,10 +166,21 @@ struct NativeSource {
     file: IDWriteFontFile,
 }
 
+#[windows_core::implement()]
+struct FontDataOwner {
+    _data: FontDataBlob<u8>,
+}
+
 struct GlyphAnalysis {
     analysis: IDWriteGlyphRunAnalysis,
     bounds: RECT,
     texture_type: DWRITE_TEXTURE_TYPE,
+}
+
+struct ColorLayerAnalysis {
+    analysis: IDWriteGlyphRunAnalysis,
+    bounds: RECT,
+    color: LayerColor,
 }
 
 struct ColorRenderingParams {
@@ -236,7 +249,7 @@ impl DirectWriteGlyphRasterizer {
         let source = match self.sources.entry(face.source_id) {
             std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::hash_map::Entry::Vacant(entry) => entry.insert(
-                NativeSource::new(&self.factory, &self.in_memory_loader, face.data)
+                NativeSource::new(&self.factory, &self.in_memory_loader, face.source)
                     .context("DirectWrite could not retain the font source")?,
             ),
         };
@@ -429,16 +442,17 @@ impl DirectWriteGlyphRasterizer {
             )
         };
 
-        let enumerator = enumerate()?;
+        let mut layer_analyses = Vec::new();
         let mut raster_bounds: Option<RECT> = None;
+        let enumerator = enumerate()?;
         while unsafe { enumerator.MoveNext() }?.as_bool() {
             let run = unsafe { &*enumerator.GetCurrentRun()? };
 
-            if run.glyphImageFormat & DWRITE_GLYPH_IMAGE_FORMATS_COLR
-                == DWRITE_GLYPH_IMAGE_FORMATS_NONE
-            {
-                continue;
-            }
+            ensure!(
+                supports_color_layer_outline(run.glyphImageFormat),
+                "unsupported DirectWrite color layer image format {}",
+                run.glyphImageFormat.0
+            );
 
             let analysis = unsafe {
                 self.factory.CreateGlyphRunAnalysis(
@@ -460,6 +474,11 @@ impl DirectWriteGlyphRasterizer {
                 continue;
             }
 
+            layer_analyses.push(ColorLayerAnalysis {
+                analysis,
+                bounds: layer_bounds,
+                color: layer_color(run, current_color),
+            });
             raster_bounds = Some(match raster_bounds {
                 Some(bounds) => RECT {
                     left: bounds.left.min(layer_bounds.left),
@@ -480,46 +499,22 @@ impl DirectWriteGlyphRasterizer {
         };
 
         let mut layers = Vec::new();
-        let enumerator = enumerate()?;
-        while unsafe { enumerator.MoveNext() }?.as_bool() {
-            let run = unsafe { &*enumerator.GetCurrentRun()? };
-
-            if run.glyphImageFormat & DWRITE_GLYPH_IMAGE_FORMATS_COLR
-                == DWRITE_GLYPH_IMAGE_FORMATS_NONE
-            {
-                continue;
-            }
-
-            let layer_analysis = unsafe {
-                self.factory.CreateGlyphRunAnalysis(
-                    &run.Base.glyphRun,
-                    Some(&transform),
-                    DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC,
-                    run.measuringMode,
-                    DWRITE_GRID_FIT_MODE_DEFAULT,
-                    DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE,
-                    run.Base.baselineOriginX,
-                    run.Base.baselineOriginY,
-                )
-            }?;
-
-            let layer_bounds =
-                unsafe { layer_analysis.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1) }?;
-
+        for layer_analysis in layer_analyses {
+            let layer_bounds = layer_analysis.bounds;
             let Some((_, layer_width, layer_height)) = convert_bounds(layer_bounds)? else {
-                continue;
+                unreachable!("color layer bounds were validated above");
             };
 
             let mut coverage = vec![0; layer_width as usize * layer_height as usize];
             unsafe {
-                layer_analysis.CreateAlphaTexture(
+                layer_analysis.analysis.CreateAlphaTexture(
                     DWRITE_TEXTURE_ALIASED_1x1,
                     &layer_bounds,
                     &mut coverage,
                 )?;
             }
 
-            let color = layer_color(run, current_color);
+            let color = layer_analysis.color;
             layers.push(ColorGlyphLayer {
                 bounds: Bounds {
                     origin: point(
@@ -733,6 +728,14 @@ fn supports_windows_color_glyph(kind: ColorGlyphKind) -> bool {
     matches!(kind, ColorGlyphKind::ColrV0 | ColorGlyphKind::Bitmap)
 }
 
+fn supports_color_layer_outline(format: DWRITE_GLYPH_IMAGE_FORMATS) -> bool {
+    format
+        & (DWRITE_GLYPH_IMAGE_FORMATS_COLR
+            | DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE
+            | DWRITE_GLYPH_IMAGE_FORMATS_CFF)
+        != DWRITE_GLYPH_IMAGE_FORMATS_NONE
+}
+
 impl NativeFace {
     fn new(
         factory: &IDWriteFactory5,
@@ -789,19 +792,18 @@ impl NativeSource {
     fn new(
         factory: &IDWriteFactory5,
         loader: &IDWriteInMemoryFontFileLoader,
-        bytes: &[u8],
+        source: &FontDataBlob<u8>,
     ) -> Result<Self> {
+        let bytes = source.as_ref();
         let data_len =
             u32::try_from(bytes.len()).context("font data exceeds DirectWrite limits")?;
+        let owner: windows::core::IUnknown = FontDataOwner {
+            _data: source.clone(),
+        }
+        .into();
 
-        // A null owner makes DirectWrite copy the bytes before this call returns.
         let file = unsafe {
-            loader.CreateInMemoryFontFileReference(
-                factory,
-                bytes.as_ptr().cast(),
-                data_len,
-                None::<&windows::core::IUnknown>,
-            )
+            loader.CreateInMemoryFontFileReference(factory, bytes.as_ptr().cast(), data_len, &owner)
         }?;
 
         Ok(Self { file })
@@ -1010,6 +1012,25 @@ mod tests {
         include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
     const NOTO_COLOR_EMOJI: &[u8] =
         include_bytes!("../../../assets/fonts/noto-color-emoji/NotoColorEmoji.subset.ttf");
+
+    #[test]
+    fn translated_color_layers_accept_documented_outline_formats() {
+        for format in [
+            DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE,
+            DWRITE_GLYPH_IMAGE_FORMATS_CFF,
+            DWRITE_GLYPH_IMAGE_FORMATS_COLR,
+            DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE | DWRITE_GLYPH_IMAGE_FORMATS_COLR,
+        ] {
+            assert!(supports_color_layer_outline(format));
+        }
+
+        assert!(!supports_color_layer_outline(
+            DWRITE_GLYPH_IMAGE_FORMATS_NONE
+        ));
+        assert!(!supports_color_layer_outline(
+            DWRITE_GLYPH_IMAGE_FORMATS_PNG
+        ));
+    }
 
     #[test]
     fn gpu_color_layers_match_cpu_and_fall_back_off_thread() -> Result<()> {

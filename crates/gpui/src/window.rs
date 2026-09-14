@@ -4763,6 +4763,18 @@ impl Window {
         glyph_id: GlyphId,
         font_size: Pixels,
     ) -> Result<()> {
+        self.paint_emoji_with_color(origin, font_id, glyph_id, font_size, white())
+    }
+
+    /// Paints a color glyph with an application foreground for `currentColor` layers.
+    pub fn paint_emoji_with_color(
+        &mut self,
+        origin: Point<Pixels>,
+        font_id: FontId,
+        glyph_id: GlyphId,
+        font_size: Pixels,
+        color: Hsla,
+    ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
@@ -4770,7 +4782,7 @@ impl Window {
         let (integer_origin, subpixel_variant) = quantize_color_glyph_origin(glyph_origin);
         let raster_style = self
             .text_system()
-            .prepare_raster_style(white(), GlyphRenderMode::Color);
+            .prepare_raster_style(color, GlyphRenderMode::Color);
         let params = RenderGlyphParams {
             font_id,
             glyph_id,
@@ -4780,7 +4792,7 @@ impl Window {
             raster_style,
         };
 
-        self.paint_glyph_from_atlas(integer_origin, params, white(), self.element_opacity())
+        self.paint_glyph_from_atlas(integer_origin, params, color, self.element_opacity())
     }
 
     /// Paint a monochrome SVG into the scene for the next frame at the current stacking context.
@@ -7624,9 +7636,13 @@ pub fn outline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FocusHandle, ImageSource, ShaderBool, img};
+    use crate::{
+        FocusHandle, ImageSource, PreparedRasterStyle, RasterColorEffect, RasterStyleRequest,
+        ShaderBool, hsla_to_rgba, img,
+    };
     use image::{Frame as ImageFrame, ImageBuffer, Rgba};
     use smallvec::smallvec;
+    use std::sync::Mutex as StdMutex;
 
     proptest! {
         #[test]
@@ -7657,7 +7673,10 @@ mod tests {
         }
     }
 
-    struct RasterFormatTextSystem;
+    #[derive(Default)]
+    struct RasterFormatTextSystem {
+        rasterized: StdMutex<Vec<RenderGlyphParams>>,
+    }
 
     impl PlatformTextSystem for RasterFormatTextSystem {
         fn add_fonts(&self, _fonts: Vec<Cow<'static, [u8]>>) -> anyhow::Result<()> {
@@ -7693,6 +7712,8 @@ mod tests {
         }
 
         fn rasterize_glyph(&self, params: &RenderGlyphParams) -> anyhow::Result<RasterizedGlyph> {
+            self.rasterized.lock().unwrap().push(params.clone());
+
             let (format, pixels) = match params.glyph_id.0 {
                 1 => (RasterizedGlyphFormat::AlphaMask, vec![0, 255]),
                 2 => (
@@ -7718,6 +7739,17 @@ mod tests {
             })
         }
 
+        fn prepare_raster_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
+            if request.requested_mode == GlyphRenderMode::Color {
+                return PreparedRasterStyle {
+                    mode: GlyphRenderMode::Color,
+                    color_effect: RasterColorEffect::Preblend(request.scene_color.into()),
+                };
+            }
+
+            PreparedRasterStyle::independent(request.requested_mode)
+        }
+
         fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout {
             PlatformTextSystem::layout_text(&TestTextSystem, request)
         }
@@ -7736,6 +7768,7 @@ mod tests {
             _context: &mut Context<Self>,
         ) -> impl IntoElement {
             let color = hsla(0.6, 0.7, 0.4, 0.8);
+            let alternate_color = hsla(0.1, 0.6, 0.3, 0.4);
             div().size_full().opacity(0.5).child(
                 canvas(
                     |_, _, _| (),
@@ -7743,10 +7776,25 @@ mod tests {
                         for (glyph_id, origin) in [
                             (GlyphId(1), point(px(5.13), px(10.245))),
                             (GlyphId(2), point(px(10.0), px(15.0))),
-                            (GlyphId(3), point(px(15.0), px(20.0))),
                         ] {
                             window
                                 .paint_glyph(origin, FontId(7), glyph_id, px(16.0), color)
+                                .unwrap();
+                        }
+
+                        for (origin, foreground) in [
+                            (point(px(15.0), px(20.0)), color),
+                            (point(px(20.0), px(25.0)), alternate_color),
+                            (point(px(25.0), px(30.0)), color),
+                        ] {
+                            window
+                                .paint_emoji_with_color(
+                                    origin,
+                                    FontId(7),
+                                    GlyphId(3),
+                                    px(16.0),
+                                    foreground,
+                                )
                                 .unwrap();
                         }
                     },
@@ -7758,18 +7806,24 @@ mod tests {
 
     #[test]
     fn returned_raster_format_drives_atlas_and_scene_behavior() {
-        let mut app = TestApp::with_text_system(Arc::new(RasterFormatTextSystem));
+        let text_system = Arc::new(RasterFormatTextSystem::default());
+        let mut app = TestApp::with_text_system(text_system.clone());
         let mut test_window = app.open_window(|_, _| RasterFormatView);
         test_window.draw();
 
         test_window.update(|_, window, _| {
-            assert_eq!(window.rendered_primitive_counts(), (0, 1, 1, 1));
+            assert_eq!(window.rendered_primitive_counts(), (0, 1, 1, 3));
             let scene = &window.rendered_frame.scene;
             let expected_color = hsla(0.6, 0.7, 0.4, 0.8).opacity(0.5).into();
 
             assert_eq!(scene.monochrome_sprites[0].color, expected_color);
             assert_eq!(scene.subpixel_sprites[0].color, expected_color);
-            assert_eq!(scene.polychrome_sprites[0].opacity, 0.5);
+            assert!(
+                scene
+                    .polychrome_sprites
+                    .iter()
+                    .all(|sprite| sprite.opacity == 0.5)
+            );
             assert_eq!(
                 scene.monochrome_sprites[0].bounds.origin,
                 point(ScaledPixels(9.0), ScaledPixels(18.0))
@@ -7786,7 +7840,28 @@ mod tests {
                 scene.polychrome_sprites[0].tile.texture_id.kind,
                 crate::AtlasTextureKind::Polychrome
             );
+            let first_tile = scene.polychrome_sprites[0].tile;
+            let second_tile = scene.polychrome_sprites[1].tile;
+            let third_tile = scene.polychrome_sprites[2].tile;
+            assert!(
+                first_tile == second_tile || first_tile == third_tile || second_tile == third_tile
+            );
+            assert!(first_tile != second_tile || second_tile != third_tile);
         });
+
+        let rasterized = text_system.rasterized.lock().unwrap();
+        let color_styles = rasterized
+            .iter()
+            .filter(|params| params.raster_style.mode == GlyphRenderMode::Color)
+            .map(|params| params.raster_style.color_effect)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            color_styles,
+            [
+                RasterColorEffect::Preblend(hsla_to_rgba(hsla(0.6, 0.7, 0.4, 0.8)).into()),
+                RasterColorEffect::Preblend(hsla_to_rgba(hsla(0.1, 0.6, 0.3, 0.4)).into()),
+            ]
+        );
     }
     struct EmptyView;
 

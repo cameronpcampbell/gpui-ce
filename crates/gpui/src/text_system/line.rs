@@ -310,7 +310,13 @@ fn paint_text_fragment(
         );
 
         if glyph.is_emoji {
-            window.paint_emoji(glyph_origin, fragment.font_id, glyph.id, fragment.font_size)?;
+            window.paint_emoji_with_color(
+                glyph_origin,
+                fragment.font_id,
+                glyph.id,
+                fragment.font_size,
+                fragment.style.color,
+            )?;
         } else {
             window.paint_glyph(
                 glyph_origin,

@@ -3499,7 +3499,7 @@ mod tests {
             *self.seen.lock() = Some(SeenRasterFace {
                 font_id: face.font_id,
                 face_index: face.face_index,
-                data_matches: face.data == SOURCE_SERIF,
+                data_matches: face.data() == SOURCE_SERIF,
                 variations: face.variations.to_vec(),
                 synthesis: face.synthesis,
                 has_color_glyphs: face.has_color_glyphs,

@@ -42,6 +42,16 @@ pub struct FontVariation {
     pub value: f32,
 }
 
+impl FontVariation {
+    /// Creates a design-space variation coordinate from an OpenType axis tag.
+    pub const fn new(tag: [u8; 4], value: f32) -> Self {
+        Self {
+            tag: Tag::new(&tag),
+            value,
+        }
+    }
+}
+
 /// Synthetic styling attached to an exact font instance.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FontSynthesis {
@@ -67,10 +77,12 @@ pub struct RasterFace<'a> {
     pub font_id: FontId,
     /// Stable identity shared by every face and instance backed by the same source bytes.
     pub source_id: u64,
-    /// Original font or collection bytes.
-    pub data: &'a [u8],
+    /// Owning handle for the original font or collection bytes.
+    pub source: &'a Blob<u8>,
     /// Face index within a TTC or OTC collection.
     pub face_index: u32,
+    /// Normalized variation coordinates in axis order.
+    pub normalized_coords: &'a [NormalizedCoord],
     /// Design-space variation coordinates.
     pub variations: &'a [FontVariation],
     /// Synthetic styling selected by Fontique.
@@ -80,9 +92,14 @@ pub struct RasterFace<'a> {
 }
 
 impl RasterFace<'_> {
+    /// Returns the original font or collection bytes.
+    pub fn data(&self) -> &[u8] {
+        self.source.as_ref()
+    }
+
     /// Returns whether every supplied variation coordinate uses its axis default.
     pub fn has_default_variations(&self) -> Result<bool> {
-        let font = FontRef::from_index(self.data, self.face_index)
+        let font = FontRef::from_index(self.data(), self.face_index)
             .context("cannot inspect variation axes in the selected face")?;
 
         Ok(variations_are_default(&font, self.variations))
@@ -94,7 +111,7 @@ impl RasterFace<'_> {
         glyph_id: GlyphId,
         supports: impl FnMut(ColorGlyphKind) -> bool,
     ) -> Result<Option<ColorGlyphKind>> {
-        let font = FontRef::from_index(self.data, self.face_index)
+        let font = FontRef::from_index(self.data(), self.face_index)
             .context("cannot inspect color glyph data in the selected face")?;
 
         Ok(first_supported_color_kind(
@@ -186,7 +203,8 @@ pub(crate) struct LoadedFont {
 /// Color glyph data parsed once for all glyphs in a shaped run.
 pub(crate) struct ColorGlyphClassifier<'a> {
     colr: skrifa::color::ColorGlyphCollection<'a>,
-    bitmap_strikes: skrifa::bitmap::BitmapStrikes<'a>,
+    sbix: Option<skrifa::raw::tables::sbix::Sbix<'a>>,
+    cbdt_strikes: Option<skrifa::bitmap::BitmapStrikes<'a>>,
     svg_ranges: Vec<(u32, u32)>,
 }
 
@@ -211,7 +229,11 @@ impl ColorGlyphClassifier<'_> {
             .unwrap_or_default();
         ColorGlyphClassifier {
             colr: font.color_glyphs(),
-            bitmap_strikes: font.bitmap_strikes(),
+            sbix: font.sbix().ok(),
+            cbdt_strikes: skrifa::bitmap::BitmapStrikes::with_format(
+                &font,
+                skrifa::bitmap::BitmapFormat::Cbdt,
+            ),
             svg_ranges,
         }
     }
@@ -231,13 +253,15 @@ impl ColorGlyphClassifier<'_> {
             .get_with_format(skrifa_id, skrifa::color::ColorGlyphFormat::ColrV0)
             .is_some();
 
-        let has_color_bitmap = matches!(
-            self.bitmap_strikes.format(),
-            Some(skrifa::bitmap::BitmapFormat::Sbix | skrifa::bitmap::BitmapFormat::Cbdt)
-        ) && self
-            .bitmap_strikes
-            .iter()
-            .any(|strike| strike.get(skrifa_id).is_some());
+        let has_sbix_bitmap = self
+            .sbix
+            .as_ref()
+            .is_some_and(|sbix| sbix_has_glyph(sbix, skrifa_id));
+        let has_cbdt_bitmap = self
+            .cbdt_strikes
+            .as_ref()
+            .is_some_and(|strikes| strikes.iter().any(|strike| strike.get(skrifa_id).is_some()));
+        let has_color_bitmap = has_sbix_bitmap || has_cbdt_bitmap;
         let has_svg = self
             .svg_ranges
             .iter()
@@ -252,6 +276,17 @@ impl ColorGlyphClassifier<'_> {
         .into_iter()
         .flatten()
     }
+}
+
+fn sbix_has_glyph(sbix: &skrifa::raw::tables::sbix::Sbix<'_>, glyph_id: skrifa::GlyphId) -> bool {
+    (0..sbix.strikes().len()).any(|strike_idx| {
+        sbix.strikes()
+            .get(strike_idx)
+            .ok()
+            .and_then(|strike| strike.glyph_data(glyph_id).ok())
+            .flatten()
+            .is_some()
+    })
 }
 
 fn first_supported_color_kind(
@@ -329,8 +364,9 @@ impl LoadedFont {
         RasterFace {
             font_id,
             source_id: self.source_identity.0,
-            data: self.data.as_ref(),
+            source: &self.data,
             face_index: self.index,
+            normalized_coords: &self.normalized_coords,
             variations: &self.variations,
             synthesis: self.synthesis.into(),
             has_color_glyphs: self.has_color_glyphs,
@@ -688,20 +724,20 @@ impl SwashGlyphRasterizer {
             .cache_keys
             .entry(face.font_id)
             .or_insert_with(SwashCacheKey::new);
-        let mut font_ref = SwashFontRef::from_index(face.data, face.face_index as usize)
+        let mut font_ref = SwashFontRef::from_index(face.data(), face.face_index as usize)
             .context("Swash could not parse the stored font face")?;
         font_ref.key = cache_key;
         let subpixel_offset = subpixel_offset(params);
-        let variations = face
-            .variations
+        let normalized_coords = face
+            .normalized_coords
             .iter()
-            .map(|variation| (variation.tag.to_be_bytes(), variation.value))
+            .map(|coordinate| coordinate.to_bits())
             .collect::<Vec<_>>();
         let mut scaler = self
             .scale_context
             .builder(font_ref)
             .size(f32::from(params.font_size) * params.scale_factor)
-            .variations(&variations)
+            .normalized_coords(&normalized_coords)
             .hint(true)
             .build();
         let sources: &[Source] = if params.raster_style.mode == GlyphRenderMode::Color {
@@ -770,6 +806,7 @@ mod tests {
     fn design_variations_round_trip_normalized_coordinates() {
         let font = FontRef::new(SOURCE_SERIF).unwrap();
         let axes = font.axes();
+        let source = Blob::from(SOURCE_SERIF.to_vec());
 
         for target in [
             vec![NormalizedCoord::default(); axes.len()],
@@ -788,8 +825,9 @@ mod tests {
             let face = RasterFace {
                 font_id: FontId(1),
                 source_id: 1,
-                data: SOURCE_SERIF,
+                source: &source,
                 face_index: 0,
+                normalized_coords: &target,
                 variations: &variations,
                 synthesis: FontSynthesis::default(),
                 has_color_glyphs: false,
@@ -862,11 +900,84 @@ mod tests {
     }
 
     #[test]
+    fn portable_rasterization_uses_parleys_normalized_coordinates() {
+        let source = Blob::from(SOURCE_SERIF.to_vec());
+        let font = FontRef::new(source.as_ref()).unwrap();
+        let default_coords = vec![NormalizedCoord::default(); font.axes().len()];
+        let mut optical_coords = default_coords.clone();
+        optical_coords[0] = NormalizedCoord::from_f32(1.0);
+        let variations = design_variations(&font, &default_coords);
+        let default_face = RasterFace {
+            font_id: FontId(1),
+            source_id: source.id(),
+            source: &source,
+            face_index: 0,
+            normalized_coords: &default_coords,
+            variations: &variations,
+            synthesis: FontSynthesis::default(),
+            has_color_glyphs: false,
+        };
+        let optical_face = RasterFace {
+            font_id: FontId(2),
+            normalized_coords: &optical_coords,
+            ..default_face
+        };
+        let glyph_id = GlyphId(font.charmap().map('A').unwrap().to_u32());
+        let params = RenderGlyphParams {
+            font_id: default_face.font_id,
+            glyph_id,
+            font_size: px(48.0),
+            subpixel_variant: point(0, 0),
+            scale_factor: 1.0,
+            raster_style: PreparedRasterStyle::independent(GlyphRenderMode::Grayscale),
+        };
+        let mut rasterizer = SwashGlyphRasterizer::default();
+        let default = rasterizer.rasterize(default_face, &params).unwrap();
+        let optical = rasterizer
+            .rasterize(
+                optical_face,
+                &RenderGlyphParams {
+                    font_id: optical_face.font_id,
+                    ..params
+                },
+            )
+            .unwrap();
+
+        assert_ne!(optical.pixels, default.pixels);
+    }
+
+    #[test]
     fn supported_color_artwork_is_selected_when_a_preferred_format_is_unsupported() {
         let available = [ColorGlyphKind::ColrV1, ColorGlyphKind::ColrV0];
         let selected = first_supported_color_kind(available, |kind| kind == ColorGlyphKind::ColrV0);
 
         assert_eq!(selected, Some(ColorGlyphKind::ColrV0));
+    }
+
+    #[test]
+    fn sbix_records_are_artwork_even_when_their_payload_is_a_native_reference() {
+        for graphic_type in [*b"flip", *b"dupe"] {
+            let mut table = Vec::new();
+            table.extend_from_slice(&1u16.to_be_bytes());
+            table.extend_from_slice(&1u16.to_be_bytes());
+            table.extend_from_slice(&1u32.to_be_bytes());
+            table.extend_from_slice(&12u32.to_be_bytes());
+            table.extend_from_slice(&20u16.to_be_bytes());
+            table.extend_from_slice(&72u16.to_be_bytes());
+            table.extend_from_slice(&16u32.to_be_bytes());
+            table.extend_from_slice(&16u32.to_be_bytes());
+            table.extend_from_slice(&26u32.to_be_bytes());
+            table.extend_from_slice(&0i16.to_be_bytes());
+            table.extend_from_slice(&0i16.to_be_bytes());
+            table.extend_from_slice(&graphic_type);
+            table.extend_from_slice(&0u16.to_be_bytes());
+
+            let sbix = skrifa::raw::tables::sbix::Sbix::read(skrifa::raw::FontData::new(&table), 2)
+                .unwrap();
+
+            assert!(!sbix_has_glyph(&sbix, skrifa::GlyphId::new(0)));
+            assert!(sbix_has_glyph(&sbix, skrifa::GlyphId::new(1)));
+        }
     }
 
     #[test]
