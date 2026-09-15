@@ -203,7 +203,8 @@ impl RasterStyleCache {
 struct ColorGlyphSupport {
     colr_v0: bool,
     colr_v1: bool,
-    bitmap: bool,
+    cbdt: bool,
+    sbix: bool,
     svg: bool,
 }
 
@@ -212,7 +213,8 @@ impl ColorGlyphSupport {
         Self {
             colr_v0: rasterizer.supports_color_glyph(crate::ColorGlyphKind::ColrV0),
             colr_v1: rasterizer.supports_color_glyph(crate::ColorGlyphKind::ColrV1),
-            bitmap: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Bitmap),
+            cbdt: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Cbdt),
+            sbix: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Sbix),
             svg: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Svg),
         }
     }
@@ -221,7 +223,8 @@ impl ColorGlyphSupport {
         match kind {
             crate::ColorGlyphKind::ColrV0 => self.colr_v0,
             crate::ColorGlyphKind::ColrV1 => self.colr_v1,
-            crate::ColorGlyphKind::Bitmap => self.bitmap,
+            crate::ColorGlyphKind::Cbdt => self.cbdt,
+            crate::ColorGlyphKind::Sbix => self.sbix,
             crate::ColorGlyphKind::Svg => self.svg,
         }
     }
@@ -1900,7 +1903,7 @@ impl PlatformTextSystem for ParleyTextSystem {
             .rasterize(font.raster_face(params.font_id), params)
             .with_context(|| {
                 format!(
-                    "native rasterization failed for FontId {:?}, data identity {data_identity}, face index {face_idx}, variations {variations:?}",
+                    "glyph rasterization failed for FontId {:?}, data identity {data_identity}, face index {face_idx}, variations {variations:?}",
                     params.font_id
                 )
             })
@@ -2086,6 +2089,43 @@ mod tests {
             wrap_width: Some(wrap_width),
             line_clamp,
         })
+    }
+
+    fn visible_pixel_bounds(raster: &RasterizedGlyph) -> Option<(usize, usize, usize, usize)> {
+        let width = raster.size.width.0 as usize;
+        let height = raster.size.height.0 as usize;
+        let channels = match raster.format {
+            RasterizedGlyphFormat::AlphaMask => 1,
+            RasterizedGlyphFormat::BgraSubpixelMask | RasterizedGlyphFormat::BgraColor => 4,
+        };
+        let is_visible = |pixel: &[u8]| match raster.format {
+            RasterizedGlyphFormat::AlphaMask => pixel[0] != 0,
+            RasterizedGlyphFormat::BgraSubpixelMask => {
+                pixel[..3].iter().any(|channel| *channel != 0)
+            }
+            RasterizedGlyphFormat::BgraColor => pixel[3] != 0,
+        };
+        let mut left = width;
+        let mut top = height;
+        let mut right = 0;
+        let mut bottom = 0;
+        let mut found = false;
+
+        for (pixel_idx, pixel) in raster.pixels.chunks_exact(channels).enumerate() {
+            if !is_visible(pixel) {
+                continue;
+            }
+
+            let pixel_x = pixel_idx % width;
+            let pixel_y = pixel_idx / width;
+            left = left.min(pixel_x);
+            top = top.min(pixel_y);
+            right = right.max(pixel_x + 1);
+            bottom = bottom.max(pixel_y + 1);
+            found = true;
+        }
+
+        found.then_some((left, top, right, bottom))
     }
 
     fn wrapped(layout: LineLayout, width: Pixels) -> gpui::WrappedLineLayout {
@@ -3513,6 +3553,143 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn bundled_emoji_sample_keeps_font_metrics_and_device_scaling() {
+        const SAMPLE: &str = "Color emoji: 😀 🎉 🚀 💡 🔥 ✨";
+        const EMOJI: [char; 6] = ['😀', '🎉', '🚀', '💡', '🔥', '✨'];
+
+        let system = test_system();
+        let noto_id = system.font_id(&font("Noto Color Emoji")).unwrap();
+
+        for font_size in [px(16.0), px(24.0), px(32.0)] {
+            let layout = layout_line(
+                &system,
+                SAMPLE,
+                font_size,
+                &[text_run(SAMPLE, "IBM Plex Sans")],
+            );
+            let emoji_glyphs = layout
+                .paint_fragments
+                .iter()
+                .flat_map(|fragment| {
+                    fragment
+                        .glyphs
+                        .iter()
+                        .filter(|glyph| glyph.is_emoji)
+                        .map(move |glyph| (fragment, glyph))
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(emoji_glyphs.len(), EMOJI.len());
+            assert_eq!(layout.font_size, font_size);
+
+            for (character, (fragment, glyph)) in EMOJI.into_iter().zip(emoji_glyphs) {
+                assert_eq!(
+                    fragment.font_id, noto_id,
+                    "{character} selected another font"
+                );
+                assert_eq!(fragment.font_size, font_size);
+                assert_eq!(glyph.position.y, Pixels::ZERO);
+                assert_eq!(
+                    glyph.id,
+                    system.glyph_for_char(noto_id, character).unwrap(),
+                    "{character} did not use its nominal bundled glyph"
+                );
+
+                let glyph_idx = fragment
+                    .glyphs
+                    .iter()
+                    .position(|candidate| std::ptr::eq(candidate, glyph))
+                    .unwrap();
+                let shaped_advance = fragment
+                    .glyphs
+                    .get(glyph_idx + 1)
+                    .map(|next| next.position.x - glyph.position.x)
+                    .unwrap_or(fragment.x_range.end - glyph.position.x);
+                assert!(shaped_advance > Pixels::ZERO);
+                let raster_style = system.prepare_raster_style(RasterStyleRequest {
+                    font_id: fragment.font_id,
+                    glyph_id: glyph.id,
+                    scene_color: gpui::rgba(0xffffffff),
+                    requested_mode: GlyphRenderMode::Color,
+                    foreground_dependency: gpui::ForegroundDependency::Full,
+                });
+                let mut scale_one_bounds: Option<(f32, f32, f32, f32)> = None;
+
+                for scale_factor in [1.0, 1.5, 2.0] {
+                    let raster = system
+                        .rasterize_glyph(&RenderGlyphParams {
+                            font_id: fragment.font_id,
+                            glyph_id: glyph.id,
+                            font_size: fragment.font_size,
+                            subpixel_variant: point(0, 0),
+                            scale_factor,
+                            raster_style,
+                        })
+                        .unwrap();
+                    raster.validate().unwrap();
+                    assert_eq!(raster.format, RasterizedGlyphFormat::BgraColor);
+                    let ink_bounds = visible_pixel_bounds(&raster)
+                        .unwrap_or_else(|| panic!("{character} produced no visible pixels"));
+
+                    eprintln!(
+                        "emoji={character} font=Noto Color Emoji({:?}) glyph={} size={} shaped_advance={} baseline={} baseline_offset_y={} scale={} raster={:?} ink={ink_bounds:?}",
+                        fragment.font_id,
+                        glyph.id.0,
+                        f32::from(fragment.font_size),
+                        f32::from(shaped_advance),
+                        f32::from(layout.ascent),
+                        f32::from(glyph.position.y),
+                        scale_factor,
+                        raster.bounds,
+                    );
+
+                    let logical_bounds = (
+                        raster.bounds.origin.x.0 as f32 / scale_factor,
+                        raster.bounds.origin.y.0 as f32 / scale_factor,
+                        raster.size.width.0 as f32 / scale_factor,
+                        raster.size.height.0 as f32 / scale_factor,
+                    );
+                    if let Some(reference) = scale_one_bounds {
+                        for (actual, expected) in [
+                            (logical_bounds.0, reference.0),
+                            (logical_bounds.1, reference.1),
+                            (logical_bounds.2, reference.2),
+                            (logical_bounds.3, reference.3),
+                        ] {
+                            assert!(
+                                (actual - expected).abs() <= 1.0,
+                                "{character} changed logical raster bounds from {reference:?} to {logical_bounds:?} at scale {scale_factor}"
+                            );
+                        }
+                    } else {
+                        scale_one_bounds = Some(logical_bounds);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bundled_joined_emoji_sequence_shapes_as_one_color_glyph() {
+        let system = test_system();
+        let text = "👩🏽‍💻";
+        let layout = layout_line(
+            &system,
+            text,
+            px(24.0),
+            &[text_run(text, "Noto Color Emoji")],
+        );
+        let glyphs = layout
+            .paint_fragments
+            .iter()
+            .flat_map(|fragment| fragment.glyphs.iter())
+            .collect::<Vec<_>>();
+
+        assert_eq!(glyphs.len(), 1);
+        assert!(glyphs[0].is_emoji);
     }
 
     #[test]

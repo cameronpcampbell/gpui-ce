@@ -7,7 +7,8 @@ mod text_system;
 pub use catalog::SystemFonts;
 pub use fontique::Blob as FontDataBlob;
 pub use store::{
-    ColorGlyphKind, FontSynthesis, FontVariation, GlyphRasterizer, RasterFace, SwashGlyphRasterizer,
+    BitmapFallbackGlyphRasterizer, ColorGlyphKind, FontSynthesis, FontVariation, GlyphRasterizer,
+    RasterFace, SwashGlyphRasterizer,
 };
 pub use text_system::ParleyTextSystem;
 
