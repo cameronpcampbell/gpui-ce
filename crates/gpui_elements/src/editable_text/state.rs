@@ -308,6 +308,7 @@ impl EditableTextState {
     fn point_for_caret(&self, caret: CaretPosition) -> Option<Point<Pixels>> {
         self.current_document()?
             .position_for_caret(caret, self.layout_data.line_height)
+            .map(|point| point + self.layout_data.document_offset)
     }
 
     fn cluster_deletion_range(&self, direction: NavigationDirection) -> Option<Range<usize>> {
@@ -956,6 +957,8 @@ impl EntityInputHandler for EditableTextState {
         let line_height = window.line_height();
 
         let document = self.current_document()?;
+        let document_origin = bounds.origin + self.layout_data.document_offset
+            - self.layout_data.scroll_bounds.origin;
         let start = range.start.min(document.text.len());
         let end = range.end.min(document.text.len());
 
@@ -963,8 +966,8 @@ impl EntityInputHandler for EditableTextState {
             let caret = CaretPosition::new(start, CaretAffinity::Downstream);
             let position = document.position_for_caret(caret, line_height)?;
             return Some(Bounds::from_corners(
-                bounds.origin + position,
-                bounds.origin + position + point(CARET_PIXELS_EPSILON, line_height),
+                document_origin + position,
+                document_origin + position + point(CARET_PIXELS_EPSILON, line_height),
             ));
         }
 
@@ -973,7 +976,7 @@ impl EntityInputHandler for EditableTextState {
             .into_iter()
             .next()?;
         Some(Bounds::new(
-            bounds.origin + selection.origin,
+            document_origin + selection.origin,
             selection.size,
         ))
     }
@@ -984,6 +987,8 @@ impl EntityInputHandler for EditableTextState {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
+        let point =
+            point + self.layout_data.scroll_bounds.origin - self.layout_data.document_offset;
         let index = self.index_for_pixel_point(point, window.line_height());
         Some(self.storage.utf_offset_8to16(index))
     }

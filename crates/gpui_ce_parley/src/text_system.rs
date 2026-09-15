@@ -5,7 +5,7 @@ use crate::{FontSynthesis, FontVariation, RasterFace};
 use gpui::{
     AppContext, CaretSelection, Context, FontFallbacks, FontFeatures as GpuiFontFeatures,
     FontStyle as GpuiFontStyle, FontWeight as GpuiFontWeight, GlyphRenderMode, HeadlessAppContext,
-    HighlightStyle, Hsla, IntoElement, Point, RasterizedGlyphFormat, Render, ScaledPixels,
+    HighlightStyle, Hsla, IntoElement, RasterizedGlyphFormat, Render, ScaledPixels,
     StrikethroughStyle, Styled, StyledText, TextSystem, UnderlineStyle, VerticalAlign, Window,
     WindowHandle, WindowTextSystem, div, font, hsla, prelude::*,
 };
@@ -25,13 +25,13 @@ use crate::{
 
 use anyhow::{Context as _, Result};
 use gpui::{
-    Bounds, CaretAffinity, CaretPosition, Font, FontId, FontMetrics, GlyphId, InlineBoxRequest,
-    InlineLayout, InlineLayoutRequest, InlineTextMetrics, InlineTextStyle, InlineVisualLine,
-    LineLayout, PaintFragment, PaintStyle, Pixels, PlatformTextLayout, PlatformTextSystem,
-    PositionedInlineBox, PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph,
-    RenderGlyphParams, ShapedGlyph, Size, TextAlign, TextLayoutRequest, TextMovement,
-    TextRenderingMode, TextRun, TextSelectionKind, VisualDirection, VisualLine, align_inline_boxes,
-    point, px, size,
+    Bounds, CaretAffinity, CaretPosition, Font, FontId, FontMetrics, GlyphId, InlineBidiScope,
+    InlineBoxRequest, InlineLayout, InlineLayoutRequest, InlineTextMetrics, InlineTextStyle,
+    InlineVisualLine, LineLayout, PaintFragment, PaintStyle, ParagraphDirection, Pixels,
+    PlatformTextLayout, PlatformTextSystem, Point, PositionedInlineBox, PreparedRasterStyle,
+    RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, ResolvedDirection, ShapedGlyph, Size,
+    TextAlign, TextLayoutRequest, TextMovement, TextRenderingMode, TextRun, TextSelectionKind,
+    UnicodeBidi, VisualDirection, VisualLine, align_inline_boxes, point, px, size,
 };
 
 use parking_lot::{Mutex, RwLock};
@@ -131,15 +131,447 @@ impl ParagraphCache {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ParagraphResultCacheKey {
     paragraph: ParagraphCacheKey,
+    source_map: SourceMap,
     wrap: Option<(Pixels, Option<usize>)>,
     inline_text_metrics: Option<InlineTextMetrics>,
     text_align: Option<TextAlign>,
+    alignment_width: Option<Pixels>,
 }
 
 #[derive(Default)]
 struct ParagraphResultCache {
     entries: HashMap<ParagraphResultCacheKey, ParleyLayoutResult>,
     insertion_order: VecDeque<ParagraphResultCacheKey>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SourceMap {
+    source_to_backend: Vec<usize>,
+    backend_to_source: Vec<usize>,
+}
+
+impl SourceMap {
+    fn source_index(&self, backend_idx: usize) -> usize {
+        self.backend_to_source
+            .get(backend_idx)
+            .copied()
+            .unwrap_or_else(|| *self.backend_to_source.last().unwrap_or(&0))
+    }
+
+    fn backend_index(&self, source_idx: usize) -> usize {
+        self.source_to_backend
+            .get(source_idx)
+            .copied()
+            .unwrap_or_else(|| *self.source_to_backend.last().unwrap_or(&0))
+    }
+
+    fn source_caret(&self, caret: CaretPosition) -> CaretPosition {
+        CaretPosition::new(self.source_index(caret.index), caret.affinity)
+    }
+
+    fn backend_caret(&self, caret: CaretPosition) -> CaretPosition {
+        CaretPosition::new(self.backend_index(caret.index), caret.affinity)
+    }
+
+    fn source_range(&self, range: Range<usize>) -> Range<usize> {
+        self.source_index(range.start)..self.source_index(range.end)
+    }
+
+    fn backend_range(&self, range: Range<usize>) -> Range<usize> {
+        self.backend_index(range.start)..self.backend_index(range.end)
+    }
+}
+
+#[derive(Debug)]
+struct SourceMappedLayout {
+    source_len: usize,
+    map: SourceMap,
+    inner: Arc<dyn PlatformTextLayout>,
+}
+
+impl PlatformTextLayout for SourceMappedLayout {
+    fn len(&self) -> usize {
+        self.source_len
+    }
+
+    fn line_count(&self) -> usize {
+        self.inner.line_count()
+    }
+
+    fn size(&self) -> Size<Pixels> {
+        self.inner.size()
+    }
+
+    fn index_from_point(&self, point: Point<Pixels>, line_height: Pixels) -> Result<usize, usize> {
+        self.inner
+            .index_from_point(point, line_height)
+            .map(|idx| self.map.source_index(idx))
+            .map_err(|idx| self.map.source_index(idx))
+    }
+
+    fn caret_from_point(
+        &self,
+        point: Point<Pixels>,
+        line_height: Pixels,
+    ) -> Result<CaretPosition, CaretPosition> {
+        self.inner
+            .caret_from_point(point, line_height)
+            .map(|caret| self.map.source_caret(caret))
+            .map_err(|caret| self.map.source_caret(caret))
+    }
+
+    fn caret_geometry(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>> {
+        self.inner
+            .caret_geometry(self.map.backend_caret(caret), line_height)
+    }
+
+    fn refresh_caret(&self, caret: CaretPosition) -> CaretPosition {
+        self.map
+            .source_caret(self.inner.refresh_caret(self.map.backend_caret(caret)))
+    }
+
+    fn move_visual(
+        &self,
+        caret: CaretPosition,
+        direction: VisualDirection,
+    ) -> Option<CaretPosition> {
+        let source_start = caret.index.min(self.source_len);
+        let mut backend_caret = self.map.backend_caret(caret);
+
+        for _attempt in 0..=self.inner.len() {
+            backend_caret = self.inner.move_visual(backend_caret, direction)?;
+            let source_caret = self.map.source_caret(backend_caret);
+
+            if source_caret.index != source_start {
+                return Some(source_caret);
+            }
+        }
+
+        None
+    }
+
+    fn selection_geometry(&self, range: Range<usize>, line_height: Pixels) -> Vec<Bounds<Pixels>> {
+        self.inner
+            .selection_geometry(self.map.backend_range(range), line_height)
+    }
+
+    fn inline_geometry(&self, range: Range<usize>) -> Vec<(Bounds<Pixels>, usize)> {
+        self.inner.inline_geometry(self.map.backend_range(range))
+    }
+
+    fn inline_geometry_for_ranges(
+        &self,
+        ranges: &[Range<usize>],
+    ) -> Vec<Vec<(Bounds<Pixels>, usize)>> {
+        let ranges = ranges
+            .iter()
+            .cloned()
+            .map(|range| self.map.backend_range(range))
+            .collect::<Vec<_>>();
+
+        self.inner.inline_geometry_for_ranges(&ranges)
+    }
+
+    fn logical_cluster_before(&self, caret: CaretPosition) -> Option<Range<usize>> {
+        let mut backend_caret = self.map.backend_caret(caret);
+
+        for _attempt in 0..=self.inner.len() {
+            let range = self.inner.logical_cluster_before(backend_caret)?;
+            let source = self.map.source_range(range.clone());
+
+            if !source.is_empty() {
+                return Some(source);
+            }
+
+            backend_caret.index = range.start;
+        }
+
+        None
+    }
+
+    fn logical_cluster_after(&self, caret: CaretPosition) -> Option<Range<usize>> {
+        let mut backend_caret = self.map.backend_caret(caret);
+
+        for _attempt in 0..=self.inner.len() {
+            let range = self.inner.logical_cluster_after(backend_caret)?;
+            let source = self.map.source_range(range.clone());
+
+            if !source.is_empty() {
+                return Some(source);
+            }
+
+            backend_caret.index = range.end;
+        }
+
+        None
+    }
+
+    fn move_caret(
+        &self,
+        caret: CaretPosition,
+        movement: TextMovement,
+        preferred_x: Option<Pixels>,
+    ) -> (CaretPosition, Option<Pixels>) {
+        if movement == TextMovement::VisualLeft {
+            return (
+                self.move_visual(caret, VisualDirection::Left)
+                    .unwrap_or(caret),
+                None,
+            );
+        }
+
+        if movement == TextMovement::VisualRight {
+            return (
+                self.move_visual(caret, VisualDirection::Right)
+                    .unwrap_or(caret),
+                None,
+            );
+        }
+
+        let (caret, preferred_x) =
+            self.inner
+                .move_caret(self.map.backend_caret(caret), movement, preferred_x);
+
+        (self.map.source_caret(caret), preferred_x)
+    }
+
+    fn selection_from_point(
+        &self,
+        point: Point<Pixels>,
+        line_height: Pixels,
+        kind: TextSelectionKind,
+    ) -> Range<usize> {
+        self.map
+            .source_range(self.inner.selection_from_point(point, line_height, kind))
+    }
+}
+
+struct PreparedBidiText {
+    text: String,
+    runs: Vec<TextRun>,
+    run_sources: Vec<usize>,
+    text_styles: Vec<InlineTextStyle>,
+    inline_boxes: Vec<InlineBoxRequest>,
+    map: SourceMap,
+}
+
+#[derive(Clone)]
+struct BidiControls {
+    start: usize,
+    end: usize,
+    open: Vec<char>,
+    close: Vec<char>,
+}
+
+fn controls_for_scope(
+    range: Range<usize>,
+    direction: ResolvedDirection,
+    unicode_bidi: UnicodeBidi,
+) -> Option<BidiControls> {
+    let (directional_embed, directional_isolate, directional_override) = match direction {
+        ResolvedDirection::LeftToRight => ('\u{202a}', '\u{2066}', '\u{202d}'),
+        ResolvedDirection::RightToLeft => ('\u{202b}', '\u{2067}', '\u{202e}'),
+    };
+    let (open, close) = match unicode_bidi {
+        UnicodeBidi::Normal => return None,
+        UnicodeBidi::Embed => (vec![directional_embed], vec!['\u{202c}']),
+        UnicodeBidi::Isolate => (vec![directional_isolate], vec!['\u{2069}']),
+        UnicodeBidi::BidiOverride => (vec![directional_override], vec!['\u{202c}']),
+        UnicodeBidi::IsolateOverride => (
+            vec![directional_isolate, directional_override],
+            vec!['\u{202c}', '\u{2069}'],
+        ),
+        UnicodeBidi::Plaintext => (vec!['\u{2068}'], vec!['\u{2069}']),
+    };
+
+    Some(BidiControls {
+        start: range.start,
+        end: range.end,
+        open,
+        close,
+    })
+}
+
+fn prepare_bidi_text(
+    text: &str,
+    runs: &[TextRun],
+    text_styles: &[InlineTextStyle],
+    inline_boxes: &[InlineBoxRequest],
+    direction: ParagraphDirection,
+    unicode_bidi: UnicodeBidi,
+    bidi_scopes: &[InlineBidiScope],
+) -> PreparedBidiText {
+    let root_direction = match direction {
+        ParagraphDirection::Auto => None,
+        ParagraphDirection::LeftToRight => Some(ResolvedDirection::LeftToRight),
+        ParagraphDirection::RightToLeft => Some(ResolvedDirection::RightToLeft),
+    };
+    let mut controls = bidi_scopes
+        .iter()
+        .filter(|scope| {
+            scope.range.start <= scope.range.end
+                && scope.range.end <= text.len()
+                && text.is_char_boundary(scope.range.start)
+                && text.is_char_boundary(scope.range.end)
+        })
+        .filter_map(|scope| {
+            controls_for_scope(scope.range.clone(), scope.direction, scope.unicode_bidi)
+        })
+        .collect::<Vec<_>>();
+
+    if let Some(root_direction) = root_direction
+        && let Some(root) = controls_for_scope(0..text.len(), root_direction, unicode_bidi)
+    {
+        controls.push(root);
+    }
+
+    controls.sort_by_key(|scope| (scope.start, std::cmp::Reverse(scope.end)));
+
+    let mut prepared = String::new();
+    let mut backend_to_source = vec![0];
+    let mut source_to_backend = vec![0; text.len() + 1];
+
+    let append_synthetic = |character: char,
+                            source_idx: usize,
+                            prepared: &mut String,
+                            backend_to_source: &mut Vec<usize>| {
+        prepared.push(character);
+        backend_to_source.extend(std::iter::repeat_n(source_idx, character.len_utf8()));
+    };
+
+    if let Some(root_direction) = root_direction {
+        let marker = match root_direction {
+            ResolvedDirection::LeftToRight => '\u{200e}',
+            ResolvedDirection::RightToLeft => '\u{200f}',
+        };
+        append_synthetic(marker, 0, &mut prepared, &mut backend_to_source);
+    }
+
+    for (source_idx, character) in text
+        .char_indices()
+        .chain(std::iter::once((text.len(), '\0')))
+    {
+        let mut closing = controls
+            .iter()
+            .filter(|scope| {
+                scope.start < scope.end && scope.end == source_idx && scope.end < text.len()
+            })
+            .collect::<Vec<_>>();
+        closing.sort_by_key(|scope| std::cmp::Reverse(scope.start));
+
+        for scope in closing {
+            for control in &scope.close {
+                append_synthetic(*control, source_idx, &mut prepared, &mut backend_to_source);
+            }
+        }
+
+        for scope in controls.iter().filter(|scope| scope.start == source_idx) {
+            for control in &scope.open {
+                append_synthetic(*control, source_idx, &mut prepared, &mut backend_to_source);
+            }
+        }
+
+        source_to_backend[source_idx] = prepared.len();
+
+        if source_idx == text.len() {
+            break;
+        }
+
+        for scope in controls
+            .iter()
+            .filter(|scope| scope.start == source_idx && scope.end == source_idx)
+        {
+            for control in &scope.close {
+                append_synthetic(*control, source_idx, &mut prepared, &mut backend_to_source);
+            }
+        }
+
+        prepared.push(character);
+        for byte_offset in 1..=character.len_utf8() {
+            backend_to_source.push(source_idx + byte_offset);
+            source_to_backend[source_idx + byte_offset] =
+                prepared.len() - character.len_utf8() + byte_offset;
+        }
+    }
+
+    let mut closing = controls
+        .iter()
+        .filter(|scope| scope.end == text.len())
+        .collect::<Vec<_>>();
+    closing.sort_by_key(|scope| std::cmp::Reverse(scope.start));
+
+    for scope in closing {
+        for control in &scope.close {
+            append_synthetic(*control, text.len(), &mut prepared, &mut backend_to_source);
+        }
+    }
+
+    let map = SourceMap {
+        source_to_backend,
+        backend_to_source,
+    };
+    let (runs, run_sources) = remap_runs(&prepared, &map, runs, text.len());
+    let text_styles = text_styles
+        .iter()
+        .map(|style| InlineTextStyle {
+            range: map.backend_range(style.range.clone()),
+            ..style.clone()
+        })
+        .collect();
+    let inline_boxes = inline_boxes
+        .iter()
+        .map(|inline_box| InlineBoxRequest {
+            index: map.backend_index(inline_box.index),
+            ..*inline_box
+        })
+        .collect();
+
+    PreparedBidiText {
+        text: prepared,
+        runs,
+        run_sources,
+        text_styles,
+        inline_boxes,
+        map,
+    }
+}
+
+fn remap_runs(
+    text: &str,
+    map: &SourceMap,
+    source_runs: &[TextRun],
+    source_len: usize,
+) -> (Vec<TextRun>, Vec<usize>) {
+    let mut run_ends = Vec::with_capacity(source_runs.len());
+    let mut end = 0;
+
+    for run in source_runs {
+        end += run.len;
+        run_ends.push(end);
+    }
+
+    let mut runs: Vec<TextRun> = Vec::new();
+    let mut run_sources = Vec::new();
+
+    for (backend_idx, character) in text.char_indices() {
+        let source_idx = map
+            .source_index(backend_idx)
+            .min(source_len.saturating_sub(1));
+        let source_run = run_ends
+            .partition_point(|run_end| *run_end <= source_idx)
+            .min(source_runs.len().saturating_sub(1));
+
+        if run_sources.last().copied() == Some(source_run) {
+            runs.last_mut().unwrap().len += character.len_utf8();
+        } else if let Some(run) = source_runs.get(source_run) {
+            let mut run = run.clone();
+            run.len = character.len_utf8();
+            runs.push(run);
+            run_sources.push(source_run);
+        }
+    }
+
+    (runs, run_sources)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -267,15 +699,21 @@ struct ParleyLayoutResult {
     is_rtl: bool,
 }
 
-fn inline_alignment_offset(text_align: TextAlign, lines: &[InlineVisualLine]) -> Pixels {
+fn inline_alignment_offset(
+    text_align: TextAlign,
+    direction: ResolvedDirection,
+    lines: &[InlineVisualLine],
+) -> Pixels {
     let Some(line) = lines.first() else {
         return Pixels::ZERO;
     };
 
     match text_align {
-        TextAlign::Left => Pixels::ZERO,
+        TextAlign::Start if direction.is_rtl() => line.origin.x + line.size.width,
+        TextAlign::Start | TextAlign::Left => Pixels::ZERO,
         TextAlign::Center => line.origin.x + line.size.width / 2.,
-        TextAlign::Right => line.origin.x + line.size.width,
+        TextAlign::End if direction.is_rtl() => Pixels::ZERO,
+        TextAlign::End | TextAlign::Right => line.origin.x + line.size.width,
     }
 }
 
@@ -1080,6 +1518,10 @@ impl ParleyTextSystem {
         line_height: Option<Pixels>,
         inline_text_metrics: Option<InlineTextMetrics>,
         text_align: Option<TextAlign>,
+        alignment_width: Option<Pixels>,
+        direction: ParagraphDirection,
+        unicode_bidi: UnicodeBidi,
+        bidi_scopes: &[InlineBidiScope],
     ) -> Result<ParleyLayoutResult> {
         // Parley 0.11 resolves one base direction per layout, including across newlines.
         if !text.chars().any(is_paragraph_separator) {
@@ -1093,6 +1535,10 @@ impl ParleyTextSystem {
                 line_height,
                 inline_text_metrics,
                 text_align,
+                alignment_width,
+                direction,
+                unicode_bidi,
+                bidi_scopes,
             );
         }
 
@@ -1194,6 +1640,19 @@ impl ParleyTextSystem {
                 line_height,
                 inline_text_metrics,
                 text_align,
+                alignment_width,
+                direction,
+                unicode_bidi,
+                &bidi_scopes
+                    .iter()
+                    .filter_map(|scope| {
+                        local_range(&scope.range, &source.content).map(|range| InlineBidiScope {
+                            range,
+                            direction: scope.direction,
+                            unicode_bidi: scope.unicode_bidi,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
             )?;
 
             for fragment in &mut result.layout.paint_fragments {
@@ -1287,7 +1746,26 @@ impl ParleyTextSystem {
         line_height: Option<Pixels>,
         inline_text_metrics: Option<InlineTextMetrics>,
         text_align: Option<TextAlign>,
+        alignment_width: Option<Pixels>,
+        direction: ParagraphDirection,
+        unicode_bidi: UnicodeBidi,
+        bidi_scopes: &[InlineBidiScope],
     ) -> Result<ParleyLayoutResult> {
+        let source_text_len = text.len();
+        let source_runs = runs;
+        let prepared = prepare_bidi_text(
+            text,
+            runs,
+            text_styles,
+            inline_boxes,
+            direction,
+            unicode_bidi,
+            bidi_scopes,
+        );
+        let text = prepared.text.as_str();
+        let runs = prepared.runs.as_slice();
+        let text_styles = prepared.text_styles.as_slice();
+        let inline_boxes = prepared.inline_boxes.as_slice();
         let run_ranges = run_ranges(runs);
         let line_height = if text.is_empty() {
             text_styles
@@ -1308,14 +1786,16 @@ impl ParleyTextSystem {
         };
         let result_cache_key = ParagraphResultCacheKey {
             paragraph: cache_key.clone(),
+            source_map: prepared.map.clone(),
             wrap,
             inline_text_metrics,
             text_align,
+            alignment_width,
         };
 
         if let Some(mut result) = self.paragraph_result_cache.lock().get(&result_cache_key) {
             for fragment in &mut result.layout.paint_fragments {
-                fragment.style = PaintStyle::from(&runs[fragment.source_run]);
+                fragment.style = PaintStyle::from(&source_runs[fragment.source_run]);
             }
 
             return Ok(result);
@@ -1518,6 +1998,16 @@ impl ParleyTextSystem {
             } else {
                 layout.break_all_lines(Some(f32::from(wrap_width)));
             }
+        } else if let Some(alignment_width) = alignment_width {
+            let mut breaker = layout.break_lines();
+            breaker.state_mut().set_layout_max_advance(f32::INFINITY);
+            breaker.state_mut().set_line_max_advance(f32::INFINITY);
+
+            while breaker.break_next().is_some() {
+                breaker.set_prior_line_width(f32::from(alignment_width));
+            }
+
+            breaker.finish();
         } else {
             layout.break_all_lines(None);
         }
@@ -1525,12 +2015,14 @@ impl ParleyTextSystem {
         // Parley uses an unbounded line width for empty layouts. Align their empty
         // row here so centered and right-aligned carets stay inside the container.
         let empty_alignment = (text.is_empty() && inline_boxes.is_empty()).then(|| {
-            let width = wrap
-                .map(|(width, _max_lines)| width)
+            let width = alignment_width
+                .or_else(|| wrap.map(|(width, _max_lines)| width))
                 .filter(|width| *width < Pixels::MAX)
                 .unwrap_or_default();
 
             match text_align {
+                Some(TextAlign::Start) if layout.is_rtl() => width,
+                Some(TextAlign::End) if !layout.is_rtl() => width,
                 Some(TextAlign::Right) => width,
                 Some(TextAlign::Center) => width / 2.,
                 _ => Pixels::ZERO,
@@ -1541,14 +2033,26 @@ impl ParleyTextSystem {
             && empty_alignment.is_none()
         {
             let alignment = match text_align {
+                TextAlign::Start => Alignment::Start,
+                TextAlign::End => Alignment::End,
                 TextAlign::Left => Alignment::Left,
                 TextAlign::Center => Alignment::Center,
                 TextAlign::Right => Alignment::Right,
             };
 
-            layout.align(alignment, AlignmentOptions::default());
+            layout.align(
+                alignment,
+                AlignmentOptions {
+                    align_when_overflowing: true,
+                },
+            );
         }
 
+        let paragraph_direction = if layout.is_rtl() {
+            ResolvedDirection::RightToLeft
+        } else {
+            ResolvedDirection::LeftToRight
+        };
         let mut visual_lines = Vec::new();
         let mut paint_fragments = Vec::new();
 
@@ -1693,13 +2197,16 @@ impl ParleyTextSystem {
             }
 
             let parley_text_range = line.text_range();
-            let text_range =
-                parley_text_range.start.min(text.len())..parley_text_range.end.min(text.len());
+            let text_range = prepared.map.source_range(
+                parley_text_range.start.min(text.len())..parley_text_range.end.min(text.len()),
+            );
 
             visual_lines.push(VisualLine {
                 text_range,
                 fragment_range: fragment_start..paint_fragments.len(),
                 advance: line_advance,
+                offset: line_x,
+                direction: paragraph_direction,
             });
 
             inline_lines.push(InlineVisualLine {
@@ -1742,8 +2249,18 @@ impl ParleyTextSystem {
             );
         }
 
+        for fragment in &mut paint_fragments {
+            fragment.source_run = prepared.run_sources[fragment.source_run];
+            fragment.style = PaintStyle::from(&source_runs[fragment.source_run]);
+        }
+
         let is_rtl = layout.is_rtl();
         let platform_layout = ParleyLayout::new(layout, paragraph_text, inline_lines.clone());
+        let platform_layout: Arc<dyn PlatformTextLayout> = Arc::new(SourceMappedLayout {
+            source_len: source_text_len,
+            map: prepared.map,
+            inner: Arc::new(platform_layout),
+        });
         let line_layout = LineLayout {
             font_size,
             width,
@@ -1751,8 +2268,8 @@ impl ParleyTextSystem {
             descent,
             visual_lines: visual_lines.iter().cloned().collect(),
             paint_fragments,
-            len: text.len(),
-            platform_layout: std::sync::Arc::new(platform_layout),
+            len: source_text_len,
+            platform_layout,
         };
 
         let result = ParleyLayoutResult {
@@ -1973,7 +2490,11 @@ impl PlatformTextSystem for ParleyTextSystem {
             &[],
             None,
             None,
-            None,
+            Some(request.text_align),
+            request.alignment_width,
+            request.direction,
+            request.unicode_bidi,
+            &[],
         )
         .expect("Parley failed to lay out a validated GPUI document")
         .layout
@@ -1995,11 +2516,23 @@ impl PlatformTextSystem for ParleyTextSystem {
                 Some(request.line_height),
                 Some(request.text_metrics),
                 Some(request.text_align),
+                request.alignment_width,
+                request.direction,
+                request.unicode_bidi,
+                request.bidi_scopes,
             )
             .expect("Parley failed to lay out a validated GPUI inline document");
         InlineLayout {
             layout: std::sync::Arc::new(result.layout),
-            alignment_offset: inline_alignment_offset(request.text_align, &result.inline_lines),
+            alignment_offset: inline_alignment_offset(
+                request.text_align,
+                if result.is_rtl {
+                    ResolvedDirection::RightToLeft
+                } else {
+                    ResolvedDirection::LeftToRight
+                },
+                &result.inline_lines,
+            ),
             lines: result.inline_lines,
             boxes: result.inline_boxes,
             size: result.size,
@@ -2071,6 +2604,10 @@ mod tests {
             runs,
             wrap_width: None,
             line_clamp: None,
+            alignment_width: None,
+            text_align: TextAlign::Left,
+            direction: ParagraphDirection::Auto,
+            unicode_bidi: UnicodeBidi::Normal,
         })
     }
 
@@ -2088,7 +2625,266 @@ mod tests {
             runs,
             wrap_width: Some(wrap_width),
             line_clamp,
+            alignment_width: None,
+            text_align: TextAlign::Left,
+            direction: ParagraphDirection::Auto,
+            unicode_bidi: UnicodeBidi::Normal,
         })
+    }
+
+    fn layout_directional(
+        system: &ParleyTextSystem,
+        text: &str,
+        direction: ParagraphDirection,
+        text_align: TextAlign,
+        alignment_width: Option<Pixels>,
+    ) -> LineLayout {
+        system.layout_text(TextLayoutRequest {
+            text,
+            font_size: px(16.0),
+            runs: &[text_run(text, "IBM Plex Sans")],
+            wrap_width: None,
+            line_clamp: None,
+            alignment_width,
+            text_align,
+            direction,
+            unicode_bidi: UnicodeBidi::Normal,
+        })
+    }
+
+    #[test]
+    fn explicit_rtl_sets_the_base_direction_without_rtl_characters() {
+        let system = test_system();
+
+        for text in ["English 123!", "123 …", ""] {
+            let layout = layout_directional(
+                &system,
+                text,
+                ParagraphDirection::RightToLeft,
+                TextAlign::Start,
+                Some(px(240.0)),
+            );
+
+            assert_eq!(layout.len, text.len());
+            assert_eq!(layout.platform_layout.len(), text.len());
+            assert_eq!(
+                layout.visual_lines[0].direction,
+                ResolvedDirection::RightToLeft
+            );
+            let caret = layout
+                .platform_layout
+                .caret_geometry(CaretPosition::new(0, CaretAffinity::Downstream), px(24.0))
+                .unwrap();
+            assert!(caret.origin.x > px(100.0), "text={text:?}, caret={caret:?}");
+        }
+    }
+
+    #[test]
+    fn logical_text_alignment_uses_the_paragraph_direction() {
+        let system = test_system();
+        let rtl_start = layout_directional(
+            &system,
+            "English",
+            ParagraphDirection::RightToLeft,
+            TextAlign::Start,
+            Some(px(240.0)),
+        );
+        let rtl_end = layout_directional(
+            &system,
+            "English",
+            ParagraphDirection::RightToLeft,
+            TextAlign::End,
+            Some(px(240.0)),
+        );
+        let ltr_start = layout_directional(
+            &system,
+            "English",
+            ParagraphDirection::LeftToRight,
+            TextAlign::Start,
+            Some(px(240.0)),
+        );
+
+        let line_height = px(24.0);
+        let rtl_start_selection = rtl_start
+            .platform_layout
+            .selection_geometry(0.."English".len(), line_height);
+        let rtl_end_selection = rtl_end
+            .platform_layout
+            .selection_geometry(0.."English".len(), line_height);
+        let ltr_start_selection = ltr_start
+            .platform_layout
+            .selection_geometry(0.."English".len(), line_height);
+        assert!(
+            rtl_start_selection[0].origin.x > px(100.0),
+            "start={rtl_start_selection:?}, end={rtl_end_selection:?}, fragments={:?}",
+            rtl_start.paint_fragments
+        );
+        assert!(rtl_end_selection[0].origin.x < px(1.0));
+        assert!(ltr_start_selection[0].origin.x < px(1.0));
+
+        let caret = rtl_start
+            .platform_layout
+            .caret_geometry(
+                CaretPosition::new(0, CaretAffinity::Downstream),
+                line_height,
+            )
+            .unwrap();
+        assert!(caret.origin.x > px(100.0));
+    }
+
+    #[test]
+    fn bidi_scope_controls_preserve_source_byte_indices() {
+        let system = test_system();
+        let text = "A אב B";
+        let hebrew = text.find('א').unwrap()..text.find('ב').unwrap() + 'ב'.len_utf8();
+        let runs = [text_run(text, "IBM Plex Sans")];
+        let scopes = [InlineBidiScope {
+            range: hebrew,
+            direction: ResolvedDirection::RightToLeft,
+            unicode_bidi: UnicodeBidi::IsolateOverride,
+        }];
+        let layout = system.layout_inline(InlineLayoutRequest {
+            text,
+            font_size: px(16.0),
+            runs: &runs,
+            boxes: &[],
+            text_styles: &[],
+            line_height: px(24.0),
+            text_metrics: InlineTextMetrics::default(),
+            wrap_width: None,
+            line_clamp: None,
+            alignment_width: Some(px(240.0)),
+            text_align: TextAlign::Start,
+            direction: ParagraphDirection::LeftToRight,
+            unicode_bidi: UnicodeBidi::Normal,
+            bidi_scopes: &scopes,
+        });
+
+        assert_eq!(layout.layout.len, text.len());
+        assert_eq!(layout.layout.platform_layout.len(), text.len());
+        assert_eq!(
+            layout
+                .layout
+                .platform_layout
+                .logical_cluster_after(CaretPosition::new(0, CaretAffinity::Downstream)),
+            Some(0..1)
+        );
+
+        for (idx, _) in text
+            .char_indices()
+            .chain(std::iter::once((text.len(), '\0')))
+        {
+            let caret = layout
+                .layout
+                .platform_layout
+                .refresh_caret(CaretPosition::new(idx, CaretAffinity::Downstream));
+            assert!(caret.index <= text.len());
+        }
+
+        let selection = layout
+            .layout
+            .platform_layout
+            .selection_geometry(0..text.len(), px(24.0));
+        assert!(!selection.is_empty());
+    }
+
+    #[test]
+    fn result_cache_keeps_source_maps_for_authored_directional_controls() {
+        let system = test_system();
+        let explicit = layout_directional(
+            &system,
+            "a",
+            ParagraphDirection::LeftToRight,
+            TextAlign::Left,
+            None,
+        );
+        let source = "\u{200e}a";
+        let authored_control = system.layout_text(TextLayoutRequest {
+            text: source,
+            font_size: px(16.0),
+            runs: &[text_run(source, "IBM Plex Sans")],
+            wrap_width: None,
+            line_clamp: None,
+            alignment_width: None,
+            text_align: TextAlign::Left,
+            direction: ParagraphDirection::Auto,
+            unicode_bidi: UnicodeBidi::Normal,
+        });
+
+        assert_eq!(explicit.platform_layout.len(), 1);
+        assert_eq!(authored_control.len, source.len());
+        assert_eq!(authored_control.platform_layout.len(), source.len());
+    }
+
+    #[test]
+    fn rtl_bidi_override_reverses_visual_cluster_positions() {
+        let system = test_system();
+        let text = "abc";
+        let runs = [text_run(text, "IBM Plex Sans")];
+        let scopes = [InlineBidiScope {
+            range: 0..text.len(),
+            direction: ResolvedDirection::RightToLeft,
+            unicode_bidi: UnicodeBidi::IsolateOverride,
+        }];
+        let layout = system.layout_inline(InlineLayoutRequest {
+            text,
+            font_size: px(16.0),
+            runs: &runs,
+            boxes: &[],
+            text_styles: &[],
+            line_height: px(24.0),
+            text_metrics: InlineTextMetrics::default(),
+            wrap_width: None,
+            line_clamp: None,
+            alignment_width: None,
+            text_align: TextAlign::Start,
+            direction: ParagraphDirection::LeftToRight,
+            unicode_bidi: UnicodeBidi::Normal,
+            bidi_scopes: &scopes,
+        });
+        let positions = [0..1, 1..2, 2..3].map(|range| {
+            layout.layout.platform_layout.inline_geometry(range)[0]
+                .0
+                .origin
+                .x
+        });
+
+        assert!(positions[0] > positions[1]);
+        assert!(positions[1] > positions[2]);
+    }
+
+    #[test]
+    fn plaintext_resolves_each_hard_paragraph_and_neutral_lines_fall_back_to_ltr() {
+        let system = test_system();
+        let text = "مرحبا\n123 …\nEnglish\n";
+        let layout = system.layout_text(TextLayoutRequest {
+            text,
+            font_size: px(16.0),
+            runs: &[text_run(text, "IBM Plex Sans")],
+            wrap_width: None,
+            line_clamp: None,
+            alignment_width: Some(px(240.0)),
+            text_align: TextAlign::Start,
+            direction: ParagraphDirection::Auto,
+            unicode_bidi: UnicodeBidi::Plaintext,
+        });
+
+        assert_eq!(
+            layout
+                .visual_lines
+                .iter()
+                .map(|line| line.direction)
+                .collect::<Vec<_>>(),
+            vec![
+                ResolvedDirection::RightToLeft,
+                ResolvedDirection::LeftToRight,
+                ResolvedDirection::LeftToRight,
+                ResolvedDirection::LeftToRight,
+            ]
+        );
+        assert!(layout.visual_lines[0].offset > px(100.0));
+        assert_eq!(layout.visual_lines[1].offset, Pixels::ZERO);
+        assert_eq!(layout.visual_lines[3].text_range, text.len()..text.len());
     }
 
     fn wrapped(layout: LineLayout, width: Pixels) -> gpui::WrappedLineLayout {
@@ -2257,7 +3053,11 @@ mod tests {
 
             wrap_width: Some(px(300.)),
             line_clamp: None,
+            alignment_width: None,
             text_align: TextAlign::Left,
+            direction: ParagraphDirection::Auto,
+            unicode_bidi: UnicodeBidi::Normal,
+            bidi_scopes: &[],
         });
 
         assert_eq!(layout.lines.len(), 3);
@@ -2380,7 +3180,11 @@ mod tests {
             text_metrics,
             wrap_width: Some(px(160.0)),
             line_clamp: None,
+            alignment_width: None,
             text_align: TextAlign::Center,
+            direction: ParagraphDirection::Auto,
+            unicode_bidi: UnicodeBidi::Normal,
+            bidi_scopes: &[],
         };
 
         let layout = system.layout_inline(request);
@@ -2482,7 +3286,11 @@ mod tests {
             },
             wrap_width: Some(px(24.0)),
             line_clamp: None,
+            alignment_width: None,
             text_align: TextAlign::Left,
+            direction: ParagraphDirection::Auto,
+            unicode_bidi: UnicodeBidi::Normal,
+            bidi_scopes: &[],
         });
 
         assert_eq!(layout.boxes.len(), 2);
@@ -2848,7 +3656,11 @@ mod tests {
                 },
                 wrap_width: Some(px(260.)),
                 line_clamp: None,
+                alignment_width: None,
                 text_align,
+                direction: ParagraphDirection::Auto,
+                unicode_bidi: UnicodeBidi::Normal,
+                bidi_scopes: &[],
             });
             let mut ids = inline
                 .boxes
@@ -2939,6 +3751,10 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
+                    ParagraphDirection::Auto,
+                    UnicodeBidi::Normal,
+                    &[],
                 )
                 .unwrap();
 
@@ -3728,7 +4544,11 @@ mod tests {
             text_metrics: InlineTextMetrics::default(),
             wrap_width: None,
             line_clamp: None,
+            alignment_width: None,
             text_align: TextAlign::Left,
+            direction: ParagraphDirection::Auto,
+            unicode_bidi: UnicodeBidi::Normal,
+            bidi_scopes: &[],
         });
         let small = inline
             .layout
@@ -4415,6 +5235,10 @@ mod tests {
                         runs: &runs,
                         wrap_width: Some(*width),
                         line_clamp: None,
+                        alignment_width: None,
+                        text_align: TextAlign::Left,
+                        direction: ParagraphDirection::Auto,
+                        unicode_bidi: UnicodeBidi::Normal,
                     });
 
                     layout.visual_lines.len() == 2
@@ -5502,6 +6326,232 @@ mod tests {
                 glyph_heights[0] > glyph_heights[1] * 1.5,
                 "glyph painting must use each shaped run's font size"
             );
+        }
+    }
+
+    mod direction_layout {
+        use super::*;
+
+        struct DirectionFlexView {
+            direction: gpui::Direction,
+            cached_child: gpui::Entity<CachedDirectionChild>,
+            cached_arabic: gpui::Entity<CachedArabicChild>,
+        }
+
+        struct CachedDirectionChild;
+        struct CachedArabicChild {
+            text: gpui::SharedString,
+        }
+
+        impl Render for CachedDirectionChild {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _context: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div().flex().justify_start().size_full().child(
+                    div()
+                        .w(px(30.0))
+                        .h(px(20.0))
+                        .debug_selector(|| "cached-first".into()),
+                )
+            }
+        }
+
+        impl Render for CachedArabicChild {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _context: &mut Context<Self>,
+            ) -> impl IntoElement {
+                div().size_full().child(self.text.clone())
+            }
+        }
+
+        impl Render for DirectionFlexView {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _context: &mut Context<Self>,
+            ) -> impl IntoElement {
+                let item = |selector: &'static str| {
+                    div()
+                        .w(px(30.0))
+                        .h(px(20.0))
+                        .debug_selector(move || selector.into())
+                };
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(
+                        div()
+                            .direction(self.direction)
+                            .flex()
+                            .flex_row_reverse()
+                            .justify_start()
+                            .w(px(200.0))
+                            .h(px(20.0))
+                            .debug_selector(|| "logical-row".into())
+                            .child(item("logical-first"))
+                            .child(item("logical-second")),
+                    )
+                    .child(
+                        div()
+                            .direction(self.direction)
+                            .flex()
+                            .flex_row_reverse()
+                            .justify_flex_start()
+                            .w(px(200.0))
+                            .h(px(20.0))
+                            .debug_selector(|| "flex-row".into())
+                            .child(item("flex-first"))
+                            .child(item("flex-second")),
+                    )
+                    .child(
+                        div()
+                            .direction(self.direction)
+                            .grid()
+                            .grid_cols(2)
+                            .w(px(200.0))
+                            .h(px(20.0))
+                            .debug_selector(|| "grid-row".into())
+                            .child(item("grid-first"))
+                            .child(item("grid-second")),
+                    )
+                    .child(
+                        div()
+                            .direction(self.direction)
+                            .w(px(200.0))
+                            .h(px(20.0))
+                            .debug_selector(|| "cached-row".into())
+                            .child(
+                                self.cached_child
+                                    .clone()
+                                    .cached(gpui::StyleRefinement::default().size_full()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .direction(self.direction)
+                            .w(px(200.0))
+                            .h(px(20.0))
+                            .debug_selector(|| "deferred-row".into())
+                            .child(gpui::deferred(
+                                div().flex().justify_start().size_full().child(
+                                    div()
+                                        .w(px(30.0))
+                                        .h(px(20.0))
+                                        .debug_selector(|| "deferred-first".into()),
+                                ),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .direction(gpui::Direction::Auto)
+                            .flex()
+                            .justify_start()
+                            .w(px(200.0))
+                            .h(px(20.0))
+                            .debug_selector(|| "auto-cached-row".into())
+                            .child(
+                                div()
+                                    .w(px(30.0))
+                                    .h(px(20.0))
+                                    .debug_selector(|| "auto-cached-item".into())
+                                    .child(
+                                        self.cached_arabic
+                                            .clone()
+                                            .cached(gpui::StyleRefinement::default().size_full()),
+                                    ),
+                            ),
+                    )
+            }
+        }
+
+        fn bounds(
+            context: &mut HeadlessAppContext,
+            window: gpui::AnyWindowHandle,
+            selector: &str,
+        ) -> Bounds<Pixels> {
+            context
+                .debug_bounds(window, selector)
+                .unwrap()
+                .unwrap_or_else(|| panic!("missing {selector}"))
+        }
+
+        #[test]
+        fn direction_updates_logical_and_flex_relative_alignment() {
+            let mut context = HeadlessAppContext::new(test_system());
+            let window = context
+                .open_window(size(px(320.0), px(160.0)), |_window, context| {
+                    let cached_child = context.new(|_| CachedDirectionChild);
+                    let cached_arabic = context.new(|_| CachedArabicChild {
+                        text: "مرحبا".into(),
+                    });
+                    context.new(|_| DirectionFlexView {
+                        direction: gpui::Direction::RightToLeft,
+                        cached_child,
+                        cached_arabic,
+                    })
+                })
+                .unwrap();
+            context.run_until_parked();
+
+            let any_window = window.into();
+            let logical_row = bounds(&mut context, any_window, "logical-row");
+            let logical_first = bounds(&mut context, any_window, "logical-first");
+            let flex_row = bounds(&mut context, any_window, "flex-row");
+            let flex_first = bounds(&mut context, any_window, "flex-first");
+            let grid_row = bounds(&mut context, any_window, "grid-row");
+            let grid_first = bounds(&mut context, any_window, "grid-first");
+            let cached_row = bounds(&mut context, any_window, "cached-row");
+            let cached_first = bounds(&mut context, any_window, "cached-first");
+            let auto_cached_row = bounds(&mut context, any_window, "auto-cached-row");
+            let auto_cached_item = bounds(&mut context, any_window, "auto-cached-item");
+            let deferred_row = bounds(&mut context, any_window, "deferred-row");
+            let deferred_first = bounds(&mut context, any_window, "deferred-first");
+            assert!(logical_first.origin.x > logical_row.center().x);
+            assert!(flex_first.right() < flex_row.center().x);
+            assert!(grid_first.origin.x > grid_row.center().x);
+            assert!(cached_first.origin.x > cached_row.center().x);
+            assert!(auto_cached_item.origin.x > auto_cached_row.center().x);
+            assert!(deferred_first.origin.x > deferred_row.center().x);
+
+            window
+                .update(&mut context, |view, _, context| {
+                    view.direction = gpui::Direction::LeftToRight;
+                    context.notify();
+                })
+                .unwrap();
+            context.run_until_parked();
+
+            let logical_first = bounds(&mut context, any_window, "logical-first");
+            let flex_first = bounds(&mut context, any_window, "flex-first");
+            let grid_first = bounds(&mut context, any_window, "grid-first");
+            let cached_first = bounds(&mut context, any_window, "cached-first");
+            let auto_cached_item = bounds(&mut context, any_window, "auto-cached-item");
+            let deferred_first = bounds(&mut context, any_window, "deferred-first");
+            assert!(logical_first.right() < logical_row.center().x);
+            assert!(flex_first.origin.x > flex_row.center().x);
+            assert!(grid_first.right() < grid_row.center().x);
+            assert!(cached_first.right() < cached_row.center().x);
+            assert!(auto_cached_item.origin.x > auto_cached_row.center().x);
+            assert!(deferred_first.right() < deferred_row.center().x);
+
+            window
+                .update(&mut context, |view, _, context| {
+                    view.cached_arabic.update(context, |child, context| {
+                        child.text = "English".into();
+                        context.notify();
+                    });
+                })
+                .unwrap();
+            context.run_until_parked();
+
+            let auto_cached_item = bounds(&mut context, any_window, "auto-cached-item");
+            assert!(auto_cached_item.right() < auto_cached_row.center().x);
         }
     }
 }

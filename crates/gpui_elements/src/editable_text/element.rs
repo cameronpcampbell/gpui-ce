@@ -3,9 +3,8 @@ use crate::editable_text::StringStorage;
 
 #[cfg(test)]
 use gpui::{
-    AppContext, CaretAffinity, CaretPosition, Context, EntityInputHandler, HeadlessAppContext,
-    PlatformInput, PlatformTextSystem, Render, ScaledPixels, TestTextSystem, WindowHandle, div,
-    hsla, prelude::*,
+    AppContext, Context, EntityInputHandler, HeadlessAppContext, PlatformInput, PlatformTextSystem,
+    Render, ScaledPixels, TestTextSystem, WindowHandle, div, hsla, prelude::*,
 };
 
 #[cfg(test)]
@@ -21,12 +20,14 @@ use crate::editable_text::{
     state::AccessibilityText,
 };
 use gpui::{
-    A11ySubtreeBuilder, App, Bounds, CursorStyle, DefiniteLength, DispatchPhase, Display, Element,
-    ElementId, ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla,
-    InteractiveElement, Interactivity, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, NavigationDirection, PaintQuad, Pixels, Point, SharedString,
-    Size, StatefulInteractiveElement, Style, StyleRefinement, Styled, TextAlign, TextLayout,
-    WeakEntity, Window, WrappedLine, accesskit, fill, point, px, relative, size,
+    A11ySubtreeBuilder, App, Bounds, CaretAffinity, CaretPosition, CursorStyle, DefiniteLength,
+    Direction, DispatchPhase, Display, Element, ElementId, ElementInputHandler, Entity,
+    FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla, InteractiveElement, Interactivity,
+    IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    NavigationDirection, PaintQuad, ParagraphDirection, Pixels, Point, SharedString, Size,
+    StatefulInteractiveElement, Style, StyleRefinement, Styled, TextAlign, TextLayout,
+    TextLayoutOptions, UnicodeBidi, WeakEntity, Window, WrappedLine, accesskit, fill, point, px,
+    relative, size,
 };
 use palette::IntoColor;
 use smallvec::SmallVec;
@@ -257,13 +258,14 @@ pub struct LayoutState {
 struct InteractivityPrepaint {
     hitbox: Option<Hitbox>,
     scroll_offset: Point<Pixels>,
+    document_offset: Point<Pixels>,
     inner_bounds: Bounds<Pixels>,
     caret_visible: bool,
 }
 
 impl InteractivityPrepaint {
     fn document_origin(&self) -> Point<Pixels> {
-        self.inner_bounds.origin + self.scroll_offset
+        self.inner_bounds.origin + self.scroll_offset + self.document_offset
     }
 }
 
@@ -351,9 +353,10 @@ impl Element for EditableTextElement {
 
         // Read new state information from the underlying entity.
         // Block-wrapped so that the state being read is dropped before continuing.
-        let (prelayout, next_scroll_offset) = {
+        let (prelayout, next_scroll_offset, direction_text) = {
             let state = entity.read(cx);
             let show_placeholder = state.as_str().is_empty();
+            let direction_text = SharedString::from(state.as_str());
             let text = match show_placeholder {
                 false => Some(SharedString::from(state.as_str())),
                 true => self.placeholder.clone(),
@@ -369,7 +372,11 @@ impl Element for EditableTextElement {
                 supports_multiline: self.supports_multiline,
                 accepts_input: self.accepts_input,
             };
-            (prelayout, state.layout_data.next_scroll_offset)
+            (
+                prelayout,
+                state.layout_data.next_scroll_offset,
+                direction_text,
+            )
         };
 
         // Update the scroll offset of the element when the user's caret goes out of scope.
@@ -391,11 +398,19 @@ impl Element for EditableTextElement {
             cx,
             |style, window, cx| {
                 window.with_text_style(style.text_style().cloned(), move |window| {
-                    let text_layout_id = prelayout.perform_text_layout(window);
+                    let unicode_bidi = if style.unicode_bidi_explicit {
+                        style.unicode_bidi
+                    } else if style.direction == Direction::Inherit {
+                        UnicodeBidi::Normal
+                    } else {
+                        UnicodeBidi::Isolate
+                    };
+                    let text_layout_id = prelayout.perform_text_layout(unicode_bidi, window);
                     window.request_layout(style.clone(), Some(text_layout_id), cx)
                 })
             },
         );
+        window.set_layout_direction_text(layout_id, direction_text);
 
         (
             layout_id,
@@ -460,9 +475,11 @@ impl Element for EditableTextElement {
                     state.layout_data.scroll_bounds =
                         Bounds::new(-scroll_offset, inner_bounds.size);
                 });
+                let document_offset = request_layout.state.read(cx).layout_data.document_offset;
                 InteractivityPrepaint {
                     hitbox,
                     scroll_offset,
+                    document_offset,
                     inner_bounds,
                     caret_visible,
                 }
@@ -681,7 +698,7 @@ impl EditableTextElement {
 }
 
 impl PrelayoutState {
-    fn perform_text_layout(self, window: &mut Window) -> LayoutId {
+    fn perform_text_layout(self, unicode_bidi: UnicodeBidi, window: &mut Window) -> LayoutId {
         // NOTE: Loosely mirrors TextLayout::layout
         let text_style = window.text_style();
         let font_size = text_style.font_size.to_pixels(window.rem_size());
@@ -721,11 +738,28 @@ impl PrelayoutState {
 
                 let truncation =
                     TextLayout::evaluate_overflow(&text_style, known_dimensions, available_space);
+                let alignment_width =
+                    TextLayout::evaluate_alignment_width(known_dimensions, available_space);
+                let element_direction = window.resolved_direction();
+                let direction = if unicode_bidi == UnicodeBidi::Plaintext {
+                    ParagraphDirection::Auto
+                } else {
+                    element_direction.into()
+                };
+                let options = TextLayoutOptions {
+                    wrap_width,
+                    line_clamp: text_style.line_clamp,
+                    alignment_width,
+                    text_align: text_style.text_align,
+                    direction,
+                    unicode_bidi,
+                };
 
                 if let Some(size) = self.prev_layout_state.size
                     && (wrap_width.is_none() || wrap_width == self.prev_layout_state.wrap_width)
                     && truncation.width.is_none()
                     && self.storage_version == self.prev_layout_state.last_seen_storage_version
+                    && self.prev_layout_state.options == options
                 {
                     return size;
                 }
@@ -738,17 +772,33 @@ impl PrelayoutState {
                     wrap_width,
                     &truncation,
                     &runs,
+                    options.direction,
+                    options.unicode_bidi,
                     window,
                     cx,
                 );
                 let document = window
                     .text_system()
-                    .shape_text(text, font_size, &runs, wrap_width, text_style.line_clamp)
+                    .shape_text_with_options(text, font_size, &runs, options)
                     .ok()
                     .map(Arc::new);
                 let size = document
                     .as_ref()
                     .map_or_else(Size::default, |document| document.size(line_height));
+                let document_offset = if element_direction.is_rtl() {
+                    document.as_deref().map_or_else(Point::default, |document| {
+                        editable_document_offset(document, line_height)
+                    })
+                } else {
+                    Point::default()
+                };
+                let initial_scroll = self
+                    .prev_layout_state
+                    .size
+                    .is_none()
+                    .then_some(document_offset)
+                    .filter(|offset| offset.x > Pixels::ZERO);
+                let refresh_for_initial_scroll = initial_scroll.is_some();
 
                 let layout_data = EditableTextLayoutResult {
                     supports_multiline: self.supports_multiline,
@@ -759,18 +809,29 @@ impl PrelayoutState {
                         wrap_width,
                         size: Some(size),
                         last_seen_storage_version: self.storage_version,
+                        options,
                     },
                     document,
                     line_height,
-                    next_scroll_offset: None,
+                    document_offset,
+                    next_scroll_offset: initial_scroll,
                 };
 
                 // Update the state for use in prepaint, paint, and action handlers.
                 // request_measured_layout caches this scope for processing later
                 // between layout and prepaint, so we cant just copy/move these values to the outer scope.
-                self.state.update(cx, move |state, _cx| {
+                self.state.update(cx, move |state, cx| {
                     state.layout_data = layout_data;
+                    if state.layout_data.next_scroll_offset.is_some() {
+                        cx.notify();
+                    }
                 });
+                if refresh_for_initial_scroll {
+                    let state = self.state.clone();
+                    cx.defer(move |cx| {
+                        state.update(cx, |_state, cx| cx.notify());
+                    });
+                }
 
                 size
             },
@@ -821,6 +882,7 @@ impl PrepaintElements {
         let InteractivityPrepaint {
             hitbox: _,
             scroll_offset,
+            document_offset: _,
             inner_bounds,
             caret_visible,
         } = prepaint;
@@ -897,6 +959,25 @@ impl PrepaintElements {
     }
 }
 
+fn editable_document_offset(document: &WrappedLine, line_height: Pixels) -> Point<Pixels> {
+    let mut left = Pixels::ZERO;
+
+    for caret in [
+        CaretPosition::new(0, CaretAffinity::Downstream),
+        CaretPosition::new(document.text.len(), CaretAffinity::Upstream),
+    ] {
+        if let Some(position) = document.position_for_caret(caret, line_height) {
+            left = left.min(position.x);
+        }
+    }
+
+    for bounds in document.selection_bounds(0..document.text.len(), line_height) {
+        left = left.min(bounds.left());
+    }
+
+    point(-left, Pixels::ZERO)
+}
+
 fn build_quad_over_text(
     containing_range: &Range<usize>,
     document: &WrappedLine,
@@ -933,6 +1014,9 @@ mod tests {
         padding: Pixels,
         width: Pixels,
         wrap: bool,
+        direction: Direction,
+        unicode_bidi: Option<UnicodeBidi>,
+        placeholder: Option<&'static str>,
     }
 
     impl Render for BidiInputView {
@@ -956,6 +1040,14 @@ mod tests {
                     .marked_color(MARKED_COLOR)
                     .text_size(px(20.))
                     .line_height(px(if self.wrap { 27.5 } else { 28. }))
+                    .direction(self.direction)
+                    .text_start()
+                    .when_some(self.unicode_bidi, |input, unicode_bidi| {
+                        input.unicode_bidi(unicode_bidi)
+                    })
+                    .when_some(self.placeholder, |input, placeholder| {
+                        input.placeholder(placeholder)
+                    })
                     .when(self.wrap, |input| {
                         input.flex_col().whitespace_normal().overflow_y_scroll()
                     })
@@ -976,6 +1068,30 @@ mod tests {
 
     impl BidiInputFixture {
         fn new(text: &str, padding: f32, width: f32, wrap: bool, scale: f32) -> Self {
+            Self::new_with_direction(text, padding, width, wrap, scale, Direction::Auto)
+        }
+
+        fn new_with_direction(
+            text: &str,
+            padding: f32,
+            width: f32,
+            wrap: bool,
+            scale: f32,
+            direction: Direction,
+        ) -> Self {
+            Self::new_with_configuration(text, padding, width, wrap, scale, direction, None, None)
+        }
+
+        fn new_with_configuration(
+            text: &str,
+            padding: f32,
+            width: f32,
+            wrap: bool,
+            scale: f32,
+            direction: Direction,
+            unicode_bidi: Option<UnicodeBidi>,
+            placeholder: Option<&'static str>,
+        ) -> Self {
             let system = ParleyTextSystem::new_with_system_font(SystemFonts::Skip, "IBM Plex Sans")
                 .with_fallback_families(["IBM Plex Sans", "Noto Sans Hebrew", "Noto Sans Arabic"]);
             system
@@ -1006,6 +1122,9 @@ mod tests {
                         padding: px(padding),
                         width: px(width),
                         wrap,
+                        direction,
+                        unicode_bidi,
+                        placeholder,
                     })
                 })
                 .unwrap();
@@ -1023,11 +1142,12 @@ mod tests {
         fn origin(&mut self) -> Point<Pixels> {
             let bounds = only_quad(&mut self.context, self.window.into(), INPUT_COLOR)
                 .map(|value| px(value.as_f32() / self.scale));
-            let scroll = self
-                .context
-                .update(|context| self.input.read(context).layout_data.scroll_bounds.origin);
+            let (scroll, document_offset) = self.context.update(|context| {
+                let layout = &self.input.read(context).layout_data;
+                (layout.scroll_bounds.origin, layout.document_offset)
+            });
 
-            bounds.origin + point(self.padding, self.padding) - scroll
+            bounds.origin + point(self.padding, self.padding) - scroll + document_offset
         }
 
         fn document(&mut self) -> Arc<WrappedLine> {
@@ -1214,6 +1334,111 @@ mod tests {
         fixture.assert_selection(15, 15);
         fixture.drag(13);
         fixture.assert_selection(15, 13);
+    }
+
+    #[test]
+    fn explicit_rtl_aligns_editable_ltr_text_and_keeps_interaction_geometry() {
+        let mut fixture = BidiInputFixture::new_with_direction(
+            "English 123",
+            8.0,
+            320.0,
+            false,
+            1.0,
+            Direction::RightToLeft,
+        );
+        let document = fixture.document();
+        assert_eq!(
+            document.visual_lines()[0].direction,
+            gpui::ResolvedDirection::RightToLeft
+        );
+        assert!(document.selection_bounds(0..7, px(28.0))[0].origin.x > px(150.0));
+
+        let position = fixture.point(3);
+        fixture.down(position);
+        fixture.assert_selection(3, 3);
+        fixture.drag(7);
+        fixture.assert_selection(3, 7);
+        fixture.up(7);
+    }
+
+    #[test]
+    fn auto_editable_direction_ignores_placeholder_text() {
+        let mut fixture = BidiInputFixture::new_with_configuration(
+            "",
+            8.0,
+            320.0,
+            false,
+            1.0,
+            Direction::Auto,
+            None,
+            Some("مرحبا"),
+        );
+
+        assert_eq!(
+            fixture.document().visual_lines()[0].direction,
+            gpui::ResolvedDirection::LeftToRight
+        );
+    }
+
+    #[test]
+    fn rtl_editable_overflow_starts_at_the_right_and_remains_reachable() {
+        let mut fixture = BidiInputFixture::new_with_direction(
+            "English text that is much wider than the input",
+            8.0,
+            120.0,
+            false,
+            1.0,
+            Direction::RightToLeft,
+        );
+        let (scroll, document_offset, next_scroll, content_size) =
+            fixture.context.update(|context| {
+                let layout = &fixture.input.read(context).layout_data;
+                (
+                    layout.scroll_bounds.origin,
+                    layout.document_offset,
+                    layout.next_scroll_offset,
+                    layout.state.size,
+                )
+            });
+        assert!(document_offset.x > Pixels::ZERO);
+        assert!(
+            scroll.x > Pixels::ZERO
+                && scroll.x <= document_offset.x
+                && document_offset.x - scroll.x <= px(2.01),
+            "scroll={scroll:?}, offset={document_offset:?}, next={next_scroll:?}, content={content_size:?}"
+        );
+
+        fixture.scroll(Point::default());
+        let position = fixture.point(3);
+        fixture.down(position);
+        fixture.assert_selection(3, 3);
+        fixture.up(3);
+    }
+
+    #[test]
+    fn plaintext_paragraph_direction_does_not_change_ltr_scrolling_direction() {
+        let mut fixture = BidiInputFixture::new_with_configuration(
+            "اسماء.شبكة/%20/test/",
+            8.0,
+            120.0,
+            false,
+            1.0,
+            Direction::LeftToRight,
+            Some(UnicodeBidi::Plaintext),
+            None,
+        );
+        let document = fixture.document();
+        let (scroll, document_offset) = fixture.context.update(|context| {
+            let layout = &fixture.input.read(context).layout_data;
+            (layout.scroll_bounds.origin, layout.document_offset)
+        });
+
+        assert_eq!(
+            document.visual_lines()[0].direction,
+            gpui::ResolvedDirection::RightToLeft
+        );
+        assert_eq!(document_offset, Point::default());
+        assert_eq!(scroll.x, Pixels::ZERO);
     }
 
     #[test]

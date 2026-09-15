@@ -26,3 +26,7 @@ gpui_platform = { workspace = true, features = ["wayland", "x11"] }
 [[example]]
 name = "editable_text"
 path = "examples/editable_text.rs"
+
+[[example]]
+name = "direction"
+path = "examples/direction.rs"

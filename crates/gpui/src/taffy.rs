@@ -1,6 +1,7 @@
 use crate::{
-    AbsoluteLength, App, Bounds, DefiniteLength, Display, Edges, GridTemplate, InlineContent,
-    Length, Pixels, Point, Position, Size, Style, VerticalAlign, Window, size,
+    AbsoluteLength, App, Bounds, DefiniteLength, Direction, Display, Edges, GridTemplate,
+    InlineContent, Length, Pixels, Point, Position, ResolvedDirection, SharedString, Size, Style,
+    UnicodeBidi, VerticalAlign, Window, size,
     util::{
         ceil_to_device_pixel, round_half_toward_zero, round_stroke_to_device_pixel,
         round_to_device_pixel,
@@ -8,7 +9,7 @@ use crate::{
 };
 
 use collections::{FxHashMap, FxHashSet};
-use std::{fmt::Debug, ops::Range, sync::Arc};
+use std::{cell::Cell, fmt::Debug, ops::Range, rc::Rc, sync::Arc};
 use taffy::{
     TaffyTree, TraversePartialTree as _,
     geometry::{Point as TaffyPoint, Rect as TaffyRect, Size as TaffySize},
@@ -28,17 +29,64 @@ type NodeMeasureFn = StackSafe<Box<MeasureFn>>;
 
 struct NodeContext {
     measure: NodeMeasureFn,
+    unicode_bidi: UnicodeBidi,
 }
+
+#[derive(Clone)]
+pub(crate) struct LayoutDirectionHandle(Rc<Cell<ResolvedDirection>>);
+
+impl LayoutDirectionHandle {
+    fn new() -> Self {
+        Self(Rc::new(Cell::new(ResolvedDirection::LeftToRight)))
+    }
+
+    pub(crate) fn get(&self) -> ResolvedDirection {
+        self.0.get()
+    }
+
+    fn set(&self, direction: ResolvedDirection) {
+        self.0.set(direction);
+    }
+}
+
+struct DirectionMetadata {
+    authored: Direction,
+    unicode_bidi: UnicodeBidi,
+    unicode_bidi_explicit: bool,
+    source_text: Option<SharedString>,
+    auto_direction_hint: Option<ResolvedDirection>,
+    actual_children: Vec<LayoutId>,
+    logical_children: Vec<LayoutId>,
+    resolved: LayoutDirectionHandle,
+}
+
+impl DirectionMetadata {
+    fn effective_unicode_bidi(&self) -> UnicodeBidi {
+        if self.unicode_bidi_explicit {
+            return self.unicode_bidi;
+        }
+
+        match self.authored {
+            Direction::LeftToRight | Direction::RightToLeft | Direction::Auto => {
+                UnicodeBidi::Isolate
+            }
+            Direction::Inherit => UnicodeBidi::Normal,
+        }
+    }
+}
+
 pub struct TaffyLayoutEngine {
     taffy: TaffyTree<NodeContext>,
     absolute_layout_bounds: FxHashMap<LayoutId, Bounds<Pixels>>,
     /// Unrounded absolute border-box top-left per-node coordinate in device pixels.
     absolute_outer_origins: FxHashMap<LayoutId, Point<f32>>,
     computed_layouts: FxHashSet<LayoutId>,
+    computed_available_spaces: FxHashMap<LayoutId, Size<AvailableSpace>>,
     vertical_alignments: FxHashMap<LayoutId, VerticalAlign>,
     pub(crate) inline_content: FxHashMap<LayoutId, Arc<InlineContent>>,
     pub(crate) inline_fragments: FxHashMap<LayoutId, Arc<[Bounds<Pixels>]>>,
     display_and_position: FxHashMap<LayoutId, (Display, Position)>,
+    directions: FxHashMap<LayoutId, DirectionMetadata>,
     layout_bounds_scratch_space: Vec<LayoutId>,
 }
 
@@ -53,10 +101,12 @@ impl TaffyLayoutEngine {
             absolute_layout_bounds: FxHashMap::default(),
             absolute_outer_origins: FxHashMap::default(),
             computed_layouts: FxHashSet::default(),
+            computed_available_spaces: FxHashMap::default(),
             vertical_alignments: FxHashMap::default(),
             inline_content: FxHashMap::default(),
             inline_fragments: FxHashMap::default(),
             display_and_position: FxHashMap::default(),
+            directions: FxHashMap::default(),
             layout_bounds_scratch_space: Vec::new(),
         }
     }
@@ -66,10 +116,12 @@ impl TaffyLayoutEngine {
         self.absolute_layout_bounds.clear();
         self.absolute_outer_origins.clear();
         self.computed_layouts.clear();
+        self.computed_available_spaces.clear();
         self.vertical_alignments.clear();
         self.inline_content.clear();
         self.inline_fragments.clear();
         self.display_and_position.clear();
+        self.directions.clear();
     }
 
     pub fn request_layout(
@@ -80,6 +132,9 @@ impl TaffyLayoutEngine {
         children: &[LayoutId],
     ) -> LayoutId {
         let vertical_align = style.vertical_align;
+        let direction = style.direction;
+        let unicode_bidi = style.unicode_bidi;
+        let unicode_bidi_explicit = style.unicode_bidi_explicit;
         let taffy_style = style.to_taffy(rem_size, scale_factor);
 
         let node_id = if children.is_empty() {
@@ -98,6 +153,13 @@ impl TaffyLayoutEngine {
         self.record_vertical_align(node_id, vertical_align);
         self.display_and_position
             .insert(node_id, (style.display, style.position));
+        self.record_direction(
+            node_id,
+            direction,
+            unicode_bidi,
+            unicode_bidi_explicit,
+            children,
+        );
         node_id
     }
 
@@ -115,20 +177,200 @@ impl TaffyLayoutEngine {
         + 'static,
     ) -> LayoutId {
         let vertical_align = style.vertical_align;
+        let direction = style.direction;
+        let unicode_bidi = style.unicode_bidi;
+        let unicode_bidi_explicit = style.unicode_bidi_explicit;
         let taffy_style = style.to_taffy(rem_size, scale_factor);
+        let unicode_bidi = if unicode_bidi_explicit {
+            unicode_bidi
+        } else if direction == Direction::Inherit {
+            UnicodeBidi::Normal
+        } else {
+            UnicodeBidi::Isolate
+        };
         let measure = Box::new(measure) as Box<MeasureFn>;
         #[cfg(feature = "stacker")]
         let measure = StackSafe::new(measure);
 
         let node_id = self
             .taffy
-            .new_leaf_with_context(taffy_style, NodeContext { measure })
+            .new_leaf_with_context(
+                taffy_style,
+                NodeContext {
+                    measure,
+                    unicode_bidi,
+                },
+            )
             .expect(EXPECT_MESSAGE)
             .into();
         self.record_vertical_align(node_id, vertical_align);
         self.display_and_position
             .insert(node_id, (style.display, style.position));
+        self.record_direction(node_id, direction, unicode_bidi, unicode_bidi_explicit, &[]);
         node_id
+    }
+
+    fn record_direction(
+        &mut self,
+        node_id: LayoutId,
+        authored: Direction,
+        unicode_bidi: UnicodeBidi,
+        unicode_bidi_explicit: bool,
+        children: &[LayoutId],
+    ) {
+        self.directions.insert(
+            node_id,
+            DirectionMetadata {
+                authored,
+                unicode_bidi,
+                unicode_bidi_explicit,
+                source_text: None,
+                auto_direction_hint: None,
+                actual_children: children.to_vec(),
+                logical_children: children.to_vec(),
+                resolved: LayoutDirectionHandle::new(),
+            },
+        );
+    }
+
+    pub(crate) fn set_logical_children(&mut self, node_id: LayoutId, children: &[LayoutId]) {
+        if let Some(metadata) = self.directions.get_mut(&node_id) {
+            metadata.logical_children.clear();
+            metadata.logical_children.extend_from_slice(children);
+        }
+    }
+
+    pub(crate) fn set_direction_text(&mut self, node_id: LayoutId, text: SharedString) {
+        if let Some(metadata) = self.directions.get_mut(&node_id) {
+            metadata.source_text = Some(text);
+        }
+    }
+
+    pub(crate) fn set_auto_direction_hint(
+        &mut self,
+        node_id: LayoutId,
+        direction: Option<ResolvedDirection>,
+    ) {
+        if let Some(metadata) = self.directions.get_mut(&node_id) {
+            metadata.auto_direction_hint = direction;
+        }
+    }
+
+    pub(crate) fn auto_direction_contribution(
+        &self,
+        node_id: LayoutId,
+    ) -> Option<ResolvedDirection> {
+        let metadata = self.directions.get(&node_id)?;
+        (metadata.authored == Direction::Inherit)
+            .then(|| self.auto_direction(node_id))
+            .flatten()
+    }
+
+    pub(crate) fn direction_handle(&self, node_id: LayoutId) -> LayoutDirectionHandle {
+        self.directions[&node_id].resolved.clone()
+    }
+
+    pub(crate) fn directionality(&self, node_id: LayoutId) -> (ResolvedDirection, UnicodeBidi) {
+        let metadata = &self.directions[&node_id];
+
+        (metadata.resolved.get(), metadata.effective_unicode_bidi())
+    }
+
+    fn auto_direction(&self, node_id: LayoutId) -> Option<ResolvedDirection> {
+        let metadata = self.directions.get(&node_id)?;
+
+        if let Some(text) = &metadata.source_text
+            && let Some(direction) = first_strong_direction(text)
+        {
+            return Some(direction);
+        }
+
+        if let Some(direction) = metadata.auto_direction_hint {
+            return Some(direction);
+        }
+
+        for child_id in &metadata.logical_children {
+            let Some(child) = self.directions.get(child_id) else {
+                continue;
+            };
+
+            if child.authored != Direction::Inherit {
+                continue;
+            }
+
+            if let Some(direction) = self.auto_direction(*child_id) {
+                return Some(direction);
+            }
+        }
+
+        None
+    }
+
+    fn resolve_directions(
+        &mut self,
+        root_id: LayoutId,
+        inherited: ResolvedDirection,
+    ) -> Vec<LayoutId> {
+        let mut visited = FxHashSet::default();
+        let mut changed = Vec::new();
+        self.resolve_direction_subtree(root_id, inherited, &mut visited, &mut changed);
+        changed
+    }
+
+    fn resolve_direction_subtree(
+        &mut self,
+        node_id: LayoutId,
+        inherited: ResolvedDirection,
+        visited: &mut FxHashSet<LayoutId>,
+        changed: &mut Vec<LayoutId>,
+    ) {
+        if !visited.insert(node_id) {
+            return;
+        }
+
+        let Some(metadata) = self.directions.get(&node_id) else {
+            return;
+        };
+        let resolved = match metadata.authored {
+            Direction::Inherit => inherited,
+            Direction::LeftToRight => ResolvedDirection::LeftToRight,
+            Direction::RightToLeft => ResolvedDirection::RightToLeft,
+            Direction::Auto => self
+                .auto_direction(node_id)
+                .unwrap_or(ResolvedDirection::LeftToRight),
+        };
+        let actual_children = metadata.actual_children.clone();
+        let logical_children = metadata.logical_children.clone();
+        if metadata.resolved.get() != resolved {
+            changed.push(node_id);
+        }
+        metadata.resolved.set(resolved);
+
+        let taffy_direction = match resolved {
+            ResolvedDirection::LeftToRight => taffy::style::Direction::Ltr,
+            ResolvedDirection::RightToLeft => taffy::style::Direction::Rtl,
+        };
+        if self
+            .taffy
+            .style(node_id.into())
+            .expect(EXPECT_MESSAGE)
+            .direction
+            != taffy_direction
+        {
+            let mut style = self
+                .taffy
+                .style(node_id.into())
+                .expect(EXPECT_MESSAGE)
+                .clone();
+            style.direction = taffy_direction;
+            self.taffy
+                .set_style(node_id.into(), style)
+                .expect(EXPECT_MESSAGE);
+        }
+
+        for child_id in actual_children.into_iter().chain(logical_children) {
+            self.resolve_direction_subtree(child_id, resolved, visited, changed);
+        }
     }
 
     fn record_vertical_align(&mut self, node_id: LayoutId, vertical_align: VerticalAlign) {
@@ -253,6 +495,7 @@ impl TaffyLayoutEngine {
         &mut self,
         id: LayoutId,
         available_space: Size<AvailableSpace>,
+        inherited_direction: ResolvedDirection,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -267,22 +510,55 @@ impl TaffyLayoutEngine {
         // }
         //
 
-        if !self.computed_layouts.insert(id) {
-            let stack = &mut self.layout_bounds_scratch_space;
-            stack.push(id);
-            while let Some(id) = stack.pop() {
-                self.absolute_layout_bounds.remove(&id);
-                self.absolute_outer_origins.remove(&id);
-                stack.extend(
-                    self.taffy
-                        .children(id.into())
-                        .expect(EXPECT_MESSAGE)
-                        .into_iter()
-                        .map(LayoutId::from),
-                );
-            }
+        let changed = self.resolve_directions(id, inherited_direction);
+        let changed_layouts = changed
+            .into_iter()
+            .filter(|changed_id| *changed_id != id)
+            .filter_map(|changed_id| {
+                self.computed_available_spaces
+                    .get(&changed_id)
+                    .copied()
+                    .map(|available_space| (changed_id, available_space))
+            })
+            .collect::<Vec<_>>();
+
+        for (changed_id, available_space) in changed_layouts {
+            self.clear_cached_bounds(changed_id);
+            self.compute_resolved_layout(changed_id, available_space, window, cx);
         }
 
+        self.computed_available_spaces.insert(id, available_space);
+
+        if !self.computed_layouts.insert(id) {
+            self.clear_cached_bounds(id);
+        }
+
+        self.compute_resolved_layout(id, available_space, window, cx);
+    }
+
+    fn clear_cached_bounds(&mut self, id: LayoutId) {
+        let stack = &mut self.layout_bounds_scratch_space;
+        stack.push(id);
+        while let Some(id) = stack.pop() {
+            self.absolute_layout_bounds.remove(&id);
+            self.absolute_outer_origins.remove(&id);
+            stack.extend(
+                self.taffy
+                    .children(id.into())
+                    .expect(EXPECT_MESSAGE)
+                    .into_iter()
+                    .map(LayoutId::from),
+            );
+        }
+    }
+
+    fn compute_resolved_layout(
+        &mut self,
+        id: LayoutId,
+        available_space: Size<AvailableSpace>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         let scale_factor = window.scale_factor();
 
         let transform = |v: AvailableSpace| match v {
@@ -301,7 +577,7 @@ impl TaffyLayoutEngine {
             .compute_layout_with_measure(
                 id.into(),
                 available_space.into(),
-                |known_dimensions, available_space, _id, node_context, _style| {
+                |known_dimensions, available_space, _id, node_context, style| {
                     let Some(node_context) = node_context else {
                         return taffy::geometry::Size::default();
                     };
@@ -324,8 +600,21 @@ impl TaffyLayoutEngine {
                         untransform(available_space.height),
                     );
 
+                    let resolved_direction = match style.direction {
+                        taffy::style::Direction::Ltr => ResolvedDirection::LeftToRight,
+                        taffy::style::Direction::Rtl => ResolvedDirection::RightToLeft,
+                    };
+                    let previous_direction =
+                        std::mem::replace(&mut window.measurement_direction, resolved_direction);
+                    let previous_unicode_bidi = std::mem::replace(
+                        &mut window.measurement_unicode_bidi,
+                        node_context.unicode_bidi,
+                    );
                     let measured_size: Size<Pixels> =
                         (node_context.measure)(known_dimensions, available_space, window, cx);
+                    window.measurement_direction = previous_direction;
+                    window.measurement_unicode_bidi = previous_unicode_bidi;
+
                     snap_measured_size_to_device_pixels(measured_size, scale_factor).into()
                 },
             )
@@ -660,6 +949,7 @@ impl ToTaffy<taffy::style::Style> for Style {
 
         taffy::style::Style {
             display: self.display.into(),
+            direction: taffy::style::Direction::Ltr,
             overflow: self.overflow.into(),
             scrollbar_width: self.scrollbar_width.to_taffy(rem_size, scale_factor),
             position: self.position.into(),
@@ -702,6 +992,17 @@ impl ToTaffy<taffy::style::Style> for Style {
             ..Default::default()
         }
     }
+}
+
+fn first_strong_direction(text: &str) -> Option<ResolvedDirection> {
+    use unicode_bidi::BidiClass;
+
+    text.chars()
+        .find_map(|character| match unicode_bidi::bidi_class(character) {
+            BidiClass::L => Some(ResolvedDirection::LeftToRight),
+            BidiClass::R | BidiClass::AL => Some(ResolvedDirection::RightToLeft),
+            _ => None,
+        })
 }
 
 impl ToTaffy<f32> for AbsoluteLength {
@@ -929,6 +1230,125 @@ impl From<Size<Pixels>> for Size<AvailableSpace> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::px;
+
+    fn direction_style(direction: Direction) -> Style {
+        Style {
+            direction,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn direction_defaults_to_ltr_and_inherits_through_overrides() {
+        let mut engine = TaffyLayoutEngine::new();
+        let inherited_grandchild =
+            engine.request_layout(direction_style(Direction::Inherit), px(16.0), 1.0, &[]);
+        let rtl_child = engine.request_layout(
+            direction_style(Direction::RightToLeft),
+            px(16.0),
+            1.0,
+            &[inherited_grandchild],
+        );
+        let root = engine.request_layout(
+            direction_style(Direction::Inherit),
+            px(16.0),
+            1.0,
+            &[rtl_child],
+        );
+
+        let _ = engine.resolve_directions(root, ResolvedDirection::LeftToRight);
+
+        assert_eq!(
+            engine.direction_handle(root).get(),
+            ResolvedDirection::LeftToRight
+        );
+        assert_eq!(
+            engine.direction_handle(rtl_child).get(),
+            ResolvedDirection::RightToLeft
+        );
+        assert_eq!(
+            engine.taffy.style(rtl_child.into()).unwrap().direction,
+            taffy::style::Direction::Rtl
+        );
+        assert_eq!(
+            engine.direction_handle(inherited_grandchild).get(),
+            ResolvedDirection::RightToLeft
+        );
+    }
+
+    #[test]
+    fn auto_direction_uses_first_eligible_strong_descendant() {
+        let mut engine = TaffyLayoutEngine::new();
+        let neutral =
+            engine.request_layout(direction_style(Direction::Inherit), px(16.0), 1.0, &[]);
+        engine.set_direction_text(neutral, "123 …".into());
+        let arabic = engine.request_layout(direction_style(Direction::Inherit), px(16.0), 1.0, &[]);
+        engine.set_direction_text(arabic, "مرحبا".into());
+        let root = engine.request_layout(
+            direction_style(Direction::Auto),
+            px(16.0),
+            1.0,
+            &[neutral, arabic],
+        );
+
+        let _ = engine.resolve_directions(root, ResolvedDirection::LeftToRight);
+
+        assert_eq!(
+            engine.direction_handle(root).get(),
+            ResolvedDirection::RightToLeft
+        );
+        assert_eq!(
+            engine.direction_handle(neutral).get(),
+            ResolvedDirection::RightToLeft
+        );
+    }
+
+    #[test]
+    fn auto_direction_excludes_directional_subtrees_and_falls_back_to_ltr() {
+        let mut engine = TaffyLayoutEngine::new();
+        let explicit_child =
+            engine.request_layout(direction_style(Direction::RightToLeft), px(16.0), 1.0, &[]);
+        engine.set_direction_text(explicit_child, "مرحبا".into());
+        let root = engine.request_layout(
+            direction_style(Direction::Auto),
+            px(16.0),
+            1.0,
+            &[explicit_child],
+        );
+
+        let _ = engine.resolve_directions(root, ResolvedDirection::LeftToRight);
+
+        assert_eq!(
+            engine.direction_handle(root).get(),
+            ResolvedDirection::LeftToRight
+        );
+        assert_eq!(
+            engine.direction_handle(explicit_child).get(),
+            ResolvedDirection::RightToLeft
+        );
+    }
+
+    #[test]
+    fn auto_direction_updates_when_source_text_changes() {
+        let mut engine = TaffyLayoutEngine::new();
+        let text = engine.request_layout(direction_style(Direction::Inherit), px(16.0), 1.0, &[]);
+        let root = engine.request_layout(direction_style(Direction::Auto), px(16.0), 1.0, &[text]);
+        engine.set_direction_text(text, "English".into());
+        let _ = engine.resolve_directions(root, ResolvedDirection::LeftToRight);
+        assert_eq!(
+            engine.direction_handle(root).get(),
+            ResolvedDirection::LeftToRight
+        );
+
+        engine.set_direction_text(text, "مرحبا".into());
+        let changed = engine.resolve_directions(root, ResolvedDirection::LeftToRight);
+        assert!(changed.contains(&root));
+        assert_eq!(
+            engine.direction_handle(root).get(),
+            ResolvedDirection::RightToLeft
+        );
+    }
 
     #[test]
     fn auto_sized_axes_snap_padding_proportionally() {

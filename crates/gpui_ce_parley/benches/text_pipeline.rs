@@ -1,7 +1,7 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use gpui::{
-    FontFallbacks, GlyphRenderMode, PlatformTextSystem, PreparedRasterStyle, RenderGlyphParams,
-    TextLayoutRequest, TextRun, TextSystem, font, px,
+    FontFallbacks, GlyphRenderMode, ParagraphDirection, PlatformTextSystem, PreparedRasterStyle,
+    RenderGlyphParams, TextAlign, TextLayoutRequest, TextRun, TextSystem, UnicodeBidi, font, px,
 };
 use gpui_ce_parley::{ParleyTextSystem, SystemFonts};
 use std::borrow::Cow;
@@ -52,6 +52,10 @@ fn raster_case() -> (TextSystem, RenderGlyphParams) {
         runs: &[run],
         wrap_width: None,
         line_clamp: None,
+        alignment_width: None,
+        text_align: TextAlign::Left,
+        direction: ParagraphDirection::Auto,
+        unicode_bidi: UnicodeBidi::Normal,
     });
 
     let fragment = &layout.paint_fragments[0];
@@ -92,6 +96,10 @@ fn bench_text_pipeline(criterion: &mut Criterion) {
                 runs: &runs,
                 wrap_width: None,
                 line_clamp: None,
+                alignment_width: None,
+                text_align: TextAlign::Left,
+                direction: ParagraphDirection::Auto,
+                unicode_bidi: UnicodeBidi::Normal,
             })
         });
     });
@@ -109,6 +117,10 @@ fn bench_text_pipeline(criterion: &mut Criterion) {
                 runs: &runs,
                 wrap_width: None,
                 line_clamp: None,
+                alignment_width: None,
+                text_align: TextAlign::Left,
+                direction: ParagraphDirection::Auto,
+                unicode_bidi: UnicodeBidi::Normal,
             })
         });
     });
@@ -126,6 +138,10 @@ fn bench_text_pipeline(criterion: &mut Criterion) {
                 runs: &runs,
                 wrap_width: Some(px(480.0)),
                 line_clamp: None,
+                alignment_width: None,
+                text_align: TextAlign::Left,
+                direction: ParagraphDirection::Auto,
+                unicode_bidi: UnicodeBidi::Normal,
             })
         });
     });
@@ -145,6 +161,10 @@ fn bench_text_pipeline(criterion: &mut Criterion) {
                     runs: &runs,
                     wrap_width: None,
                     line_clamp: None,
+                    alignment_width: None,
+                    text_align: TextAlign::Left,
+                    direction: ParagraphDirection::Auto,
+                    unicode_bidi: UnicodeBidi::Normal,
                 })
             },
             BatchSize::SmallInput,

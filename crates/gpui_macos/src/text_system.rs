@@ -1152,6 +1152,10 @@ mod renderer {
                     }],
                     wrap_width: None,
                     line_clamp: None,
+                    alignment_width: None,
+                    text_align: gpui::TextAlign::Left,
+                    direction: gpui::ParagraphDirection::Auto,
+                    unicode_bidi: gpui::UnicodeBidi::Normal,
                 });
                 let fragment = &layout.paint_fragments[0];
 
@@ -1270,6 +1274,10 @@ mod renderer {
                         }],
                         wrap_width: None,
                         line_clamp: None,
+                        alignment_width: None,
+                        text_align: gpui::TextAlign::Left,
+                        direction: gpui::ParagraphDirection::Auto,
+                        unicode_bidi: gpui::UnicodeBidi::Normal,
                     });
                     let fragment = layout
                         .paint_fragments
@@ -1636,6 +1644,10 @@ mod renderer {
                 }],
                 wrap_width: None,
                 line_clamp: None,
+                alignment_width: None,
+                text_align: gpui::TextAlign::Left,
+                direction: gpui::ParagraphDirection::Auto,
+                unicode_bidi: gpui::UnicodeBidi::Normal,
             });
             let directional_glyph = directional_layout
                 .paint_fragments

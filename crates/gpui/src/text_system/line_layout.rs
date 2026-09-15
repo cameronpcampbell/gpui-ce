@@ -1,7 +1,8 @@
 use crate::{
-    Bounds, FontId, GlyphId, InlineBoxRequest, InlineLayoutRequest, InlineTextStyle, Pixels,
-    PlatformTextSystem, Point, SharedString, Size, StrikethroughStyle, TextAlign,
-    TextLayoutRequest, TextRun, UnderlineStyle, VerticalAlign,
+    Bounds, FontId, GlyphId, InlineBidiScope, InlineBoxRequest, InlineLayoutRequest,
+    InlineTextStyle, ParagraphDirection, Pixels, PlatformTextSystem, Point, SharedString, Size,
+    StrikethroughStyle, TextAlign, TextLayoutOptions, TextLayoutRequest, TextRun, UnderlineStyle,
+    UnicodeBidi, VerticalAlign,
 };
 use collections::FxHashMap;
 use palette::Hsla;
@@ -358,6 +359,10 @@ pub struct VisualLine {
     pub fragment_range: Range<usize>,
     /// The row's advance before alignment.
     pub advance: Pixels,
+    /// Horizontal offset assigned by backend layout.
+    pub offset: Pixels,
+    /// Base direction used to order and align this visual line.
+    pub direction: crate::ResolvedDirection,
 }
 
 /// GPUI paint properties carried through Parley's brush.
@@ -947,26 +952,26 @@ impl LineLayoutCache {
         curr_frame.used_inline_layouts.clear();
     }
 
-    pub fn layout_wrapped_line<Text>(
+    pub fn layout_wrapped_line_with_options<Text>(
         &self,
         text: Text,
         font_size: Pixels,
         runs: &[TextRun],
-        wrap_width: Option<Pixels>,
-        max_lines: Option<usize>,
+        options: TextLayoutOptions,
     ) -> Arc<WrappedLineLayout>
     where
         Text: AsRef<str>,
         SharedString: From<Text>,
     {
         self.sync_font_generation();
+        let wrap_width = options.wrap_width;
+        let max_lines = options.line_clamp;
         let shaping_runs = runs.iter().map(ShapingRun::from).collect::<SmallVec<_>>();
         let key = &CacheKeyRef {
             text: text.as_ref(),
             font_size,
             runs: &shaping_runs,
-            wrap_width,
-            max_lines,
+            options,
         } as &dyn AsCacheKeyRef;
 
         let current_frame = self.current_frame.upgradable_read();
@@ -985,18 +990,22 @@ impl LineLayoutCache {
         } else {
             drop(current_frame);
             let text = SharedString::from(text);
-            let document_layout =
-                if wrap_width.is_some() || max_lines.is_some() || text.contains('\n') {
-                    Arc::new(self.platform_text_system.layout_text(TextLayoutRequest {
-                        text: &text,
-                        font_size,
-                        runs,
-                        wrap_width,
-                        line_clamp: max_lines,
-                    }))
-                } else {
-                    self.layout_line::<&SharedString>(&text, font_size, runs)
-                };
+            let document_layout = if options != TextLayoutOptions::default() || text.contains('\n')
+            {
+                Arc::new(self.platform_text_system.layout_text(TextLayoutRequest {
+                    text: &text,
+                    font_size,
+                    runs,
+                    wrap_width,
+                    line_clamp: max_lines,
+                    alignment_width: options.alignment_width,
+                    text_align: options.text_align,
+                    direction: options.direction,
+                    unicode_bidi: options.unicode_bidi,
+                }))
+            } else {
+                self.layout_line::<&SharedString>(&text, font_size, runs)
+            };
 
             let layout = Arc::new(WrappedLineLayout {
                 layout: document_layout,
@@ -1006,8 +1015,7 @@ impl LineLayoutCache {
                 text,
                 font_size,
                 runs: shaping_runs,
-                wrap_width,
-                max_lines,
+                options,
             });
 
             let mut current_frame = self.current_frame.write();
@@ -1036,8 +1044,7 @@ impl LineLayoutCache {
             text: text.as_ref(),
             font_size,
             runs: &shaping_runs,
-            wrap_width: None,
-            max_lines: None,
+            options: TextLayoutOptions::default(),
         } as &dyn AsCacheKeyRef;
 
         let current_frame = self.current_frame.upgradable_read();
@@ -1058,14 +1065,17 @@ impl LineLayoutCache {
                 runs,
                 wrap_width: None,
                 line_clamp: None,
+                alignment_width: None,
+                text_align: TextAlign::Start,
+                direction: ParagraphDirection::Auto,
+                unicode_bidi: UnicodeBidi::Normal,
             });
 
             let key = Arc::new(CacheKey {
                 text,
                 font_size,
                 runs: shaping_runs,
-                wrap_width: None,
-                max_lines: None,
+                options: TextLayoutOptions::default(),
             });
             let layout = Arc::new(layout);
             current_frame.lines.insert(key.clone(), layout.clone());
@@ -1124,7 +1134,11 @@ struct InlineCacheKey {
     text_metrics: InlineTextMetrics,
     wrap_width: Option<Pixels>,
     line_clamp: Option<usize>,
+    alignment_width: Option<Pixels>,
     text_align: TextAlign,
+    direction: ParagraphDirection,
+    unicode_bidi: UnicodeBidi,
+    bidi_scopes: Vec<InlineBidiScope>,
 }
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -1138,7 +1152,11 @@ struct InlineCacheKeyRef<'a> {
     text_metrics: InlineTextMetrics,
     wrap_width: Option<Pixels>,
     line_clamp: Option<usize>,
+    alignment_width: Option<Pixels>,
     text_align: TextAlign,
+    direction: ParagraphDirection,
+    unicode_bidi: UnicodeBidi,
+    bidi_scopes: &'a [InlineBidiScope],
 }
 
 impl From<InlineLayoutRequest<'_>> for InlineCacheKey {
@@ -1153,7 +1171,11 @@ impl From<InlineLayoutRequest<'_>> for InlineCacheKey {
             text_metrics: request.text_metrics,
             wrap_width: request.wrap_width,
             line_clamp: request.line_clamp,
+            alignment_width: request.alignment_width,
             text_align: request.text_align,
+            direction: request.direction,
+            unicode_bidi: request.unicode_bidi,
+            bidi_scopes: request.bidi_scopes.to_vec(),
         }
     }
 }
@@ -1170,7 +1192,11 @@ impl<'a> From<InlineLayoutRequest<'a>> for InlineCacheKeyRef<'a> {
             text_metrics: request.text_metrics,
             wrap_width: request.wrap_width,
             line_clamp: request.line_clamp,
+            alignment_width: request.alignment_width,
             text_align: request.text_align,
+            direction: request.direction,
+            unicode_bidi: request.unicode_bidi,
+            bidi_scopes: request.bidi_scopes,
         }
     }
 }
@@ -1187,7 +1213,11 @@ impl AsInlineCacheKeyRef for InlineCacheKey {
             text_metrics: self.text_metrics,
             wrap_width: self.wrap_width,
             line_clamp: self.line_clamp,
+            alignment_width: self.alignment_width,
             text_align: self.text_align,
+            direction: self.direction,
+            unicode_bidi: self.unicode_bidi,
+            bidi_scopes: &self.bidi_scopes,
         }
     }
 }
@@ -1239,8 +1269,7 @@ struct CacheKey {
     text: SharedString,
     font_size: Pixels,
     runs: SmallVec<[ShapingRun; 1]>,
-    wrap_width: Option<Pixels>,
-    max_lines: Option<usize>,
+    options: TextLayoutOptions,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -1248,8 +1277,7 @@ struct CacheKeyRef<'a> {
     text: &'a str,
     font_size: Pixels,
     runs: &'a [ShapingRun],
-    wrap_width: Option<Pixels>,
-    max_lines: Option<usize>,
+    options: TextLayoutOptions,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -1289,8 +1317,7 @@ impl AsCacheKeyRef for CacheKey {
             text: &self.text,
             font_size: self.font_size,
             runs: self.runs.as_slice(),
-            wrap_width: self.wrap_width,
-            max_lines: self.max_lines,
+            options: self.options,
         }
     }
 }

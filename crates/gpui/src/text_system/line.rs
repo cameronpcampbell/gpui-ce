@@ -364,26 +364,14 @@ fn paint_visual_text(
         return Ok(());
     }
 
-    let paint_width = visual_lines
-        .iter()
-        .map(|line| line.advance)
-        .fold(Pixels::ZERO, Pixels::max);
-    let line_bounds = Bounds::new(
-        origin,
-        size(paint_width, line_height * visual_lines.len() as f32),
-    );
+    let line_bounds = visual_text_bounds(origin, line_height, align, align_width, visual_lines);
     window.paint_layer(line_bounds, |window| {
         let padding_top = (line_height - layout.ascent - layout.descent) / 2.;
         let text_system = cx.text_system().clone();
 
         for (line_idx, line) in visual_lines.iter().enumerate() {
             let line_origin = point(
-                aligned_visual_origin_x(
-                    origin.x,
-                    align_width.unwrap_or(line.advance),
-                    line.advance,
-                    align,
-                ),
+                visual_line_origin_x(origin.x, align, align_width, line),
                 origin.y + line_idx as f32 * line_height,
             );
             paint_visual_line(
@@ -415,25 +403,13 @@ fn paint_visual_background(
         return Ok(());
     }
 
-    let paint_width = visual_lines
-        .iter()
-        .map(|line| line.advance)
-        .fold(Pixels::ZERO, Pixels::max);
-    let line_bounds = Bounds::new(
-        origin,
-        size(paint_width, line_height * visual_lines.len() as f32),
-    );
+    let line_bounds = visual_text_bounds(origin, line_height, align, align_width, visual_lines);
     window.paint_layer(line_bounds, |window| {
         let padding_top = (line_height - layout.ascent - layout.descent) / 2.;
         let text_system = cx.text_system().clone();
         for (line_idx, line) in visual_lines.iter().enumerate() {
             let line_origin = point(
-                aligned_visual_origin_x(
-                    origin.x,
-                    align_width.unwrap_or(line.advance),
-                    line.advance,
-                    align,
-                ),
+                visual_line_origin_x(origin.x, align, align_width, line),
                 origin.y + line_idx as f32 * line_height,
             );
             paint_visual_line(
@@ -449,6 +425,44 @@ fn paint_visual_background(
         }
         Ok(())
     })
+}
+
+fn visual_text_bounds(
+    origin: Point<Pixels>,
+    line_height: Pixels,
+    align: TextAlign,
+    align_width: Option<Pixels>,
+    visual_lines: &[VisualLine],
+) -> Bounds<Pixels> {
+    let mut left = Pixels::MAX;
+    let mut right = Pixels::MIN;
+
+    for line in visual_lines {
+        let line_left = visual_line_origin_x(origin.x, align, align_width, line);
+        left = left.min(line_left);
+        right = right.max(line_left + line.advance);
+    }
+
+    Bounds::new(
+        point(left, origin.y),
+        size(right - left, line_height * visual_lines.len() as f32),
+    )
+}
+
+fn visual_line_origin_x(
+    origin_x: Pixels,
+    align: TextAlign,
+    align_width: Option<Pixels>,
+    line: &VisualLine,
+) -> Pixels {
+    line.offset
+        + aligned_visual_origin_x(
+            origin_x,
+            align_width.unwrap_or(line.advance),
+            line.advance,
+            align,
+            line.direction,
+        )
 }
 
 fn paint_fragment_decorations_at(
@@ -503,10 +517,13 @@ fn aligned_visual_origin_x(
     align_width: Pixels,
     line_width: Pixels,
     align: TextAlign,
+    direction: crate::ResolvedDirection,
 ) -> Pixels {
     match align {
-        TextAlign::Left => origin_x,
+        TextAlign::Start if direction.is_rtl() => origin_x + align_width - line_width,
+        TextAlign::Start | TextAlign::Left => origin_x,
         TextAlign::Center => (origin_x * 2.0 + align_width - line_width) / 2.0,
-        TextAlign::Right => origin_x + align_width - line_width,
+        TextAlign::End if direction.is_rtl() => origin_x,
+        TextAlign::End | TextAlign::Right => origin_x + align_width - line_width,
     }
 }

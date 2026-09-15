@@ -3,10 +3,11 @@ use crate::elements::text::{
     TruncationCandidate, text_layout_fits, truncate_with_measured_candidates,
 };
 use crate::{
-    AnyElement, App, AvailableSpace, Bounds, Display, InlineBoxRequest, InlineLayout,
-    InlineLayoutRequest, InlineTextMetrics, InlineTextStyle, LayoutId, Pixels, Point, Position,
-    SharedString, Size, Style, TextLayout, TextLayoutTruncation, TextRun, TextStyle, Window,
-    WindowTextSystem, place_inline_layout, size,
+    AnyElement, App, AvailableSpace, Bounds, Direction, Display, InlineBidiScope, InlineBoxRequest,
+    InlineLayout, InlineLayoutRequest, InlineTextMetrics, InlineTextStyle, LayoutId,
+    ParagraphDirection, Pixels, Point, Position, SharedString, Size, Style, TextLayout,
+    TextLayoutTruncation, TextRun, TextStyle, UnicodeBidi, Window, WindowTextSystem,
+    place_inline_layout, size,
 };
 
 use collections::FxHashMap;
@@ -37,6 +38,8 @@ struct InlineSpan {
     layout_id: LayoutId,
     text_range: Range<usize>,
     box_range: Range<usize>,
+    direction: crate::taffy::LayoutDirectionHandle,
+    unicode_bidi: UnicodeBidi,
 }
 
 #[derive(Default)]
@@ -50,6 +53,18 @@ struct InlineDocument {
 }
 
 impl InlineDocument {
+    fn bidi_scopes(&self) -> Vec<InlineBidiScope> {
+        self.spans
+            .iter()
+            .filter(|span| span.unicode_bidi != UnicodeBidi::Normal)
+            .map(|span| InlineBidiScope {
+                range: span.text_range.clone(),
+                direction: span.direction.get(),
+                unicode_bidi: span.unicode_bidi,
+            })
+            .collect()
+    }
+
     fn layout(
         self: &Arc<Self>,
         request: InlineLayoutRequest<'_>,
@@ -89,10 +104,12 @@ impl InlineDocument {
             truncation.source,
             |candidate| {
                 let document = self.truncated(candidate);
+                let bidi_scopes = document.bidi_scopes();
                 let layout = text_system.layout_inline(InlineLayoutRequest {
                     text: &document.text,
                     runs: &document.runs,
                     text_styles: &document.text_styles,
+                    bidi_scopes: &bidi_scopes,
                     ..request
                 });
                 let fits = fits(&layout);
@@ -129,6 +146,8 @@ impl InlineDocument {
                         layout_id: span.layout_id,
                         text_range,
                         box_range: 0..0,
+                        direction: span.direction.clone(),
+                        unicode_bidi: span.unicode_bidi,
                     })
             })
             .collect();
@@ -146,6 +165,11 @@ impl InlineDocument {
 struct InlineParagraphMeasurement {
     wrap_width: Option<Pixels>,
     truncate_width: Option<Pixels>,
+    alignment_width: Option<Pixels>,
+    text_align: crate::TextAlign,
+    direction: ParagraphDirection,
+    unicode_bidi: UnicodeBidi,
+    bidi_scopes: Vec<InlineBidiScope>,
     document: Arc<InlineDocument>,
     layout: Arc<InlineLayout>,
 }
@@ -174,6 +198,9 @@ struct InlineParagraphCollector<'a> {
     current_span_indices: FxHashMap<LayoutId, usize>,
     open_span_layout_ids: Vec<LayoutId>,
     text_style: TextStyle,
+    style_direction: Direction,
+    style_unicode_bidi: UnicodeBidi,
+    style_unicode_bidi_explicit: bool,
     window: &'a mut Window,
     cx: &'a mut App,
 }
@@ -280,6 +307,8 @@ impl InlineParagraphCollector<'_> {
                 layout_id,
                 text_range: text_start..text_end,
                 box_range: box_start..box_end,
+                direction: self.window.layout_direction_handle(layout_id),
+                unicode_bidi: self.window.layout_directionality(layout_id).1,
             });
         }
     }
@@ -311,6 +340,13 @@ impl InlineParagraphCollector<'_> {
 
         let measured_document = document.clone();
         let measurement_cache = measurement.clone();
+        let unicode_bidi = if self.style_unicode_bidi_explicit {
+            self.style_unicode_bidi
+        } else if self.style_direction == Direction::Inherit {
+            UnicodeBidi::Normal
+        } else {
+            UnicodeBidi::Isolate
+        };
 
         let layout_id = self.window.request_measured_layout(
             Style {
@@ -326,11 +362,25 @@ impl InlineParagraphCollector<'_> {
 
                 let truncation =
                     TextLayout::evaluate_overflow(&text_style, known_dimensions, available_space);
+                let alignment_width =
+                    TextLayout::evaluate_alignment_width(known_dimensions, available_space);
+
+                let bidi_scopes = measured_document.bidi_scopes();
+                let direction = if unicode_bidi == UnicodeBidi::Plaintext {
+                    ParagraphDirection::Auto
+                } else {
+                    window.resolved_direction().into()
+                };
 
                 if let Some(measurement) =
                     measurement_cache.borrow().as_ref() as Option<&InlineParagraphMeasurement>
                     && measurement.wrap_width == wrap_width
                     && measurement.truncate_width == truncation.width
+                    && measurement.alignment_width == alignment_width
+                    && measurement.text_align == text_style.text_align
+                    && measurement.direction == direction
+                    && measurement.unicode_bidi == unicode_bidi
+                    && measurement.bidi_scopes == bidi_scopes
                 {
                     return measurement.layout.size;
                 }
@@ -345,7 +395,11 @@ impl InlineParagraphCollector<'_> {
                     text_metrics,
                     wrap_width,
                     line_clamp: text_style.line_clamp,
+                    alignment_width,
                     text_align: text_style.text_align,
+                    direction,
+                    unicode_bidi,
+                    bidi_scopes: &bidi_scopes,
                 };
                 let (document, layout) =
                     measured_document.layout(request, &truncation, window.text_system());
@@ -356,6 +410,11 @@ impl InlineParagraphCollector<'_> {
                     .replace(InlineParagraphMeasurement {
                         wrap_width,
                         truncate_width: truncation.width,
+                        alignment_width,
+                        text_align: text_style.text_align,
+                        direction,
+                        unicode_bidi,
+                        bidi_scopes,
                         document,
                         layout,
                     });
@@ -403,6 +462,9 @@ impl InlineDivFrameState {
             current_span_indices: FxHashMap::default(),
             open_span_layout_ids: Vec::new(),
             text_style: window.text_style(),
+            style_direction: style.direction,
+            style_unicode_bidi: style.unicode_bidi,
+            style_unicode_bidi_explicit: style.unicode_bidi_explicit,
             window,
             cx: context,
         };

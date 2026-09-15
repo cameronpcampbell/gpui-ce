@@ -2331,6 +2331,8 @@ impl Element for Div {
                             );
                         }
 
+                        window.set_layout_logical_children(layout_id, &child_layout_ids);
+
                         layout_id
                     })
                 },

@@ -53,8 +53,8 @@ use crate::{
 #[cfg(any(test, feature = "test-support"))]
 use crate::{
     CaretAffinity, CaretPosition, InlineVisualLine, PaintFragment, PaintStyle, PlatformTextLayout,
-    PositionedInlineBox, ShapedGlyph, TextMovement, TextSelectionKind, VisualDirection, VisualLine,
-    align_inline_boxes, size,
+    PositionedInlineBox, ResolvedDirection, ShapedGlyph, TextAlign, TextMovement,
+    TextSelectionKind, VisualDirection, VisualLine, align_inline_boxes, size,
 };
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use anyhow::bail;
@@ -1635,10 +1635,44 @@ impl PlatformTextSystem for TestTextSystem {
             tracking_covered = end;
         }
 
+        let direction = match request.direction {
+            crate::ParagraphDirection::LeftToRight => ResolvedDirection::LeftToRight,
+            crate::ParagraphDirection::RightToLeft => ResolvedDirection::RightToLeft,
+            crate::ParagraphDirection::Auto => text
+                .chars()
+                .find_map(|character| match unicode_bidi::bidi_class(character) {
+                    unicode_bidi::BidiClass::L => Some(ResolvedDirection::LeftToRight),
+                    unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL => {
+                        Some(ResolvedDirection::RightToLeft)
+                    }
+                    _ => None,
+                })
+                .unwrap_or(ResolvedDirection::LeftToRight),
+        };
+        let advance = position + tracking;
+        let alignment_width = request.alignment_width.unwrap_or(advance);
+        let offset = match request.text_align {
+            TextAlign::Start if direction.is_rtl() => alignment_width - advance,
+            TextAlign::Start | TextAlign::Left => Pixels::ZERO,
+            TextAlign::Center => (alignment_width - advance) / 2.0,
+            TextAlign::End if direction.is_rtl() => Pixels::ZERO,
+            TextAlign::End | TextAlign::Right => alignment_width - advance,
+        };
+
+        for (_idx, position) in &mut stops {
+            *position += offset;
+        }
+        for (_range, bounds) in &mut interaction_clusters {
+            bounds.start += offset;
+            bounds.end += offset;
+        }
+
         let visual_lines = [VisualLine {
             text_range: 0..text.len(),
             fragment_range: 0..usize::from(!glyphs.is_empty()),
-            advance: position + tracking,
+            advance,
+            offset,
+            direction,
         }]
         .into_iter()
         .collect();
@@ -1648,7 +1682,7 @@ impl PlatformTextSystem for TestTextSystem {
                 font_id: FontId(0),
                 font_size,
                 glyphs: glyphs.into(),
-                x_range: Pixels::ZERO..position + tracking,
+                x_range: Pixels::ZERO..advance,
                 style: shaping_runs
                     .first()
                     .map_or_else(PaintStyle::default, PaintStyle::from),
@@ -1659,7 +1693,7 @@ impl PlatformTextSystem for TestTextSystem {
             .collect();
         LineLayout {
             font_size,
-            width: position + tracking,
+            width: advance,
             ascent: font_size * (metrics.ascent / metrics.units_per_em as f32),
             descent: font_size * (metrics.descent / metrics.units_per_em as f32),
             visual_lines,
@@ -1669,7 +1703,7 @@ impl PlatformTextSystem for TestTextSystem {
                 text: text.to_owned(),
                 stops,
                 clusters: interaction_clusters,
-                size: size(position + tracking, font_size),
+                size: size(advance, font_size),
             }),
         }
     }
@@ -1681,6 +1715,10 @@ impl PlatformTextSystem for TestTextSystem {
             runs: request.runs,
             wrap_width: request.wrap_width,
             line_clamp: request.line_clamp,
+            alignment_width: request.alignment_width,
+            text_align: request.text_align,
+            direction: request.direction,
+            unicode_bidi: request.unicode_bidi,
         });
 
         let metrics = self.font_metrics(FontId(0));
@@ -1698,11 +1736,12 @@ impl PlatformTextSystem for TestTextSystem {
         let positioned_boxes = position_test_inline_boxes(request, em_width, baseline);
         add_test_inline_box_advances(&mut layout, request);
         let line_width = request.wrap_width.unwrap_or(Pixels::MAX).min(layout.width);
+        let line_offset = layout.visual_lines[0].offset;
         let mut inline = InlineLayout {
             size: size(layout.width, baseline),
             layout: Arc::new(layout),
             lines: [InlineVisualLine {
-                origin: Point::default(),
+                origin: point(line_offset, Pixels::ZERO),
                 size: size(line_width, baseline),
                 baseline,
             }]

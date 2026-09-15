@@ -103,6 +103,7 @@ thiserror.workspace = true
 tracing.workspace = true
 gpui_util.workspace = true
 unicode-segmentation.workspace = true
+unicode-bidi.workspace = true
 hdrhistogram = { workspace = true, optional = true }
 waker-fn = "1.2.0"
 lyon = "1.0"

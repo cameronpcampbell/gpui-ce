@@ -7,10 +7,10 @@ use std::collections::HashSet;
 use crate::{
     ActiveTooltip, AnyView, App, AppContext, Bounds, DispatchPhase, Element, ElementId,
     GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
-    LayoutId, LineLayout, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    SharedString, Size, TextOverflow, TextRun, TextStyle, TextTransform, TooltipId, WhiteSpace,
-    Window, WrappedLine, WrappedLineLayout, px, register_tooltip_mouse_handlers,
-    set_tooltip_on_window,
+    LayoutId, LineLayout, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParagraphDirection, Pixels,
+    Point, SharedString, Size, TextAlign, TextLayoutOptions, TextOverflow, TextRun, TextStyle,
+    TextTransform, TooltipId, UnicodeBidi, WhiteSpace, Window, WrappedLine, WrappedLineLayout, px,
+    register_tooltip_mouse_handlers, set_tooltip_on_window,
 };
 use anyhow::Context as _;
 use gpui_util::ResultExt;
@@ -639,6 +639,7 @@ struct TextLayoutInner {
     line_height: Pixels,
     wrap_width: Option<Pixels>,
     truncate_width: Option<Pixels>,
+    options: TextLayoutOptions,
     size: Option<Size<Pixels>>,
     bounds: Option<Bounds<Pixels>>,
 }
@@ -836,6 +837,17 @@ impl TextLayout {
         }
     }
 
+    /// Evaluates the containing width used to align text independently of wrapping.
+    pub fn evaluate_alignment_width(
+        known_dimensions: Size<Option<Pixels>>,
+        available_space: Size<crate::AvailableSpace>,
+    ) -> Option<Pixels> {
+        known_dimensions.width.or(match available_space.width {
+            crate::AvailableSpace::Definite(width) => Some(width),
+            crate::AvailableSpace::MinContent | crate::AvailableSpace::MaxContent => None,
+        })
+    }
+
     /// Evaluates how truncation should be applied if the text overflows the available space.
     pub fn evaluate_overflow(
         text_style: &TextStyle,
@@ -869,6 +881,8 @@ impl TextLayout {
         wrap_width: Option<Pixels>,
         truncation: &TextLayoutTruncation,
         runs: &'runs [TextRun],
+        paragraph_direction: ParagraphDirection,
+        unicode_bidi: UnicodeBidi,
         window: &mut Window,
         cx: &mut App,
     ) -> (SharedString, Cow<'runs, [TextRun]>) {
@@ -886,6 +900,8 @@ impl TextLayout {
             &truncation.affix,
             runs,
             truncation.source,
+            paragraph_direction,
+            unicode_bidi,
             window,
         )
     }
@@ -933,6 +949,22 @@ impl TextLayout {
                 let truncation =
                     Self::evaluate_overflow(&text_style, known_dimensions, available_space);
                 let truncate_width = truncation.width;
+                let alignment_width =
+                    Self::evaluate_alignment_width(known_dimensions, available_space);
+                let unicode_bidi = window.resolved_unicode_bidi();
+                let direction = if unicode_bidi == UnicodeBidi::Plaintext {
+                    ParagraphDirection::Auto
+                } else {
+                    window.resolved_direction().into()
+                };
+                let options = TextLayoutOptions {
+                    wrap_width,
+                    line_clamp: text_style.line_clamp,
+                    alignment_width,
+                    text_align: text_style.text_align,
+                    direction,
+                    unicode_bidi,
+                };
 
                 // Only use cached layout if:
                 // 1. We have a cached size
@@ -947,6 +979,7 @@ impl TextLayout {
                     && (wrap_width.is_none() || wrap_width == text_layout.wrap_width)
                     && truncate_width.is_none()
                     && text_layout.truncate_width.is_none()
+                    && text_layout.options == options
                 {
                     return size;
                 }
@@ -959,6 +992,8 @@ impl TextLayout {
                     wrap_width,
                     &truncation,
                     &runs,
+                    options.direction,
+                    options.unicode_bidi,
                     window,
                     cx,
                 );
@@ -966,13 +1001,7 @@ impl TextLayout {
 
                 let Some(document) = window
                     .text_system()
-                    .shape_text(
-                        text,
-                        font_size,
-                        &runs,
-                        wrap_width,            // Wrap if we know the width.
-                        text_style.line_clamp, // Limit the number of lines if line_clamp is set.
-                    )
+                    .shape_text_with_options(text, font_size, &runs, options)
                     .log_err()
                 else {
                     element_state
@@ -985,6 +1014,7 @@ impl TextLayout {
                             line_height,
                             wrap_width,
                             truncate_width,
+                            options,
                             size: Some(Size::default()),
                             bounds: None,
                         });
@@ -1004,6 +1034,7 @@ impl TextLayout {
                         line_height,
                         wrap_width,
                         truncate_width,
+                        options,
                         size: Some(size),
                         bounds: None,
                     });
@@ -1052,15 +1083,13 @@ impl TextLayout {
             .unwrap();
 
         let line_height = element_state.line_height;
-        let text_style = window.text_style();
-
         if let Some(document) = &element_state.document {
             document
                 .paint_background(
                     bounds.origin,
                     line_height,
-                    text_style.text_align,
-                    Some(bounds),
+                    TextAlign::Left,
+                    None,
                     window,
                     cx,
                 )
@@ -1069,8 +1098,8 @@ impl TextLayout {
                 .paint(
                     bounds.origin,
                     line_height,
-                    text_style.text_align,
-                    Some(bounds),
+                    TextAlign::Left,
+                    None,
                     window,
                     cx,
                 )
@@ -1190,12 +1219,21 @@ fn truncate_to_shaped_layout<'a>(
     affix: &str,
     runs: &'a [TextRun],
     direction: TruncateFrom,
+    paragraph_direction: ParagraphDirection,
+    unicode_bidi: UnicodeBidi,
     window: &mut Window,
 ) -> (SharedString, Cow<'a, [TextRun]>) {
+    let options = TextLayoutOptions {
+        wrap_width,
+        direction: paragraph_direction,
+        unicode_bidi,
+        text_align: TextAlign::Left,
+        ..Default::default()
+    };
     let Ok(document) =
         window
             .text_system()
-            .shape_text(text.clone(), font_size, runs, wrap_width, None)
+            .shape_text_with_options(text.clone(), font_size, runs, options)
     else {
         return (text, Cow::Borrowed(runs));
     };
@@ -1240,12 +1278,14 @@ fn truncate_to_shaped_layout<'a>(
 
         window
             .text_system()
-            .shape_text(
+            .shape_text_with_options(
                 SharedString::from(affix),
                 font_size,
                 &candidate.runs,
-                None,
-                None,
+                TextLayoutOptions {
+                    wrap_width: None,
+                    ..options
+                },
             )
             .map_or(Pixels::ZERO, |layout| layout.width())
     };
@@ -1302,12 +1342,11 @@ fn truncate_to_shaped_layout<'a>(
         |candidate| {
             let fits = window
                 .text_system()
-                .shape_text(
+                .shape_text_with_options(
                     candidate.text.clone(),
                     font_size,
                     &candidate.runs,
-                    wrap_width,
-                    None,
+                    options,
                 )
                 .is_ok_and(|document| text_layout_fits(&document.layout.layout, width, max_lines));
 

@@ -31,15 +31,15 @@ use crate::{
     MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay,
     PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority,
     PromptButton, PromptLevel, Quad, RasterizedGlyphFormat, Render, RenderGlyphParams, RenderImage,
-    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels, Scene, Shadow,
-    SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription,
-    SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
+    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, ResolvedDirection,
+    SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels,
+    Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet,
+    Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
     TextInputConfiguration, TextInputStateChange, TextRenderingMode, TextStyle,
     TextStyleRefinement, ThermalState, TransformationMatrix, Transition, TransitionState,
-    Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem, point, px,
-    rems, size, transparent_black, white,
+    Underline, UnderlineStyle, UnicodeBidi, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
+    point, px, rems, size, transparent_black, white,
 };
 
 use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
@@ -1282,6 +1282,8 @@ pub struct Window {
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
+    pub(crate) measurement_direction: ResolvedDirection,
+    pub(crate) measurement_unicode_bidi: UnicodeBidi,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     /// Bounds of the parent `Div` currently prepainting this element as one of its children.
@@ -1989,6 +1991,8 @@ impl Window {
             root: None,
             element_id_stack: SmallVec::default(),
             text_style_stack: Vec::new(),
+            measurement_direction: ResolvedDirection::LeftToRight,
+            measurement_unicode_bidi: UnicodeBidi::Normal,
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
             style_transition_containing_bounds: None,
@@ -2271,6 +2275,20 @@ impl Window {
             style.refine(refinement);
         }
         style
+    }
+
+    /// Returns the resolved direction of the current measured or prepainted layout node.
+    ///
+    /// Custom elements can use this when direction changes intrinsic measurement or a detached
+    /// sublayout created during prepaint.
+    pub fn resolved_direction(&self) -> ResolvedDirection {
+        self.measurement_direction
+    }
+
+    /// Returns the bidirectional formatting mode of the measured layout node.
+    #[doc(hidden)]
+    pub fn resolved_unicode_bidi(&self) -> UnicodeBidi {
+        self.measurement_unicode_bidi
     }
 
     /// Check if the platform window is maximized.
@@ -5162,7 +5180,13 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
 
         let mut layout_engine = self.layout_engine.take().unwrap();
-        layout_engine.compute_layout(layout_id, available_space, self, cx);
+        layout_engine.compute_layout(
+            layout_id,
+            available_space,
+            self.measurement_direction,
+            self,
+            cx,
+        );
         self.layout_engine = Some(layout_engine);
     }
 
@@ -5207,11 +5231,89 @@ impl Window {
         node_id: LayoutId,
         content: crate::InlineContent,
     ) {
+        if let crate::InlineContent::Text { text, .. } = &content {
+            self.layout_engine
+                .as_mut()
+                .unwrap()
+                .set_direction_text(node_id, text.clone());
+        }
+
         self.layout_engine
             .as_mut()
             .unwrap()
             .inline_content
             .insert(node_id, Arc::new(content));
+    }
+
+    pub(crate) fn set_layout_logical_children(&mut self, node_id: LayoutId, children: &[LayoutId]) {
+        self.layout_engine
+            .as_mut()
+            .unwrap()
+            .set_logical_children(node_id, children);
+    }
+
+    pub(crate) fn set_layout_auto_direction_hint(
+        &mut self,
+        node_id: LayoutId,
+        direction: Option<ResolvedDirection>,
+    ) {
+        self.layout_engine
+            .as_mut()
+            .unwrap()
+            .set_auto_direction_hint(node_id, direction);
+    }
+
+    pub(crate) fn layout_auto_direction_contribution(
+        &self,
+        node_id: LayoutId,
+    ) -> Option<ResolvedDirection> {
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .auto_direction_contribution(node_id)
+    }
+
+    pub(crate) fn layout_direction_handle(
+        &self,
+        node_id: LayoutId,
+    ) -> crate::taffy::LayoutDirectionHandle {
+        self.layout_engine
+            .as_ref()
+            .unwrap()
+            .direction_handle(node_id)
+    }
+
+    pub(crate) fn layout_directionality(
+        &self,
+        node_id: LayoutId,
+    ) -> (ResolvedDirection, UnicodeBidi) {
+        self.layout_engine.as_ref().unwrap().directionality(node_id)
+    }
+
+    pub(crate) fn with_layout_direction_context<R>(
+        &mut self,
+        node_id: LayoutId,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let (direction, unicode_bidi) = self.layout_directionality(node_id);
+        let previous_direction = std::mem::replace(&mut self.measurement_direction, direction);
+        let previous_unicode_bidi =
+            std::mem::replace(&mut self.measurement_unicode_bidi, unicode_bidi);
+        let result = f(self);
+        self.measurement_direction = previous_direction;
+        self.measurement_unicode_bidi = previous_unicode_bidi;
+        result
+    }
+
+    /// Supplies source text used by `Direction::Auto` for a custom layout node.
+    ///
+    /// Built-in text elements register their content automatically. Call this during
+    /// `request_layout` after obtaining the node's [`LayoutId`].
+    pub fn set_layout_direction_text(&mut self, node_id: LayoutId, text: impl Into<SharedString>) {
+        self.layout_engine
+            .as_mut()
+            .unwrap()
+            .set_direction_text(node_id, text.into());
     }
 
     pub(crate) fn inline_content(&self, node_id: LayoutId) -> Option<Arc<crate::InlineContent>> {
