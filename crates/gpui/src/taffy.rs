@@ -52,27 +52,10 @@ impl LayoutDirectionHandle {
 struct DirectionMetadata {
     authored: Direction,
     unicode_bidi: UnicodeBidi,
-    unicode_bidi_explicit: bool,
-    source_text: Option<SharedString>,
+    source_direction: Option<ResolvedDirection>,
     auto_direction_hint: Option<ResolvedDirection>,
-    actual_children: Vec<LayoutId>,
-    logical_children: Vec<LayoutId>,
+    logical_children: Option<Vec<LayoutId>>,
     resolved: LayoutDirectionHandle,
-}
-
-impl DirectionMetadata {
-    fn effective_unicode_bidi(&self) -> UnicodeBidi {
-        if self.unicode_bidi_explicit {
-            return self.unicode_bidi;
-        }
-
-        match self.authored {
-            Direction::LeftToRight | Direction::RightToLeft | Direction::Auto => {
-                UnicodeBidi::Isolate
-            }
-            Direction::Inherit => UnicodeBidi::Normal,
-        }
-    }
 }
 
 pub struct TaffyLayoutEngine {
@@ -133,8 +116,7 @@ impl TaffyLayoutEngine {
     ) -> LayoutId {
         let vertical_align = style.vertical_align;
         let direction = style.direction;
-        let unicode_bidi = style.unicode_bidi;
-        let unicode_bidi_explicit = style.unicode_bidi_explicit;
+        let unicode_bidi = style.effective_unicode_bidi();
         let taffy_style = style.to_taffy(rem_size, scale_factor);
 
         let node_id = if children.is_empty() {
@@ -153,13 +135,7 @@ impl TaffyLayoutEngine {
         self.record_vertical_align(node_id, vertical_align);
         self.display_and_position
             .insert(node_id, (style.display, style.position));
-        self.record_direction(
-            node_id,
-            direction,
-            unicode_bidi,
-            unicode_bidi_explicit,
-            children,
-        );
+        self.record_direction(node_id, direction, unicode_bidi);
         node_id
     }
 
@@ -178,16 +154,8 @@ impl TaffyLayoutEngine {
     ) -> LayoutId {
         let vertical_align = style.vertical_align;
         let direction = style.direction;
-        let unicode_bidi = style.unicode_bidi;
-        let unicode_bidi_explicit = style.unicode_bidi_explicit;
+        let unicode_bidi = style.effective_unicode_bidi();
         let taffy_style = style.to_taffy(rem_size, scale_factor);
-        let unicode_bidi = if unicode_bidi_explicit {
-            unicode_bidi
-        } else if direction == Direction::Inherit {
-            UnicodeBidi::Normal
-        } else {
-            UnicodeBidi::Isolate
-        };
         let measure = Box::new(measure) as Box<MeasureFn>;
         #[cfg(feature = "stacker")]
         let measure = StackSafe::new(measure);
@@ -206,7 +174,7 @@ impl TaffyLayoutEngine {
         self.record_vertical_align(node_id, vertical_align);
         self.display_and_position
             .insert(node_id, (style.display, style.position));
-        self.record_direction(node_id, direction, unicode_bidi, unicode_bidi_explicit, &[]);
+        self.record_direction(node_id, direction, unicode_bidi);
         node_id
     }
 
@@ -215,34 +183,33 @@ impl TaffyLayoutEngine {
         node_id: LayoutId,
         authored: Direction,
         unicode_bidi: UnicodeBidi,
-        unicode_bidi_explicit: bool,
-        children: &[LayoutId],
     ) {
         self.directions.insert(
             node_id,
             DirectionMetadata {
                 authored,
                 unicode_bidi,
-                unicode_bidi_explicit,
-                source_text: None,
+                source_direction: None,
                 auto_direction_hint: None,
-                actual_children: children.to_vec(),
-                logical_children: children.to_vec(),
+                logical_children: None,
                 resolved: LayoutDirectionHandle::new(),
             },
         );
     }
 
     pub(crate) fn set_logical_children(&mut self, node_id: LayoutId, children: &[LayoutId]) {
+        let actual_children = self.taffy.children(node_id.into()).expect(EXPECT_MESSAGE);
+        let logical_children = (actual_children.as_slice() != LayoutId::to_taffy_slice(children))
+            .then(|| children.to_vec());
+
         if let Some(metadata) = self.directions.get_mut(&node_id) {
-            metadata.logical_children.clear();
-            metadata.logical_children.extend_from_slice(children);
+            metadata.logical_children = logical_children;
         }
     }
 
     pub(crate) fn set_direction_text(&mut self, node_id: LayoutId, text: SharedString) {
         if let Some(metadata) = self.directions.get_mut(&node_id) {
-            metadata.source_text = Some(text);
+            metadata.source_direction = ResolvedDirection::from_first_strong(&text);
         }
     }
 
@@ -273,15 +240,13 @@ impl TaffyLayoutEngine {
     pub(crate) fn directionality(&self, node_id: LayoutId) -> (ResolvedDirection, UnicodeBidi) {
         let metadata = &self.directions[&node_id];
 
-        (metadata.resolved.get(), metadata.effective_unicode_bidi())
+        (metadata.resolved.get(), metadata.unicode_bidi)
     }
 
     fn auto_direction(&self, node_id: LayoutId) -> Option<ResolvedDirection> {
         let metadata = self.directions.get(&node_id)?;
 
-        if let Some(text) = &metadata.source_text
-            && let Some(direction) = first_strong_direction(text)
-        {
+        if let Some(direction) = metadata.source_direction {
             return Some(direction);
         }
 
@@ -289,7 +254,16 @@ impl TaffyLayoutEngine {
             return Some(direction);
         }
 
-        for child_id in &metadata.logical_children {
+        let logical_children = metadata.logical_children.clone().unwrap_or_else(|| {
+            self.taffy
+                .children(node_id.into())
+                .expect(EXPECT_MESSAGE)
+                .into_iter()
+                .map(LayoutId::from)
+                .collect()
+        });
+
+        for child_id in &logical_children {
             let Some(child) = self.directions.get(child_id) else {
                 continue;
             };
@@ -339,8 +313,8 @@ impl TaffyLayoutEngine {
                 .auto_direction(node_id)
                 .unwrap_or(ResolvedDirection::LeftToRight),
         };
-        let actual_children = metadata.actual_children.clone();
-        let logical_children = metadata.logical_children.clone();
+        let actual_children = self.taffy.children(node_id.into()).expect(EXPECT_MESSAGE);
+        let logical_children = metadata.logical_children.clone().unwrap_or_default();
         if metadata.resolved.get() != resolved {
             changed.push(node_id);
         }
@@ -368,7 +342,11 @@ impl TaffyLayoutEngine {
                 .expect(EXPECT_MESSAGE);
         }
 
-        for child_id in actual_children.into_iter().chain(logical_children) {
+        for child_id in actual_children
+            .into_iter()
+            .map(LayoutId::from)
+            .chain(logical_children)
+        {
             self.resolve_direction_subtree(child_id, resolved, visited, changed);
         }
     }
@@ -510,19 +488,18 @@ impl TaffyLayoutEngine {
         // }
         //
 
-        let changed = self.resolve_directions(id, inherited_direction);
-        let changed_layouts = changed
-            .into_iter()
-            .filter(|changed_id| *changed_id != id)
-            .filter_map(|changed_id| {
-                self.computed_available_spaces
-                    .get(&changed_id)
-                    .copied()
-                    .map(|available_space| (changed_id, available_space))
-            })
-            .collect::<Vec<_>>();
+        let changed_ids = self.resolve_directions(id, inherited_direction);
 
-        for (changed_id, available_space) in changed_layouts {
+        for changed_id in changed_ids {
+            if changed_id == id {
+                continue;
+            }
+
+            let Some(available_space) = self.computed_available_spaces.get(&changed_id).copied()
+            else {
+                continue;
+            };
+
             self.clear_cached_bounds(changed_id);
             self.compute_resolved_layout(changed_id, available_space, window, cx);
         }
@@ -992,17 +969,6 @@ impl ToTaffy<taffy::style::Style> for Style {
             ..Default::default()
         }
     }
-}
-
-fn first_strong_direction(text: &str) -> Option<ResolvedDirection> {
-    use unicode_bidi::BidiClass;
-
-    text.chars()
-        .find_map(|character| match unicode_bidi::bidi_class(character) {
-            BidiClass::L => Some(ResolvedDirection::LeftToRight),
-            BidiClass::R | BidiClass::AL => Some(ResolvedDirection::RightToLeft),
-            _ => None,
-        })
 }
 
 impl ToTaffy<f32> for AbsoluteLength {

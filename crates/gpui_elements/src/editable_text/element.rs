@@ -3,8 +3,8 @@ use crate::editable_text::StringStorage;
 
 #[cfg(test)]
 use gpui::{
-    AppContext, Context, EntityInputHandler, HeadlessAppContext, PlatformInput, PlatformTextSystem,
-    Render, ScaledPixels, TestTextSystem, WindowHandle, div, hsla, prelude::*,
+    AppContext, Context, Direction, EntityInputHandler, HeadlessAppContext, PlatformInput,
+    PlatformTextSystem, Render, ScaledPixels, TestTextSystem, WindowHandle, div, hsla, prelude::*,
 };
 
 #[cfg(test)]
@@ -20,13 +20,13 @@ use crate::editable_text::{
     state::AccessibilityText,
 };
 use gpui::{
-    A11ySubtreeBuilder, App, Bounds, CaretPosition, CursorStyle, DefiniteLength, Direction,
-    DispatchPhase, Display, Element, ElementId, ElementInputHandler, Entity, FocusHandle,
-    Focusable, Hitbox, HitboxBehavior, Hsla, InteractiveElement, Interactivity, IntoElement,
-    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
-    PaintQuad, ParagraphDirection, Pixels, Point, SharedString, Size, StatefulInteractiveElement,
-    Style, StyleRefinement, Styled, TextAlign, TextLayout, TextLayoutOptions, UnicodeBidi,
-    WeakEntity, Window, WrappedLine, accesskit, fill, point, px, relative, size,
+    A11ySubtreeBuilder, App, Bounds, CaretPosition, CursorStyle, DefiniteLength, DispatchPhase,
+    Display, Element, ElementId, ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox,
+    HitboxBehavior, Hsla, InteractiveElement, Interactivity, IntoElement, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, PaintQuad,
+    ParagraphDirection, Pixels, Point, SharedString, Size, StatefulInteractiveElement, Style,
+    StyleRefinement, Styled, TextAlign, TextLayout, TextLayoutOptions, UnicodeBidi, WeakEntity,
+    Window, WrappedLine, accesskit, fill, point, px, relative, size,
 };
 use palette::IntoColor;
 use smallvec::SmallVec;
@@ -397,14 +397,8 @@ impl Element for EditableTextElement {
             cx,
             |style, window, cx| {
                 window.with_text_style(style.text_style().cloned(), move |window| {
-                    let unicode_bidi = if style.unicode_bidi_explicit {
-                        style.unicode_bidi
-                    } else if style.direction == Direction::Inherit {
-                        UnicodeBidi::Normal
-                    } else {
-                        UnicodeBidi::Isolate
-                    };
-                    let text_layout_id = prelayout.perform_text_layout(unicode_bidi, window);
+                    let text_layout_id =
+                        prelayout.perform_text_layout(style.effective_unicode_bidi(), window);
                     window.request_layout(style.clone(), Some(text_layout_id), cx)
                 })
             },

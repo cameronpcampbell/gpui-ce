@@ -34,6 +34,9 @@ use gpui::{
     UnicodeBidi, VisualDirection, VisualLine, align_inline_boxes, point, px, size,
 };
 
+#[cfg(test)]
+use gpui::TextLayoutOptions;
+
 use parking_lot::{Mutex, RwLock};
 use parley::setting::Tag;
 use parley::{
@@ -2516,10 +2519,11 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout {
-        let wrap = (request.wrap_width.is_some() || request.line_clamp.is_some()).then_some((
-            request.wrap_width.unwrap_or(Pixels::MAX),
-            request.line_clamp,
-        ));
+        let wrap = (request.options.wrap_width.is_some() || request.options.line_clamp.is_some())
+            .then_some((
+                request.options.wrap_width.unwrap_or(Pixels::MAX),
+                request.options.line_clamp,
+            ));
         self.parley_layout(
             request.text,
             request.font_size,
@@ -2529,10 +2533,10 @@ impl PlatformTextSystem for ParleyTextSystem {
             &[],
             None,
             None,
-            Some(request.text_align),
-            request.alignment_width,
-            request.direction,
-            request.unicode_bidi,
+            Some(request.options.text_align),
+            request.options.alignment_width,
+            request.options.direction,
+            request.options.unicode_bidi,
             &[],
         )
         .expect("Parley failed to lay out a validated GPUI document")
@@ -2540,10 +2544,11 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> InlineLayout {
-        let wrap = (request.wrap_width.is_some() || request.line_clamp.is_some()).then_some((
-            request.wrap_width.unwrap_or(Pixels::MAX),
-            request.line_clamp,
-        ));
+        let wrap = (request.options.wrap_width.is_some() || request.options.line_clamp.is_some())
+            .then_some((
+                request.options.wrap_width.unwrap_or(Pixels::MAX),
+                request.options.line_clamp,
+            ));
         let result = self
             .parley_layout(
                 request.text,
@@ -2554,17 +2559,17 @@ impl PlatformTextSystem for ParleyTextSystem {
                 request.text_styles,
                 Some(request.line_height),
                 Some(request.text_metrics),
-                Some(request.text_align),
-                request.alignment_width,
-                request.direction,
-                request.unicode_bidi,
+                Some(request.options.text_align),
+                request.options.alignment_width,
+                request.options.direction,
+                request.options.unicode_bidi,
                 request.bidi_scopes,
             )
             .expect("Parley failed to lay out a validated GPUI inline document");
         InlineLayout {
             layout: std::sync::Arc::new(result.layout),
             alignment_offset: inline_alignment_offset(
-                request.text_align,
+                request.options.text_align,
                 if result.is_rtl {
                     ResolvedDirection::RightToLeft
                 } else {
@@ -2641,12 +2646,10 @@ mod tests {
             text,
             font_size,
             runs,
-            wrap_width: None,
-            line_clamp: None,
-            alignment_width: None,
-            text_align: TextAlign::Left,
-            direction: ParagraphDirection::Auto,
-            unicode_bidi: UnicodeBidi::Normal,
+            options: TextLayoutOptions {
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
         })
     }
 
@@ -2662,12 +2665,12 @@ mod tests {
             text,
             font_size,
             runs,
-            wrap_width: Some(wrap_width),
-            line_clamp,
-            alignment_width: None,
-            text_align: TextAlign::Left,
-            direction: ParagraphDirection::Auto,
-            unicode_bidi: UnicodeBidi::Normal,
+            options: TextLayoutOptions {
+                wrap_width: Some(wrap_width),
+                line_clamp,
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
         })
     }
 
@@ -2682,12 +2685,12 @@ mod tests {
             text,
             font_size: px(16.0),
             runs: &[text_run(text, "IBM Plex Sans")],
-            wrap_width: None,
-            line_clamp: None,
-            alignment_width,
-            text_align,
-            direction,
-            unicode_bidi: UnicodeBidi::Normal,
+            options: TextLayoutOptions {
+                alignment_width,
+                text_align,
+                direction,
+                ..Default::default()
+            },
         })
     }
 
@@ -2825,12 +2828,11 @@ mod tests {
             text_styles: &[],
             line_height: px(24.0),
             text_metrics: InlineTextMetrics::default(),
-            wrap_width: None,
-            line_clamp: None,
-            alignment_width: Some(px(240.0)),
-            text_align: TextAlign::Start,
-            direction: ParagraphDirection::LeftToRight,
-            unicode_bidi: UnicodeBidi::Normal,
+            options: TextLayoutOptions {
+                alignment_width: Some(px(240.0)),
+                direction: ParagraphDirection::LeftToRight,
+                ..Default::default()
+            },
             bidi_scopes: &scopes,
         });
 
@@ -2877,12 +2879,10 @@ mod tests {
             text: source,
             font_size: px(16.0),
             runs: &[text_run(source, "IBM Plex Sans")],
-            wrap_width: None,
-            line_clamp: None,
-            alignment_width: None,
-            text_align: TextAlign::Left,
-            direction: ParagraphDirection::Auto,
-            unicode_bidi: UnicodeBidi::Normal,
+            options: TextLayoutOptions {
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
         });
 
         assert_eq!(explicit.platform_layout.len(), 1);
@@ -2908,12 +2908,10 @@ mod tests {
             text_styles: &[],
             line_height: px(24.0),
             text_metrics: InlineTextMetrics::default(),
-            wrap_width: None,
-            line_clamp: None,
-            alignment_width: None,
-            text_align: TextAlign::Start,
-            direction: ParagraphDirection::LeftToRight,
-            unicode_bidi: UnicodeBidi::Normal,
+            options: TextLayoutOptions {
+                direction: ParagraphDirection::LeftToRight,
+                ..Default::default()
+            },
             bidi_scopes: &scopes,
         });
         let positions = [0..1, 1..2, 2..3].map(|range| {
@@ -2935,12 +2933,11 @@ mod tests {
             text,
             font_size: px(16.0),
             runs: &[text_run(text, "IBM Plex Sans")],
-            wrap_width: None,
-            line_clamp: None,
-            alignment_width: Some(px(240.0)),
-            text_align: TextAlign::Start,
-            direction: ParagraphDirection::Auto,
-            unicode_bidi: UnicodeBidi::Plaintext,
+            options: TextLayoutOptions {
+                alignment_width: Some(px(240.0)),
+                unicode_bidi: UnicodeBidi::Plaintext,
+                ..Default::default()
+            },
         });
 
         assert_eq!(
@@ -3125,12 +3122,11 @@ mod tests {
                 x_height: px(7.),
             },
 
-            wrap_width: Some(px(300.)),
-            line_clamp: None,
-            alignment_width: None,
-            text_align: TextAlign::Left,
-            direction: ParagraphDirection::Auto,
-            unicode_bidi: UnicodeBidi::Normal,
+            options: TextLayoutOptions {
+                wrap_width: Some(px(300.)),
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
             bidi_scopes: &[],
         });
 
@@ -3252,12 +3248,11 @@ mod tests {
             font_size: px(18.0),
             line_height: px(24.0),
             text_metrics,
-            wrap_width: Some(px(160.0)),
-            line_clamp: None,
-            alignment_width: None,
-            text_align: TextAlign::Center,
-            direction: ParagraphDirection::Auto,
-            unicode_bidi: UnicodeBidi::Normal,
+            options: TextLayoutOptions {
+                wrap_width: Some(px(160.0)),
+                text_align: TextAlign::Center,
+                ..Default::default()
+            },
             bidi_scopes: &[],
         };
 
@@ -3358,12 +3353,11 @@ mod tests {
                 descent: px(4.0),
                 x_height: px(8.0),
             },
-            wrap_width: Some(px(24.0)),
-            line_clamp: None,
-            alignment_width: None,
-            text_align: TextAlign::Left,
-            direction: ParagraphDirection::Auto,
-            unicode_bidi: UnicodeBidi::Normal,
+            options: TextLayoutOptions {
+                wrap_width: Some(px(24.0)),
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
             bidi_scopes: &[],
         });
 
@@ -3728,12 +3722,11 @@ mod tests {
                     descent: px(4.),
                     x_height: px(9.),
                 },
-                wrap_width: Some(px(260.)),
-                line_clamp: None,
-                alignment_width: None,
-                text_align,
-                direction: ParagraphDirection::Auto,
-                unicode_bidi: UnicodeBidi::Normal,
+                options: TextLayoutOptions {
+                    wrap_width: Some(px(260.)),
+                    text_align,
+                    ..Default::default()
+                },
                 bidi_scopes: &[],
             });
             let mut ids = inline
@@ -4616,12 +4609,10 @@ mod tests {
             font_size: px(12.0),
             line_height: px(16.0),
             text_metrics: InlineTextMetrics::default(),
-            wrap_width: None,
-            line_clamp: None,
-            alignment_width: None,
-            text_align: TextAlign::Left,
-            direction: ParagraphDirection::Auto,
-            unicode_bidi: UnicodeBidi::Normal,
+            options: TextLayoutOptions {
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
             bidi_scopes: &[],
         });
         let small = inline
@@ -5307,12 +5298,11 @@ mod tests {
                         text: LINE_CLAMP_TEXT,
                         font_size: px(14.),
                         runs: &runs,
-                        wrap_width: Some(*width),
-                        line_clamp: None,
-                        alignment_width: None,
-                        text_align: TextAlign::Left,
-                        direction: ParagraphDirection::Auto,
-                        unicode_bidi: UnicodeBidi::Normal,
+                        options: TextLayoutOptions {
+                            wrap_width: Some(*width),
+                            text_align: TextAlign::Left,
+                            ..Default::default()
+                        },
                     });
 
                     layout.visual_lines.len() == 2

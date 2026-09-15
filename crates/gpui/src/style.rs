@@ -465,6 +465,17 @@ impl ResolvedDirection {
     pub fn is_rtl(self) -> bool {
         self == Self::RightToLeft
     }
+
+    pub(crate) fn from_first_strong(text: &str) -> Option<Self> {
+        use unicode_bidi::BidiClass;
+
+        text.chars()
+            .find_map(|character| match unicode_bidi::bidi_class(character) {
+                BidiClass::L => Some(Self::LeftToRight),
+                BidiClass::R | BidiClass::AL => Some(Self::RightToLeft),
+                _ => None,
+            })
+    }
 }
 
 /// Controls the Unicode bidirectional scope established by an element.
@@ -835,6 +846,18 @@ pub struct HighlightStyle {
 }
 
 impl Style {
+    /// Resolves the initial Unicode bidi behavior against this style's direction.
+    #[doc(hidden)]
+    pub fn effective_unicode_bidi(&self) -> UnicodeBidi {
+        if self.unicode_bidi_explicit {
+            self.unicode_bidi
+        } else if self.direction == Direction::Inherit {
+            UnicodeBidi::Normal
+        } else {
+            UnicodeBidi::Isolate
+        }
+    }
+
     /// Returns true if the style is visible and the background is opaque.
     pub fn has_opaque_background(&self) -> bool {
         self.background

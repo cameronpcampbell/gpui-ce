@@ -1150,12 +1150,10 @@ mod renderer {
                         font: gpui_font("Source Serif 4"),
                         ..Default::default()
                     }],
-                    wrap_width: None,
-                    line_clamp: None,
-                    alignment_width: None,
-                    text_align: gpui::TextAlign::Left,
-                    direction: gpui::ParagraphDirection::Auto,
-                    unicode_bidi: gpui::UnicodeBidi::Normal,
+                    options: gpui::TextLayoutOptions {
+                        text_align: gpui::TextAlign::Left,
+                        ..Default::default()
+                    },
                 });
                 let fragment = &layout.paint_fragments[0];
 
@@ -1272,12 +1270,10 @@ mod renderer {
                             font: gpui_font(family),
                             ..Default::default()
                         }],
-                        wrap_width: None,
-                        line_clamp: None,
-                        alignment_width: None,
-                        text_align: gpui::TextAlign::Left,
-                        direction: gpui::ParagraphDirection::Auto,
-                        unicode_bidi: gpui::UnicodeBidi::Normal,
+                        options: gpui::TextLayoutOptions {
+                            text_align: gpui::TextAlign::Left,
+                            ..Default::default()
+                        },
                     });
                     let fragment = layout
                         .paint_fragments
@@ -1642,12 +1638,10 @@ mod renderer {
                     font: gpui_font("Apple Color Emoji"),
                     ..Default::default()
                 }],
-                wrap_width: None,
-                line_clamp: None,
-                alignment_width: None,
-                text_align: gpui::TextAlign::Left,
-                direction: gpui::ParagraphDirection::Auto,
-                unicode_bidi: gpui::UnicodeBidi::Normal,
+                options: gpui::TextLayoutOptions {
+                    text_align: gpui::TextAlign::Left,
+                    ..Default::default()
+                },
             });
             let directional_glyph = directional_layout
                 .paint_fragments

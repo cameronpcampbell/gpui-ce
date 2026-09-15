@@ -1,8 +1,7 @@
 use crate::{
     Bounds, FontId, GlyphId, InlineBidiScope, InlineBoxRequest, InlineLayoutRequest,
-    InlineTextStyle, ParagraphDirection, Pixels, PlatformTextSystem, Point, SharedString, Size,
-    StrikethroughStyle, TextAlign, TextLayoutOptions, TextLayoutRequest, TextRun, UnderlineStyle,
-    UnicodeBidi, VerticalAlign,
+    InlineTextStyle, Pixels, PlatformTextSystem, Point, SharedString, Size, StrikethroughStyle,
+    TextLayoutOptions, TextLayoutRequest, TextRun, UnderlineStyle, VerticalAlign,
 };
 use collections::FxHashMap;
 use palette::Hsla;
@@ -975,7 +974,6 @@ impl LineLayoutCache {
     {
         self.sync_font_generation();
         let wrap_width = options.wrap_width;
-        let max_lines = options.line_clamp;
         let shaping_runs = runs.iter().map(ShapingRun::from).collect::<SmallVec<_>>();
         let key = &CacheKeyRef {
             text: text.as_ref(),
@@ -1006,12 +1004,7 @@ impl LineLayoutCache {
                     text: &text,
                     font_size,
                     runs,
-                    wrap_width,
-                    line_clamp: max_lines,
-                    alignment_width: options.alignment_width,
-                    text_align: options.text_align,
-                    direction: options.direction,
-                    unicode_bidi: options.unicode_bidi,
+                    options,
                 }))
             } else {
                 self.layout_line::<&SharedString>(&text, font_size, runs)
@@ -1073,12 +1066,7 @@ impl LineLayoutCache {
                 text: &text,
                 font_size,
                 runs,
-                wrap_width: None,
-                line_clamp: None,
-                alignment_width: None,
-                text_align: TextAlign::Start,
-                direction: ParagraphDirection::Auto,
-                unicode_bidi: UnicodeBidi::Normal,
+                options: TextLayoutOptions::default(),
             });
 
             let key = Arc::new(CacheKey {
@@ -1142,12 +1130,7 @@ struct InlineCacheKey {
     font_size: Pixels,
     line_height: Pixels,
     text_metrics: InlineTextMetrics,
-    wrap_width: Option<Pixels>,
-    line_clamp: Option<usize>,
-    alignment_width: Option<Pixels>,
-    text_align: TextAlign,
-    direction: ParagraphDirection,
-    unicode_bidi: UnicodeBidi,
+    options: TextLayoutOptions,
     bidi_scopes: Vec<InlineBidiScope>,
 }
 
@@ -1160,12 +1143,7 @@ struct InlineCacheKeyRef<'a> {
     font_size: Pixels,
     line_height: Pixels,
     text_metrics: InlineTextMetrics,
-    wrap_width: Option<Pixels>,
-    line_clamp: Option<usize>,
-    alignment_width: Option<Pixels>,
-    text_align: TextAlign,
-    direction: ParagraphDirection,
-    unicode_bidi: UnicodeBidi,
+    options: TextLayoutOptions,
     bidi_scopes: &'a [InlineBidiScope],
 }
 
@@ -1179,12 +1157,7 @@ impl From<InlineLayoutRequest<'_>> for InlineCacheKey {
             font_size: request.font_size,
             line_height: request.line_height,
             text_metrics: request.text_metrics,
-            wrap_width: request.wrap_width,
-            line_clamp: request.line_clamp,
-            alignment_width: request.alignment_width,
-            text_align: request.text_align,
-            direction: request.direction,
-            unicode_bidi: request.unicode_bidi,
+            options: request.options,
             bidi_scopes: request.bidi_scopes.to_vec(),
         }
     }
@@ -1200,12 +1173,7 @@ impl<'a> From<InlineLayoutRequest<'a>> for InlineCacheKeyRef<'a> {
             font_size: request.font_size,
             line_height: request.line_height,
             text_metrics: request.text_metrics,
-            wrap_width: request.wrap_width,
-            line_clamp: request.line_clamp,
-            alignment_width: request.alignment_width,
-            text_align: request.text_align,
-            direction: request.direction,
-            unicode_bidi: request.unicode_bidi,
+            options: request.options,
             bidi_scopes: request.bidi_scopes,
         }
     }
@@ -1221,12 +1189,7 @@ impl AsInlineCacheKeyRef for InlineCacheKey {
             font_size: self.font_size,
             line_height: self.line_height,
             text_metrics: self.text_metrics,
-            wrap_width: self.wrap_width,
-            line_clamp: self.line_clamp,
-            alignment_width: self.alignment_width,
-            text_align: self.text_align,
-            direction: self.direction,
-            unicode_bidi: self.unicode_bidi,
+            options: self.options,
             bidi_scopes: &self.bidi_scopes,
         }
     }

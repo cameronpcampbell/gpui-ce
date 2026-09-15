@@ -1,7 +1,7 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use gpui::{
-    FontFallbacks, GlyphRenderMode, ParagraphDirection, PlatformTextSystem, PreparedRasterStyle,
-    RenderGlyphParams, TextAlign, TextLayoutRequest, TextRun, TextSystem, UnicodeBidi, font, px,
+    FontFallbacks, GlyphRenderMode, PlatformTextSystem, PreparedRasterStyle, RenderGlyphParams,
+    TextAlign, TextLayoutOptions, TextLayoutRequest, TextRun, TextSystem, font, px,
 };
 use gpui_ce_parley::{ParleyTextSystem, SystemFonts};
 use std::borrow::Cow;
@@ -50,12 +50,10 @@ fn raster_case() -> (TextSystem, RenderGlyphParams) {
         text,
         font_size: px(16.0),
         runs: &[run],
-        wrap_width: None,
-        line_clamp: None,
-        alignment_width: None,
-        text_align: TextAlign::Left,
-        direction: ParagraphDirection::Auto,
-        unicode_bidi: UnicodeBidi::Normal,
+        options: TextLayoutOptions {
+            text_align: TextAlign::Left,
+            ..Default::default()
+        },
     });
 
     let fragment = &layout.paint_fragments[0];
@@ -94,12 +92,10 @@ fn bench_text_pipeline(criterion: &mut Criterion) {
                 text: &code,
                 font_size: px(14.0),
                 runs: &runs,
-                wrap_width: None,
-                line_clamp: None,
-                alignment_width: None,
-                text_align: TextAlign::Left,
-                direction: ParagraphDirection::Auto,
-                unicode_bidi: UnicodeBidi::Normal,
+                options: TextLayoutOptions {
+                    text_align: TextAlign::Left,
+                    ..Default::default()
+                },
             })
         });
     });
@@ -115,12 +111,10 @@ fn bench_text_pipeline(criterion: &mut Criterion) {
                 text: &multilingual,
                 font_size: px(16.0),
                 runs: &runs,
-                wrap_width: None,
-                line_clamp: None,
-                alignment_width: None,
-                text_align: TextAlign::Left,
-                direction: ParagraphDirection::Auto,
-                unicode_bidi: UnicodeBidi::Normal,
+                options: TextLayoutOptions {
+                    text_align: TextAlign::Left,
+                    ..Default::default()
+                },
             })
         });
     });
@@ -136,12 +130,11 @@ fn bench_text_pipeline(criterion: &mut Criterion) {
                 text: &multilingual,
                 font_size: px(16.0),
                 runs: &runs,
-                wrap_width: Some(px(480.0)),
-                line_clamp: None,
-                alignment_width: None,
-                text_align: TextAlign::Left,
-                direction: ParagraphDirection::Auto,
-                unicode_bidi: UnicodeBidi::Normal,
+                options: TextLayoutOptions {
+                    wrap_width: Some(px(480.0)),
+                    text_align: TextAlign::Left,
+                    ..Default::default()
+                },
             })
         });
     });
@@ -159,12 +152,10 @@ fn bench_text_pipeline(criterion: &mut Criterion) {
                     text: &multilingual,
                     font_size: px(16.0),
                     runs: &runs,
-                    wrap_width: None,
-                    line_clamp: None,
-                    alignment_width: None,
-                    text_align: TextAlign::Left,
-                    direction: ParagraphDirection::Auto,
-                    unicode_bidi: UnicodeBidi::Normal,
+                    options: TextLayoutOptions {
+                        text_align: TextAlign::Left,
+                        ..Default::default()
+                    },
                 })
             },
             BatchSize::SmallInput,

@@ -559,18 +559,8 @@ pub struct TextLayoutRequest<'a> {
     pub font_size: Pixels,
     /// Complete shaping and paint styles covering `text`.
     pub runs: &'a [TextRun],
-    /// Optional soft-wrap width.
-    pub wrap_width: Option<Pixels>,
-    /// Optional maximum number of visual rows.
-    pub line_clamp: Option<usize>,
-    /// Width used for horizontal alignment, independently of wrapping.
-    pub alignment_width: Option<Pixels>,
-    /// Horizontal text alignment.
-    pub text_align: TextAlign,
-    /// Paragraph base-direction policy.
-    pub direction: ParagraphDirection,
-    /// Bidirectional behavior applied to the complete document.
-    pub unicode_bidi: UnicodeBidi,
+    /// Wrapping, alignment, and bidirectional layout options.
+    pub options: TextLayoutOptions,
 }
 
 /// An atomic element inserted at a UTF-8 boundary in an inline document.
@@ -614,18 +604,8 @@ pub struct InlineLayoutRequest<'a> {
     pub line_height: Pixels,
     /// Metrics for the inline container's base font.
     pub text_metrics: InlineTextMetrics,
-    /// Optional soft-wrap width.
-    pub wrap_width: Option<Pixels>,
-    /// Optional maximum number of visual rows.
-    pub line_clamp: Option<usize>,
-    /// Width used for horizontal alignment, independently of wrapping.
-    pub alignment_width: Option<Pixels>,
-    /// Horizontal alignment within `alignment_width`.
-    pub text_align: TextAlign,
-    /// Paragraph base-direction policy.
-    pub direction: ParagraphDirection,
-    /// Bidirectional behavior applied to the inline container.
-    pub unicode_bidi: UnicodeBidi,
+    /// Wrapping, alignment, and bidirectional layout options.
+    pub options: TextLayoutOptions,
     /// Directional scopes established by nested inline elements.
     pub bidi_scopes: &'a [InlineBidiScope],
 }
@@ -1142,12 +1122,11 @@ mod layout_cache_tests {
             font_size: px(16.0),
             line_height: px(20.0),
             text_metrics: InlineTextMetrics::default(),
-            wrap_width: Some(wrap_width),
-            line_clamp: None,
-            alignment_width: None,
-            text_align: TextAlign::Left,
-            direction: ParagraphDirection::Auto,
-            unicode_bidi: UnicodeBidi::Normal,
+            options: TextLayoutOptions {
+                wrap_width: Some(wrap_width),
+                text_align: TextAlign::Left,
+                ..Default::default()
+            },
             bidi_scopes: &[],
         };
 

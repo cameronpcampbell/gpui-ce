@@ -1635,23 +1635,16 @@ impl PlatformTextSystem for TestTextSystem {
             tracking_covered = end;
         }
 
-        let direction = match request.direction {
+        let direction = match request.options.direction {
             crate::ParagraphDirection::LeftToRight => ResolvedDirection::LeftToRight,
             crate::ParagraphDirection::RightToLeft => ResolvedDirection::RightToLeft,
-            crate::ParagraphDirection::Auto => text
-                .chars()
-                .find_map(|character| match unicode_bidi::bidi_class(character) {
-                    unicode_bidi::BidiClass::L => Some(ResolvedDirection::LeftToRight),
-                    unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL => {
-                        Some(ResolvedDirection::RightToLeft)
-                    }
-                    _ => None,
-                })
-                .unwrap_or(ResolvedDirection::LeftToRight),
+            crate::ParagraphDirection::Auto => {
+                ResolvedDirection::from_first_strong(text).unwrap_or_default()
+            }
         };
         let advance = position + tracking;
-        let alignment_width = request.alignment_width.unwrap_or(advance);
-        let offset = match request.text_align {
+        let alignment_width = request.options.alignment_width.unwrap_or(advance);
+        let offset = match request.options.text_align {
             TextAlign::Start if direction.is_rtl() => alignment_width - advance,
             TextAlign::Start | TextAlign::Left => Pixels::ZERO,
             TextAlign::Center => (alignment_width - advance) / 2.0,
@@ -1713,12 +1706,7 @@ impl PlatformTextSystem for TestTextSystem {
             text: request.text,
             font_size: request.font_size,
             runs: request.runs,
-            wrap_width: request.wrap_width,
-            line_clamp: request.line_clamp,
-            alignment_width: request.alignment_width,
-            text_align: request.text_align,
-            direction: request.direction,
-            unicode_bidi: request.unicode_bidi,
+            options: request.options,
         });
 
         let metrics = self.font_metrics(FontId(0));
@@ -1735,7 +1723,11 @@ impl PlatformTextSystem for TestTextSystem {
             .fold(request.line_height, Pixels::max);
         let positioned_boxes = position_test_inline_boxes(request, em_width, baseline);
         add_test_inline_box_advances(&mut layout, request);
-        let line_width = request.wrap_width.unwrap_or(Pixels::MAX).min(layout.width);
+        let line_width = request
+            .options
+            .wrap_width
+            .unwrap_or(Pixels::MAX)
+            .min(layout.width);
         let line_offset = layout.visual_lines[0].offset;
         let mut inline = InlineLayout {
             size: size(layout.width, baseline),
