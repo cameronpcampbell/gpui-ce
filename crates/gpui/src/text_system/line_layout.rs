@@ -433,11 +433,21 @@ pub struct CaretPosition {
 
 impl CaretPosition {
     /// Creates a caret at a byte index with the given affinity.
-    pub fn new(idx: usize, affinity: CaretAffinity) -> Self {
+    pub const fn new(idx: usize, affinity: CaretAffinity) -> Self {
         Self {
             index: idx,
             affinity,
         }
+    }
+
+    /// Creates a caret attached to the logically following cluster.
+    pub const fn downstream(idx: usize) -> Self {
+        Self::new(idx, CaretAffinity::Downstream)
+    }
+
+    /// Creates a caret attached to the logically preceding cluster.
+    pub const fn upstream(idx: usize) -> Self {
+        Self::new(idx, CaretAffinity::Upstream)
     }
 }
 

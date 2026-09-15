@@ -20,14 +20,13 @@ use crate::editable_text::{
     state::AccessibilityText,
 };
 use gpui::{
-    A11ySubtreeBuilder, App, Bounds, CaretAffinity, CaretPosition, CursorStyle, DefiniteLength,
-    Direction, DispatchPhase, Display, Element, ElementId, ElementInputHandler, Entity,
-    FocusHandle, Focusable, Hitbox, HitboxBehavior, Hsla, InteractiveElement, Interactivity,
-    IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    NavigationDirection, PaintQuad, ParagraphDirection, Pixels, Point, SharedString, Size,
-    StatefulInteractiveElement, Style, StyleRefinement, Styled, TextAlign, TextLayout,
-    TextLayoutOptions, UnicodeBidi, WeakEntity, Window, WrappedLine, accesskit, fill, point, px,
-    relative, size,
+    A11ySubtreeBuilder, App, Bounds, CaretPosition, CursorStyle, DefiniteLength, Direction,
+    DispatchPhase, Display, Element, ElementId, ElementInputHandler, Entity, FocusHandle,
+    Focusable, Hitbox, HitboxBehavior, Hsla, InteractiveElement, Interactivity, IntoElement,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
+    PaintQuad, ParagraphDirection, Pixels, Point, SharedString, Size, StatefulInteractiveElement,
+    Style, StyleRefinement, Styled, TextAlign, TextLayout, TextLayoutOptions, UnicodeBidi,
+    WeakEntity, Window, WrappedLine, accesskit, fill, point, px, relative, size,
 };
 use palette::IntoColor;
 use smallvec::SmallVec;
@@ -963,8 +962,8 @@ fn editable_document_offset(document: &WrappedLine, line_height: Pixels) -> Poin
     let mut left = Pixels::ZERO;
 
     for caret in [
-        CaretPosition::new(0, CaretAffinity::Downstream),
-        CaretPosition::new(document.text.len(), CaretAffinity::Upstream),
+        CaretPosition::downstream(0),
+        CaretPosition::upstream(document.text.len()),
     ] {
         if let Some(position) = document.position_for_caret(caret, line_height) {
             left = left.min(position.x);
@@ -1193,40 +1192,18 @@ mod tests {
         }
 
         fn point(&mut self, idx: usize) -> Point<Pixels> {
-            self.point_for_caret(CaretPosition::new(idx, CaretAffinity::Downstream))
+            self.point_for_caret(CaretPosition::downstream(idx))
         }
 
-        fn backspace_at(&mut self, idx: usize) {
+        fn update_input(
+            &mut self,
+            update: impl FnOnce(&mut EditableTextState, &mut Context<EditableTextState>),
+        ) {
             self.context
                 .update_window(self.window.into(), |_view, window, context| {
                     let focus_handle = self.input.read(context).focus_handle(context);
                     window.focus(&focus_handle, context);
-                    self.input.update(context, |state, context| {
-                        state.move_to(idx, context);
-                        state.delete_linear(
-                            NavigationDirection::Back,
-                            crate::editable_text::TextBoundary::Graphmeme,
-                            context,
-                        );
-                    });
-                })
-                .unwrap();
-            self.context.run_until_parked();
-        }
-
-        fn select_to_end_from(&mut self, idx: usize) {
-            self.context
-                .update_window(self.window.into(), |_view, window, context| {
-                    let focus_handle = self.input.read(context).focus_handle(context);
-                    window.focus(&focus_handle, context);
-                    self.input.update(context, |state, context| {
-                        state.move_to(idx, context);
-                        state.select_linear(
-                            NavigationDirection::Forward,
-                            crate::editable_text::TextBoundary::Document,
-                            context,
-                        );
-                    });
+                    self.input.update(context, update);
                 })
                 .unwrap();
             self.context.run_until_parked();
@@ -1421,21 +1398,14 @@ mod tests {
             ("English 123", 3, Direction::LeftToRight),
             ("مرحبا", "مر".len(), Direction::RightToLeft),
         ] {
-            for endpoint in [
-                CaretPosition::new(0, CaretAffinity::Downstream),
-                CaretPosition::new(text.len(), CaretAffinity::Upstream),
-            ] {
+            let start = CaretPosition::downstream(0);
+            let end = CaretPosition::upstream(text.len());
+            for (endpoint, opposite) in [(start, end), (end, start)] {
                 let mut fixture =
                     BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
-                let other_idx = if endpoint.index == 0 { text.len() } else { 0 };
-                let other_affinity = if other_idx == 0 {
-                    CaretAffinity::Downstream
-                } else {
-                    CaretAffinity::Upstream
-                };
-                let other = fixture.point_for_caret(CaretPosition::new(other_idx, other_affinity));
+                let opposite_point = fixture.point_for_caret(opposite);
                 let mut endpoint_point = fixture.point_for_caret(endpoint);
-                endpoint_point.x += if endpoint_point.x < other.x {
+                endpoint_point.x += if endpoint_point.x < opposite_point.x {
                     px(-1.0)
                 } else {
                     px(1.0)
@@ -1444,28 +1414,28 @@ mod tests {
                 fixture.down(endpoint_point);
                 fixture.assert_caret_selection(endpoint.index, endpoint);
 
-                let mut fixture =
-                    BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
-                let anchor_point =
-                    fixture.point_for_caret(CaretPosition::new(anchor, CaretAffinity::Downstream));
-                fixture.down(anchor_point);
-                fixture.drag_to(endpoint_point);
-                fixture.assert_caret_selection(anchor, endpoint);
-
-                let mut fixture =
-                    BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
-                fixture.down(other);
-                fixture.drag_to(endpoint_point);
-                fixture.assert_caret_selection(other_idx, endpoint);
+                for drag_anchor in [CaretPosition::downstream(anchor), opposite] {
+                    let mut fixture = BidiInputFixture::new_with_direction(
+                        text, 8.0, 320.0, false, 1.0, direction,
+                    );
+                    let anchor_point = fixture.point_for_caret(drag_anchor);
+                    fixture.down(anchor_point);
+                    fixture.drag_to(endpoint_point);
+                    fixture.assert_caret_selection(drag_anchor.index, endpoint);
+                }
             }
 
             let mut fixture =
                 BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
-            fixture.select_to_end_from(anchor);
-            fixture.assert_caret_selection(
-                anchor,
-                CaretPosition::new(text.len(), CaretAffinity::Upstream),
-            );
+            fixture.update_input(|state, context| {
+                state.move_to(anchor, context);
+                state.select_linear(
+                    NavigationDirection::Forward,
+                    crate::editable_text::TextBoundary::Document,
+                    context,
+                );
+            });
+            fixture.assert_caret_selection(anchor, CaretPosition::upstream(text.len()));
         }
     }
 
@@ -1478,23 +1448,26 @@ mod tests {
             let mut fixture =
                 BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
 
-            fixture.backspace_at(text.len());
+            fixture.update_input(|state, context| {
+                state.move_to(text.len(), context);
+                state.delete_linear(
+                    NavigationDirection::Back,
+                    crate::editable_text::TextBoundary::Graphmeme,
+                    context,
+                );
+            });
 
             let caret = fixture.context.update(|context| {
                 let state = fixture.input.read(context);
                 assert_eq!(state.as_str(), remaining);
                 state.caret()
             });
-            assert_eq!(caret.index, remaining.len());
-            assert_eq!(caret.affinity, CaretAffinity::Upstream);
+            assert_eq!(caret, CaretPosition::upstream(remaining.len()));
 
             let document = fixture.document();
             let line_height = fixture.line_height();
             let downstream = document
-                .position_for_caret(
-                    CaretPosition::new(caret.index, CaretAffinity::Downstream),
-                    line_height,
-                )
+                .position_for_caret(CaretPosition::downstream(caret.index), line_height)
                 .unwrap();
             let upstream = document.position_for_caret(caret, line_height).unwrap();
             assert_ne!(upstream.x, downstream.x);
@@ -1656,7 +1629,7 @@ mod tests {
     fn wrapped_opposite_direction_drag_reaches_the_document_end() {
         let text = "English text wraps here";
         let anchor = 3;
-        let end = CaretPosition::new(text.len(), CaretAffinity::Upstream);
+        let end = CaretPosition::upstream(text.len());
         let mut fixture = BidiInputFixture::new_with_direction(
             text,
             8.0,

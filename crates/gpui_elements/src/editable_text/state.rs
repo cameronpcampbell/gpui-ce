@@ -484,13 +484,12 @@ impl EditableTextState {
     fn caret_for_index(&self, caret_pos: usize) -> CaretPosition {
         let len = self.storage.content_utf8().len();
         let index = caret_pos.min(len);
-        let affinity = if index > 0 && index == len {
-            CaretAffinity::Upstream
-        } else {
-            CaretAffinity::Downstream
-        };
 
-        CaretPosition::new(index, affinity)
+        if index > 0 && index == len {
+            CaretPosition::upstream(index)
+        } else {
+            CaretPosition::downstream(index)
+        }
     }
 
     fn move_to_caret(&mut self, mut caret: CaretPosition, context: &mut Context<Self>) {
@@ -585,17 +584,14 @@ impl EditableTextState {
         let start = range.start.min(storage_len_utf8);
         let end = range.end.max(start).min(storage_len_utf8);
 
-        if had_selection || start == end {
-            self.replace_text(start..end, "");
+        if !had_selection
+            && start < end
+            && ((direction == NavigationDirection::Back && start > 0)
+                || (direction == NavigationDirection::Forward && end == storage_len_utf8))
+        {
+            self.replace_text_with_affinity(start..end, "", CaretAffinity::Upstream);
         } else {
-            let new_len = storage_len_utf8 - (end - start);
-            let affinity = match direction {
-                NavigationDirection::Back if start > 0 => CaretAffinity::Upstream,
-                NavigationDirection::Back => CaretAffinity::Downstream,
-                NavigationDirection::Forward if start < new_len => CaretAffinity::Downstream,
-                NavigationDirection::Forward => CaretAffinity::Upstream,
-            };
-            self.replace_text_with_affinity(start..end, "", affinity);
+            self.replace_text(start..end, "");
         }
 
         self.emit_text_changed(cx);
@@ -1579,7 +1575,7 @@ mod tests {
                 input.nav_end(&NavDocumentEnd, window, cx);
                 assert_eq!(
                     input.selected_range,
-                    CaretSelection::collapsed(CaretPosition::new(18, CaretAffinity::Upstream))
+                    CaretSelection::collapsed(CaretPosition::upstream(18))
                 );
             });
         })
@@ -1699,8 +1695,8 @@ mod tests {
                 assert_eq!(
                     input.selected_range,
                     CaretSelection::from_focus_anchor(
-                        CaretPosition::new(11, CaretAffinity::Upstream),
-                        CaretPosition::new(6, CaretAffinity::Downstream),
+                        CaretPosition::upstream(11),
+                        CaretPosition::downstream(6),
                     )
                 );
             });
@@ -1727,31 +1723,23 @@ mod tests {
 
     #[gpui::test]
     fn test_backspace_deletes_previous_grapheme(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 5);
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.delete_left(&DeleteLeft, window, cx);
-                assert_eq!(input.as_str(), "hell");
-                assert_eq!(
-                    input.selected_range,
-                    CaretSelection::collapsed(CaretPosition::new(4, CaretAffinity::Upstream))
-                );
-            });
-        })
-        .unwrap();
-    }
-
-    #[gpui::test]
-    fn test_backspace_of_first_grapheme_uses_following_affinity(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 1);
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.delete_left(&DeleteLeft, window, cx);
-                assert_eq!(input.as_str(), "ello");
-                assert_eq!(input.selected_range, 0.into());
-            });
-        })
-        .unwrap();
+        for (caret, expected_text, expected_caret) in [
+            (5, "hell", CaretPosition::upstream(4)),
+            (1, "ello", CaretPosition::downstream(0)),
+        ] {
+            let view = create_test_input(cx, "hello", caret);
+            view.update(cx, |view, window, cx| {
+                view.input.update(cx, |input, cx| {
+                    input.delete_left(&DeleteLeft, window, cx);
+                    assert_eq!(input.as_str(), expected_text);
+                    assert_eq!(
+                        input.selected_range,
+                        CaretSelection::collapsed(expected_caret)
+                    );
+                });
+            })
+            .unwrap();
+        }
     }
 
     #[gpui::test]
@@ -1776,7 +1764,7 @@ mod tests {
                 assert_eq!(input.as_str(), "Hi ");
                 assert_eq!(
                     input.selected_range,
-                    CaretSelection::collapsed(CaretPosition::new(3, CaretAffinity::Upstream))
+                    CaretSelection::collapsed(CaretPosition::upstream(3))
                 );
             });
         })
@@ -1802,31 +1790,23 @@ mod tests {
 
     #[gpui::test]
     fn test_delete_deletes_next_grapheme(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 0);
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.delete_right(&DeleteRight, window, cx);
-                assert_eq!(input.as_str(), "ello");
-                assert_eq!(input.selected_range, 0.into());
-            });
-        })
-        .unwrap();
-    }
-
-    #[gpui::test]
-    fn test_delete_of_last_grapheme_uses_preceding_affinity(cx: &mut TestAppContext) {
-        let view = create_test_input(cx, "hello", 4);
-        view.update(cx, |view, window, cx| {
-            view.input.update(cx, |input, cx| {
-                input.delete_right(&DeleteRight, window, cx);
-                assert_eq!(input.as_str(), "hell");
-                assert_eq!(
-                    input.selected_range,
-                    CaretSelection::collapsed(CaretPosition::new(4, CaretAffinity::Upstream))
-                );
-            });
-        })
-        .unwrap();
+        for (caret, expected_text, expected_caret) in [
+            (0, "ello", CaretPosition::downstream(0)),
+            (4, "hell", CaretPosition::upstream(4)),
+        ] {
+            let view = create_test_input(cx, "hello", caret);
+            view.update(cx, |view, window, cx| {
+                view.input.update(cx, |input, cx| {
+                    input.delete_right(&DeleteRight, window, cx);
+                    assert_eq!(input.as_str(), expected_text);
+                    assert_eq!(
+                        input.selected_range,
+                        CaretSelection::collapsed(expected_caret)
+                    );
+                });
+            })
+            .unwrap();
+        }
     }
 
     #[gpui::test]
@@ -1920,7 +1900,7 @@ mod tests {
                 assert_eq!(input.as_str(), "hello there world");
                 assert_eq!(
                     input.selected_range,
-                    CaretSelection::collapsed(CaretPosition::new(11, CaretAffinity::Upstream))
+                    CaretSelection::collapsed(CaretPosition::upstream(11))
                 );
             });
         })
@@ -2061,7 +2041,7 @@ mod tests {
                 input.move_to(1000, cx);
                 assert_eq!(
                     input.selected_range,
-                    CaretSelection::collapsed(CaretPosition::new(5, CaretAffinity::Upstream))
+                    CaretSelection::collapsed(CaretPosition::upstream(5))
                 );
 
                 input.selected_range = 0.into();
@@ -2069,8 +2049,8 @@ mod tests {
                 assert_eq!(
                     input.selected_range,
                     CaretSelection::from_focus_anchor(
-                        CaretPosition::new(5, CaretAffinity::Upstream),
-                        CaretPosition::new(0, CaretAffinity::Downstream),
+                        CaretPosition::upstream(5),
+                        CaretPosition::downstream(0),
                     )
                 );
             });
@@ -2471,8 +2451,8 @@ mod tests {
                 assert_eq!(
                     input.selected_range,
                     CaretSelection::from_focus_anchor(
-                        CaretPosition::new(11, CaretAffinity::Upstream),
-                        CaretPosition::new(5, CaretAffinity::Downstream),
+                        CaretPosition::upstream(11),
+                        CaretPosition::downstream(5),
                     )
                 );
             });
@@ -2918,7 +2898,7 @@ mod tests {
                 assert_eq!(input.as_str(), "hello");
                 assert_eq!(
                     input.selected_range,
-                    CaretSelection::collapsed(CaretPosition::new(5, CaretAffinity::Upstream))
+                    CaretSelection::collapsed(CaretPosition::upstream(5))
                 );
             });
         })

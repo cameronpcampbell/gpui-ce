@@ -190,16 +190,6 @@ struct SourceMappedLayout {
 }
 
 impl SourceMappedLayout {
-    fn canonical_source_caret(&self, mut caret: CaretPosition) -> CaretPosition {
-        if caret.index == 0 {
-            caret.affinity = CaretAffinity::Downstream;
-        } else if caret.index == self.source_len {
-            caret.affinity = CaretAffinity::Upstream;
-        }
-
-        caret
-    }
-
     fn source_caret_for_point(
         &self,
         caret: CaretPosition,
@@ -211,18 +201,22 @@ impl SourceMappedLayout {
             return mapped;
         }
 
-        // A synthetic bidi control can occupy a visual edge and map that hit to the
-        // opposite source endpoint. Compare the real source endpoint geometries.
-        let mapped = self.canonical_source_caret(mapped);
-        if self.source_len == 0 || (mapped.index != 0 && mapped.index != self.source_len) {
-            return mapped;
+        let start = CaretPosition::downstream(0);
+        if self.source_len == 0 {
+            return start;
         }
 
-        let start = CaretPosition::new(0, CaretAffinity::Downstream);
-        let end = CaretPosition::new(self.source_len, CaretAffinity::Upstream);
-        let distance = |caret| {
+        let end = CaretPosition::upstream(self.source_len);
+        let mapped = match mapped.index {
+            0 => start,
+            idx if idx == self.source_len => end,
+            _ => return mapped,
+        };
+
+        // A synthetic bidi control can map a visual edge to the other source endpoint.
+        let distance = |endpoint| {
             self.inner
-                .caret_geometry(self.map.backend_caret(caret), line_height)
+                .caret_geometry(self.map.backend_caret(endpoint), line_height)
                 .map(|bounds| (bounds.origin - point).magnitude())
         };
 
@@ -2739,8 +2733,8 @@ mod tests {
                 layout_directional(&system, text, direction, TextAlign::Start, Some(px(240.0)));
 
             for expected in [
-                CaretPosition::new(0, CaretAffinity::Downstream),
-                CaretPosition::new(text.len(), CaretAffinity::Upstream),
+                CaretPosition::downstream(0),
+                CaretPosition::upstream(text.len()),
             ] {
                 let expected_bounds = layout
                     .platform_layout
@@ -2755,14 +2749,6 @@ mod tests {
                     .unwrap_or_else(|caret| caret);
 
                 assert_eq!(hit, expected, "text={text:?}, direction={direction:?}");
-                assert_eq!(
-                    layout
-                        .platform_layout
-                        .caret_geometry(hit, line_height)
-                        .unwrap(),
-                    expected_bounds,
-                    "text={text:?}, direction={direction:?}"
-                );
             }
         }
     }
