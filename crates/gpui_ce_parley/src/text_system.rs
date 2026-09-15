@@ -189,6 +189,51 @@ struct SourceMappedLayout {
     inner: Arc<dyn PlatformTextLayout>,
 }
 
+impl SourceMappedLayout {
+    fn canonical_source_caret(&self, mut caret: CaretPosition) -> CaretPosition {
+        if caret.index == 0 {
+            caret.affinity = CaretAffinity::Downstream;
+        } else if caret.index == self.source_len {
+            caret.affinity = CaretAffinity::Upstream;
+        }
+
+        caret
+    }
+
+    fn source_caret_for_point(
+        &self,
+        caret: CaretPosition,
+        point: Point<Pixels>,
+        line_height: Pixels,
+    ) -> CaretPosition {
+        let mapped = self.map.source_caret(caret);
+        if self.inner.len() == self.source_len {
+            return mapped;
+        }
+
+        // A synthetic bidi control can occupy a visual edge and map that hit to the
+        // opposite source endpoint. Compare the real source endpoint geometries.
+        let mapped = self.canonical_source_caret(mapped);
+        if self.source_len == 0 || (mapped.index != 0 && mapped.index != self.source_len) {
+            return mapped;
+        }
+
+        let start = CaretPosition::new(0, CaretAffinity::Downstream);
+        let end = CaretPosition::new(self.source_len, CaretAffinity::Upstream);
+        let distance = |caret| {
+            self.inner
+                .caret_geometry(self.map.backend_caret(caret), line_height)
+                .map(|bounds| (bounds.origin - point).magnitude())
+        };
+
+        match (distance(start), distance(end)) {
+            (Some(start_distance), Some(end_distance)) if end_distance < start_distance => end,
+            (Some(_), Some(_)) => start,
+            _ => mapped,
+        }
+    }
+}
+
 impl PlatformTextLayout for SourceMappedLayout {
     fn len(&self) -> usize {
         self.source_len
@@ -216,8 +261,8 @@ impl PlatformTextLayout for SourceMappedLayout {
     ) -> Result<CaretPosition, CaretPosition> {
         self.inner
             .caret_from_point(point, line_height)
-            .map(|caret| self.map.source_caret(caret))
-            .map_err(|caret| self.map.source_caret(caret))
+            .map(|caret| self.source_caret_for_point(caret, point, line_height))
+            .map_err(|caret| self.source_caret_for_point(caret, point, line_height))
     }
 
     fn caret_geometry(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>> {
@@ -2676,6 +2721,49 @@ mod tests {
                 .caret_geometry(CaretPosition::new(0, CaretAffinity::Downstream), px(24.0))
                 .unwrap();
             assert!(caret.origin.x > px(100.0), "text={text:?}, caret={caret:?}");
+        }
+    }
+
+    #[test]
+    fn directional_hit_testing_preserves_source_endpoint_carets() {
+        let system = test_system();
+        let line_height = px(24.0);
+
+        for (text, direction) in [
+            ("English 123", ParagraphDirection::RightToLeft),
+            ("مرحبا", ParagraphDirection::LeftToRight),
+            ("English 123", ParagraphDirection::LeftToRight),
+            ("مرحبا", ParagraphDirection::RightToLeft),
+        ] {
+            let layout =
+                layout_directional(&system, text, direction, TextAlign::Start, Some(px(240.0)));
+
+            for expected in [
+                CaretPosition::new(0, CaretAffinity::Downstream),
+                CaretPosition::new(text.len(), CaretAffinity::Upstream),
+            ] {
+                let expected_bounds = layout
+                    .platform_layout
+                    .caret_geometry(expected, line_height)
+                    .unwrap();
+                let hit = layout
+                    .platform_layout
+                    .caret_from_point(
+                        expected_bounds.origin + point(px(0.0), line_height / 2.0),
+                        line_height,
+                    )
+                    .unwrap_or_else(|caret| caret);
+
+                assert_eq!(hit, expected, "text={text:?}, direction={direction:?}");
+                assert_eq!(
+                    layout
+                        .platform_layout
+                        .caret_geometry(hit, line_height)
+                        .unwrap(),
+                    expected_bounds,
+                    "text={text:?}, direction={direction:?}"
+                );
+            }
         }
     }
 

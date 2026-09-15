@@ -1182,8 +1182,7 @@ mod tests {
             });
         }
 
-        fn point(&mut self, idx: usize) -> Point<Pixels> {
-            let caret = CaretPosition::new(idx, CaretAffinity::Downstream);
+        fn point_for_caret(&mut self, caret: CaretPosition) -> Point<Pixels> {
             let line_height = self.line_height();
             let local = self
                 .document()
@@ -1191,6 +1190,46 @@ mod tests {
                 .unwrap();
 
             self.origin() + local + point(px(0.), line_height / 2.)
+        }
+
+        fn point(&mut self, idx: usize) -> Point<Pixels> {
+            self.point_for_caret(CaretPosition::new(idx, CaretAffinity::Downstream))
+        }
+
+        fn backspace_at(&mut self, idx: usize) {
+            self.context
+                .update_window(self.window.into(), |_view, window, context| {
+                    let focus_handle = self.input.read(context).focus_handle(context);
+                    window.focus(&focus_handle, context);
+                    self.input.update(context, |state, context| {
+                        state.move_to(idx, context);
+                        state.delete_linear(
+                            NavigationDirection::Back,
+                            crate::editable_text::TextBoundary::Graphmeme,
+                            context,
+                        );
+                    });
+                })
+                .unwrap();
+            self.context.run_until_parked();
+        }
+
+        fn select_to_end_from(&mut self, idx: usize) {
+            self.context
+                .update_window(self.window.into(), |_view, window, context| {
+                    let focus_handle = self.input.read(context).focus_handle(context);
+                    window.focus(&focus_handle, context);
+                    self.input.update(context, |state, context| {
+                        state.move_to(idx, context);
+                        state.select_linear(
+                            NavigationDirection::Forward,
+                            crate::editable_text::TextBoundary::Document,
+                            context,
+                        );
+                    });
+                })
+                .unwrap();
+            self.context.run_until_parked();
         }
 
         fn dispatch(&mut self, event: PlatformInput) {
@@ -1213,6 +1252,10 @@ mod tests {
 
         fn drag(&mut self, idx: usize) {
             let position = self.point(idx);
+            self.drag_to(position);
+        }
+
+        fn drag_to(&mut self, position: Point<Pixels>) {
             self.dispatch(PlatformInput::MouseMove(MouseMoveEvent {
                 position,
                 pressed_button: Some(MouseButton::Left),
@@ -1231,11 +1274,20 @@ mod tests {
         }
 
         fn assert_selection(&mut self, anchor: usize, focus: usize) {
-            let range = anchor.min(focus)..anchor.max(focus);
+            let caret = self
+                .context
+                .update(|context| self.input.read(context).caret());
+            assert_eq!(caret.index, focus);
+            self.assert_caret_selection(anchor, caret);
+        }
+
+        fn assert_caret_selection(&mut self, anchor: usize, focus: CaretPosition) {
+            let focus_idx = focus.index;
+            let range = anchor.min(focus_idx)..anchor.max(focus_idx);
             let caret = self.context.update(|context| {
                 let state = self.input.read(context);
                 assert_eq!(state.selected_range(), range);
-                assert_eq!(state.caret().index, focus);
+                assert_eq!(state.caret(), focus);
 
                 state.caret()
             });
@@ -1359,6 +1411,96 @@ mod tests {
         fixture.drag(7);
         fixture.assert_selection(3, 7);
         fixture.up(7);
+    }
+
+    #[test]
+    fn directional_text_clicks_and_drags_preserve_endpoint_affinity() {
+        for (text, anchor, direction) in [
+            ("English 123", 3, Direction::RightToLeft),
+            ("مرحبا", "مر".len(), Direction::LeftToRight),
+            ("English 123", 3, Direction::LeftToRight),
+            ("مرحبا", "مر".len(), Direction::RightToLeft),
+        ] {
+            for endpoint in [
+                CaretPosition::new(0, CaretAffinity::Downstream),
+                CaretPosition::new(text.len(), CaretAffinity::Upstream),
+            ] {
+                let mut fixture =
+                    BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
+                let other_idx = if endpoint.index == 0 { text.len() } else { 0 };
+                let other_affinity = if other_idx == 0 {
+                    CaretAffinity::Downstream
+                } else {
+                    CaretAffinity::Upstream
+                };
+                let other = fixture.point_for_caret(CaretPosition::new(other_idx, other_affinity));
+                let mut endpoint_point = fixture.point_for_caret(endpoint);
+                endpoint_point.x += if endpoint_point.x < other.x {
+                    px(-1.0)
+                } else {
+                    px(1.0)
+                };
+
+                fixture.down(endpoint_point);
+                fixture.assert_caret_selection(endpoint.index, endpoint);
+
+                let mut fixture =
+                    BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
+                let anchor_point =
+                    fixture.point_for_caret(CaretPosition::new(anchor, CaretAffinity::Downstream));
+                fixture.down(anchor_point);
+                fixture.drag_to(endpoint_point);
+                fixture.assert_caret_selection(anchor, endpoint);
+
+                let mut fixture =
+                    BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
+                fixture.down(other);
+                fixture.drag_to(endpoint_point);
+                fixture.assert_caret_selection(other_idx, endpoint);
+            }
+
+            let mut fixture =
+                BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
+            fixture.select_to_end_from(anchor);
+            fixture.assert_caret_selection(
+                anchor,
+                CaretPosition::new(text.len(), CaretAffinity::Upstream),
+            );
+        }
+    }
+
+    #[test]
+    fn backspace_keeps_caret_at_text_end_when_direction_opposes_the_text() {
+        for (text, remaining, direction) in [
+            ("abc", "ab", Direction::RightToLeft),
+            ("مرحبا", "مرحب", Direction::LeftToRight),
+        ] {
+            let mut fixture =
+                BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
+
+            fixture.backspace_at(text.len());
+
+            let caret = fixture.context.update(|context| {
+                let state = fixture.input.read(context);
+                assert_eq!(state.as_str(), remaining);
+                state.caret()
+            });
+            assert_eq!(caret.index, remaining.len());
+            assert_eq!(caret.affinity, CaretAffinity::Upstream);
+
+            let document = fixture.document();
+            let line_height = fixture.line_height();
+            let downstream = document
+                .position_for_caret(
+                    CaretPosition::new(caret.index, CaretAffinity::Downstream),
+                    line_height,
+                )
+                .unwrap();
+            let upstream = document.position_for_caret(caret, line_height).unwrap();
+            assert_ne!(upstream.x, downstream.x);
+
+            fixture.assert_selection(caret.index, caret.index);
+        }
     }
 
     #[test]
@@ -1508,6 +1650,31 @@ mod tests {
         fixture.drag(0);
         fixture.assert_selection(anchor, 0);
         fixture.up(0);
+    }
+
+    #[test]
+    fn wrapped_opposite_direction_drag_reaches_the_document_end() {
+        let text = "English text wraps here";
+        let anchor = 3;
+        let end = CaretPosition::new(text.len(), CaretAffinity::Upstream);
+        let mut fixture = BidiInputFixture::new_with_direction(
+            text,
+            8.0,
+            120.0,
+            true,
+            1.0,
+            Direction::RightToLeft,
+        );
+        assert!(fixture.document().line_count() > 1);
+
+        let anchor_point = fixture.point(anchor);
+        let mut end_point = fixture.point_for_caret(end);
+        assert!(end_point.y > anchor_point.y);
+        end_point.x += px(1.0);
+
+        fixture.down(anchor_point);
+        fixture.drag_to(end_point);
+        fixture.assert_caret_selection(anchor, end);
     }
 
     struct CenteredEditableTextView {
