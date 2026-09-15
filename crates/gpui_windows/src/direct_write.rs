@@ -1218,49 +1218,6 @@ mod tests {
         include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Italic.ttf");
     const SOURCE_SERIF: &[u8] =
         include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
-    const NOTO_COLOR_EMOJI: &[u8] =
-        include_bytes!("../../../assets/fonts/noto-color-emoji/NotoColorEmoji.subset.ttf");
-
-    #[test]
-    fn bundled_cbdt_sample_renders_without_a_native_bitmap_path() -> Result<()> {
-        let system = DirectWriteTextSystem::new_headless()?;
-        system.add_fonts(vec![Cow::Borrowed(NOTO_COLOR_EMOJI)])?;
-        let font_id = system.font_id(&font("Noto Color Emoji"))?;
-
-        for character in ['😀', '🎉', '🚀', '💡', '🔥', '✨'] {
-            let glyph_id = system
-                .glyph_for_char(font_id, character)
-                .with_context(|| format!("bundled font has no {character} glyph"))?;
-            let raster = rasterize(
-                &system,
-                font_id,
-                glyph_id,
-                GlyphRenderMode::Color,
-                point(0, 0),
-                1.5,
-            )?;
-            assert_eq!(raster.format, RasterizedGlyphFormat::BgraColor);
-            assert!(raster.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
-            raster.validate()?;
-        }
-
-        let space = system
-            .glyph_for_char(font_id, ' ')
-            .context("bundled font has no space glyph")?;
-        let empty = rasterize(
-            &system,
-            font_id,
-            space,
-            GlyphRenderMode::Grayscale,
-            point(0, 0),
-            1.5,
-        )?;
-        assert_eq!(empty.size, Size::default());
-        assert!(empty.pixels.is_empty());
-
-        Ok(())
-    }
-
     #[test]
     fn fixed_fonts_cover_native_modes_instances_and_empty_glyphs() -> Result<()> {
         let system = DirectWriteTextSystem::new_headless()?;

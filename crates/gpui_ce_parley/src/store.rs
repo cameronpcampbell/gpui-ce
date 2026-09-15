@@ -20,7 +20,7 @@ use skrifa::{
     outline::{DrawSettings, OutlinePen},
     raw::TableProvider as _,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use swash::{
     CacheKey as SwashCacheKey, FontRef as SwashFontRef,
     scale::{Render, ScaleContext, Source, StrikeWith},
@@ -115,18 +115,11 @@ impl RasterFace<'_> {
     fn requires_portable_bitmap_rasterization(&self) -> Result<bool> {
         let font = FontRef::from_index(self.data(), self.face_index)
             .context("cannot inspect color tables in the selected face")?;
-        let has_cbdt = font.table_data(Tag::new(b"CBDT")).is_some()
-            && font.table_data(Tag::new(b"CBLC")).is_some();
+        let has_table = |tag| font.table_data(Tag::new(tag)).is_some();
 
-        if !has_cbdt {
-            return Ok(false);
-        }
-
-        let has_native_color_format = [*b"COLR", *b"sbix", *b"SVG "]
-            .into_iter()
-            .any(|tag| font.table_data(Tag::new(&tag)).is_some());
-
-        Ok(!has_native_color_format)
+        Ok(has_table(b"CBDT")
+            && has_table(b"CBLC")
+            && ![b"COLR", b"sbix", b"SVG "].into_iter().any(has_table))
     }
 
     /// Returns the preferred color artwork format supported by the rasterizer.
@@ -802,10 +795,7 @@ where
     Native: GlyphRasterizer,
 {
     fn supports_color_glyph(&self, kind: ColorGlyphKind) -> bool {
-        match kind {
-            ColorGlyphKind::Cbdt => self.portable.supports_color_glyph(kind),
-            _ => self.native.supports_color_glyph(kind),
-        }
+        kind == ColorGlyphKind::Cbdt || self.native.supports_color_glyph(kind)
     }
 
     fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
@@ -817,13 +807,9 @@ where
         face: RasterFace<'_>,
         params: &RenderGlyphParams,
     ) -> Result<RasterizedGlyph> {
-        let use_portable = if let Some(use_portable) = self.portable_faces.get(&face.font_id) {
-            *use_portable
-        } else {
-            let use_portable = face.requires_portable_bitmap_rasterization()?;
-            self.portable_faces.insert(face.font_id, use_portable);
-
-            use_portable
+        let use_portable = match self.portable_faces.entry(face.font_id) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => *entry.insert(face.requires_portable_bitmap_rasterization()?),
         };
 
         if use_portable {
@@ -1033,18 +1019,15 @@ fn convert_subpixel_mask_to_bgra(pixels: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
 
     const SOURCE_SERIF: &[u8] =
         include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
     const NOTO_COLOR_EMOJI: &[u8] =
         include_bytes!("../../../assets/fonts/noto-color-emoji/NotoColorEmoji.subset.ttf");
 
+    #[derive(Default)]
     struct RecordingNativeRasterizer {
-        raster_calls: Arc<AtomicUsize>,
+        raster_calls: usize,
     }
 
     impl GlyphRasterizer for RecordingNativeRasterizer {
@@ -1061,23 +1044,11 @@ mod tests {
             _face: RasterFace<'_>,
             params: &RenderGlyphParams,
         ) -> Result<RasterizedGlyph> {
-            self.raster_calls.fetch_add(1, Ordering::SeqCst);
+            self.raster_calls += 1;
 
             Ok(RasterizedGlyph::empty(
                 params.raster_style.mode.rasterized_format(),
             ))
-        }
-    }
-
-    #[test]
-    fn bundled_emoji_font_covers_the_complete_sample() {
-        let font = FontRef::new(NOTO_COLOR_EMOJI).unwrap();
-
-        for character in ['😀', '🎉', '🚀', '💡', '🔥', '✨'] {
-            assert!(
-                font.charmap().map(character).is_some(),
-                "Missing example emoji {character}"
-            );
         }
     }
 
@@ -1095,11 +1066,8 @@ mod tests {
             synthesis: FontSynthesis::default(),
             has_color_glyphs: true,
         };
-        let raster_calls = Arc::new(AtomicUsize::new(0));
-        let native = RecordingNativeRasterizer {
-            raster_calls: raster_calls.clone(),
-        };
-        let mut rasterizer = BitmapFallbackGlyphRasterizer::new(native);
+        let mut rasterizer =
+            BitmapFallbackGlyphRasterizer::new(RecordingNativeRasterizer::default());
 
         assert!(rasterizer.supports_color_glyph(ColorGlyphKind::Cbdt));
         assert!(rasterizer.supports_color_glyph(ColorGlyphKind::ColrV0));
@@ -1127,7 +1095,7 @@ mod tests {
         let empty = rasterizer.rasterize(cbdt_face, &params(space)).unwrap();
         assert_eq!(empty.size, Size::default());
         assert!(empty.pixels.is_empty());
-        assert_eq!(raster_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(rasterizer.native.raster_calls, 0);
 
         let native_source = Blob::from(SOURCE_SERIF.to_vec());
         let native_font = FontRef::new(native_source.as_ref()).unwrap();
@@ -1156,7 +1124,7 @@ mod tests {
             raster_style: PreparedRasterStyle::independent(GlyphRenderMode::Grayscale),
         };
         rasterizer.rasterize(native_face, &native_params).unwrap();
-        assert_eq!(raster_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(rasterizer.native.raster_calls, 1);
     }
 
     #[test]

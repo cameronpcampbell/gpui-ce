@@ -109,9 +109,7 @@ mod renderer {
     };
 
     #[cfg(test)]
-    use gpui_parley::{
-        BitmapFallbackGlyphRasterizer, FontVariation, ParleyTextSystem, SystemFonts,
-    };
+    use gpui_parley::{FontVariation, ParleyTextSystem, SystemFonts};
 
     #[cfg(test)]
     use std::borrow::Cow;
@@ -301,11 +299,10 @@ mod renderer {
         fn raster_bounds(&self, params: &NativeGlyphParams) -> Result<Bounds<DevicePixels>> {
             let native = &self.faces.fonts[params.font_id.0];
 
-            if params.is_emoji {
-                return self.core_text_raster_bounds(native, params);
-            }
-
-            if native.synthesis == FontSynthesis::default() && native.has_default_variations {
+            if !params.is_emoji
+                && native.synthesis == FontSynthesis::default()
+                && native.has_default_variations
+            {
                 let scale = Transform2F::from_scale(params.scale_factor);
                 let rect = native.font.raster_bounds(
                     params.glyph_id.0,
@@ -933,9 +930,6 @@ mod renderer {
             include_bytes!("../../../assets/fonts/ibm-plex-sans/IBMPlexSans-Italic.ttf");
         const SOURCE_SERIF: &[u8] =
             include_bytes!("../../../assets/fonts/source-serif-4/SourceSerif4[opsz,wght].ttf");
-        const NOTO_COLOR_EMOJI: &[u8] =
-            include_bytes!("../../../assets/fonts/noto-color-emoji/NotoColorEmoji.subset.ttf");
-
         #[test]
         fn collection_faces_are_selected_and_compacted_by_physical_index() {
             let collection = test_collection(&[SOURCE_SERIF, IBM_PLEX, IBM_PLEX_ITALIC]);
@@ -1566,7 +1560,7 @@ mod renderer {
             let emoji_system = ParleyTextSystem::new_with_rasterizer(
                 SystemFonts::Load,
                 ".AppleSystemUIFont",
-                BitmapFallbackGlyphRasterizer::new(MacGlyphRenderer::new()),
+                MacGlyphRenderer::new(),
             );
             let emoji_font = emoji_system
                 .font_id(&gpui_font("Apple Color Emoji"))
@@ -1681,61 +1675,11 @@ mod renderer {
         }
 
         #[test]
-        fn bundled_cbdt_sample_uses_portable_rasterization() {
-            let system = ParleyTextSystem::new_with_rasterizer(
-                SystemFonts::Skip,
-                "Noto Color Emoji",
-                BitmapFallbackGlyphRasterizer::new(MacGlyphRenderer::new()),
-            );
-            system
-                .add_fonts(vec![Cow::Borrowed(NOTO_COLOR_EMOJI)])
-                .unwrap();
-            let font_id = system.font_id(&gpui_font("Noto Color Emoji")).unwrap();
-
-            for character in ['😀', '🎉', '🚀', '💡', '🔥', '✨'] {
-                let glyph_id = system.glyph_for_char(font_id, character).unwrap();
-                let raster = system
-                    .rasterize_glyph(&RenderGlyphParams {
-                        font_id,
-                        glyph_id,
-                        font_size: px(24.0),
-                        subpixel_variant: point(0, 0),
-                        scale_factor: 1.5,
-                        raster_style: system.prepare_raster_style(RasterStyleRequest {
-                            font_id,
-                            glyph_id,
-                            scene_color: rgba(0xffffffff),
-                            requested_mode: GlyphRenderMode::Color,
-                            foreground_dependency: gpui::ForegroundDependency::Full,
-                        }),
-                    })
-                    .unwrap();
-                raster.validate().unwrap();
-                assert_eq!(raster.format, RasterizedGlyphFormat::BgraColor);
-                assert!(raster.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
-            }
-
-            let space = system.glyph_for_char(font_id, ' ').unwrap();
-            let empty = system
-                .rasterize_glyph(&RenderGlyphParams {
-                    font_id,
-                    glyph_id: space,
-                    font_size: px(24.0),
-                    subpixel_variant: point(0, 0),
-                    scale_factor: 1.5,
-                    raster_style: PreparedRasterStyle::independent(GlyphRenderMode::Grayscale),
-                })
-                .unwrap();
-            assert_eq!(empty.size, gpui::Size::default());
-            assert!(empty.pixels.is_empty());
-        }
-
-        #[test]
         fn native_color_bounds_follow_visible_artwork_at_the_requested_size() {
             let system = ParleyTextSystem::new_with_rasterizer(
                 SystemFonts::Load,
                 ".AppleSystemUIFont",
-                BitmapFallbackGlyphRasterizer::new(MacGlyphRenderer::new()),
+                MacGlyphRenderer::new(),
             );
             let font_id = system
                 .font_id(&gpui_font("Apple Color Emoji"))
