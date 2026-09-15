@@ -821,12 +821,64 @@ pub(crate) struct LineLayoutCache {
 
 #[derive(Default)]
 struct FrameCache {
-    lines: FxHashMap<Arc<CacheKey>, Arc<LineLayout>>,
-    wrapped_lines: FxHashMap<Arc<CacheKey>, Arc<WrappedLineLayout>>,
-    inline_layouts: FxHashMap<Arc<InlineCacheKey>, Arc<InlineLayout>>,
-    used_lines: Vec<Arc<CacheKey>>,
-    used_wrapped_lines: Vec<Arc<CacheKey>>,
-    used_inline_layouts: Vec<Arc<InlineCacheKey>>,
+    lines: FrameLayouts<CacheKey, LineLayout>,
+    wrapped_lines: FrameLayouts<CacheKey, WrappedLineLayout>,
+    inline_layouts: FrameLayouts<InlineCacheKey, InlineLayout>,
+}
+
+struct FrameLayouts<Key, Value> {
+    entries: FxHashMap<Arc<Key>, Arc<Value>>,
+    used: Vec<Arc<Key>>,
+}
+
+impl<Key, Value> Default for FrameLayouts<Key, Value> {
+    fn default() -> Self {
+        Self {
+            entries: FxHashMap::default(),
+            used: Vec::new(),
+        }
+    }
+}
+
+impl<Key, Value> FrameLayouts<Key, Value>
+where
+    Key: Eq + Hash,
+{
+    fn get<Query>(&self, key: &Query) -> Option<&Arc<Value>>
+    where
+        Arc<Key>: Borrow<Query>,
+        Query: Eq + Hash + ?Sized,
+    {
+        self.entries.get(key)
+    }
+
+    fn remove_entry<Query>(&mut self, key: &Query) -> Option<(Arc<Key>, Arc<Value>)>
+    where
+        Arc<Key>: Borrow<Query>,
+        Query: Eq + Hash + ?Sized,
+    {
+        self.entries.remove_entry(key)
+    }
+
+    fn insert(&mut self, key: Arc<Key>, value: Arc<Value>) {
+        self.entries.insert(key.clone(), value);
+        self.used.push(key);
+    }
+
+    fn reuse(&mut self, previous: &mut Self, range: Range<usize>) {
+        for key in &previous.used[range] {
+            if let Some(layout) = previous.entries.remove(key) {
+                self.entries.insert(key.clone(), layout);
+            }
+
+            self.used.push(key.clone());
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.used.clear();
+    }
 }
 
 fn repaint_line_layout(layout: Arc<LineLayout>, runs: &[TextRun]) -> Arc<LineLayout> {
@@ -887,9 +939,9 @@ impl LineLayoutCache {
     pub fn layout_index(&self) -> LineLayoutIndex {
         let frame = self.current_frame.read();
         LineLayoutIndex {
-            lines_index: frame.used_lines.len(),
-            wrapped_lines_index: frame.used_wrapped_lines.len(),
-            inline_layouts_index: frame.used_inline_layouts.len(),
+            lines_index: frame.lines.used.len(),
+            wrapped_lines_index: frame.wrapped_lines.used.len(),
+            inline_layouts_index: frame.inline_layouts.used.len(),
         }
     }
 
@@ -912,40 +964,30 @@ impl LineLayoutCache {
         let mut previous_frame = &mut *self.previous_frame.lock();
         let mut current_frame = &mut *self.current_frame.write();
 
-        for key in &previous_frame.used_lines[range.start.lines_index..range.end.lines_index] {
-            if let Some((key, line)) = previous_frame.lines.remove_entry(key) {
-                current_frame.lines.insert(key, line);
-            }
-            current_frame.used_lines.push(key.clone());
-        }
-
-        for key in &previous_frame.used_wrapped_lines
-            [range.start.wrapped_lines_index..range.end.wrapped_lines_index]
-        {
-            if let Some((key, line)) = previous_frame.wrapped_lines.remove_entry(key) {
-                current_frame.wrapped_lines.insert(key, line);
-            }
-            current_frame.used_wrapped_lines.push(key.clone());
-        }
-
-        for key in &previous_frame.used_inline_layouts
-            [range.start.inline_layouts_index..range.end.inline_layouts_index]
-        {
-            if let Some((key, layout)) = previous_frame.inline_layouts.remove_entry(key) {
-                current_frame.inline_layouts.insert(key, layout);
-            }
-            current_frame.used_inline_layouts.push(key.clone());
-        }
+        current_frame.lines.reuse(
+            &mut previous_frame.lines,
+            range.start.lines_index..range.end.lines_index,
+        );
+        current_frame.wrapped_lines.reuse(
+            &mut previous_frame.wrapped_lines,
+            range.start.wrapped_lines_index..range.end.wrapped_lines_index,
+        );
+        current_frame.inline_layouts.reuse(
+            &mut previous_frame.inline_layouts,
+            range.start.inline_layouts_index..range.end.inline_layouts_index,
+        );
     }
 
     pub fn truncate_layouts(&self, index: LineLayoutIndex) {
         let mut current_frame = &mut *self.current_frame.write();
-        current_frame.used_lines.truncate(index.lines_index);
+        current_frame.lines.used.truncate(index.lines_index);
         current_frame
-            .used_wrapped_lines
+            .wrapped_lines
+            .used
             .truncate(index.wrapped_lines_index);
         current_frame
-            .used_inline_layouts
+            .inline_layouts
+            .used
             .truncate(index.inline_layouts_index);
     }
 
@@ -956,9 +998,6 @@ impl LineLayoutCache {
         curr_frame.lines.clear();
         curr_frame.wrapped_lines.clear();
         curr_frame.inline_layouts.clear();
-        curr_frame.used_lines.clear();
-        curr_frame.used_wrapped_lines.clear();
-        curr_frame.used_inline_layouts.clear();
     }
 
     pub fn layout_wrapped_line_with_options<Text>(
@@ -990,10 +1029,7 @@ impl LineLayoutCache {
         let previous_frame_entry = self.previous_frame.lock().wrapped_lines.remove_entry(key);
         if let Some((key, layout)) = previous_frame_entry {
             let mut current_frame = RwLockUpgradableReadGuard::upgrade(current_frame);
-            current_frame
-                .wrapped_lines
-                .insert(key.clone(), layout.clone());
-            current_frame.used_wrapped_lines.push(key);
+            current_frame.wrapped_lines.insert(key, layout.clone());
             repaint_wrapped_layout(layout, runs)
         } else {
             drop(current_frame);
@@ -1022,10 +1058,7 @@ impl LineLayoutCache {
             });
 
             let mut current_frame = self.current_frame.write();
-            current_frame
-                .wrapped_lines
-                .insert(key.clone(), layout.clone());
-            current_frame.used_wrapped_lines.push(key);
+            current_frame.wrapped_lines.insert(key, layout.clone());
 
             layout
         }
@@ -1057,8 +1090,7 @@ impl LineLayoutCache {
 
         let mut current_frame = RwLockUpgradableReadGuard::upgrade(current_frame);
         if let Some((key, layout)) = self.previous_frame.lock().lines.remove_entry(key) {
-            current_frame.lines.insert(key.clone(), layout.clone());
-            current_frame.used_lines.push(key);
+            current_frame.lines.insert(key, layout.clone());
             repaint_line_layout(layout, runs)
         } else {
             let text = SharedString::from(text);
@@ -1076,8 +1108,7 @@ impl LineLayoutCache {
                 options: TextLayoutOptions::default(),
             });
             let layout = Arc::new(layout);
-            current_frame.lines.insert(key.clone(), layout.clone());
-            current_frame.used_lines.push(key);
+            current_frame.lines.insert(key, layout.clone());
             layout
         }
     }
@@ -1095,10 +1126,7 @@ impl LineLayoutCache {
 
         if let Some((key, layout)) = previous_frame_entry {
             let mut current_frame = RwLockUpgradableReadGuard::upgrade(current_frame);
-            current_frame
-                .inline_layouts
-                .insert(key.clone(), layout.clone());
-            current_frame.used_inline_layouts.push(key);
+            current_frame.inline_layouts.insert(key, layout.clone());
 
             return layout;
         }
@@ -1108,10 +1136,7 @@ impl LineLayoutCache {
         let key = Arc::new(InlineCacheKey::from(request));
 
         let mut current_frame = self.current_frame.write();
-        current_frame
-            .inline_layouts
-            .insert(key.clone(), layout.clone());
-        current_frame.used_inline_layouts.push(key);
+        current_frame.inline_layouts.insert(key, layout.clone());
 
         layout
     }

@@ -60,6 +60,7 @@ use crate::{
 use anyhow::bail;
 use anyhow::{Context as _, Result};
 use async_task::Runnable;
+use collections::FxHashMap;
 use futures::channel::oneshot;
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
 use image::RgbaImage;
@@ -1849,6 +1850,52 @@ impl From<RenderSvgParams> for AtlasKey {
 impl From<RenderImageParams> for AtlasKey {
     fn from(params: RenderImageParams) -> Self {
         Self::Image(params)
+    }
+}
+
+#[doc(hidden)]
+#[derive(Default)]
+pub struct GlyphAtlasCache {
+    entries: FxHashMap<RenderGlyphParams, GlyphAtlasEntry>,
+}
+
+impl GlyphAtlasCache {
+    pub fn get(&self, params: &RenderGlyphParams) -> Option<GlyphAtlasEntry> {
+        self.entries.get(params).copied()
+    }
+
+    pub fn insert(
+        &mut self,
+        params: &RenderGlyphParams,
+        glyph: &RasterizedGlyph,
+        tile: Option<AtlasTile>,
+    ) -> GlyphAtlasEntry {
+        let entry = GlyphAtlasEntry {
+            tile,
+            bounds: glyph.bounds,
+            format: glyph.format,
+        };
+        self.entries.insert(params.clone(), entry);
+
+        entry
+    }
+
+    pub fn remove(&mut self, key: &AtlasKey) {
+        let AtlasKey::Glyph { params, format } = key else {
+            return;
+        };
+
+        if self
+            .entries
+            .get(params)
+            .is_some_and(|entry| entry.format == *format)
+        {
+            self.entries.remove(params);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
     }
 }
 

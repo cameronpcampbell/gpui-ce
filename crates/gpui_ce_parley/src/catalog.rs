@@ -18,23 +18,14 @@ pub enum SystemFonts {
 }
 
 #[derive(Clone)]
-pub(crate) struct CatalogState {
+struct CatalogState {
     collection: Collection,
     sources: SourceCache,
     generation: u64,
 }
 
 impl CatalogState {
-    #[cfg(test)]
-    fn register(&mut self, fonts: &[Cow<'static, [u8]>]) -> Result<()> {
-        let blobs = fonts
-            .iter()
-            .map(|bytes| Blob::from(bytes.as_ref().to_vec()))
-            .collect::<Vec<_>>();
-        self.register_blobs(&blobs)
-    }
-
-    pub(crate) fn register_blobs(&mut self, fonts: &[Blob<u8>]) -> Result<()> {
+    fn register_fonts(&mut self, fonts: &[Blob<u8>]) -> Result<()> {
         let mut validator = Collection::new(CollectionOptions {
             shared: false,
             system_fonts: false,
@@ -57,7 +48,7 @@ impl CatalogState {
 
 /// Shared font enumeration and registration for GPUI text backends.
 pub(crate) struct FontCatalog {
-    pub(crate) state: RwLock<CatalogState>,
+    state: RwLock<CatalogState>,
 }
 
 impl FontCatalog {
@@ -88,14 +79,23 @@ impl FontCatalog {
         }
     }
 
-    /// Registers every face found in the supplied font data.
-    #[cfg(test)]
-    fn register_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
+    pub(crate) fn register_fonts(&self, fonts: &[Blob<u8>]) -> Result<()> {
         let mut state = self.state.write();
         let mut next = state.clone();
-        next.register(&fonts)?;
+        next.register_fonts(fonts)?;
         *state = next;
+
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn register_bytes(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
+        let fonts = fonts
+            .into_iter()
+            .map(|bytes| Blob::from(bytes.into_owned()))
+            .collect::<Vec<_>>();
+
+        self.register_fonts(&fonts)
     }
 
     /// Returns the available family names in stable display order.
@@ -210,7 +210,7 @@ mod tests {
     fn registered_fonts_are_enumerated_and_resolved() {
         let catalog = FontCatalog::new(SystemFonts::Skip);
         catalog
-            .register_fonts(vec![
+            .register_bytes(vec![
                 Cow::Borrowed(IBM_PLEX),
                 Cow::Borrowed(IBM_PLEX_SEMIBOLD_ITALIC),
                 Cow::Borrowed(LILEX),
@@ -255,12 +255,12 @@ mod tests {
     #[test]
     fn font_registration_is_atomic() {
         let catalog = FontCatalog::new(SystemFonts::Skip);
-        catalog.register_fonts(vec![Cow::Borrowed(LILEX)]).unwrap();
+        catalog.register_bytes(vec![Cow::Borrowed(LILEX)]).unwrap();
         let families_before = catalog.family_names();
 
         assert!(
             catalog
-                .register_fonts(vec![Cow::Borrowed(IBM_PLEX), Cow::Borrowed(b"not a font")])
+                .register_bytes(vec![Cow::Borrowed(IBM_PLEX), Cow::Borrowed(b"not a font")])
                 .is_err()
         );
         assert_eq!(catalog.family_names(), families_before);

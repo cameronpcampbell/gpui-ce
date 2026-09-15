@@ -19,8 +19,8 @@ use std::{
 };
 
 use crate::{
-    CatalogState, FaceFamily, FaceRequest, FontCatalog, FontStore, GlyphRasterizer,
-    SwashGlyphRasterizer, SystemFonts,
+    FaceFamily, FaceRequest, FontCatalog, FontStore, GlyphRasterizer, SwashGlyphRasterizer,
+    SystemFonts,
 };
 
 use anyhow::{Context as _, Result};
@@ -49,6 +49,7 @@ use skrifa::instance::NormalizedCoord;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
+    hash::Hash,
     ops::Range,
     sync::{Arc, OnceLock},
 };
@@ -97,32 +98,42 @@ struct ParagraphCacheKey {
     line_height: Option<Pixels>,
 }
 
-#[derive(Default)]
-struct ParagraphCache {
-    entries: HashMap<ParagraphCacheKey, Layout<ParleyBrush>>,
-    insertion_order: VecDeque<ParagraphCacheKey>,
+struct BoundedCache<Key, Value, const CAPACITY: usize> {
+    entries: HashMap<Key, Value>,
+    insertion_order: VecDeque<Key>,
 }
 
-impl ParagraphCache {
-    const CAPACITY: usize = 512;
+impl<Key, Value, const CAPACITY: usize> Default for BoundedCache<Key, Value, CAPACITY> {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            insertion_order: VecDeque::new(),
+        }
+    }
+}
 
-    fn get(&self, key: &ParagraphCacheKey) -> Option<Layout<ParleyBrush>> {
+impl<Key, Value, const CAPACITY: usize> BoundedCache<Key, Value, CAPACITY>
+where
+    Key: Clone + Eq + Hash,
+    Value: Clone,
+{
+    fn get(&self, key: &Key) -> Option<Value> {
         self.entries.get(key).cloned()
     }
 
-    fn insert(&mut self, key: ParagraphCacheKey, layout: Layout<ParleyBrush>) {
+    fn insert(&mut self, key: Key, value: Value) {
         if self.entries.contains_key(&key) {
             return;
         }
 
-        if self.entries.len() == Self::CAPACITY
+        if self.entries.len() == CAPACITY
             && let Some(expired) = self.insertion_order.pop_front()
         {
             self.entries.remove(&expired);
         }
 
         self.insertion_order.push_back(key.clone());
-        self.entries.insert(key, layout);
+        self.entries.insert(key, value);
     }
 
     fn clear(&mut self) {
@@ -130,6 +141,8 @@ impl ParagraphCache {
         self.insertion_order.clear();
     }
 }
+
+type ParagraphCache = BoundedCache<ParagraphCacheKey, Layout<ParleyBrush>, 512>;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ParagraphResultCacheKey {
@@ -141,11 +154,7 @@ struct ParagraphResultCacheKey {
     alignment_width: Option<Pixels>,
 }
 
-#[derive(Default)]
-struct ParagraphResultCache {
-    entries: HashMap<ParagraphResultCacheKey, ParleyLayoutResult>,
-    insertion_order: VecDeque<ParagraphResultCacheKey>,
-}
+type ParagraphResultCache = BoundedCache<ParagraphResultCacheKey, ParleyLayoutResult, 512>;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct SourceMap {
@@ -493,15 +502,9 @@ fn prepare_bidi_text(
         .char_indices()
         .chain(std::iter::once((text.len(), '\0')))
     {
-        let mut closing = controls
-            .iter()
-            .filter(|scope| {
-                scope.start < scope.end && scope.end == source_idx && scope.end < text.len()
-            })
-            .collect::<Vec<_>>();
-        closing.sort_by_key(|scope| std::cmp::Reverse(scope.start));
-
-        for scope in closing {
+        for scope in controls.iter().rev().filter(|scope| {
+            scope.start < scope.end && scope.end == source_idx && scope.end < text.len()
+        }) {
             for control in &scope.close {
                 append_synthetic(*control, source_idx, &mut prepared, &mut backend_to_source);
             }
@@ -536,13 +539,11 @@ fn prepare_bidi_text(
         }
     }
 
-    let mut closing = controls
+    for scope in controls
         .iter()
+        .rev()
         .filter(|scope| scope.end == text.len())
-        .collect::<Vec<_>>();
-    closing.sort_by_key(|scope| std::cmp::Reverse(scope.start));
-
-    for scope in closing {
+    {
         for control in &scope.close {
             append_synthetic(*control, text.len(), &mut prepared, &mut backend_to_source);
         }
@@ -650,28 +651,7 @@ impl From<RasterStyleRequest> for RasterStyleCacheKey {
     }
 }
 
-#[derive(Default)]
-struct RasterStyleCache {
-    styles: HashMap<RasterStyleCacheKey, PreparedRasterStyle>,
-    insertion_order: VecDeque<RasterStyleCacheKey>,
-}
-
-impl RasterStyleCache {
-    const CAPACITY: usize = 256;
-
-    fn insert(&mut self, key: RasterStyleCacheKey, style: PreparedRasterStyle) {
-        if self.styles.insert(key, style).is_none() {
-            self.insertion_order.push_back(key);
-        }
-
-        while self.styles.len() > Self::CAPACITY {
-            let Some(oldest) = self.insertion_order.pop_front() else {
-                break;
-            };
-            self.styles.remove(&oldest);
-        }
-    }
-}
+type RasterStyleCache = BoundedCache<RasterStyleCacheKey, PreparedRasterStyle, 256>;
 
 #[derive(Clone, Copy)]
 struct ColorGlyphSupport {
@@ -701,34 +681,6 @@ impl ColorGlyphSupport {
             crate::ColorGlyphKind::Sbix => self.sbix,
             crate::ColorGlyphKind::Svg => self.svg,
         }
-    }
-}
-
-impl ParagraphResultCache {
-    const CAPACITY: usize = 512;
-
-    fn get(&self, key: &ParagraphResultCacheKey) -> Option<ParleyLayoutResult> {
-        self.entries.get(key).cloned()
-    }
-
-    fn insert(&mut self, key: ParagraphResultCacheKey, result: ParleyLayoutResult) {
-        if self.entries.contains_key(&key) {
-            return;
-        }
-
-        if self.entries.len() == Self::CAPACITY
-            && let Some(expired) = self.insertion_order.pop_front()
-        {
-            self.entries.remove(&expired);
-        }
-
-        self.insertion_order.push_back(key.clone());
-        self.entries.insert(key, result);
-    }
-
-    fn clear(&mut self) {
-        self.entries.clear();
-        self.insertion_order.clear();
     }
 }
 
@@ -764,7 +716,6 @@ struct ParleyLayout {
     layout: Layout<ParleyBrush>,
     inline_lines: Vec<InlineVisualLine>,
     text: Arc<str>,
-    text_len: usize,
     caret_stops: OnceLock<ParleyCaretStops>,
     graphemes: OnceLock<Vec<std::ops::Range<usize>>>,
 }
@@ -794,12 +745,10 @@ impl ParleyLayout {
         text: Arc<str>,
         inline_lines: Vec<InlineVisualLine>,
     ) -> Self {
-        let text_len = text.len();
         Self {
             layout,
             inline_lines,
             text,
-            text_len,
             caret_stops: OnceLock::new(),
             graphemes: OnceLock::new(),
         }
@@ -953,7 +902,7 @@ impl ParleyLayout {
 
     fn caret_stop_index(&self, caret: CaretPosition) -> Option<usize> {
         let stops = self.caret_stops.get_or_init(|| {
-            Self::collect_caret_stops(&self.layout, self.text_len, self.graphemes())
+            Self::collect_caret_stops(&self.layout, self.text.len(), self.graphemes())
         });
         if let Some(idx) = stops.indices.get(&caret).copied() {
             return Some(idx);
@@ -1011,6 +960,25 @@ impl ParleyLayout {
                 (metrics.block_min_coord + metrics.block_max_coord) * 0.5
             })
             .unwrap_or_else(|| self.layout.height())
+    }
+
+    fn line_index_from_point(point: Point<Pixels>, line_height: Pixels) -> usize {
+        if line_height > Pixels::ZERO && point.y >= Pixels::ZERO {
+            (point.y / line_height) as usize
+        } else {
+            0
+        }
+    }
+
+    fn line_index_at_block(&self, block: f32) -> usize {
+        self.layout
+            .lines()
+            .position(|line| {
+                let metrics = line.metrics();
+
+                block >= metrics.block_min_coord && block < metrics.block_max_coord
+            })
+            .unwrap_or_else(|| self.layout.len().saturating_sub(1))
     }
 
     fn inline_cluster_geometry(&self) -> Vec<ParleyClusterGeometry> {
@@ -1078,7 +1046,7 @@ impl ParleyLayout {
 
 impl PlatformTextLayout for ParleyLayout {
     fn len(&self) -> usize {
-        self.text_len
+        self.text.len()
     }
 
     fn line_count(&self) -> usize {
@@ -1086,7 +1054,7 @@ impl PlatformTextLayout for ParleyLayout {
     }
 
     fn size(&self) -> Size<Pixels> {
-        let width = if self.text_len == 0 && self.layout.inline_boxes().is_empty() {
+        let width = if self.text.is_empty() && self.layout.inline_boxes().is_empty() {
             Pixels::ZERO
         } else {
             px(self.layout.width())
@@ -1105,7 +1073,7 @@ impl PlatformTextLayout for ParleyLayout {
             .unwrap_or_else(|caret| caret)
             .index;
 
-        if self.text_len == 0 || point.y < Pixels::ZERO || line_height <= Pixels::ZERO {
+        if self.text.is_empty() || point.y < Pixels::ZERO || line_height <= Pixels::ZERO {
             return Err(closest);
         }
 
@@ -1136,11 +1104,7 @@ impl PlatformTextLayout for ParleyLayout {
         point: gpui::Point<Pixels>,
         line_height: Pixels,
     ) -> std::result::Result<CaretPosition, CaretPosition> {
-        let line_idx = if line_height > px(0.0) && point.y >= Pixels::ZERO {
-            (point.y / line_height) as usize
-        } else {
-            0
-        };
+        let line_idx = Self::line_index_from_point(point, line_height);
 
         let caret = Self::caret_position(Cursor::from_point(
             &self.layout,
@@ -1148,7 +1112,7 @@ impl PlatformTextLayout for ParleyLayout {
             self.native_y_for_line(line_idx),
         ));
 
-        if self.text_len == 0 {
+        if self.text.is_empty() {
             return Err(caret);
         }
 
@@ -1176,7 +1140,7 @@ impl PlatformTextLayout for ParleyLayout {
             return None;
         }
 
-        if self.text_len == 0 && self.layout.inline_boxes().is_empty() {
+        if self.text.is_empty() && self.layout.inline_boxes().is_empty() {
             return Some(Bounds::new(
                 point(self.inline_lines[0].origin.x, Pixels::ZERO),
                 size(Pixels::ZERO, line_height),
@@ -1185,15 +1149,8 @@ impl PlatformTextLayout for ParleyLayout {
 
         let cursor = self.cursor(caret);
         let geometry = cursor.geometry(&self.layout, 0.0);
-        let line_idx = self
-            .layout
-            .lines()
-            .position(|line| {
-                let metrics = line.metrics();
-                geometry.y0 as f32 >= metrics.block_min_coord
-                    && (geometry.y0 as f32) < metrics.block_max_coord
-            })
-            .unwrap_or_else(|| self.layout.len().saturating_sub(1));
+        let line_idx = self.line_index_at_block(geometry.y0 as f32);
+
         Some(Bounds::from_corners(
             point(px(geometry.x0 as f32), line_height * line_idx),
             point(px(geometry.x1 as f32), line_height * (line_idx + 1)),
@@ -1209,7 +1166,7 @@ impl PlatformTextLayout for ParleyLayout {
         caret: CaretPosition,
         direction: VisualDirection,
     ) -> Option<CaretPosition> {
-        if self.text_len == 0 && self.layout.inline_boxes().is_empty() {
+        if self.text.is_empty() && self.layout.inline_boxes().is_empty() {
             return None;
         }
 
@@ -1310,19 +1267,14 @@ impl PlatformTextLayout for ParleyLayout {
     ) -> (CaretPosition, Option<Pixels>) {
         let cursor = self.cursor(caret);
         let moved = match movement {
-            TextMovement::VisualLeft => {
-                return (
-                    self.move_visual(caret, VisualDirection::Left)
-                        .unwrap_or(caret),
-                    None,
-                );
-            }
-            TextMovement::VisualRight => {
-                return (
-                    self.move_visual(caret, VisualDirection::Right)
-                        .unwrap_or(caret),
-                    None,
-                );
+            TextMovement::VisualLeft | TextMovement::VisualRight => {
+                let direction = if movement == TextMovement::VisualLeft {
+                    VisualDirection::Left
+                } else {
+                    VisualDirection::Right
+                };
+
+                return (self.move_visual(caret, direction).unwrap_or(caret), None);
             }
             TextMovement::VisualWordLeft => cursor.previous_visual_word(&self.layout),
             TextMovement::VisualWordRight => cursor.next_visual_word(&self.layout),
@@ -1346,15 +1298,7 @@ impl PlatformTextLayout for ParleyLayout {
                 };
 
                 let geometry = cursor.geometry(&self.layout, 0.0);
-                let line_idx = self
-                    .layout
-                    .lines()
-                    .position(|line| {
-                        let metrics = line.metrics();
-                        geometry.y0 as f32 >= metrics.block_min_coord
-                            && (geometry.y0 as f32) < metrics.block_max_coord
-                    })
-                    .unwrap_or_else(|| self.layout.len().saturating_sub(1));
+                let line_idx = self.line_index_at_block(geometry.y0 as f32);
                 let target_idx = line_idx
                     .checked_add_signed(delta)
                     .filter(|&target_idx| self.layout.get(target_idx).is_some());
@@ -1385,11 +1329,7 @@ impl PlatformTextLayout for ParleyLayout {
         line_height: Pixels,
         kind: TextSelectionKind,
     ) -> std::ops::Range<usize> {
-        let line_idx = if line_height > Pixels::ZERO && point.y >= Pixels::ZERO {
-            (point.y / line_height) as usize
-        } else {
-            0
-        };
+        let line_idx = Self::line_index_from_point(point, line_height);
 
         let y = self.native_y_for_line(line_idx);
         match kind {
@@ -1748,7 +1688,6 @@ impl ParleyTextSystem {
                 block_offset,
                 native: result.layout.platform_layout,
                 newline,
-                is_rtl: result.is_rtl,
             });
             visual_lines.extend(result.layout.visual_lines);
             paint_fragments.extend(result.layout.paint_fragments);
@@ -1756,7 +1695,7 @@ impl ParleyTextSystem {
             positioned_inline_boxes.extend(result.inline_boxes);
         }
 
-        let is_rtl = paragraphs[0].is_rtl;
+        let is_rtl = visual_lines[0].direction.is_rtl();
         let platform_layout = ParleyDocumentLayout::new(paragraphs, text, document_size);
 
         Ok(ParleyLayoutResult {
@@ -2361,17 +2300,16 @@ fn push_face_families<'a>(
 fn push_parley_families<'a>(
     families: &mut Vec<FontFamilyName<'a>>,
     name: &'a str,
-    system_font_fallback: &str,
+    system_font_fallback: &'a str,
 ) {
     if name == ".SystemUIFont" {
         families.push(FontFamilyName::Generic(GenericFamily::SystemUi));
-        families.push(FontFamilyName::Named(Cow::Owned(
-            system_font_fallback.to_string(),
-        )));
+        families.push(FontFamilyName::Named(Cow::Borrowed(system_font_fallback)));
     } else {
-        families.push(FontFamilyName::Named(Cow::Owned(
-            canonical_family(name, system_font_fallback).to_string(),
-        )));
+        families.push(FontFamilyName::Named(Cow::Borrowed(canonical_family(
+            name,
+            system_font_fallback,
+        ))));
     }
 }
 
@@ -2387,13 +2325,10 @@ fn canonical_family<'a>(name: &'a str, system: &'a str) -> &'a str {
 impl PlatformTextSystem for ParleyTextSystem {
     fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
         let blobs = fonts
-            .iter()
-            .map(|bytes| fontique::Blob::from(bytes.as_ref().to_vec()))
+            .into_iter()
+            .map(|bytes| fontique::Blob::from(bytes.into_owned()))
             .collect::<Vec<_>>();
-        let mut state = self.catalog.state.write();
-        let mut next: CatalogState = state.clone();
-        next.register_blobs(&blobs)?;
-        *state = next;
+        self.catalog.register_fonts(&blobs)?;
         self.paragraph_cache.lock().clear();
         self.paragraph_result_cache.lock().clear();
 
@@ -2501,7 +2436,7 @@ impl PlatformTextSystem for ParleyTextSystem {
         };
 
         let key = request.into();
-        if let Some(style) = self.raster_styles.lock().styles.get(&key).copied() {
+        if let Some(style) = self.raster_styles.lock().get(&key) {
             return style;
         }
 
@@ -3045,7 +2980,7 @@ mod tests {
         }
 
         let line_height = px(24.0);
-        let wrapped = wrapped(layout.clone_for_test(), px(120.0));
+        let wrapped = wrapped(layout.clone(), px(120.0));
         let mut caret = wrapped
             .closest_caret_for_position(point(px(-100.0), line_height * 0.5), line_height)
             .unwrap_err();
@@ -3375,25 +3310,6 @@ mod tests {
         assert_eq!(layout.size.width, px(30.0));
         assert!(layout.size.height >= px(48.0));
         assert_inline_geometry_is_contained(&layout, layout.size.width);
-    }
-
-    trait CloneLineLayoutForTest {
-        fn clone_for_test(&self) -> LineLayout;
-    }
-
-    impl CloneLineLayoutForTest for LineLayout {
-        fn clone_for_test(&self) -> LineLayout {
-            LineLayout {
-                font_size: self.font_size,
-                width: self.width,
-                ascent: self.ascent,
-                descent: self.descent,
-                visual_lines: self.visual_lines.clone(),
-                paint_fragments: self.paint_fragments.clone(),
-                len: self.len,
-                platform_layout: self.platform_layout.clone(),
-            }
-        }
     }
 
     #[test]

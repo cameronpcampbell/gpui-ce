@@ -66,11 +66,11 @@ impl InlineDocument {
     }
 
     fn layout(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         request: InlineLayoutRequest<'_>,
         truncation: &TextLayoutTruncation,
         text_system: &WindowTextSystem,
-    ) -> (Arc<Self>, Arc<InlineLayout>) {
+    ) -> (Rc<Self>, Arc<InlineLayout>) {
         // Removing embedded widgets also requires suppressing their painting and hit regions.
         let Some(width) = truncation.width.filter(|_width| self.boxes.is_empty()) else {
             return (self.clone(), text_system.layout_inline(request));
@@ -117,7 +117,7 @@ impl InlineDocument {
                 });
                 let fits = fits(&layout);
 
-                ((Arc::new(document), layout), fits)
+                ((Rc::new(document), layout), fits)
             },
         );
 
@@ -169,13 +169,13 @@ struct InlineParagraphMeasurement {
     truncate_width: Option<Pixels>,
     options: crate::TextLayoutOptions,
     bidi_scopes: Vec<InlineBidiScope>,
-    document: Arc<InlineDocument>,
+    document: Rc<InlineDocument>,
     layout: Arc<InlineLayout>,
 }
 
 struct InlineParagraph {
     layout_id: LayoutId,
-    document: Arc<InlineDocument>,
+    document: Rc<InlineDocument>,
     measurement: Rc<RefCell<Option<InlineParagraphMeasurement>>>,
     paint_origin: Point<Pixels>,
 }
@@ -315,7 +315,7 @@ impl InlineParagraphCollector<'_> {
             return;
         }
 
-        let document = Arc::new(std::mem::take(&mut self.current_document));
+        let document = Rc::new(std::mem::take(&mut self.current_document));
         self.current_span_indices.clear();
         let measurement = Rc::new(RefCell::new(None));
 
