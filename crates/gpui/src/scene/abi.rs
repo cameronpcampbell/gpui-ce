@@ -59,6 +59,8 @@ pub const SCENE_BUFFER_LAYOUTS: &[SceneBufferLayout] = &[
         "Quad",
         order,
         border_style,
+        border_dashed_length,
+        border_dashed_gap,
         bounds,
         content_mask,
         background,

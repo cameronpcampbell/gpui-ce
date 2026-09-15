@@ -796,8 +796,13 @@ mod tests {
             .begin_upload(&context.queue, 4096, 8)
             .expect("mapped downlevel staging");
 
+        let custom_dash = Quad {
+            border_dashed_length: 4.0,
+            border_dashed_gap: 0.5,
+            ..Quad::default()
+        };
         let slice = upload
-            .write(&[Quad::default(), Quad::default()])
+            .write(&[custom_dash, Quad::default()])
             .expect("small batch must fit");
         // Downlevel draws start at instance zero; the base travels in the range offset.
         assert_eq!(slice.range(), 0..2);

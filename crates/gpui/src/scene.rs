@@ -29,6 +29,9 @@ pub type PathVertex_ScaledPixels = PathVertex<ScaledPixels>;
 #[expect(missing_docs)]
 pub type DrawOrder = u32;
 
+pub(crate) const DEFAULT_BORDER_DASHED_LENGTH: f32 = 2.0;
+pub(crate) const DEFAULT_BORDER_DASHED_GAP: f32 = 1.0;
+
 /// A boolean with the same four-byte representation in Rust and WGSL.
 /// Scene structs use it over one-byte [`bool`] to keep the storage-buffer ABI explicit.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -782,20 +785,41 @@ impl<'a> Iterator for BatchIterator<'a> {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 #[repr(C)]
 #[expect(missing_docs)]
 pub struct Quad {
     pub order: DrawOrder,
     pub border_style: BorderStyle,
+    pub border_dashed_length: f32,
+    pub border_dashed_gap: f32,
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub background: Background,
-    pub border_color: SceneHsla,
+    pub border_color: Background,
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
     pub corner_smoothing: f32,
     pub padding: u32,
+}
+
+impl Default for Quad {
+    fn default() -> Self {
+        Self {
+            order: Default::default(),
+            border_style: Default::default(),
+            border_dashed_length: DEFAULT_BORDER_DASHED_LENGTH,
+            border_dashed_gap: DEFAULT_BORDER_DASHED_GAP,
+            bounds: Default::default(),
+            content_mask: Default::default(),
+            background: Default::default(),
+            border_color: Default::default(),
+            corner_radii: Default::default(),
+            border_widths: Default::default(),
+            corner_smoothing: Default::default(),
+            padding: Default::default(),
+        }
+    }
 }
 
 impl From<Quad> for Primitive {
@@ -832,7 +856,7 @@ pub struct Shadow {
     pub bounds: Bounds<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
-    pub color: SceneHsla,
+    pub color: Background,
     pub element_bounds: Bounds<ScaledPixels>,
     pub element_corner_radii: Corners<ScaledPixels>,
     /// Whether this shadow is rendered inside the element instead of outside it.

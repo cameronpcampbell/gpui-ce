@@ -4,17 +4,17 @@
 #![cfg(feature = "test-support")]
 
 use gpui::{
-    AtlasKey, AtlasTile, BackdropFilter, BorderStyle, Bounds, ContentMask, Corners, DevicePixels,
-    Edges, Hsla, MonochromeSprite, PlatformHeadlessRenderer, Point, PolychromeSprite, Quad,
-    RenderImageParams, RenderSvgParams, ScaledFilter, ScaledPixels, Scene, ShaderBool, Shadow,
-    Size, Underline, checkerboard, solid_background,
+    AtlasKey, AtlasTile, BackdropFilter, BorderStyle, Bounds, ColorSpace, ContentMask, Corners,
+    DevicePixels, Edges, Hsla, MonochromeSprite, PlatformHeadlessRenderer, Point, PolychromeSprite,
+    Quad, RenderImageParams, RenderSvgParams, ScaledFilter, ScaledPixels, Scene, ShaderBool,
+    Shadow, Size, Underline, checkerboard, linear_color_stop, linear_gradient, solid_background,
 };
 use gpui_ce_wgpu::WgpuHeadlessRenderer;
 use smallvec::smallvec;
 use std::borrow::Cow;
 
 const TARGET: Size<DevicePixels> = Size {
-    width: DevicePixels(200),
+    width: DevicePixels(310),
     height: DevicePixels(100),
 };
 
@@ -33,7 +33,7 @@ fn bounds(x: f32, y: f32, w: f32, h: f32) -> Bounds<ScaledPixels> {
 
 fn full_mask() -> ContentMask<ScaledPixels> {
     ContentMask {
-        bounds: bounds(0.0, 0.0, 200.0, 100.0),
+        bounds: bounds(0.0, 0.0, 310.0, 100.0),
     }
 }
 
@@ -85,6 +85,7 @@ fn every_primitive_kind_renders() {
 
     let mut scene = Scene::default();
     let green: Hsla = gpui::rgb_to_hsla(gpui::rgb(0x00ff00));
+    let red: Hsla = gpui::rgb_to_hsla(gpui::rgb(0xff0000));
     let white: Hsla = gpui::rgb_to_hsla(gpui::rgb(0xffffff));
     let blue: Hsla = gpui::rgb_to_hsla(gpui::rgb(0x0000ff));
 
@@ -166,6 +167,39 @@ fn every_primitive_kind_renders() {
         background: solid_background(blue),
         ..Default::default()
     });
+    // 8–9. Gradient drop and inset shadows. The inset gradient stays in the element's paint
+    // coordinate space while its offset hole is smaller.
+    let gradient = linear_gradient(
+        90.0,
+        linear_color_stop(red, 0.0),
+        linear_color_stop(blue, 1.0),
+    )
+    .color_space(ColorSpace::Srgb);
+    let gradient_drop_bounds = bounds(210.0, 10.0, 40.0, 40.0);
+    scene.insert_primitive(Shadow {
+        order: 0,
+        blur_radius: ScaledPixels(0.0),
+        bounds: gradient_drop_bounds,
+        corner_radii: Default::default(),
+        content_mask: full_mask(),
+        color: gradient,
+        element_bounds: gradient_drop_bounds,
+        element_corner_radii: Default::default(),
+        inset: ShaderBool::Disabled,
+        corner_smoothing: 0.0,
+    });
+    scene.insert_primitive(Shadow {
+        order: 0,
+        blur_radius: ScaledPixels(0.0),
+        bounds: bounds(266.0, 16.0, 28.0, 28.0),
+        corner_radii: Default::default(),
+        content_mask: full_mask(),
+        color: gradient,
+        element_bounds: bounds(260.0, 10.0, 40.0, 40.0),
+        element_corner_radii: Default::default(),
+        inset: ShaderBool::Enabled,
+        corner_smoothing: 0.0,
+    });
     scene.finish();
     let quad_batches: Vec<_> = scene
         .render_commands()
@@ -209,6 +243,25 @@ fn every_primitive_kind_renders() {
     check("polychrome sprite", 55, 65, (255, 0, 0));
     check("second quad batch", 85, 85, (0, 0, 255));
     check("background", 190, 90, (0, 0, 0));
+    check("gradient inset shadow hole", 280, 30, (0, 0, 0));
+    let mut check_dominant = |name: &str, x: u32, y: u32, red_dominant: bool| {
+        let (r, g, b, _) = px(x, y);
+        let matches = if red_dominant {
+            r > 180 && g < 80 && b < 80
+        } else {
+            b > 180 && r < 80 && g < 80
+        };
+        if !matches {
+            failures.push(format!(
+                "{name} at ({x},{y}): got ({r},{g},{b}), expected {} dominance",
+                if red_dominant { "red" } else { "blue" }
+            ));
+        }
+    };
+    check_dominant("gradient drop shadow left edge", 212, 30, true);
+    check_dominant("gradient drop shadow right edge", 247, 30, false);
+    check_dominant("gradient inset shadow left edge", 262, 30, true);
+    check_dominant("gradient inset shadow right edge", 297, 30, false);
     if !failures.is_empty() {
         let path = std::env::temp_dir().join("gpui_headless_primitives.png");
         image.save(&path).ok();

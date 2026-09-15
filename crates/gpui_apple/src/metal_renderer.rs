@@ -2543,6 +2543,38 @@ mod tests {
             (1..8).contains(&border_like),
             "top edge mixes dash and gap texels: {edge:?}",
         );
+
+        let mut custom_border = Scene::default();
+        custom_border.insert_primitive(Quad {
+            bounds: box_bounds,
+            content_mask: ContentMask { bounds: full },
+            background: solid_background(hsla(0.05, 0.8, 0.45, 1.0)),
+            border_style: BorderStyle::Dashed,
+            border_dashed_length: 4.0,
+            border_dashed_gap: 0.5,
+            border_color: hsla(0.6, 0.9, 0.7, 1.0).into(),
+            corner_radii: Corners::all(ScaledPixels(2.0)),
+            border_widths: Edges::all(ScaledPixels(1.0)),
+            ..Default::default()
+        });
+
+        custom_border.finish();
+        let Some(custom_image) = render_for_contracts(
+            &mut renderer,
+            &custom_border,
+            Size {
+                width: DevicePixels(16),
+                height: DevicePixels(16),
+            },
+        ) else {
+            return;
+        };
+
+        assert_ne!(
+            image.as_raw(),
+            custom_image.as_raw(),
+            "custom dash length and gap change the rendered border",
+        );
     }
 
     #[test]
