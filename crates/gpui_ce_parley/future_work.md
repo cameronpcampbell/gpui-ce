@@ -1,6 +1,6 @@
 # Future work
 
-Verified against Parley 0.11.1 and upstream `main` on 2026-09-15.
+Verified against Parley 0.11.1, upstream `main`, and PR #766 on 2026-09-15.
 
 ## Vertical alignment
 
@@ -8,9 +8,9 @@ GPUI handles `baseline`, `middle`, `top`, `bottom`, and their line metrics itsel
 
 - Parley 0.11.1 supports bottom-to-baseline alignment only.
 - [PR #639](https://github.com/linebender/parley/pull/639) added custom box baselines and matching line-height calculation to `main`, but not the other modes.
-- Draft [PR #579](https://github.com/linebender/parley/pull/579) implements and tests all four modes, but is not merge-ready and uses an older `InlineBox` API.
+- [PR #766](https://github.com/linebender/parley/pull/766) implements and tests all four modes for spans and inline boxes, including line-height calculation. It is open and unmerged.
 
-Keep `align_inline_boxes` until equivalent support is released and passes GPUI's inline-layout tests.
+Keep `align_inline_boxes` until #766 ships and passes GPUI's inline-layout tests, especially `middle` alignment and line metrics.
 
 ## Out-of-flow boxes
 
