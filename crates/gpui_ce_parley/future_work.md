@@ -12,6 +12,10 @@ GPUI handles `baseline`, `middle`, `top`, `bottom`, and their line metrics itsel
 
 Keep `align_inline_boxes` until #766 ships and passes GPUI's inline-layout tests, especially `middle` alignment and line metrics.
 
+## Whitespace at wrapped line starts
+
+Extend GPUI's existing whitespace behavior once Parley implements the necessary support tracked in [issue #619](https://github.com/linebender/parley/issues/619).
+
 ## Out-of-flow boxes
 
 [`InlineBoxKind::OutOfFlow`](https://docs.rs/parley/0.11.1/parley/enum.InlineBoxKind.html#variant.OutOfFlow) already exists in 0.11.1. It can provide an absolute inline child's static position without affecting text flow. Taffy must still handle sizing, insets, and final placement.
