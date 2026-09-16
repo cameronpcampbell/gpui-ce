@@ -1,6 +1,7 @@
 use gpui::{
-    Bounds, CaretMovement, CaretPosition, Pixels, PlatformTextLayout, Point, Size, TextMovement,
-    TextSelectionKind, VisualDirection, point, px,
+    Bounds, CaretMovement, CaretPosition, Pixels, PlatformTextLayout, Point, Size,
+    TextBoundary as Boundary, TextDirection as Direction, TextMovement, TextSelectionKind,
+    VisualDirection, point, px,
 };
 use std::{ops::Range, sync::Arc};
 use unicode_segmentation::UnicodeSegmentation as _;
@@ -347,27 +348,37 @@ impl PlatformTextLayout for ParleyDocumentLayout {
         preferred_x: Option<Pixels>,
     ) -> CaretMovement {
         let caret = self.refresh_caret(caret);
-        let direction = match movement {
-            TextMovement::VisualLeft | TextMovement::VisualWordLeft => Some(VisualDirection::Left),
-            TextMovement::VisualRight | TextMovement::VisualWordRight => {
-                Some(VisualDirection::Right)
-            }
+        let direction = match movement.direction {
+            Direction::Left => Some(VisualDirection::Left),
+            Direction::Right => Some(VisualDirection::Right),
             _ => None,
         };
 
-        if matches!(
-            movement,
-            TextMovement::VisualLeft | TextMovement::VisualRight
-        ) {
+        if movement.boundary == Boundary::Cluster && direction.is_some() {
             return CaretMovement {
                 caret: self.move_visual(caret, direction.unwrap()).unwrap_or(caret),
                 preferred_x: None,
             };
         }
 
-        if matches!(movement, TextMovement::VisualUp | TextMovement::VisualDown) {
+        if movement.boundary == Boundary::Document {
+            let caret = match movement.direction {
+                Direction::Start => CaretPosition::attached_to_next_cluster(0),
+                Direction::End => CaretPosition::attached_to_previous_cluster(self.len()),
+                _ => caret,
+            };
+
+            return CaretMovement {
+                caret: self.refresh_caret(caret),
+                preferred_x: None,
+            };
+        }
+
+        if movement.boundary == Boundary::VisualLine
+            && matches!(movement.direction, Direction::Up | Direction::Down)
+        {
             let geometry = self.caret_geometry(caret, px(1.0)).unwrap();
-            let delta = if movement == TextMovement::VisualUp {
+            let delta = if movement.direction == Direction::Up {
                 -1
             } else {
                 1

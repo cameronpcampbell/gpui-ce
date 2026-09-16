@@ -1503,7 +1503,7 @@ mod tests {
                 state.move_to(text.len(), cx);
                 state.delete_linear(
                     NavigationDirection::Back,
-                    crate::editable_text::TextBoundary::Graphmeme,
+                    crate::editable_text::TextBoundary::Cluster,
                     cx,
                 );
             });

@@ -5,8 +5,8 @@ use crate::editable_text::{
 use gpui::{
     App, Bounds, CaretAffinity, CaretPosition, CaretSelection, ClipboardItem, Context, ElementId,
     Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, NavigationDirection, Pixels,
-    Point, ShapedText, Subscription, TextMovement, TextSelectionKind, UTF16Selection, Window,
-    point, utf16_to_utf8_offset,
+    Point, ShapedText, Subscription, TextDirection as Direction, TextMovement, TextSelectionKind,
+    UTF16Selection, Window, point, utf16_to_utf8_offset,
 };
 use std::{
     borrow::Cow,
@@ -365,20 +365,29 @@ impl EditableTextState {
         let caret = self.caret();
 
         let movement = match (direction, boundary) {
-            (NavigationDirection::Back, TextBoundary::Graphmeme) => {
+            (NavigationDirection::Back, TextBoundary::Cluster) => {
                 return document
                     .logical_cluster_before(caret)
                     .filter(|range| !range.is_empty() && range.end <= self.as_str().len());
             }
-            (NavigationDirection::Forward, TextBoundary::Graphmeme) => {
+            (NavigationDirection::Forward, TextBoundary::Cluster) => {
                 return document
                     .logical_cluster_after(caret)
                     .filter(|range| !range.is_empty() && range.end <= self.as_str().len());
             }
-            (NavigationDirection::Back, TextBoundary::Word) => TextMovement::VisualWordLeft,
-            (NavigationDirection::Forward, TextBoundary::Word) => TextMovement::VisualWordRight,
-            (NavigationDirection::Back, TextBoundary::Line) => TextMovement::HardLineStart,
-            (NavigationDirection::Forward, TextBoundary::Line) => TextMovement::HardLineEnd,
+            (NavigationDirection::Back, TextBoundary::Word) => {
+                Direction::Left.with_boundary(TextBoundary::Word)
+            }
+            (NavigationDirection::Forward, TextBoundary::Word) => {
+                Direction::Right.with_boundary(TextBoundary::Word)
+            }
+            (NavigationDirection::Back, TextBoundary::HardLine) => {
+                Direction::Start.with_boundary(TextBoundary::HardLine)
+            }
+            (NavigationDirection::Forward, TextBoundary::HardLine) => {
+                Direction::End.with_boundary(TextBoundary::HardLine)
+            }
+            (_, TextBoundary::VisualLine) => return None,
             (_, TextBoundary::Document) => return None,
         };
 
@@ -429,9 +438,15 @@ impl EditableTextState {
 
         let (endpoint_edge, target_edge) =
             if opposite_visual_position.y > endpoint_visual_position.y {
-                (TextMovement::VisualLineEnd, TextMovement::VisualLineStart)
+                (
+                    Direction::End.with_boundary(TextBoundary::VisualLine),
+                    Direction::Start.with_boundary(TextBoundary::VisualLine),
+                )
             } else if opposite_visual_position.y < endpoint_visual_position.y {
-                (TextMovement::VisualLineStart, TextMovement::VisualLineEnd)
+                (
+                    Direction::Start.with_boundary(TextBoundary::VisualLine),
+                    Direction::End.with_boundary(TextBoundary::VisualLine),
+                )
             } else {
                 return endpoint;
             };
@@ -453,8 +468,11 @@ impl EditableTextState {
 
         let range = match self.current_document() {
             Some(document) => {
-                let [start, end] = [TextMovement::HardLineStart, TextMovement::HardLineEnd]
-                    .map(|movement| document.caret_movement(caret, movement, None).caret.index);
+                let [start, end] = [Direction::Start, Direction::End].map(|direction| {
+                    let movement = direction.with_boundary(TextBoundary::HardLine);
+
+                    document.caret_movement(caret, movement, None).caret.index
+                });
 
                 start.min(end)..start.max(end)
             }
@@ -462,13 +480,13 @@ impl EditableTextState {
                 let start = self.storage.offset_from_caret(
                     caret.index,
                     NavigationDirection::Back,
-                    TextBoundary::Line,
+                    TextBoundary::HardLine,
                 );
 
                 let end = self.storage.offset_from_caret(
                     caret.index,
                     NavigationDirection::Forward,
-                    TextBoundary::Line,
+                    TextBoundary::HardLine,
                 );
 
                 start..end
@@ -479,7 +497,7 @@ impl EditableTextState {
             let end = self.storage.offset_from_caret(
                 range.end,
                 NavigationDirection::Forward,
-                TextBoundary::Graphmeme,
+                TextBoundary::Cluster,
             );
 
             return range.start..end;
@@ -489,7 +507,7 @@ impl EditableTextState {
             let start = self.storage.offset_from_caret(
                 range.start,
                 NavigationDirection::Back,
-                TextBoundary::Graphmeme,
+                TextBoundary::Cluster,
             );
 
             return start..range.end;
@@ -699,37 +717,13 @@ impl EditableTextState {
             return;
         }
 
-        let direction = if matches!(
-            movement,
-            TextMovement::VisualLeft
-                | TextMovement::VisualWordLeft
-                | TextMovement::VisualUp
-                | TextMovement::VisualLineStart
-                | TextMovement::HardLineStart
-        ) {
-            NavigationDirection::Back
-        } else {
-            NavigationDirection::Forward
+        let direction = match movement.direction {
+            Direction::Left | Direction::Up | Direction::Start => NavigationDirection::Back,
+            Direction::Right | Direction::Down | Direction::End => NavigationDirection::Forward,
         };
-
-        let boundary = match movement {
-            TextMovement::VisualLeft | TextMovement::VisualRight => TextBoundary::Graphmeme,
-            TextMovement::VisualWordLeft | TextMovement::VisualWordRight => TextBoundary::Word,
-            TextMovement::VisualUp
-            | TextMovement::VisualDown
-            | TextMovement::VisualLineStart
-            | TextMovement::VisualLineEnd
-            | TextMovement::HardLineStart
-            | TextMovement::HardLineEnd => TextBoundary::Line,
-        };
-
-        let horizontal = matches!(
-            movement,
-            TextMovement::VisualLeft
-                | TextMovement::VisualRight
-                | TextMovement::VisualWordLeft
-                | TextMovement::VisualWordRight
-        );
+        let boundary = movement.boundary;
+        let horizontal = matches!(movement.direction, Direction::Left | Direction::Right)
+            && matches!(boundary, TextBoundary::Cluster | TextBoundary::Word);
         let idx = if !extend && !self.selected_range.is_empty() && horizontal {
             let range = self.selected_range();
 
@@ -742,7 +736,13 @@ impl EditableTextState {
                 .offset_from_caret(self.caret_pos(), direction, boundary)
         };
 
-        self.set_caret(CaretPosition::attached_to_next_cluster(idx), extend, cx);
+        let caret = if boundary == TextBoundary::Document {
+            self.caret_for_index(idx)
+        } else {
+            CaretPosition::attached_to_next_cluster(idx)
+        };
+
+        self.set_caret(caret, extend, cx);
     }
 
     /// Sets the current selection to be the entire text in the storage medium
@@ -801,10 +801,10 @@ impl EditableTextState {
         use NavigationDirection::*;
         use TextBoundary::*;
 
-        let line_start = self.storage.offset_from_caret(caret_pos, Back, Line);
-        let line_end = self.storage.offset_from_caret(caret_pos, Forward, Line);
+        let line_start = self.storage.offset_from_caret(caret_pos, Back, HardLine);
+        let line_end = self.storage.offset_from_caret(caret_pos, Forward, HardLine);
         let line_end_with_newline = if line_end < self.storage.content_utf8().len() {
-            self.storage.offset_from_caret(line_end, Forward, Graphmeme)
+            self.storage.offset_from_caret(line_end, Forward, Cluster)
         } else {
             line_end
         };
@@ -1075,11 +1075,11 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn delete_left(&mut self, _: &DeleteLeft, _: &mut Window, cx: &mut Context<'app, Self>) {
-        self.delete_linear(NavigationDirection::Back, TextBoundary::Graphmeme, cx);
+        self.delete_linear(NavigationDirection::Back, TextBoundary::Cluster, cx);
     }
 
     fn delete_right(&mut self, _: &DeleteRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.delete_linear(NavigationDirection::Forward, TextBoundary::Graphmeme, cx);
+        self.delete_linear(NavigationDirection::Forward, TextBoundary::Cluster, cx);
     }
 
     fn delete_word_left(
@@ -1106,7 +1106,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         _w: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
-        self.delete_linear(NavigationDirection::Back, TextBoundary::Line, cx);
+        self.delete_linear(NavigationDirection::Back, TextBoundary::HardLine, cx);
     }
 
     fn delete_to_line_end(
@@ -1115,57 +1115,57 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         _w: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
-        self.delete_linear(NavigationDirection::Forward, TextBoundary::Line, cx);
+        self.delete_linear(NavigationDirection::Forward, TextBoundary::HardLine, cx);
     }
 
     fn nav_left(&mut self, _: &NavLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.nav_semantic(TextMovement::VisualLeft, cx);
+        self.nav_semantic(Direction::Left.with_boundary(TextBoundary::Cluster), cx);
     }
 
     fn nav_right(&mut self, _: &NavRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.nav_semantic(TextMovement::VisualRight, cx);
+        self.nav_semantic(Direction::Right.with_boundary(TextBoundary::Cluster), cx);
     }
 
     fn nav_up(&mut self, _: &NavUp, _window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
-            self.nav_semantic(TextMovement::VisualLineStart, cx);
+            self.nav_semantic(Direction::Start.with_boundary(TextBoundary::VisualLine), cx);
             return;
         }
 
-        self.nav_semantic(TextMovement::VisualUp, cx);
+        self.nav_semantic(Direction::Up.with_boundary(TextBoundary::VisualLine), cx);
     }
 
     fn nav_down(&mut self, _: &NavDown, _window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
-            self.nav_semantic(TextMovement::VisualLineEnd, cx);
+            self.nav_semantic(Direction::End.with_boundary(TextBoundary::VisualLine), cx);
             return;
         }
 
-        self.nav_semantic(TextMovement::VisualDown, cx);
+        self.nav_semantic(Direction::Down.with_boundary(TextBoundary::VisualLine), cx);
     }
 
     fn nav_line_start(&mut self, _: &NavLineStart, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.nav_semantic(TextMovement::HardLineStart, cx);
+        self.nav_semantic(Direction::Start.with_boundary(TextBoundary::HardLine), cx);
     }
 
     fn nav_line_end(&mut self, _: &NavLineEnd, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.nav_semantic(TextMovement::HardLineEnd, cx);
+        self.nav_semantic(Direction::End.with_boundary(TextBoundary::HardLine), cx);
     }
 
     fn nav_start(&mut self, _: &NavDocumentStart, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.nav_linear(NavigationDirection::Back, TextBoundary::Document, cx);
+        self.nav_semantic(Direction::Start.with_boundary(TextBoundary::Document), cx);
     }
 
     fn nav_end(&mut self, _: &NavDocumentEnd, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.nav_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
+        self.nav_semantic(Direction::End.with_boundary(TextBoundary::Document), cx);
     }
 
     fn nav_left_word(&mut self, _: &NavWordLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.nav_semantic(TextMovement::VisualWordLeft, cx);
+        self.nav_semantic(Direction::Left.with_boundary(TextBoundary::Word), cx);
     }
 
     fn nav_right_word(&mut self, _: &NavWordRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.nav_semantic(TextMovement::VisualWordRight, cx);
+        self.nav_semantic(Direction::Right.with_boundary(TextBoundary::Word), cx);
     }
 
     fn select_all(&mut self, _: &SelectAll, _w: &mut Window, cx: &mut Context<'app, Self>) {
@@ -1173,31 +1173,31 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn select_left(&mut self, _: &SelectLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.select_semantic(TextMovement::VisualLeft, cx);
+        self.select_semantic(Direction::Left.with_boundary(TextBoundary::Cluster), cx);
     }
 
     fn select_right(&mut self, _: &SelectRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.select_semantic(TextMovement::VisualRight, cx);
+        self.select_semantic(Direction::Right.with_boundary(TextBoundary::Cluster), cx);
     }
 
     fn select_up(&mut self, _: &SelectUp, _window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
             // semantically equivalent to select document
-            self.select_linear(NavigationDirection::Back, TextBoundary::Document, cx);
+            self.select_semantic(Direction::Start.with_boundary(TextBoundary::Document), cx);
             return;
         }
 
-        self.select_semantic(TextMovement::VisualUp, cx);
+        self.select_semantic(Direction::Up.with_boundary(TextBoundary::VisualLine), cx);
     }
 
     fn select_down(&mut self, _: &SelectDown, _window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
             // semantically equivalent to select document
-            self.select_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
+            self.select_semantic(Direction::End.with_boundary(TextBoundary::Document), cx);
             return;
         }
 
-        self.select_semantic(TextMovement::VisualDown, cx);
+        self.select_semantic(Direction::Down.with_boundary(TextBoundary::VisualLine), cx);
     }
 
     fn select_start(
@@ -1206,11 +1206,11 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         _w: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
-        self.select_linear(NavigationDirection::Back, TextBoundary::Document, cx);
+        self.select_semantic(Direction::Start.with_boundary(TextBoundary::Document), cx);
     }
 
     fn select_end(&mut self, _: &SelectDocumentEnd, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.select_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
+        self.select_semantic(Direction::End.with_boundary(TextBoundary::Document), cx);
     }
 
     fn select_left_word(
@@ -1219,7 +1219,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         _w: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
-        self.select_semantic(TextMovement::VisualWordLeft, cx);
+        self.select_semantic(Direction::Left.with_boundary(TextBoundary::Word), cx);
     }
 
     fn select_right_word(
@@ -1228,7 +1228,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         _w: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
-        self.select_semantic(TextMovement::VisualWordRight, cx);
+        self.select_semantic(Direction::Right.with_boundary(TextBoundary::Word), cx);
     }
 
     fn cut(&mut self, _: &Cut, _w: &mut Window, cx: &mut Context<'app, Self>) {
@@ -1888,14 +1888,14 @@ mod tests {
             use TextBoundary::*;
             let storage = &input.storage;
 
-            assert_eq!(storage.offset_from_caret(0, Back, Line), 0);
-            assert_eq!(storage.offset_from_caret(3, Back, Line), 0);
-            assert_eq!(storage.offset_from_caret(6, Back, Line), 6);
-            assert_eq!(storage.offset_from_caret(13, Back, Line), 13);
+            assert_eq!(storage.offset_from_caret(0, Back, HardLine), 0);
+            assert_eq!(storage.offset_from_caret(3, Back, HardLine), 0);
+            assert_eq!(storage.offset_from_caret(6, Back, HardLine), 6);
+            assert_eq!(storage.offset_from_caret(13, Back, HardLine), 13);
 
-            assert_eq!(storage.offset_from_caret(0, Forward, Line), 5);
-            assert_eq!(storage.offset_from_caret(6, Forward, Line), 12);
-            assert_eq!(storage.offset_from_caret(13, Forward, Line), 18);
+            assert_eq!(storage.offset_from_caret(0, Forward, HardLine), 5);
+            assert_eq!(storage.offset_from_caret(6, Forward, HardLine), 12);
+            assert_eq!(storage.offset_from_caret(13, Forward, HardLine), 18);
         });
     }
 
@@ -1967,7 +1967,7 @@ mod tests {
         update_test_input(view, cx, |input, _window, _cx| {
             use NavigationDirection::*;
             use TextBoundary::*;
-            assert_eq!(input.storage.offset_from_caret(0, Back, Graphmeme), 0);
+            assert_eq!(input.storage.offset_from_caret(0, Back, Cluster), 0);
         });
     }
 
@@ -1978,8 +1978,8 @@ mod tests {
             use NavigationDirection::*;
             use TextBoundary::*;
             let storage = &input.storage;
-            assert_eq!(storage.offset_from_caret(5, Forward, Graphmeme), 5);
-            assert_eq!(storage.offset_from_caret(100, Forward, Graphmeme), 5);
+            assert_eq!(storage.offset_from_caret(5, Forward, Cluster), 5);
+            assert_eq!(storage.offset_from_caret(100, Forward, Cluster), 5);
         });
     }
 

@@ -25,9 +25,10 @@ use gpui::{
     InlineTextStyle, InlineVisualLine, LineLayout, PaintFragment, PaintStyle, ParagraphDirection,
     Pixels, PlatformTextLayout, PlatformTextSystem, Point, PositionedInlineBox,
     PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, ResolvedDirection,
-    ShapedGlyph, Size, TextAlign, TextLayoutOptions, TextLayoutRequest, TextMovement,
-    TextRenderingMode, TextRun, TextSelectionKind, UnicodeBidi, VisualDirection, VisualLine,
-    align_inline_boxes, point, px, size,
+    ShapedGlyph, Size, TextAlign, TextBoundary as Boundary, TextDirection as Direction,
+    TextLayoutOptions, TextLayoutRequest, TextMovement, TextRenderingMode, TextRun,
+    TextSelectionKind, UnicodeBidi, VisualDirection, VisualLine, align_inline_boxes, point, px,
+    size,
 };
 
 use parking_lot::{Mutex, RwLock};
@@ -360,9 +361,9 @@ impl PlatformTextLayout for SourceMappedLayout {
         movement: TextMovement,
         preferred_x: Option<Pixels>,
     ) -> CaretMovement {
-        let direction = match movement {
-            TextMovement::VisualLeft => Some(VisualDirection::Left),
-            TextMovement::VisualRight => Some(VisualDirection::Right),
+        let direction = match (movement.direction, movement.boundary) {
+            (Direction::Left, Boundary::Cluster) => Some(VisualDirection::Left),
+            (Direction::Right, Boundary::Cluster) => Some(VisualDirection::Right),
             _ => None,
         };
 
@@ -1199,9 +1200,9 @@ impl PlatformTextLayout for ParleyLayout {
         preferred_x: Option<Pixels>,
     ) -> CaretMovement {
         let cursor = self.cursor(caret);
-        let moved = match movement {
-            TextMovement::VisualLeft | TextMovement::VisualRight => {
-                let direction = if movement == TextMovement::VisualLeft {
+        let moved = match (movement.direction, movement.boundary) {
+            (Direction::Left | Direction::Right, Boundary::Cluster) => {
+                let direction = if movement.direction == Direction::Left {
                     VisualDirection::Left
                 } else {
                     VisualDirection::Right
@@ -1212,22 +1213,33 @@ impl PlatformTextLayout for ParleyLayout {
                     preferred_x: None,
                 };
             }
-            TextMovement::VisualWordLeft => cursor.previous_visual_word(&self.layout),
-            TextMovement::VisualWordRight => cursor.next_visual_word(&self.layout),
-            TextMovement::VisualLineStart => Selection::from(cursor)
+            (Direction::Left, Boundary::Word) => cursor.previous_visual_word(&self.layout),
+            (Direction::Right, Boundary::Word) => cursor.next_visual_word(&self.layout),
+            (Direction::Start, Boundary::VisualLine) => Selection::from(cursor)
                 .line_start(&self.layout, false)
                 .focus(),
-            TextMovement::VisualLineEnd => Selection::from(cursor)
+            (Direction::End, Boundary::VisualLine) => Selection::from(cursor)
                 .line_end(&self.layout, false)
                 .focus(),
-            TextMovement::HardLineStart => Selection::from(cursor)
+            (Direction::Start, Boundary::HardLine) => Selection::from(cursor)
                 .hard_line_start(&self.layout, false)
                 .focus(),
-            TextMovement::HardLineEnd => Selection::from(cursor)
+            (Direction::End, Boundary::HardLine) => Selection::from(cursor)
                 .hard_line_end(&self.layout, false)
                 .focus(),
-            TextMovement::VisualUp | TextMovement::VisualDown => {
-                let delta = if movement == TextMovement::VisualUp {
+            (Direction::Start | Direction::End, Boundary::Document) => {
+                let delta = if movement.direction == Direction::Start {
+                    isize::MIN
+                } else {
+                    isize::MAX
+                };
+
+                Selection::from(cursor)
+                    .move_lines(&self.layout, delta, false)
+                    .focus()
+            }
+            (Direction::Up | Direction::Down, Boundary::VisualLine) => {
+                let delta = if movement.direction == Direction::Up {
                     -1
                 } else {
                     1
@@ -1260,6 +1272,7 @@ impl PlatformTextLayout for ParleyLayout {
                     preferred_x: Some(px(x)),
                 };
             }
+            _ => cursor,
         };
 
         CaretMovement {
@@ -3378,8 +3391,14 @@ mod tests {
             assert_eq!(selected, source.content.start..source.separator.end);
 
             for (movement, expected) in [
-                (TextMovement::HardLineStart, source.content.start),
-                (TextMovement::HardLineEnd, source.content.end),
+                (
+                    Direction::Start.with_boundary(Boundary::HardLine),
+                    source.content.start,
+                ),
+                (
+                    Direction::End.with_boundary(Boundary::HardLine),
+                    source.content.end,
+                ),
             ] {
                 assert_eq!(
                     native.caret_movement(before, movement, None).caret.index,
@@ -3393,7 +3412,11 @@ mod tests {
         assert_eq!(native.refresh_caret(inside).index, crlf);
 
         let start = CaretPosition::default();
-        let down = native.caret_movement(start, TextMovement::VisualDown, None);
+        let down = native.caret_movement(
+            start,
+            Direction::Down.with_boundary(Boundary::VisualLine),
+            None,
+        );
         assert_eq!(
             geometry(down.caret).origin.y,
             geometry(start).origin.y + line_height
@@ -3404,8 +3427,11 @@ mod tests {
         let mut preferred_x = None;
 
         for line_idx in 1..native.line_count() {
-            let moved =
-                native.caret_movement(vertical_caret, TextMovement::VisualDown, preferred_x);
+            let moved = native.caret_movement(
+                vertical_caret,
+                Direction::Down.with_boundary(Boundary::VisualLine),
+                preferred_x,
+            );
             vertical_caret = moved.caret;
             preferred_x = moved.preferred_x;
 
@@ -3414,17 +3440,41 @@ mod tests {
         }
 
         for line_idx in (0..native.line_count() - 1).rev() {
-            let moved = native.caret_movement(vertical_caret, TextMovement::VisualUp, preferred_x);
+            let moved = native.caret_movement(
+                vertical_caret,
+                Direction::Up.with_boundary(Boundary::VisualLine),
+                preferred_x,
+            );
             vertical_caret = moved.caret;
             preferred_x = moved.preferred_x;
 
             assert_eq!(geometry(vertical_caret).origin.y, line_height * line_idx);
         }
 
+        let document_start = native.caret_movement(
+            CaretPosition::attached_to_previous_cluster(text.len()),
+            Direction::Start.with_boundary(Boundary::Document),
+            None,
+        );
+        assert_eq!(
+            document_start.caret,
+            CaretPosition::attached_to_next_cluster(0)
+        );
+
+        let document_end = native.caret_movement(
+            CaretPosition::attached_to_next_cluster(0),
+            Direction::End.with_boundary(Boundary::Document),
+            None,
+        );
+        assert_eq!(
+            document_end.caret,
+            CaretPosition::attached_to_previous_cluster(text.len())
+        );
+
         for direction in [VisualDirection::Left, VisualDirection::Right] {
             let movement = match direction {
-                VisualDirection::Left => TextMovement::VisualWordLeft,
-                VisualDirection::Right => TextMovement::VisualWordRight,
+                VisualDirection::Left => Direction::Left.with_boundary(Boundary::Word),
+                VisualDirection::Right => Direction::Right.with_boundary(Boundary::Word),
             };
             let edge_x = match direction {
                 VisualDirection::Left => px(-100.),
@@ -4013,14 +4063,22 @@ mod tests {
         let middle = CaretPosition::new(2, CaretAffinity::Downstream);
         assert_eq!(
             single_line
-                .caret_movement(middle, TextMovement::VisualUp, None)
+                .caret_movement(
+                    middle,
+                    Direction::Up.with_boundary(Boundary::VisualLine),
+                    None,
+                )
                 .caret
                 .index,
             0
         );
         assert_eq!(
             single_line
-                .caret_movement(middle, TextMovement::VisualDown, None)
+                .caret_movement(
+                    middle,
+                    Direction::Down.with_boundary(Boundary::VisualLine),
+                    None,
+                )
                 .caret
                 .index,
             single_line_text.len()
@@ -4048,7 +4106,7 @@ mod tests {
         let selection = CaretSelection::new(end, start);
         let collapsed_left = layout.move_selection(
             selection,
-            TextMovement::VisualLeft,
+            Direction::Left.with_boundary(Boundary::Cluster),
             false,
             None,
             line_height,
@@ -4057,7 +4115,7 @@ mod tests {
         assert_eq!(collapsed_left.selection.focus, start);
         let collapsed_right = layout.move_selection(
             selection,
-            TextMovement::VisualRight,
+            Direction::Right.with_boundary(Boundary::Cluster),
             false,
             None,
             line_height,
@@ -4066,7 +4124,7 @@ mod tests {
 
         let word = layout.move_selection(
             CaretSelection::collapsed(start),
-            TextMovement::VisualWordRight,
+            Direction::Right.with_boundary(Boundary::Word),
             true,
             None,
             line_height,
@@ -4075,7 +4133,7 @@ mod tests {
         assert_ne!(word.selection.focus, start);
         let down = layout.move_selection(
             CaretSelection::collapsed(word.selection.focus),
-            TextMovement::VisualDown,
+            Direction::Down.with_boundary(Boundary::VisualLine),
             false,
             None,
             line_height,
@@ -4084,7 +4142,7 @@ mod tests {
         let maintained_x = layout
             .move_selection(
                 down.selection,
-                TextMovement::VisualDown,
+                Direction::Down.with_boundary(Boundary::VisualLine),
                 false,
                 down.preferred_x,
                 line_height,

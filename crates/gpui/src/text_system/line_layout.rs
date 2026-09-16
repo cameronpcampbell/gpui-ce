@@ -304,29 +304,58 @@ pub enum VisualDirection {
     Right,
 }
 
-/// A semantic caret movement handled by the native text layout.
+/// The direction of a semantic text movement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TextMovement {
-    /// Move to the preceding visual caret stop.
-    VisualLeft,
-    /// Move to the following visual caret stop.
-    VisualRight,
-    /// Move to the preceding word in visual order.
-    VisualWordLeft,
-    /// Move to the following word in visual order.
-    VisualWordRight,
+pub enum TextDirection {
+    /// Move toward the visual left.
+    Left,
+    /// Move toward the visual right.
+    Right,
     /// Move to the visual row above.
-    VisualUp,
+    Up,
     /// Move to the visual row below.
-    VisualDown,
-    /// Move to the start of the current visual row.
-    VisualLineStart,
-    /// Move to the end of the current visual row.
-    VisualLineEnd,
-    /// Move to the start of the current hard line.
-    HardLineStart,
-    /// Move to the end of the current hard line.
-    HardLineEnd,
+    Down,
+    /// Move to the start of a line or document boundary.
+    Start,
+    /// Move to the end of a line or document boundary.
+    End,
+}
+
+/// The boundary at which a semantic text movement stops.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TextBoundary {
+    /// A backend-native shaping cluster and caret stop.
+    Cluster,
+    /// A word boundary.
+    Word,
+    /// A soft-wrapped visual row.
+    VisualLine,
+    /// A line delimited by a hard break.
+    HardLine,
+    /// The complete text document.
+    Document,
+}
+
+/// A semantic caret movement handled by the native text layout.
+///
+/// Left and right movement use cluster or word boundaries. Up and down movement use visual-line
+/// boundaries. Start and end movement use visual-line, hard-line, or document boundaries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TextMovement {
+    /// The direction in which to move.
+    pub direction: TextDirection,
+    /// The boundary at which to stop.
+    pub boundary: TextBoundary,
+}
+
+impl TextDirection {
+    /// Creates a semantic movement in this direction with the requested boundary.
+    pub const fn with_boundary(self, boundary: TextBoundary) -> TextMovement {
+        TextMovement {
+            direction: self,
+            boundary,
+        }
+    }
 }
 
 /// A semantic selection derived from a point.
@@ -723,15 +752,14 @@ impl ShapedTextLayout {
         preferred_x: Option<Pixels>,
         line_height: Pixels,
     ) -> CaretSelectionMove {
-        let forward = matches!(
-            movement,
-            TextMovement::VisualRight | TextMovement::VisualWordRight
+        let forward = movement.direction == TextDirection::Right;
+        let horizontal = matches!(
+            movement.direction,
+            TextDirection::Left | TextDirection::Right
+        ) && matches!(
+            movement.boundary,
+            TextBoundary::Cluster | TextBoundary::Word
         );
-        let horizontal = forward
-            || matches!(
-                movement,
-                TextMovement::VisualLeft | TextMovement::VisualWordLeft
-            );
 
         if !extend && !selection.is_empty() && horizontal {
             let focus_visual_position =

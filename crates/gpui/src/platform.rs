@@ -54,7 +54,8 @@ use crate::{
 use crate::{
     CaretAffinity, CaretMovement, CaretPosition, InlineVisualLine, PaintFragment, PaintStyle,
     PlatformTextLayout, PositionedInlineBox, ResolvedDirection, ShapedGlyph, TextAlign,
-    TextMovement, TextSelectionKind, VisualDirection, VisualLine, align_inline_boxes, size,
+    TextBoundary, TextDirection, TextMovement, TextSelectionKind, VisualDirection, VisualLine,
+    align_inline_boxes, size,
 };
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use anyhow::bail;
@@ -1361,25 +1362,28 @@ impl PlatformTextLayout for TestPlatformTextLayout {
         movement: TextMovement,
         preferred_x: Option<Pixels>,
     ) -> CaretMovement {
-        let idx = match movement {
-            TextMovement::VisualLeft => {
+        use TextBoundary::*;
+        use TextDirection::*;
+
+        let idx = match (movement.direction, movement.boundary) {
+            (Left, Cluster) => {
                 self.move_visual(caret, VisualDirection::Left)
                     .unwrap_or(caret)
                     .index
             }
-            TextMovement::VisualRight => {
+            (Right, Cluster) => {
                 self.move_visual(caret, VisualDirection::Right)
                     .unwrap_or(caret)
                     .index
             }
-            TextMovement::VisualWordLeft => {
+            (Left, Word) => {
                 let prefix = &self.text[..caret.index.min(self.text.len())];
                 let trimmed = prefix.trim_end_matches(char::is_whitespace);
                 trimmed.rfind(char::is_whitespace).map_or(0, |idx| {
                     idx + trimmed[idx..].chars().next().unwrap().len_utf8()
                 })
             }
-            TextMovement::VisualWordRight => {
+            (Right, Word) => {
                 let start = caret.index.min(self.text.len());
                 let suffix = &self.text[start..];
                 let word_end = suffix.find(char::is_whitespace).unwrap_or(suffix.len());
@@ -1390,15 +1394,12 @@ impl PlatformTextLayout for TestPlatformTextLayout {
                         .find(|character: char| !character.is_whitespace())
                         .unwrap_or(rest.len())
             }
-            TextMovement::VisualLineStart
-            | TextMovement::HardLineStart
-            | TextMovement::VisualUp => 0,
-            TextMovement::VisualLineEnd | TextMovement::HardLineEnd | TextMovement::VisualDown => {
-                self.len()
-            }
+            (Up | Start, VisualLine) | (Start, HardLine | Document) => 0,
+            (Down | End, VisualLine) | (End, HardLine | Document) => self.len(),
+            _ => caret.index,
         };
 
-        let preferred_x = matches!(movement, TextMovement::VisualUp | TextMovement::VisualDown)
+        let preferred_x = matches!(movement.direction, TextDirection::Up | TextDirection::Down)
             .then(|| {
                 preferred_x.unwrap_or_else(|| {
                     self.caret_geometry(caret, self.size.height)
