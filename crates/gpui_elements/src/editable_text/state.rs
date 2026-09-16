@@ -586,15 +586,12 @@ impl EditableTextState {
 
     fn set_selection(
         &mut self,
-        mut selection: CaretSelection,
+        selection: CaretSelection,
         caret_position_x: Option<Pixels>,
         cx: &mut Context<Self>,
     ) {
         cx.emit(CaretNotify::PauseBlinking);
-        let storage_len = self.as_str().len();
-        selection.focus.index = selection.focus.index.min(storage_len);
-        selection.anchor.index = selection.anchor.index.min(storage_len);
-        self.selected_range = selection;
+        self.selected_range = selection.min(self.as_str().len());
         self.caret_position_x = caret_position_x;
 
         self.scroll_to_caret();

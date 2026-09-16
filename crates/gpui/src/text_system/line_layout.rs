@@ -501,6 +501,14 @@ impl CaretSelection {
         self.anchor.index.min(self.focus.index)..self.anchor.index.max(self.focus.index)
     }
 
+    /// Limits both selection endpoints to `max_idx` while preserving their affinities.
+    pub fn min(mut self, max_idx: usize) -> Self {
+        self.focus.index = self.focus.index.min(max_idx);
+        self.anchor.index = self.anchor.index.min(max_idx);
+
+        self
+    }
+
     /// Moves the active end while preserving the anchor.
     pub fn with_focus(self, focus: CaretPosition) -> Self {
         Self { focus, ..self }
