@@ -17,7 +17,7 @@ use gpui_util::ResultExt;
 use smallvec::SmallVec;
 use std::{
     borrow::Cow,
-    cell::{Cell, RefCell},
+    cell::{Cell, Ref, RefCell},
     mem,
     ops::{Deref, DerefMut, Range},
     rc::Rc,
@@ -637,10 +637,9 @@ struct TextLayoutInner {
     len: usize,
     document: Option<WrappedLine>,
     line_height: Pixels,
-    wrap_width: Option<Pixels>,
     truncate_width: Option<Pixels>,
     options: TextLayoutOptions,
-    size: Option<Size<Pixels>>,
+    size: Size<Pixels>,
     bounds: Option<Bounds<Pixels>>,
 }
 
@@ -796,22 +795,16 @@ pub struct TextLayoutTruncation {
 impl TextLayoutTruncation {
     /// Creates a truncation by using the overflow as the affix, given the provided width.
     fn overflow_width(text_overflow: TextOverflow, width: Option<Pixels>) -> Self {
-        match text_overflow {
-            TextOverflow::Truncate(s) => TextLayoutTruncation {
-                width,
-                affix: s,
-                source: TruncateFrom::End,
-            },
-            TextOverflow::TruncateStart(s) => TextLayoutTruncation {
-                width,
-                affix: s,
-                source: TruncateFrom::Start,
-            },
-            TextOverflow::TruncateMiddle(s) => TextLayoutTruncation {
-                width,
-                affix: s,
-                source: TruncateFrom::Middle,
-            },
+        let (affix, source) = match text_overflow {
+            TextOverflow::Truncate(affix) => (affix, TruncateFrom::End),
+            TextOverflow::TruncateStart(affix) => (affix, TruncateFrom::Start),
+            TextOverflow::TruncateMiddle(affix) => (affix, TruncateFrom::Middle),
+        };
+
+        Self {
+            width,
+            affix,
+            source,
         }
     }
 }
@@ -823,17 +816,9 @@ impl TextLayout {
         known_dimensions: Size<Option<Pixels>>,
         available_space: Size<crate::AvailableSpace>,
     ) -> Option<Pixels> {
-        use crate::AvailableSpace::*;
         match white_space {
-            // Text does not wrap, no max width
             WhiteSpace::Nowrap => None,
-            // If the text wraps, return the already calculated width.
-            WhiteSpace::Normal => known_dimensions.width.or(match available_space.width {
-                // Otherwise if the available space is a concrete value, then that is the width to wrap to.
-                Definite(x) => Some(x),
-                // If the wrapping is content-based, then there is no wrapping of text.
-                MaxContent | MinContent => None,
-            }),
+            WhiteSpace::Normal => Self::evaluate_alignment_width(known_dimensions, available_space),
         }
     }
 
@@ -857,10 +842,7 @@ impl TextLayout {
         match text_style.text_overflow.clone() {
             Some(text_overflow) => {
                 // Overflow is checked against each visual row's available width.
-                let width = known_dimensions.width.or(match available_space.width {
-                    crate::AvailableSpace::Definite(width) => Some(width),
-                    _ => None,
-                });
+                let width = Self::evaluate_alignment_width(known_dimensions, available_space);
 
                 TextLayoutTruncation::overflow_width(text_overflow, width)
             }
@@ -870,6 +852,34 @@ impl TextLayout {
                 source: TruncateFrom::End,
             },
         }
+    }
+
+    pub(crate) fn layout_options(
+        text_style: &TextStyle,
+        known_dimensions: Size<Option<Pixels>>,
+        available_space: Size<crate::AvailableSpace>,
+        resolved_direction: crate::ResolvedDirection,
+        unicode_bidi: UnicodeBidi,
+    ) -> (TextLayoutOptions, TextLayoutTruncation) {
+        let alignment_width = Self::evaluate_alignment_width(known_dimensions, available_space);
+        let direction = match unicode_bidi {
+            UnicodeBidi::Plaintext => ParagraphDirection::Auto,
+            _ => resolved_direction.into(),
+        };
+        let options = TextLayoutOptions {
+            wrap_width: match text_style.white_space {
+                WhiteSpace::Normal => alignment_width,
+                WhiteSpace::Nowrap => None,
+            },
+            line_clamp: text_style.line_clamp,
+            alignment_width,
+            text_align: text_style.text_align,
+            direction,
+            unicode_bidi,
+        };
+        let truncation = Self::evaluate_overflow(text_style, known_dimensions, available_space);
+
+        (options, truncation)
     }
 
     /// Conditionally applies truncation to some text and outputs how the text should be displayed.
@@ -940,48 +950,29 @@ impl TextLayout {
             let element_state = self.clone();
 
             move |known_dimensions, available_space, window, cx| {
-                let wrap_width = Self::evaluate_wrap_width(
-                    &text_style.white_space,
+                let unicode_bidi = window.resolved_unicode_bidi();
+                let (options, truncation) = Self::layout_options(
+                    &text_style,
                     known_dimensions,
                     available_space,
-                );
-
-                let truncation =
-                    Self::evaluate_overflow(&text_style, known_dimensions, available_space);
-                let truncate_width = truncation.width;
-                let alignment_width =
-                    Self::evaluate_alignment_width(known_dimensions, available_space);
-                let unicode_bidi = window.resolved_unicode_bidi();
-                let direction = if unicode_bidi == UnicodeBidi::Plaintext {
-                    ParagraphDirection::Auto
-                } else {
-                    window.resolved_direction().into()
-                };
-                let options = TextLayoutOptions {
-                    wrap_width,
-                    line_clamp: text_style.line_clamp,
-                    alignment_width,
-                    text_align: text_style.text_align,
-                    direction,
+                    window.resolved_direction(),
                     unicode_bidi,
-                };
+                );
+                let truncate_width = truncation.width;
 
                 // Only use cached layout if:
-                // 1. We have a cached size
-                // 2. wrap_width matches (or both are None)
-                // 3. truncate_width is None (if truncate_width is Some, we need to re-layout
+                // 1. truncate_width is None (if truncate_width is Some, we need to re-layout
                 //    because the previous layout may have been computed without truncation)
-                // 4. the cached layout was not truncated (a truncated layout answers an
+                // 2. the cached layout was not truncated (a truncated layout answers an
                 //    unconstrained probe with the truncated size, which poisons intrinsic
                 //    sizing with whatever width some earlier measure pass happened to use)
+                // 3. the complete layout options match.
                 if let Some(text_layout) = element_state.0.layout.borrow().as_ref()
-                    && let Some(size) = text_layout.size
-                    && (wrap_width.is_none() || wrap_width == text_layout.wrap_width)
                     && truncate_width.is_none()
                     && text_layout.truncate_width.is_none()
                     && text_layout.options == options
                 {
-                    return size;
+                    return text_layout.size;
                 }
 
                 let (text, runs) = Self::apply_truncation(
@@ -989,7 +980,7 @@ impl TextLayout {
                     &text_style,
                     font_size,
                     line_height,
-                    wrap_width,
+                    options.wrap_width,
                     &truncation,
                     &runs,
                     options.direction,
@@ -997,45 +988,26 @@ impl TextLayout {
                     window,
                     cx,
                 );
-                let len = text.len();
-
-                let Some(document) = window
+                let document = window
                     .text_system()
                     .shape_text_with_options(text, font_size, &runs, options)
-                    .log_err()
-                else {
-                    element_state
-                        .0
-                        .layout
-                        .borrow_mut()
-                        .replace(TextLayoutInner {
-                            document: None,
-                            len: 0,
-                            line_height,
-                            wrap_width,
-                            truncate_width,
-                            options,
-                            size: Some(Size::default()),
-                            bounds: None,
-                        });
-
-                    return Size::default();
-                };
-
-                let size = document.size(line_height);
+                    .log_err();
+                let size = document
+                    .as_ref()
+                    .map_or_else(Size::default, |document| document.size(line_height));
+                let len = document.as_ref().map_or(0, |document| document.text.len());
 
                 element_state
                     .0
                     .layout
                     .borrow_mut()
                     .replace(TextLayoutInner {
-                        document: Some(document),
+                        document,
                         len,
                         line_height,
-                        wrap_width,
                         truncate_width,
                         options,
-                        size: Some(size),
+                        size,
                         bounds: None,
                     });
 
@@ -1107,12 +1079,15 @@ impl TextLayout {
         }
     }
 
+    fn measured(&self) -> Ref<'_, TextLayoutInner> {
+        Ref::map(self.0.layout.borrow(), |layout| {
+            layout.as_ref().expect("measurement has not been performed")
+        })
+    }
+
     /// Get the byte index into the input of the pixel position.
     pub fn index_for_position(&self, mut position: Point<Pixels>) -> Result<usize, usize> {
-        let element_state = self.0.layout.borrow();
-        let element_state = element_state
-            .as_ref()
-            .expect("measurement has not been performed");
+        let element_state = self.measured();
         let bounds = element_state
             .bounds
             .expect("prepaint has not been performed");
@@ -1131,10 +1106,7 @@ impl TextLayout {
 
     /// Get the pixel position for the given byte index.
     pub fn position_for_index(&self, index: usize) -> Option<Point<Pixels>> {
-        let element_state = self.0.layout.borrow();
-        let element_state = element_state
-            .as_ref()
-            .expect("measurement has not been performed");
+        let element_state = self.measured();
         let bounds = element_state
             .bounds
             .expect("prepaint has not been performed");
@@ -1146,21 +1118,14 @@ impl TextLayout {
 
     /// Retrieve the layout for the line containing the given byte index.
     pub fn line_layout_for_index(&self, index: usize) -> Option<Arc<WrappedLineLayout>> {
-        let element_state = self.0.layout.borrow();
-        let element_state = element_state
-            .as_ref()
-            .expect("measurement has not been performed");
+        let element_state = self.measured();
         let document = element_state.document.as_ref()?;
         (index <= document.len()).then(|| document.layout.clone())
     }
 
     /// Retrieve all line layouts in source order.
     pub fn line_layouts(&self) -> SmallVec<[Arc<WrappedLineLayout>; 1]> {
-        self.0
-            .layout
-            .borrow()
-            .as_ref()
-            .expect("measurement has not been performed")
+        self.measured()
             .document
             .iter()
             .map(|document| document.layout.clone())
@@ -1169,26 +1134,22 @@ impl TextLayout {
 
     /// The bounds of this layout.
     pub fn bounds(&self) -> Bounds<Pixels> {
-        self.0.layout.borrow().as_ref().unwrap().bounds.unwrap()
+        self.measured().bounds.unwrap()
     }
 
     /// The line height for this layout.
     pub fn line_height(&self) -> Pixels {
-        self.0.layout.borrow().as_ref().unwrap().line_height
+        self.measured().line_height
     }
 
     /// The UTF-8 length of the underlying text.
     pub fn len(&self) -> usize {
-        self.0.layout.borrow().as_ref().unwrap().len
+        self.measured().len
     }
 
     /// The text for this layout.
     pub fn text(&self) -> String {
-        self.0
-            .layout
-            .borrow()
-            .as_ref()
-            .unwrap()
+        self.measured()
             .document
             .as_ref()
             .map_or_else(String::new, |document| document.text.to_string())
@@ -1197,8 +1158,9 @@ impl TextLayout {
     /// The text for this layout (with soft-wraps as newlines)
     pub fn wrapped_text(&self) -> String {
         let mut accumulator = String::new();
+        let element_state = self.measured();
 
-        if let Some(document) = &self.0.layout.borrow().as_ref().unwrap().document {
+        if let Some(document) = &element_state.document {
             for visual_line in document.layout.visual_lines() {
                 accumulator.push_str(&document.text[visual_line.text_range.clone()]);
                 accumulator.push('\n');

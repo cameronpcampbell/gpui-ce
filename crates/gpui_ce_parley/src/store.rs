@@ -12,13 +12,12 @@ use gpui::{
 use skrifa::{
     FontRef, MetadataProvider as _, Tag,
     bitmap::{BitmapFormat, BitmapStrikes},
-    color::{
-        Brush as ColorBrush, ColorGlyphFormat, ColorPainter, CompositeMode,
-        Transform as ColorTransform,
-    },
-    instance::{Location, NormalizedCoord, Size as SkrifaSize},
+    instance::{NormalizedCoord, Size as SkrifaSize},
     outline::{DrawSettings, OutlinePen},
-    raw::TableProvider as _,
+    raw::{
+        TableProvider as _,
+        tables::{colr::Colr, svg::SVGDocumentRecord},
+    },
 };
 use std::collections::{HashMap, hash_map::Entry};
 use swash::{
@@ -209,39 +208,29 @@ pub(crate) struct LoadedFont {
 
 /// Color glyph data parsed once for all glyphs in a shaped run.
 pub(crate) struct ColorGlyphClassifier<'a> {
-    colr: skrifa::color::ColorGlyphCollection<'a>,
+    colr: Option<Colr<'a>>,
     sbix: Option<skrifa::raw::tables::sbix::Sbix<'a>>,
     cbdt_strikes: Option<skrifa::bitmap::BitmapStrikes<'a>>,
-    svg_ranges: Vec<(u32, u32)>,
+    svg_records: &'a [SVGDocumentRecord],
 }
 
 impl ColorGlyphClassifier<'_> {
     fn new(font: FontRef<'_>) -> ColorGlyphClassifier<'_> {
-        let svg_ranges = font
+        let svg_records = font
             .svg()
             .ok()
             .and_then(|svg| svg.svg_document_list().ok())
-            .map(|documents| {
-                documents
-                    .document_records()
-                    .iter()
-                    .map(|record| {
-                        (
-                            record.start_glyph_id().to_u32(),
-                            record.end_glyph_id().to_u32(),
-                        )
-                    })
-                    .collect()
-            })
+            .map(|documents| documents.document_records())
             .unwrap_or_default();
+
         ColorGlyphClassifier {
-            colr: font.color_glyphs(),
+            colr: font.colr().ok(),
             sbix: font.sbix().ok(),
             cbdt_strikes: skrifa::bitmap::BitmapStrikes::with_format(
                 &font,
                 skrifa::bitmap::BitmapFormat::Cbdt,
             ),
-            svg_ranges,
+            svg_records,
         }
     }
 
@@ -251,14 +240,14 @@ impl ColorGlyphClassifier<'_> {
         glyph_id: GlyphId,
     ) -> impl Iterator<Item = ColorGlyphKind> {
         let skrifa_id = skrifa::GlyphId::new(glyph_id.0);
-        let has_colr_v1 = self
-            .colr
-            .get_with_format(skrifa_id, skrifa::color::ColorGlyphFormat::ColrV1)
-            .is_some();
-        let has_colr_v0 = self
-            .colr
-            .get_with_format(skrifa_id, skrifa::color::ColorGlyphFormat::ColrV0)
-            .is_some();
+        let has_colr_v1 = self.colr.as_ref().is_some_and(|colr| {
+            colr.v1_base_glyph(skrifa_id)
+                .is_ok_and(|glyph| glyph.is_some())
+        });
+        let has_colr_v0 = self.colr.as_ref().is_some_and(|colr| {
+            colr.v0_base_glyph(skrifa_id)
+                .is_ok_and(|glyph| glyph.is_some())
+        });
 
         let has_sbix_bitmap = self
             .sbix
@@ -268,10 +257,12 @@ impl ColorGlyphClassifier<'_> {
             .cbdt_strikes
             .as_ref()
             .is_some_and(|strikes| strikes.iter().any(|strike| strike.get(skrifa_id).is_some()));
-        let has_svg = self
-            .svg_ranges
-            .iter()
-            .any(|&(start, end)| (start..=end).contains(&glyph_id.0));
+        let has_svg = self.svg_records.iter().any(|record| {
+            let start = record.start_glyph_id().to_u32();
+            let end = record.end_glyph_id().to_u32();
+
+            (start..=end).contains(&glyph_id.0)
+        });
 
         [
             has_colr_v1.then_some(ColorGlyphKind::ColrV1),
@@ -304,53 +295,23 @@ impl ColorGlyphClassifier<'_> {
     }
 
     fn colr_v0_has_fixed_palette(&self, glyph_id: GlyphId) -> bool {
-        let Some(glyph) = self
-            .colr
-            .get_with_format(skrifa::GlyphId::new(glyph_id.0), ColorGlyphFormat::ColrV0)
+        let Some(colr) = self.colr.as_ref() else {
+            return false;
+        };
+
+        let Some(mut layers) = colr
+            .v0_base_glyph(skrifa::GlyphId::new(glyph_id.0))
+            .ok()
+            .flatten()
         else {
             return false;
         };
-        let mut painter = ForegroundTrackingPainter::default();
 
-        glyph.paint(&Location::default(), &mut painter).is_ok() && !painter.uses_foreground
+        layers.all(|layer_idx| {
+            colr.v0_layer(layer_idx)
+                .is_ok_and(|(_glyph_id, palette_idx)| palette_idx != u16::MAX)
+        })
     }
-}
-
-#[derive(Default)]
-struct ForegroundTrackingPainter {
-    uses_foreground: bool,
-}
-
-impl ForegroundTrackingPainter {
-    fn inspect_brush(&mut self, brush: ColorBrush<'_>) {
-        let uses_foreground = match brush {
-            ColorBrush::Solid { palette_index, .. } => palette_index == u16::MAX,
-            ColorBrush::LinearGradient { color_stops, .. }
-            | ColorBrush::RadialGradient { color_stops, .. }
-            | ColorBrush::SweepGradient { color_stops, .. } => color_stops
-                .iter()
-                .any(|stop| stop.palette_index == u16::MAX),
-        };
-        self.uses_foreground |= uses_foreground;
-    }
-}
-
-impl ColorPainter for ForegroundTrackingPainter {
-    fn push_transform(&mut self, _transform: ColorTransform) {}
-
-    fn pop_transform(&mut self) {}
-
-    fn push_clip_glyph(&mut self, _glyph_id: skrifa::GlyphId) {}
-
-    fn push_clip_box(&mut self, _clip_box: skrifa::raw::types::BoundingBox<f32>) {}
-
-    fn pop_clip(&mut self) {}
-
-    fn fill(&mut self, brush: ColorBrush<'_>) {
-        self.inspect_brush(brush);
-    }
-
-    fn push_layer(&mut self, _composite_mode: CompositeMode) {}
 }
 
 fn sbix_has_glyph(sbix: &skrifa::raw::tables::sbix::Sbix<'_>, glyph_id: skrifa::GlyphId) -> bool {
@@ -910,16 +871,15 @@ impl SwashGlyphRasterizer {
             .context("Swash could not parse the stored font face")?;
         font_ref.key = cache_key;
         let subpixel_offset = subpixel_offset(params);
-        let normalized_coords = face
-            .normalized_coords
-            .iter()
-            .map(|coordinate| coordinate.to_bits())
-            .collect::<Vec<_>>();
         let mut scaler = self
             .scale_context
             .builder(font_ref)
             .size(f32::from(params.font_size) * params.scale_factor)
-            .normalized_coords(&normalized_coords)
+            .normalized_coords(
+                face.normalized_coords
+                    .iter()
+                    .map(|coordinate| coordinate.to_bits()),
+            )
             .hint(true)
             .build();
         let sources: &[Source] = if params.raster_style.mode == GlyphRenderMode::Color {
@@ -1470,6 +1430,42 @@ mod tests {
         let selected = first_supported_color_kind(available, |kind| kind == ColorGlyphKind::ColrV0);
 
         assert_eq!(selected, Some(ColorGlyphKind::ColrV0));
+    }
+
+    #[test]
+    fn colr_v0_foreground_dependency_checks_every_layer() {
+        let mut table = Vec::new();
+        table.extend_from_slice(&0u16.to_be_bytes());
+        table.extend_from_slice(&3u16.to_be_bytes());
+        table.extend_from_slice(&14u32.to_be_bytes());
+        table.extend_from_slice(&32u32.to_be_bytes());
+        table.extend_from_slice(&2u16.to_be_bytes());
+
+        for (glyph_id, first_layer) in [(1u16, 0u16), (2, 1), (4, 2)] {
+            table.extend_from_slice(&glyph_id.to_be_bytes());
+            table.extend_from_slice(&first_layer.to_be_bytes());
+            table.extend_from_slice(&1u16.to_be_bytes());
+        }
+
+        for (glyph_id, palette_idx) in [(10u16, 0u16), (11, u16::MAX)] {
+            table.extend_from_slice(&glyph_id.to_be_bytes());
+            table.extend_from_slice(&palette_idx.to_be_bytes());
+        }
+
+        let colr =
+            <Colr<'_> as skrifa::raw::FontRead<'_>>::read(skrifa::raw::FontData::new(&table))
+                .unwrap();
+        let classifier = ColorGlyphClassifier {
+            colr: Some(colr),
+            sbix: None,
+            cbdt_strikes: None,
+            svg_records: &[],
+        };
+
+        assert!(classifier.colr_v0_has_fixed_palette(GlyphId(1)));
+        assert!(!classifier.colr_v0_has_fixed_palette(GlyphId(2)));
+        assert!(!classifier.colr_v0_has_fixed_palette(GlyphId(3)));
+        assert!(!classifier.colr_v0_has_fixed_palette(GlyphId(4)));
     }
 
     #[test]

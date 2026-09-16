@@ -2488,6 +2488,7 @@ dependencies = [
  "pathfinder_geometry",
  "raw-window-handle",
  "semver",
+ "skrifa",
  "smallvec",
  "strum 0.27.2",
  "url",

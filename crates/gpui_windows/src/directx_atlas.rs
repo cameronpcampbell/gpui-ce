@@ -213,26 +213,12 @@ impl DirectXAtlasState {
             height: DevicePixels(16384),
         };
         let size = min_size.min(&MAX_ATLAS_SIZE).max(&DEFAULT_ATLAS_SIZE);
-        let pixel_format;
-        let bind_flag;
-        let bytes_per_pixel;
-        match kind {
-            AtlasTextureKind::Monochrome => {
-                pixel_format = DXGI_FORMAT_R8_UNORM;
-                bind_flag = D3D11_BIND_SHADER_RESOURCE;
-                bytes_per_pixel = 1;
+        let (pixel_format, bytes_per_pixel) = match kind {
+            AtlasTextureKind::Monochrome => (DXGI_FORMAT_R8_UNORM, 1),
+            AtlasTextureKind::Polychrome | AtlasTextureKind::Subpixel => {
+                (DXGI_FORMAT_B8G8R8A8_UNORM, 4)
             }
-            AtlasTextureKind::Polychrome => {
-                pixel_format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                bind_flag = D3D11_BIND_SHADER_RESOURCE;
-                bytes_per_pixel = 4;
-            }
-            AtlasTextureKind::Subpixel => {
-                pixel_format = DXGI_FORMAT_B8G8R8A8_UNORM;
-                bind_flag = D3D11_BIND_SHADER_RESOURCE;
-                bytes_per_pixel = 4;
-            }
-        }
+        };
         let texture_desc = D3D11_TEXTURE2D_DESC {
             Width: size.width.0 as u32,
             Height: size.height.0 as u32,
@@ -244,7 +230,7 @@ impl DirectXAtlasState {
                 Quality: 0,
             },
             Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: bind_flag.0 as u32,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
             CPUAccessFlags: 0,
             MiscFlags: 0,
         };

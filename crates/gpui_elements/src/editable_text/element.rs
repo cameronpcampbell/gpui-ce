@@ -875,15 +875,13 @@ impl PrepaintElements {
 
         elements.document = Some(document.clone());
 
-        if !state.selected_range().is_empty() {
-            elements.selection.extend(quads(
-                state.selected_range(),
-                colors.selection,
-                Pixels::ZERO,
-            ));
-        }
+        elements.selection.extend(quads(
+            state.selected_range(),
+            colors.selection,
+            Pixels::ZERO,
+        ));
 
-        if let Some(range) = state.marked_range().filter(|range| !range.is_empty()) {
+        if let Some(range) = state.marked_range() {
             elements
                 .ime_marked
                 .extend(quads(range, colors.ime_underline, line_height - px(2.)));

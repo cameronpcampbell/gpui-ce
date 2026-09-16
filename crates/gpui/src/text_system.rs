@@ -588,7 +588,7 @@ pub struct InlineTextStyle {
 }
 
 /// Complete input for a document containing text and element boxes.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct InlineLayoutRequest<'a> {
     /// UTF-8 source text.
     pub text: &'a str,
@@ -1133,6 +1133,21 @@ mod layout_cache_tests {
         let wide = system.layout_inline(request(px(200.0)));
         let narrow = system.layout_inline(request(px(80.0)));
         assert!(!Arc::ptr_eq(&wide, &narrow));
+
+        let painted_runs = [TextRun {
+            color: hsla(0.5, 0.8, 0.4, 1.0),
+            ..runs[0].clone()
+        }];
+        let changed_paint = system.layout_inline(InlineLayoutRequest {
+            runs: &painted_runs,
+            ..request(px(200.0))
+        });
+        let changed_size = system.layout_inline(InlineLayoutRequest {
+            font_size: px(18.0),
+            ..request(px(200.0))
+        });
+        assert!(!Arc::ptr_eq(&wide, &changed_paint));
+        assert!(!Arc::ptr_eq(&wide, &changed_size));
         assert!(Arc::ptr_eq(
             &wide,
             &system.layout_inline(request(px(200.0)))

@@ -625,13 +625,7 @@ impl WrappedLineLayout {
             return None;
         }
 
-        self.layout
-            .platform_layout
-            .caret_geometry(
-                CaretPosition::new(idx, CaretAffinity::Downstream),
-                line_height,
-            )
-            .map(|bounds| bounds.origin)
+        self.position_for_caret(CaretPosition::downstream(idx), line_height)
     }
 
     /// Returns the pixel position for an affinity-aware caret.
@@ -1094,7 +1088,7 @@ impl LineLayoutCache {
 
     pub fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> Arc<InlineLayout> {
         self.sync_font_generation();
-        let key = &InlineCacheKeyRef::from(request) as &dyn AsInlineCacheKeyRef;
+        let key = &request as &dyn AsInlineCacheKeyRef;
         let current_frame = self.current_frame.upgradable_read();
 
         if let Some(layout) = current_frame.inline_layouts.get(key) {
@@ -1122,10 +1116,10 @@ impl LineLayoutCache {
 }
 
 trait AsInlineCacheKeyRef {
-    fn as_inline_cache_key_ref(&self) -> InlineCacheKeyRef<'_>;
+    fn as_inline_cache_key_ref(&self) -> InlineLayoutRequest<'_>;
 }
 
-#[derive(Clone, Debug, Eq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct InlineCacheKey {
     text: SharedString,
     runs: SmallVec<[TextRun; 1]>,
@@ -1136,19 +1130,6 @@ struct InlineCacheKey {
     text_metrics: InlineTextMetrics,
     options: TextLayoutOptions,
     bidi_scopes: Vec<InlineBidiScope>,
-}
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
-struct InlineCacheKeyRef<'a> {
-    text: &'a str,
-    runs: &'a [TextRun],
-    text_styles: &'a [InlineTextStyle],
-    boxes: &'a [InlineBoxRequest],
-    font_size: Pixels,
-    line_height: Pixels,
-    text_metrics: InlineTextMetrics,
-    options: TextLayoutOptions,
-    bidi_scopes: &'a [InlineBidiScope],
 }
 
 impl From<InlineLayoutRequest<'_>> for InlineCacheKey {
@@ -1167,25 +1148,9 @@ impl From<InlineLayoutRequest<'_>> for InlineCacheKey {
     }
 }
 
-impl<'a> From<InlineLayoutRequest<'a>> for InlineCacheKeyRef<'a> {
-    fn from(request: InlineLayoutRequest<'a>) -> Self {
-        Self {
-            text: request.text,
-            runs: request.runs,
-            text_styles: request.text_styles,
-            boxes: request.boxes,
-            font_size: request.font_size,
-            line_height: request.line_height,
-            text_metrics: request.text_metrics,
-            options: request.options,
-            bidi_scopes: request.bidi_scopes,
-        }
-    }
-}
-
 impl AsInlineCacheKeyRef for InlineCacheKey {
-    fn as_inline_cache_key_ref(&self) -> InlineCacheKeyRef<'_> {
-        InlineCacheKeyRef {
+    fn as_inline_cache_key_ref(&self) -> InlineLayoutRequest<'_> {
+        InlineLayoutRequest {
             text: &self.text,
             runs: &self.runs,
             text_styles: &self.text_styles,
@@ -1199,21 +1164,9 @@ impl AsInlineCacheKeyRef for InlineCacheKey {
     }
 }
 
-impl AsInlineCacheKeyRef for InlineCacheKeyRef<'_> {
-    fn as_inline_cache_key_ref(&self) -> InlineCacheKeyRef<'_> {
+impl AsInlineCacheKeyRef for InlineLayoutRequest<'_> {
+    fn as_inline_cache_key_ref(&self) -> InlineLayoutRequest<'_> {
         *self
-    }
-}
-
-impl PartialEq for InlineCacheKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_inline_cache_key_ref() == other.as_inline_cache_key_ref()
-    }
-}
-
-impl Hash for InlineCacheKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_inline_cache_key_ref().hash(state);
     }
 }
 
@@ -1241,7 +1194,7 @@ trait AsCacheKeyRef {
     fn as_cache_key_ref(&self) -> CacheKeyRef<'_>;
 }
 
-#[derive(Clone, Debug, Eq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct CacheKey {
     text: SharedString,
     font_size: Pixels,
@@ -1296,18 +1249,6 @@ impl AsCacheKeyRef for CacheKey {
             runs: self.runs.as_slice(),
             options: self.options,
         }
-    }
-}
-
-impl PartialEq for CacheKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_cache_key_ref().eq(&other.as_cache_key_ref())
-    }
-}
-
-impl Hash for CacheKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_cache_key_ref().hash(state);
     }
 }
 

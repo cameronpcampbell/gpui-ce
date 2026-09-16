@@ -2436,14 +2436,13 @@ impl Element for Div {
                 #[inline]
                 fn prepaint_children(
                     children: &mut [StackSafe<AnyElement>],
-                    order_fn: Option<&dyn Fn(&mut Window, &mut App) -> SmallVec<[usize; 8]>>,
+                    order: Option<&[usize]>,
                     window: &mut Window,
                     cx: &mut App,
                 ) {
-                    if let Some(order_fn) = order_fn {
-                        let order = order_fn(window, cx);
+                    if let Some(order) = order {
                         for idx in order {
-                            if let Some(child) = children.get_mut(idx) {
+                            if let Some(child) = children.get_mut(*idx) {
                                 child.prepaint(window, cx);
                             }
                         }
@@ -2456,41 +2455,45 @@ impl Element for Div {
 
                 window.with_image_cache(image_cache, |window| {
                     window.with_style_transition_containing_bounds(bounds, |window| {
-                        if let Some(inline) = request_layout
+                        let inline = request_layout
                             .inline
                             .as_mut()
-                            .filter(|_| !request_layout.contents_in_parent_paragraph)
-                        {
-                            let order = self
-                                .prepaint_order_fn
+                            .filter(|_| !request_layout.contents_in_parent_paragraph);
+                        let inline_order = inline.as_ref().and_then(|_| {
+                            self.prepaint_order_fn
                                 .as_ref()
-                                .map(|order_fn| order_fn(window, cx));
-                            let inline_bounds = inline.prepaint_children(
-                                &mut self.children,
-                                &request_layout.child_layout_ids,
-                                scroll_offset,
-                                order.as_deref(),
-                                self.prepaint_listener.is_some(),
-                                window,
-                                cx,
-                            );
+                                .map(|order_fn| order_fn(window, cx))
+                        });
 
-                            if let Some(listener) = self.prepaint_listener.as_ref() {
-                                children_bounds.extend(inline_bounds);
-                                listener(children_bounds, window, cx);
+                        let inline_bounds = window.with_element_offset(scroll_offset, |window| {
+                            if let Some(inline) = inline {
+                                inline.record_paragraph_origins(window);
+                                prepaint_children(
+                                    &mut self.children,
+                                    inline_order.as_deref(),
+                                    window,
+                                    cx,
+                                );
+
+                                if has_prepaint_listener {
+                                    return request_layout
+                                        .child_layout_ids
+                                        .iter()
+                                        .map(|node_id| window.layout_bounds(*node_id))
+                                        .collect();
+                                }
+                            } else {
+                                let order = self
+                                    .prepaint_order_fn
+                                    .as_ref()
+                                    .map(|order_fn| order_fn(window, cx));
+                                prepaint_children(&mut self.children, order.as_deref(), window, cx);
                             }
 
-                            return;
-                        }
-
-                        window.with_element_offset(scroll_offset, |window| {
-                            prepaint_children(
-                                &mut self.children,
-                                self.prepaint_order_fn.as_deref(),
-                                window,
-                                cx,
-                            )
+                            Vec::new()
                         });
+
+                        children_bounds.extend(inline_bounds);
 
                         if let Some(listener) = self.prepaint_listener.as_ref() {
                             listener(children_bounds, window, cx);
@@ -2533,17 +2536,16 @@ impl Element for Div {
                         return;
                     }
 
+                    for child in &mut self.children {
+                        child.paint(window, cx);
+                    }
+
                     if let Some(inline) = request_layout
                         .inline
                         .as_ref()
                         .filter(|_| !request_layout.contents_in_parent_paragraph)
                     {
-                        inline.paint_children(&mut self.children, window, cx);
-                        return;
-                    }
-
-                    for child in &mut self.children {
-                        child.paint(window, cx);
+                        inline.paint_paragraphs(window, cx);
                     }
                 },
             )

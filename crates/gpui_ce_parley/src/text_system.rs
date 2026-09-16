@@ -39,7 +39,7 @@ use parley::{
     Affinity, Alignment, AlignmentOptions, CHROMIUM_LINE_BREAK_OVERRIDE, Cluster, Cursor,
     FontContext, FontFamily, FontFamilyName, FontFeature, FontFeatures, FontStyle,
     FontVariation as ParleyFontVariation, FontWeight, GenericFamily, InlineBox, InlineBoxKind,
-    Layout, LayoutContext, LineHeight, PositionedLayoutItem, Selection, StyleProperty,
+    Layout, LayoutContext, Line, LineHeight, PositionedLayoutItem, Selection, StyleProperty,
 };
 use skrifa::instance::NormalizedCoord;
 use std::{
@@ -363,20 +363,14 @@ impl PlatformTextLayout for SourceMappedLayout {
         movement: TextMovement,
         preferred_x: Option<Pixels>,
     ) -> (CaretPosition, Option<Pixels>) {
-        if movement == TextMovement::VisualLeft {
-            return (
-                self.move_visual(caret, VisualDirection::Left)
-                    .unwrap_or(caret),
-                None,
-            );
-        }
+        let direction = match movement {
+            TextMovement::VisualLeft => Some(VisualDirection::Left),
+            TextMovement::VisualRight => Some(VisualDirection::Right),
+            _ => None,
+        };
 
-        if movement == TextMovement::VisualRight {
-            return (
-                self.move_visual(caret, VisualDirection::Right)
-                    .unwrap_or(caret),
-                None,
-            );
+        if let Some(direction) = direction {
+            return (self.move_visual(caret, direction).unwrap_or(caret), None);
         }
 
         let (caret, preferred_x) =
@@ -707,6 +701,34 @@ struct ParleyClusterGeometry {
     line_idx: usize,
 }
 
+fn visit_line_clusters(
+    line: Line<'_, ParleyBrush>,
+    mut visit: impl FnMut(Cluster<'_, ParleyBrush>, Range<f32>),
+) {
+    let mut previous_run_idx = None;
+
+    for item in line.items() {
+        let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+            continue;
+        };
+
+        let run = glyph_run.run();
+
+        if previous_run_idx == Some(run.index()) {
+            continue;
+        }
+
+        previous_run_idx = Some(run.index());
+        let mut inline = glyph_run.offset();
+
+        for cluster in run.visual_clusters() {
+            let advance = inline..inline + cluster.advance();
+            inline = advance.end;
+            visit(cluster, advance);
+        }
+    }
+}
+
 impl ParleyLayout {
     fn new(
         layout: Layout<ParleyBrush>,
@@ -770,58 +792,32 @@ impl ParleyLayout {
 
         for line in layout.lines() {
             let block = f64::from(line.metrics().block_min_coord);
-            let mut previous_run_idx = None;
-
-            for item in line.items() {
-                let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
-                    continue;
+            visit_line_clusters(line, |cluster, advance| {
+                let range = cluster.text_range();
+                let (left, right) = if cluster.is_rtl() {
+                    (
+                        CaretPosition::new(range.end, CaretAffinity::Upstream),
+                        CaretPosition::new(range.start, CaretAffinity::Downstream),
+                    )
+                } else {
+                    (
+                        CaretPosition::new(range.start, CaretAffinity::Downstream),
+                        CaretPosition::new(range.end, CaretAffinity::Upstream),
+                    )
                 };
-                let run = glyph_run.run();
 
-                if previous_run_idx == Some(run.index()) {
-                    continue;
-                }
-
-                previous_run_idx = Some(run.index());
-                let mut inline = glyph_run.offset();
-
-                for cluster in run.visual_clusters() {
-                    let range = cluster.text_range();
-                    let (left, right) = if cluster.is_rtl() {
-                        (
-                            CaretPosition::new(range.end, CaretAffinity::Upstream),
-                            CaretPosition::new(range.start, CaretAffinity::Downstream),
-                        )
-                    } else {
-                        (
-                            CaretPosition::new(range.start, CaretAffinity::Downstream),
-                            CaretPosition::new(range.end, CaretAffinity::Upstream),
-                        )
-                    };
-
-                    if grapheme_boundaries.contains(&left.index) {
+                for (caret, inline) in [(left, advance.start), (right, advance.end)] {
+                    if grapheme_boundaries.contains(&caret.index) {
                         Self::push_caret_stop(
                             &mut stops,
                             &mut indices,
-                            left,
-                            block,
-                            f64::from(inline),
-                        );
-                    }
-
-                    inline += cluster.advance();
-
-                    if grapheme_boundaries.contains(&right.index) {
-                        Self::push_caret_stop(
-                            &mut stops,
-                            &mut indices,
-                            right,
+                            caret,
                             block,
                             f64::from(inline),
                         );
                     }
                 }
-            }
+            });
         }
 
         if stops.is_empty() {
@@ -956,38 +952,21 @@ impl ParleyLayout {
             let Some(inline_line) = self.inline_lines.get(line_idx).copied() else {
                 continue;
             };
-            let mut previous_run_idx = None;
+            visit_line_clusters(line, |cluster, advance| {
+                let left = px(advance.start);
+                let right = px(advance.end);
 
-            for item in line.items() {
-                let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
-                    continue;
-                };
-                let run = glyph_run.run();
-
-                if previous_run_idx == Some(run.index()) {
-                    continue;
+                if right > left {
+                    geometries.push(ParleyClusterGeometry {
+                        text_range: cluster.text_range(),
+                        bounds: Bounds::new(
+                            point(left, inline_line.origin.y),
+                            size(right - left, inline_line.size.height),
+                        ),
+                        line_idx,
+                    });
                 }
-
-                previous_run_idx = Some(run.index());
-                let mut left = px(glyph_run.offset());
-
-                for cluster in run.visual_clusters() {
-                    let right = left + px(cluster.advance());
-
-                    if right > left {
-                        geometries.push(ParleyClusterGeometry {
-                            text_range: cluster.text_range(),
-                            bounds: Bounds::new(
-                                point(left, inline_line.origin.y),
-                                size(right - left, inline_line.size.height),
-                            ),
-                            line_idx,
-                        });
-                    }
-
-                    left = right;
-                }
-            }
+            });
         }
 
         geometries
@@ -1434,7 +1413,7 @@ impl ParleyTextSystem {
         };
 
         self.font_instances.write().intern_synthesized(
-            resolved.data,
+            resolved.blob,
             resolved.index,
             resolved.synthesis,
         )
@@ -1823,22 +1802,20 @@ impl ParleyTextSystem {
                     continue;
                 }
 
-                push_style(
+                for property in [
                     StyleProperty::FontFamily(FontFamily::from(family_lists[run_idx].as_slice())),
-                    range.clone(),
-                );
-                push_style(
                     StyleProperty::FontWeight(FontWeight::new(descriptor.weight.0)),
-                    range.clone(),
-                );
-                push_style(
                     StyleProperty::FontStyle(match descriptor.style {
                         gpui::FontStyle::Normal => FontStyle::Normal,
                         gpui::FontStyle::Italic => FontStyle::Italic,
                         gpui::FontStyle::Oblique => FontStyle::Oblique(None),
                     }),
-                    range.clone(),
-                );
+                    StyleProperty::Brush(ParleyBrush {
+                        source_run: run_idx,
+                    }),
+                ] {
+                    push_style(property, range.clone());
+                }
 
                 if !feature_lists[run_idx].is_empty() {
                     push_style(
@@ -1855,13 +1832,6 @@ impl ParleyTextSystem {
                         range.clone(),
                     );
                 }
-
-                push_style(
-                    StyleProperty::Brush(ParleyBrush {
-                        source_run: run_idx,
-                    }),
-                    range,
-                );
             }
 
             for (style_idx, style) in text_styles.iter().enumerate() {
@@ -4734,6 +4704,20 @@ mod tests {
             assert_close(actual.y, expected.y, context);
         }
 
+        fn update_view<View: Render>(
+            context: &mut HeadlessAppContext,
+            window: WindowHandle<View>,
+            edit: impl FnOnce(&mut View),
+        ) {
+            window
+                .update(context, |view, _window, context| {
+                    edit(view);
+                    context.notify();
+                })
+                .unwrap();
+            context.run_until_parked();
+        }
+
         #[test]
         fn centered_inline_lines_move_as_one_group_during_fractional_resize() {
             let text_system =
@@ -4757,13 +4741,9 @@ mod tests {
             initial.assert_valid();
 
             for step in 1..=64 {
-                window
-                    .update(&mut context, |view, _, context| {
-                        view.width_offset = step as f32 / 16.;
-                        context.notify();
-                    })
-                    .unwrap();
-                context.run_until_parked();
+                update_view(&mut context, window, |view| {
+                    view.width_offset = step as f32 / 16.;
+                });
 
                 let translated = Geometry::read(&mut context, window);
                 translated.assert_valid();
@@ -4775,13 +4755,7 @@ mod tests {
                 );
             }
 
-            window
-                .update(&mut context, |view, _, context| {
-                    view.width_offset = 0.;
-                    context.notify();
-                })
-                .unwrap();
-            context.run_until_parked();
+            update_view(&mut context, window, |view| view.width_offset = 0.);
             assert_eq!(Geometry::read(&mut context, window), initial);
         }
 
@@ -5173,13 +5147,7 @@ mod tests {
             let initial = painted.borrow()[0].0.clone();
 
             for width in [90., 2000., 180.] {
-                window
-                    .update(&mut context, |view, _window, context| {
-                        view.width = width;
-                        context.notify();
-                    })
-                    .unwrap();
-                context.run_until_parked();
+                update_view(&mut context, window, |view| view.width = width);
                 let captured = painted.borrow();
                 assert_paragraph_fits(&captured[0].0, &captured[0].1, width, 1);
 
@@ -5208,13 +5176,7 @@ mod tests {
             context.run_until_parked();
 
             for width in [260., 100., 260.] {
-                window
-                    .update(&mut context, |view, _window, context| {
-                        view.width = width;
-                        context.notify();
-                    })
-                    .unwrap();
-                context.run_until_parked();
+                update_view(&mut context, window, |view| view.width = width);
 
                 let captured = painted.borrow();
                 let (text, layout) = &captured[0];
@@ -5675,13 +5637,7 @@ mod tests {
             let mut previous = None;
 
             for width in [150., 290.] {
-                window
-                    .update(&mut context, |view, _, context| {
-                        view.width = width;
-                        context.notify();
-                    })
-                    .unwrap();
-                context.run_until_parked();
+                update_view(&mut context, window, |view| view.width = width);
 
                 let badge = context
                     .debug_bounds(window.into(), "badge")

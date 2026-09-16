@@ -5,13 +5,17 @@ use gpui::VisualTestAppContext;
 #[cfg(target_family = "wasm")]
 use gpui::{App, Bounds, WindowBounds, WindowOptions, size};
 use gpui::{
-    AppContext, Context, FontWeight, IntoElement, ParentElement, Render, Styled, Window, div, px,
-    rgb, white,
+    AppContext, Context, Div, FontWeight, IntoElement, ParentElement, Render, Styled, Window, div,
+    px, rgb, white,
 };
 use std::borrow::Cow;
 
 const BIDI_SAMPLE: &str =
     "שלום עולם\nمرحبا بالعالم\nabc אבג def\nx (مرحبا) y\nEnglish ثم عربي ثم English";
+
+fn positioned_text(left: f32, top: f32) -> Div {
+    div().absolute().left(px(left)).top(px(top))
+}
 
 fn fixture_fonts() -> Vec<Cow<'static, [u8]>> {
     vec![
@@ -51,41 +55,20 @@ fn main() {
                 .text_size(px(28.0))
                 .font_family("IBM Plex Sans")
                 .p(px(32.0))
+                .child(positioned_text(-2.5, 31.25).child("Parley office cafe\u{301} العربية אבג"))
                 .child(
-                    div()
-                        .absolute()
-                        .left(px(-2.5))
-                        .top(px(31.25))
-                        .child("Parley office cafe\u{301} العربية אבג"),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .left(px(32.0))
-                        .top(px(80.0))
+                    positioned_text(32.0, 80.0)
                         .font_family("Noto Color Emoji")
                         .child("😀 🎉 🚀 💡 🔥 ✨"),
                 )
+                .child(positioned_text(400.0, 128.0).child("日本語 ไทย"))
                 .child(
-                    div()
-                        .absolute()
-                        .left(px(400.0))
-                        .top(px(128.0))
-                        .child("日本語 ไทย"),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .left(px(32.0))
-                        .top(px(128.0))
+                    positioned_text(32.0, 128.0)
                         .w(px(260.0))
                         .child("wrapped text one two three four five six seven eight"),
                 )
                 .child(
-                    div()
-                        .absolute()
-                        .left(px(32.0))
-                        .top(px(300.0))
+                    positioned_text(32.0, 300.0)
                         .w(px(600.0))
                         .line_height(px(40.0))
                         .child(BIDI_SAMPLE),
@@ -100,30 +83,21 @@ fn main() {
                         .child("MMMM clipped at the bottom edge"),
                 )
                 .child(
-                    div()
-                        .absolute()
-                        .left(px(700.0))
-                        .top(px(32.0))
+                    positioned_text(700.0, 32.0)
                         .font_family("Source Serif 4")
                         .font_weight(FontWeight(340.0))
                         .text_size(px(12.0))
                         .child("Hamburgefontsiv"),
                 )
                 .child(
-                    div()
-                        .absolute()
-                        .left(px(700.0))
-                        .top(px(80.0))
+                    positioned_text(700.0, 80.0)
                         .font_family("Source Serif 4")
                         .font_weight(FontWeight(340.0))
                         .text_size(px(48.0))
                         .child("Hamburgefontsiv"),
                 )
                 .child(
-                    div()
-                        .absolute()
-                        .left(px(700.0))
-                        .top(px(220.0))
+                    positioned_text(700.0, 220.0)
                         .font_family("Noto Color Emoji")
                         .child("👩🏽‍💻 🇬🇧 1️⃣"),
                 )

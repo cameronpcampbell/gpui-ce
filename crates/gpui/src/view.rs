@@ -304,6 +304,7 @@ struct ViewDirectionState {
     contribution: Option<ResolvedDirection>,
 }
 
+#[derive(PartialEq)]
 struct ViewElementCacheKey {
     bounds: Bounds<Pixels>,
     content_mask: ContentMask<Pixels>,
@@ -335,94 +336,83 @@ impl<V: View> Element for ViewElement<V> {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        if let Some(entity_id) = self.entity_id {
-            // Stateful path: create a reactive boundary.
-            window.with_rendered_view(entity_id, |window| {
-                let caching_disabled = window.is_inspector_picking(cx);
-                match self.cached_style.as_ref() {
-                    Some(style) if !caching_disabled => {
-                        let mut root_style = Style::default();
-                        root_style.refine(style);
-                        let layout_id = window.request_layout(root_style, None, cx);
-                        let (known, contribution) = window
-                            .with_element_state::<ViewDirectionState, _>(
-                                global_id.unwrap(),
-                                |state, _window| {
-                                    let state = state.unwrap_or_default();
-                                    ((state.known, state.contribution), state)
-                                },
-                            );
-                        let should_probe =
-                            !known || window.dirty_views.contains(&entity_id) || window.refreshing;
+        let entity_id = self.entity_id;
+        let request_layout = |window: &mut Window| {
+            let caching_disabled = window.is_inspector_picking(cx);
 
-                        if should_probe {
-                            let ((element, detached_layout_id), accessed_entities) = cx
-                                .detect_accessed_entities(|cx| {
-                                    let mut element = self
-                                        .view
-                                        .take()
-                                        .unwrap()
-                                        .render(window, cx)
-                                        .into_any_element();
-                                    let detached_layout_id = element.request_layout(window, cx);
-                                    (element, detached_layout_id)
-                                });
-                            window.set_layout_logical_children(
-                                layout_id,
-                                std::slice::from_ref(&detached_layout_id),
-                            );
+            if let (Some(entity_id), Some(style)) = (
+                entity_id,
+                self.cached_style.as_ref().filter(|_| !caching_disabled),
+            ) {
+                let mut root_style = Style::default();
+                root_style.refine(style);
+                let layout_id = window.request_layout(root_style, None, cx);
+                let (known, contribution) = window.with_element_state::<ViewDirectionState, _>(
+                    global_id.unwrap(),
+                    |state, _window| {
+                        let state = state.unwrap_or_default();
+                        ((state.known, state.contribution), state)
+                    },
+                );
+                let should_probe =
+                    !known || window.dirty_views.contains(&entity_id) || window.refreshing;
 
-                            (
-                                layout_id,
-                                ViewElementRequestLayoutState {
-                                    element: Some(element),
-                                    detached_layout_id: Some(detached_layout_id),
-                                    accessed_entities,
-                                },
-                            )
-                        } else {
-                            window.set_layout_auto_direction_hint(layout_id, contribution);
-                            (layout_id, ViewElementRequestLayoutState::default())
-                        }
-                    }
-                    _ => {
-                        let mut element = self
-                            .view
-                            .take()
-                            .unwrap()
-                            .render(window, cx)
-                            .into_any_element();
-                        let layout_id = element.request_layout(window, cx);
-                        (
-                            layout_id,
-                            ViewElementRequestLayoutState {
-                                element: Some(element),
-                                ..Default::default()
-                            },
-                        )
-                    }
-                }
-            })
-        } else {
-            // Stateless path: isolate subtree via type name (no entity identity).
-            window.with_id(
-                ElementId::Name(std::any::type_name::<V>().into()),
-                |window| {
-                    let mut element = self
-                        .view
-                        .take()
-                        .unwrap()
-                        .render(window, cx)
-                        .into_any_element();
-                    let layout_id = element.request_layout(window, cx);
-                    (
+                if should_probe {
+                    let ((element, detached_layout_id), accessed_entities) = cx
+                        .detect_accessed_entities(|cx| {
+                            let mut element = self
+                                .view
+                                .take()
+                                .unwrap()
+                                .render(window, cx)
+                                .into_any_element();
+                            let detached_layout_id = element.request_layout(window, cx);
+
+                            (element, detached_layout_id)
+                        });
+                    window.set_layout_logical_children(
+                        layout_id,
+                        std::slice::from_ref(&detached_layout_id),
+                    );
+
+                    return (
                         layout_id,
                         ViewElementRequestLayoutState {
                             element: Some(element),
-                            ..Default::default()
+                            detached_layout_id: Some(detached_layout_id),
+                            accessed_entities,
                         },
-                    )
+                    );
+                }
+
+                window.set_layout_auto_direction_hint(layout_id, contribution);
+
+                return (layout_id, ViewElementRequestLayoutState::default());
+            }
+
+            let mut element = self
+                .view
+                .take()
+                .unwrap()
+                .render(window, cx)
+                .into_any_element();
+            let layout_id = element.request_layout(window, cx);
+
+            (
+                layout_id,
+                ViewElementRequestLayoutState {
+                    element: Some(element),
+                    ..Default::default()
                 },
+            )
+        };
+
+        if let Some(entity_id) = entity_id {
+            window.with_rendered_view(entity_id, request_layout)
+        } else {
+            window.with_id(
+                ElementId::Name(std::any::type_name::<V>().into()),
+                request_layout,
             )
         }
     }
@@ -450,18 +440,17 @@ impl<V: View> Element for ViewElement<V> {
                 window.with_element_state::<ViewElementState, _>(
                     global_id.unwrap(),
                     |element_state, window| {
-                        let content_mask = window.content_mask();
-                        let text_style = window.text_style();
-                        let direction = window.resolved_direction();
-                        let unicode_bidi = window.resolved_unicode_bidi();
+                        let cache_key = ViewElementCacheKey {
+                            bounds,
+                            content_mask: window.content_mask(),
+                            text_style: window.text_style(),
+                            direction: window.resolved_direction(),
+                            unicode_bidi: window.resolved_unicode_bidi(),
+                        };
 
                         if request_layout.element.is_none()
                             && let Some(mut element_state) = element_state
-                            && element_state.cache_key.bounds == bounds
-                            && element_state.cache_key.content_mask == content_mask
-                            && element_state.cache_key.text_style == text_style
-                            && element_state.cache_key.direction == direction
-                            && element_state.cache_key.unicode_bidi == unicode_bidi
+                            && element_state.cache_key == cache_key
                             && !window.dirty_views.contains(&entity_id)
                             && !window.refreshing
                         {
@@ -520,13 +509,7 @@ impl<V: View> Element for ViewElement<V> {
                                 accessed_entities,
                                 prepaint_range: prepaint_start..prepaint_end,
                                 paint_range: PaintIndex::default()..PaintIndex::default(),
-                                cache_key: ViewElementCacheKey {
-                                    bounds,
-                                    content_mask,
-                                    text_style,
-                                    direction,
-                                    unicode_bidi,
-                                },
+                                cache_key,
                             },
                         )
                     },

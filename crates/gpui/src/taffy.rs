@@ -63,7 +63,6 @@ pub struct TaffyLayoutEngine {
     absolute_layout_bounds: FxHashMap<LayoutId, Bounds<Pixels>>,
     /// Unrounded absolute border-box top-left per-node coordinate in device pixels.
     absolute_outer_origins: FxHashMap<LayoutId, Point<f32>>,
-    computed_layouts: FxHashSet<LayoutId>,
     computed_available_spaces: FxHashMap<LayoutId, Size<AvailableSpace>>,
     vertical_alignments: FxHashMap<LayoutId, VerticalAlign>,
     pub(crate) inline_content: FxHashMap<LayoutId, Arc<InlineContent>>,
@@ -83,7 +82,6 @@ impl TaffyLayoutEngine {
             taffy,
             absolute_layout_bounds: FxHashMap::default(),
             absolute_outer_origins: FxHashMap::default(),
-            computed_layouts: FxHashSet::default(),
             computed_available_spaces: FxHashMap::default(),
             vertical_alignments: FxHashMap::default(),
             inline_content: FxHashMap::default(),
@@ -98,7 +96,6 @@ impl TaffyLayoutEngine {
         self.taffy.clear();
         self.absolute_layout_bounds.clear();
         self.absolute_outer_origins.clear();
-        self.computed_layouts.clear();
         self.computed_available_spaces.clear();
         self.vertical_alignments.clear();
         self.inline_content.clear();
@@ -340,19 +337,7 @@ impl TaffyLayoutEngine {
 
     /// Places a detached inline box, invalidating cached positions of its descendants.
     pub(crate) fn place_inline(&mut self, node_id: LayoutId, bounds: Bounds<Pixels>, scale: f32) {
-        let mut stack = vec![node_id];
-
-        while let Some(child) = stack.pop() {
-            self.absolute_layout_bounds.remove(&child);
-            self.absolute_outer_origins.remove(&child);
-            stack.extend(
-                self.taffy
-                    .children(child.into())
-                    .expect(EXPECT_MESSAGE)
-                    .into_iter()
-                    .map(LayoutId::from),
-            );
-        }
+        self.clear_cached_bounds(node_id);
 
         self.absolute_layout_bounds.insert(node_id, bounds);
         self.absolute_outer_origins.insert(
@@ -474,9 +459,9 @@ impl TaffyLayoutEngine {
             self.compute_resolved_layout(changed_id, available_space, window, cx);
         }
 
-        self.computed_available_spaces.insert(id, available_space);
+        let previous_space = self.computed_available_spaces.insert(id, available_space);
 
-        if !self.computed_layouts.insert(id) {
+        if previous_space.is_some() {
             self.clear_cached_bounds(id);
         }
 

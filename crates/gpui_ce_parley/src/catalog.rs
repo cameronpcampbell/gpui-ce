@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use fontique::{
     Attributes, Blob, Collection, CollectionOptions, FontStyle, FontWeight, FontWidth,
-    GenericFamily, QueryFamily, QueryStatus, SourceCache,
+    GenericFamily, QueryFamily, QueryFont, QueryStatus, SourceCache,
 };
 use parley::FontContext;
 
@@ -94,21 +94,10 @@ pub(crate) enum FaceFamily<'a> {
     SystemUi,
 }
 
-/// A font face selected by Fontique.
-#[derive(Clone, Debug)]
-pub(crate) struct ResolvedFace {
-    /// Raw font data.
-    pub(crate) data: Blob<u8>,
-    /// Face index within a font collection.
-    pub(crate) index: u32,
-    /// Synthetic styling recommended by Fontique.
-    pub(crate) synthesis: fontique::Synthesis,
-}
-
 pub(crate) fn resolve_face(
     context: &mut FontContext,
     request: &FaceRequest<'_>,
-) -> Option<ResolvedFace> {
+) -> Option<QueryFont> {
     let style = match request.style {
         gpui::FontStyle::Normal => FontStyle::Normal,
         gpui::FontStyle::Italic => FontStyle::Italic,
@@ -136,11 +125,7 @@ pub(crate) fn resolve_face(
             return QueryStatus::Continue;
         }
 
-        selected = Some(ResolvedFace {
-            data: font.blob.clone(),
-            index: font.index,
-            synthesis: font.synthesis,
-        });
+        selected = Some(font.clone());
 
         QueryStatus::Stop
     });
@@ -173,7 +158,7 @@ mod tests {
             character: Some('m'),
         })
         .unwrap();
-        assert_eq!(latin.data.as_ref(), IBM_PLEX);
+        assert_eq!(latin.blob.as_ref(), IBM_PLEX);
         assert_eq!(latin.index, 0);
 
         let semibold_italic = resolve(&FaceRequest {
@@ -183,7 +168,7 @@ mod tests {
             character: None,
         })
         .unwrap();
-        assert_eq!(semibold_italic.data.as_ref(), IBM_PLEX_SEMIBOLD_ITALIC);
+        assert_eq!(semibold_italic.blob.as_ref(), IBM_PLEX_SEMIBOLD_ITALIC);
 
         assert!(
             resolve(&FaceRequest {

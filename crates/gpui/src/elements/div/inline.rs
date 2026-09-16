@@ -1,13 +1,12 @@
-use crate::elements::div::{ScrollHandle, StackSafe};
+use crate::elements::div::ScrollHandle;
 use crate::elements::text::{
     TruncationCandidate, text_layout_fits, truncate_with_measured_candidates,
 };
 use crate::{
-    AnyElement, App, AvailableSpace, Bounds, Display, InlineBidiScope, InlineBoxRequest,
-    InlineLayout, InlineLayoutRequest, InlineTextMetrics, InlineTextStyle, LayoutId,
-    ParagraphDirection, Pixels, Point, Position, SharedString, Size, Style, TextLayout,
-    TextLayoutTruncation, TextRun, TextStyle, UnicodeBidi, Window, WindowTextSystem,
-    place_inline_layout, size,
+    App, AvailableSpace, Bounds, Display, InlineBidiScope, InlineBoxRequest, InlineLayout,
+    InlineLayoutRequest, InlineTextMetrics, InlineTextStyle, LayoutId, Pixels, Point, Position,
+    SharedString, Size, Style, TextLayout, TextLayoutTruncation, TextRun, TextStyle, UnicodeBidi,
+    Window, WindowTextSystem, place_inline_layout, size,
 };
 
 use collections::FxHashMap;
@@ -345,31 +344,15 @@ impl InlineParagraphCollector<'_> {
                 ..Style::default()
             },
             move |known_dimensions, available_space, window, _context| {
-                let wrap_width = TextLayout::evaluate_wrap_width(
-                    &text_style.white_space,
+                let (options, truncation) = TextLayout::layout_options(
+                    &text_style,
                     known_dimensions,
                     available_space,
+                    window.resolved_direction(),
+                    unicode_bidi,
                 );
 
-                let truncation =
-                    TextLayout::evaluate_overflow(&text_style, known_dimensions, available_space);
-                let alignment_width =
-                    TextLayout::evaluate_alignment_width(known_dimensions, available_space);
-
                 let bidi_scopes = measured_document.bidi_scopes();
-                let direction = if unicode_bidi == UnicodeBidi::Plaintext {
-                    ParagraphDirection::Auto
-                } else {
-                    window.resolved_direction().into()
-                };
-                let options = crate::TextLayoutOptions {
-                    wrap_width,
-                    line_clamp: text_style.line_clamp,
-                    alignment_width,
-                    text_align: text_style.text_align,
-                    direction,
-                    unicode_bidi,
-                };
 
                 if let Some(measurement) =
                     measurement_cache.borrow().as_ref() as Option<&InlineParagraphMeasurement>
@@ -574,54 +557,13 @@ impl InlineDivFrameState {
             .map_or(Size::default(), |right| right.size)
     }
 
-    pub(super) fn prepaint_children(
-        &mut self,
-        children: &mut [StackSafe<AnyElement>],
-        child_ids: &[LayoutId],
-        scroll_offset: Point<Pixels>,
-        order: Option<&[usize]>,
-        collect_bounds: bool,
-        window: &mut Window,
-        context: &mut App,
-    ) -> Vec<Bounds<Pixels>> {
-        window.with_element_offset(scroll_offset, |window| {
-            for paragraph in &mut self.paragraphs {
-                paragraph.paint_origin = window.layout_bounds(paragraph.layout_id).origin;
-            }
-
-            if let Some(order) = order {
-                for idx in order {
-                    if let Some(child) = children.get_mut(*idx) {
-                        child.prepaint(window, context);
-                    }
-                }
-            } else {
-                for child in children {
-                    child.prepaint(window, context);
-                }
-            }
-
-            if collect_bounds {
-                child_ids
-                    .iter()
-                    .map(|node_id| window.layout_bounds(*node_id))
-                    .collect()
-            } else {
-                Vec::new()
-            }
-        })
+    pub(super) fn record_paragraph_origins(&mut self, window: &mut Window) {
+        for paragraph in &mut self.paragraphs {
+            paragraph.paint_origin = window.layout_bounds(paragraph.layout_id).origin;
+        }
     }
 
-    pub(super) fn paint_children(
-        &self,
-        children: &mut [StackSafe<AnyElement>],
-        window: &mut Window,
-        context: &mut App,
-    ) {
-        for child in children {
-            child.paint(window, context);
-        }
-
+    pub(super) fn paint_paragraphs(&self, window: &mut Window, context: &mut App) {
         for paragraph in &self.paragraphs {
             let measurement = paragraph.measurement.borrow();
             let layout = &measurement

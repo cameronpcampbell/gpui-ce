@@ -34,6 +34,10 @@ use windows::{
 };
 use windows_numerics::Vector2;
 
+use crate::directx_renderer::{
+    create_constant_buffer, create_fragment_shader, create_premultiplied_blend_state,
+    create_vertex_shader,
+};
 use crate::*;
 
 pub(crate) struct DirectWriteTextSystem {
@@ -86,34 +90,7 @@ impl GPUState {
         let device = directx_devices.device.clone();
         let device_context = directx_devices.device_context.clone();
 
-        let blend_state = {
-            let mut blend_state = None;
-            let desc = D3D11_BLEND_DESC {
-                AlphaToCoverageEnable: false.into(),
-                IndependentBlendEnable: false.into(),
-                RenderTarget: [
-                    D3D11_RENDER_TARGET_BLEND_DESC {
-                        BlendEnable: true.into(),
-                        SrcBlend: D3D11_BLEND_ONE,
-                        DestBlend: D3D11_BLEND_INV_SRC_ALPHA,
-                        BlendOp: D3D11_BLEND_OP_ADD,
-                        SrcBlendAlpha: D3D11_BLEND_ONE,
-                        DestBlendAlpha: D3D11_BLEND_INV_SRC_ALPHA,
-                        BlendOpAlpha: D3D11_BLEND_OP_ADD,
-                        RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
-                    },
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                    Default::default(),
-                ],
-            };
-            unsafe { device.CreateBlendState(&desc, Some(&mut blend_state)) }?;
-            blend_state.unwrap()
-        };
+        let blend_state = create_premultiplied_blend_state(&device)?;
 
         let sampler = {
             let mut sampler = None;
@@ -134,17 +111,8 @@ impl GPUState {
         };
 
         let bytecode = shader_resources::ShaderModule::EmojiRasterization.bytecode()?;
-        let vertex_shader = {
-            let mut shader = None;
-            unsafe { device.CreateVertexShader(bytecode.vertex, None, Some(&mut shader)) }?;
-            shader.unwrap()
-        };
-
-        let pixel_shader = {
-            let mut shader = None;
-            unsafe { device.CreatePixelShader(bytecode.fragment, None, Some(&mut shader)) }?;
-            shader.unwrap()
-        };
+        let vertex_shader = create_vertex_shader(&device, bytecode.vertex)?;
+        let pixel_shader = create_fragment_shader(&device, bytecode.fragment)?;
 
         Ok(Self {
             device,
@@ -331,7 +299,6 @@ impl DirectWriteGlyphRenderer {
 
     fn create_glyph_run_analysis(
         &self,
-        components: &DirectWriteComponents,
         params: &RenderGlyphParams,
     ) -> Result<IDWriteGlyphRunAnalysis> {
         let font = &self.faces[&params.font_id];
@@ -391,7 +358,7 @@ impl DirectWriteGlyphRenderer {
         };
 
         let glyph_analysis = unsafe {
-            components.factory.CreateGlyphRunAnalysis(
+            self.components.factory.CreateGlyphRunAnalysis(
                 &glyph_run,
                 Some(&transform),
                 rendering_mode,
@@ -405,108 +372,30 @@ impl DirectWriteGlyphRenderer {
         Ok(glyph_analysis)
     }
 
-    fn raster_bounds(
-        &self,
-        components: &DirectWriteComponents,
-        params: &RenderGlyphParams,
-    ) -> Result<Bounds<DevicePixels>> {
-        let glyph_analysis = self.create_glyph_run_analysis(components, params)?;
-
-        let texture_type = if params.raster_style.mode == GlyphRenderMode::Subpixel {
-            DWRITE_TEXTURE_CLEARTYPE_3x1
-        } else {
-            DWRITE_TEXTURE_ALIASED_1x1
-        };
-
-        let bounds = unsafe { glyph_analysis.GetAlphaTextureBounds(texture_type)? };
-
-        if bounds.right <= bounds.left || bounds.bottom <= bounds.top {
-            Ok(Bounds {
-                origin: point(0.into(), 0.into()),
-                size: size(0.into(), 0.into()),
-            })
-        } else {
-            Ok(Bounds {
-                origin: point(bounds.left.into(), bounds.top.into()),
-                size: size(
-                    (bounds.right - bounds.left).into(),
-                    (bounds.bottom - bounds.top).into(),
-                ),
-            })
-        }
-    }
-
-    fn rasterize_glyph(
-        &self,
-        components: &DirectWriteComponents,
-        params: &RenderGlyphParams,
-        glyph_bounds: Bounds<DevicePixels>,
-    ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
-        if glyph_bounds.size.width.0 == 0 || glyph_bounds.size.height.0 == 0 {
-            anyhow::bail!("glyph bounds are empty");
-        }
-
-        let bitmap_data = if params.raster_style.mode == GlyphRenderMode::Color {
-            if let Ok(color) = self.rasterize_color(components, params, glyph_bounds) {
-                color
-            } else {
-                let monochrome = self.rasterize_monochrome(components, params, glyph_bounds)?;
-                monochrome
-                    .into_iter()
-                    .flat_map(|pixel| [0, 0, 0, pixel])
-                    .collect::<Vec<_>>()
-            }
-        } else {
-            self.rasterize_monochrome(components, params, glyph_bounds)?
-        };
-
-        Ok((glyph_bounds.size, bitmap_data))
-    }
-
     fn rasterize_monochrome(
         &self,
-        components: &DirectWriteComponents,
-        params: &RenderGlyphParams,
-        glyph_bounds: Bounds<DevicePixels>,
+        glyph_analysis: &IDWriteGlyphRunAnalysis,
+        texture_type: DWRITE_TEXTURE_TYPE,
+        native_bounds: RECT,
     ) -> Result<Vec<u8>> {
-        let glyph_analysis = self.create_glyph_run_analysis(components, params)?;
-
-        if params.raster_style.mode != GlyphRenderMode::Subpixel {
-            let mut bitmap_data =
-                vec![0u8; glyph_bounds.size.width.0 as usize * glyph_bounds.size.height.0 as usize];
-            unsafe {
-                glyph_analysis.CreateAlphaTexture(
-                    DWRITE_TEXTURE_ALIASED_1x1,
-                    &RECT {
-                        left: glyph_bounds.origin.x.0,
-                        top: glyph_bounds.origin.y.0,
-                        right: glyph_bounds.size.width.0 + glyph_bounds.origin.x.0,
-                        bottom: glyph_bounds.size.height.0 + glyph_bounds.origin.y.0,
-                    },
-                    &mut bitmap_data,
-                )?;
-            }
-
-            return Ok(bitmap_data);
-        }
-
-        let width = glyph_bounds.size.width.0 as usize;
-        let height = glyph_bounds.size.height.0 as usize;
+        let width = (native_bounds.right - native_bounds.left) as usize;
+        let height = (native_bounds.bottom - native_bounds.top) as usize;
         let pixel_count = width * height;
-
-        let mut bitmap_data = vec![0u8; pixel_count * 4];
+        let subpixel = texture_type == DWRITE_TEXTURE_CLEARTYPE_3x1;
+        let native_channels = if subpixel { 3 } else { 1 };
+        let output_channels = if subpixel { 4 } else { 1 };
+        let mut bitmap_data = vec![0u8; pixel_count * output_channels];
 
         unsafe {
             glyph_analysis.CreateAlphaTexture(
-                DWRITE_TEXTURE_CLEARTYPE_3x1,
-                &RECT {
-                    left: glyph_bounds.origin.x.0,
-                    top: glyph_bounds.origin.y.0,
-                    right: glyph_bounds.size.width.0 + glyph_bounds.origin.x.0,
-                    bottom: glyph_bounds.size.height.0 + glyph_bounds.origin.y.0,
-                },
-                &mut bitmap_data[..pixel_count * 3],
+                texture_type,
+                &native_bounds,
+                &mut bitmap_data[..pixel_count * native_channels],
             )?;
+        }
+
+        if !subpixel {
+            return Ok(bitmap_data);
         }
 
         // The output buffer expects RGBA data, so pad the alpha channel with zeros.
@@ -531,7 +420,6 @@ impl DirectWriteGlyphRenderer {
 
     fn rasterize_color(
         &self,
-        components: &DirectWriteComponents,
         params: &RenderGlyphParams,
         glyph_bounds: Bounds<DevicePixels>,
     ) -> Result<Vec<u8>> {
@@ -579,7 +467,7 @@ impl DirectWriteGlyphRenderer {
 
         // todo: support formats other than COLR
         let color_enumerator = unsafe {
-            components.factory.TranslateColorGlyphRun(
+            self.components.factory.TranslateColorGlyphRun(
                 Vector2::new(baseline_origin_x, baseline_origin_y),
                 &glyph_run,
                 None,
@@ -598,7 +486,7 @@ impl DirectWriteGlyphRenderer {
             let image_format = color_run.glyphImageFormat & !DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE;
             if image_format == DWRITE_GLYPH_IMAGE_FORMATS_COLR {
                 let color_analysis = unsafe {
-                    components.factory.CreateGlyphRunAnalysis(
+                    self.components.factory.CreateGlyphRunAnalysis(
                         &color_run.Base.glyphRun as *const _,
                         Some(&transform),
                         DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC,
@@ -710,25 +598,10 @@ impl DirectWriteGlyphRenderer {
         render_target_texture: &ID3D11Texture2D,
         render_target_view: &Option<ID3D11RenderTargetView>,
     ) -> Result<Vec<u8>> {
-        let params_buffer = {
-            let desc = D3D11_BUFFER_DESC {
-                ByteWidth: std::mem::size_of::<GlyphLayerTextureParams>().next_multiple_of(16)
-                    as u32,
-                Usage: D3D11_USAGE_DYNAMIC,
-                BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
-                MiscFlags: 0,
-                StructureByteStride: 0,
-            };
-
-            let mut buffer = None;
-            unsafe {
-                gpu_state
-                    .device
-                    .CreateBuffer(&desc, None, Some(&mut buffer))
-            }?;
-            buffer
-        };
+        let params_buffer = Some(create_constant_buffer(
+            &gpu_state.device,
+            std::mem::size_of::<GlyphLayerTextureParams>(),
+        )?);
 
         let staging_texture = {
             let mut texture = None;
@@ -936,20 +809,42 @@ impl GlyphRasterizer for DirectWriteGlyphRenderer {
         debug_assert!(
             !matches!(params.raster_style.color_effect, RasterColorEffect::Dilation(value) if value != 0)
         );
-        let bounds = self.raster_bounds(&self.components, params)?;
+        let glyph_analysis = self.create_glyph_run_analysis(params)?;
+        let texture_type = if params.raster_style.mode == GlyphRenderMode::Subpixel {
+            DWRITE_TEXTURE_CLEARTYPE_3x1
+        } else {
+            DWRITE_TEXTURE_ALIASED_1x1
+        };
+        let native_bounds = unsafe { glyph_analysis.GetAlphaTextureBounds(texture_type)? };
 
-        if bounds.size.width.0 == 0 || bounds.size.height.0 == 0 {
+        if native_bounds.right <= native_bounds.left || native_bounds.bottom <= native_bounds.top {
             return Ok(RasterizedGlyph::empty(format));
         }
 
-        let (bitmap_size, pixels) = self.rasterize_glyph(&self.components, params, bounds)?;
+        let bounds = Bounds {
+            origin: point(native_bounds.left.into(), native_bounds.top.into()),
+            size: size(
+                (native_bounds.right - native_bounds.left).into(),
+                (native_bounds.bottom - native_bounds.top).into(),
+            ),
+        };
+        let pixels = if params.raster_style.mode == GlyphRenderMode::Color {
+            self.rasterize_color(params, bounds).or_else(|_| {
+                self.rasterize_monochrome(&glyph_analysis, texture_type, native_bounds)
+                    .map(|monochrome| {
+                        monochrome
+                            .into_iter()
+                            .flat_map(|pixel| [0, 0, 0, pixel])
+                            .collect()
+                    })
+            })?
+        } else {
+            self.rasterize_monochrome(&glyph_analysis, texture_type, native_bounds)?
+        };
 
         Ok(RasterizedGlyph {
-            bounds: Bounds {
-                origin: bounds.origin,
-                size: bitmap_size,
-            },
-            size: bitmap_size,
+            bounds,
+            size: bounds.size,
             format,
             pixels,
         })
