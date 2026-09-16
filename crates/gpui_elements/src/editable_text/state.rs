@@ -403,10 +403,6 @@ impl EditableTextState {
             .unwrap_or_else(|closest| closest)
     }
 
-    fn index_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> usize {
-        self.caret_for_pixel_point(point, line_height).index
-    }
-
     fn mouse_selection_endpoint(
         &self,
         endpoint: CaretPosition,
@@ -990,7 +986,7 @@ impl EntityInputHandler for EditableTextState {
     ) -> Option<usize> {
         let point =
             point + self.layout_data.scroll_bounds.origin - self.layout_data.document_offset;
-        let index = self.index_for_pixel_point(point, window.line_height());
+        let index = self.caret_for_pixel_point(point, window.line_height()).index;
         Some(self.storage.utf_offset_8to16(index))
     }
 }
