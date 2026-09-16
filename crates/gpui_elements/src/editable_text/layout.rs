@@ -4,8 +4,6 @@ use std::sync::Arc;
 /// Data used across successive layout requests to gauge whether layout must be recomputed.
 #[derive(Default, Clone, Copy)]
 pub(super) struct EditableTextLayoutState {
-    /// The last known width at which the lines were wrapped.
-    pub wrap_width: Option<Pixels>,
     /// The last known size of the text, as generated during layout.
     pub size: Option<Size<Pixels>>,
     /// The last seen version of `storage` (for tracking when lines need to be reprocessed during layout)

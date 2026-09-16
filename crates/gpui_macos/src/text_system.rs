@@ -104,8 +104,8 @@ mod renderer {
 
     #[cfg(test)]
     use gpui::{
-        PlatformTextSystem, RasterizedGlyphFormat, TextLayoutRequest, TextRun, font as gpui_font,
-        px, rgba,
+        GlyphId, PlatformTextSystem, RasterizedGlyphFormat, Rgba8, TextLayoutRequest, TextRun,
+        font as gpui_font, px, rgba,
     };
 
     #[cfg(test)]
@@ -138,15 +138,15 @@ mod renderer {
         canvas::RasterizationOptions, font::Font as FontKitFont, hinting::HintingOptions,
     };
     use gpui::{
-        Bounds, DevicePixels, FontId, GlyphId, GlyphRenderMode, Pixels, Point, PreparedRasterStyle,
-        RasterColorEffect, RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, Rgba8,
+        Bounds, DevicePixels, FontId, GlyphRenderMode, Pixels, PreparedRasterStyle,
+        RasterColorEffect, RasterStyleRequest, RasterizedGlyph, RenderGlyphParams,
         SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, TextRenderingMode, point, size,
     };
     use gpui_parley::{ColorGlyphKind, FontDataBlob, FontSynthesis, GlyphRasterizer, RasterFace};
     use objc2::rc::autoreleasepool;
     use pathfinder_geometry::{rect::RectI, transform2d::Transform2F};
     use std::{
-        collections::HashMap,
+        collections::{HashMap, hash_map::Entry},
         f64::consts::PI,
         sync::{Arc, OnceLock},
     };
@@ -167,44 +167,8 @@ mod renderer {
 
     /// CoreText and CoreGraphics rasterization for the exact face selected by Parley.
     pub(crate) struct MacGlyphRenderer {
-        faces: NativeFaceCache<NativeFace>,
+        faces: HashMap<FontId, NativeFace>,
         sources: HashMap<u64, Arc<SendCFData>>,
-    }
-
-    #[derive(Clone, Copy)]
-    struct NativeFontId(usize);
-
-    struct NativeFaceCache<F> {
-        ids: HashMap<FontId, NativeFontId>,
-        fonts: Vec<F>,
-    }
-
-    impl<F> Default for NativeFaceCache<F> {
-        fn default() -> Self {
-            Self {
-                ids: HashMap::default(),
-                fonts: Vec::new(),
-            }
-        }
-    }
-
-    impl<F> NativeFaceCache<F> {
-        fn get_or_insert(
-            &mut self,
-            face: RasterFace<'_>,
-            load: impl FnOnce(RasterFace<'_>) -> Result<F>,
-        ) -> Result<NativeFontId> {
-            if let Some(font_id) = self.ids.get(&face.font_id) {
-                return Ok(*font_id);
-            }
-
-            let native = load(face)?;
-            let font_id = NativeFontId(self.fonts.len());
-            self.fonts.push(native);
-            self.ids.insert(face.font_id, font_id);
-
-            Ok(font_id)
-        }
     }
 
     struct NativeFace {
@@ -216,41 +180,6 @@ mod renderer {
         // sized CTFont first draws. Keep the descriptor's source alive for the full cached-face
         // lifetime, as the pre-Parley backend did through its retained CGFont.
         _source_data: Arc<SendCFData>,
-    }
-
-    #[derive(Clone)]
-    struct NativeGlyphParams {
-        font_id: NativeFontId,
-        glyph_id: GlyphId,
-        font_size: Pixels,
-        subpixel_variant: Point<u8>,
-        scale_factor: f32,
-        is_emoji: bool,
-        subpixel_rendering: bool,
-        dilation: u8,
-        preblend_color: Option<Rgba8>,
-    }
-
-    impl NativeGlyphParams {
-        fn from_parley(font_id: NativeFontId, params: &RenderGlyphParams) -> Self {
-            Self {
-                font_id,
-                glyph_id: params.glyph_id,
-                font_size: params.font_size,
-                subpixel_variant: params.subpixel_variant,
-                scale_factor: params.scale_factor,
-                is_emoji: params.raster_style.mode == GlyphRenderMode::Color,
-                subpixel_rendering: params.raster_style.mode == GlyphRenderMode::Subpixel,
-                dilation: match params.raster_style.color_effect {
-                    RasterColorEffect::Dilation(value) => value,
-                    _ => 0,
-                },
-                preblend_color: match params.raster_style.color_effect {
-                    RasterColorEffect::Preblend(color) => Some(color),
-                    _ => None,
-                },
-            }
-        }
     }
 
     /// An immutable Core Foundation data object retained by the serialized macOS rasterizer.
@@ -267,39 +196,41 @@ mod renderer {
     impl MacGlyphRenderer {
         pub(crate) fn new() -> Self {
             Self {
-                faces: NativeFaceCache::default(),
+                faces: HashMap::default(),
                 sources: HashMap::default(),
             }
         }
 
-        fn load_face(&mut self, face: RasterFace<'_>) -> Result<NativeFontId> {
-            let sources = &mut self.sources;
+        fn load_face(&mut self, face: RasterFace<'_>) -> Result<()> {
+            let Entry::Vacant(entry) = self.faces.entry(face.font_id) else {
+                return Ok(());
+            };
+            let source = self
+                .sources
+                .get(&face.source_id)
+                .cloned()
+                .unwrap_or_else(|| source_from_blob(face.source.clone()));
+            let native =
+                autoreleasepool(|_| NativeFace::new(&face, source.clone())).with_context(|| {
+                    format!(
+                        "CoreText could not create FontId {:?}, face index {}, variations {:?}",
+                        face.font_id, face.face_index, face.variations
+                    )
+                })?;
 
-            self.faces.get_or_insert(face, |face| {
-                let source = sources
-                    .get(&face.source_id)
-                    .cloned()
-                    .unwrap_or_else(|| source_from_blob(face.source.clone()));
-                let native = autoreleasepool(|_| NativeFace::new(&face, source.clone()))
-                    .with_context(|| {
-                        format!(
-                            "CoreText could not create FontId {:?}, face index {}, variations {:?}",
-                            face.font_id, face.face_index, face.variations
-                        )
-                    })?;
+            if Arc::ptr_eq(&native._source_data, &source) {
+                self.sources.entry(face.source_id).or_insert(source);
+            }
 
-                if Arc::ptr_eq(&native._source_data, &source) {
-                    sources.entry(face.source_id).or_insert(source);
-                }
+            entry.insert(native);
 
-                Ok(native)
-            })
+            Ok(())
         }
 
-        fn raster_bounds(&self, params: &NativeGlyphParams) -> Result<Bounds<DevicePixels>> {
-            let native = &self.faces.fonts[params.font_id.0];
+        fn raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
+            let native = &self.faces[&params.font_id];
 
-            if !params.is_emoji
+            if params.raster_style.mode != GlyphRenderMode::Color
                 && native.synthesis == FontSynthesis::default()
                 && native.has_default_variations
             {
@@ -326,7 +257,7 @@ mod renderer {
         fn core_text_raster_bounds(
             &self,
             native: &NativeFace,
-            params: &NativeGlyphParams,
+            params: &RenderGlyphParams,
         ) -> Result<Bounds<DevicePixels>> {
             let font_size = f64::from(params.font_size);
             let scale_factor = f64::from(params.scale_factor);
@@ -369,7 +300,7 @@ mod renderer {
 
         fn rasterize_native(
             &self,
-            params: &NativeGlyphParams,
+            params: &RenderGlyphParams,
             glyph_bounds: Bounds<DevicePixels>,
         ) -> Result<(gpui::Size<DevicePixels>, Vec<u8>)> {
             let font_size = f64::from(params.font_size);
@@ -385,11 +316,11 @@ mod renderer {
 
             ensure!(font_size > 0.0, "glyph font size is empty");
             ensure!(
-                !params.subpixel_rendering,
+                params.raster_style.mode != GlyphRenderMode::Subpixel,
                 "macOS rasterization only supports grayscale and color modes"
             );
 
-            let native = &self.faces.fonts[params.font_id.0];
+            let native = &self.faces[&params.font_id];
             let mut bitmap_size = glyph_bounds.size;
 
             if params.subpixel_variant.x > 0 {
@@ -400,13 +331,14 @@ mod renderer {
                 bitmap_size.height += DevicePixels(1);
             }
 
-            let bytes_per_pixel = if params.is_emoji { 4 } else { 1 };
+            let is_color = params.raster_style.mode == GlyphRenderMode::Color;
+            let bytes_per_pixel = if is_color { 4 } else { 1 };
             let mut pixels =
                 vec![
                     0;
                     bitmap_size.width.0 as usize * bitmap_size.height.0 as usize * bytes_per_pixel
                 ];
-            let color_space = if params.is_emoji {
+            let color_space = if is_color {
                 CGColorSpace::create_device_rgb()
             } else {
                 CGColorSpace::create_device_gray()
@@ -418,7 +350,7 @@ mod renderer {
                 8,
                 bitmap_size.width.0 as usize * bytes_per_pixel,
                 &color_space,
-                if params.is_emoji {
+                if is_color {
                     kCGImageAlphaPremultipliedLast
                 } else {
                     kCGImageAlphaOnly
@@ -445,8 +377,7 @@ mod renderer {
 
             configure_context(
                 &context,
-                params.dilation,
-                params.preblend_color,
+                params.raster_style.color_effect,
                 native.synthesis.embolden,
                 embolden,
                 text_matrix,
@@ -463,7 +394,7 @@ mod renderer {
             let font = font::new_from_descriptor(&native.descriptor, font_size);
             font.draw_glyphs(&[params.glyph_id.0 as u16], &[offset], context);
 
-            if params.is_emoji {
+            if is_color {
                 for pixel in pixels.chunks_exact_mut(4) {
                     gpui::swap_rgba_pa_to_bgra(pixel);
                 }
@@ -511,15 +442,14 @@ mod renderer {
                     return Ok(RasterizedGlyph::empty(format));
                 }
 
-                let native_id = self.load_face(face)?;
-                let native_params = NativeGlyphParams::from_parley(native_id, params);
-                let bounds = self.raster_bounds(&native_params)?;
+                self.load_face(face)?;
+                let bounds = self.raster_bounds(params)?;
 
                 if bounds.size.width.0 == 0 || bounds.size.height.0 == 0 {
                     return Ok(RasterizedGlyph::empty(format));
                 }
 
-                let (bitmap_size, pixels) = self.rasterize_native(&native_params, bounds)?;
+                let (bitmap_size, pixels) = self.rasterize_native(params, bounds)?;
 
                 Ok(RasterizedGlyph {
                     bounds: Bounds {
@@ -849,8 +779,7 @@ mod renderer {
 
     fn configure_context(
         context: &CGContext,
-        dilation: u8,
-        preblend_color: Option<Rgba8>,
+        color_effect: RasterColorEffect,
         embolden: bool,
         embolden_amount: CGFloat,
         text_matrix: CGAffineTransform,
@@ -871,21 +800,25 @@ mod renderer {
         context.set_line_join(CGLineJoin::CGLineJoinRound);
         context.set_line_width(embolden_amount * 2.0);
 
-        if let Some(color) = preblend_color {
-            let [red, green, blue, alpha] = [color.red, color.green, color.blue, color.alpha]
-                .map(|channel| f64::from(channel) / 255.0);
-            context.set_alpha(alpha);
-            context.set_rgb_fill_color(red, green, blue, 1.0);
-            context.set_rgb_stroke_color(red, green, blue, 1.0);
-        } else if dilation > 0 {
-            let luminance = f64::from(dilation) * 0.25;
-            context.set_should_smooth_fonts(true);
-            context.set_gray_fill_color(luminance, 1.0);
-            context.set_rgb_stroke_color(luminance, luminance, luminance, 1.0);
-        } else {
-            context.set_should_smooth_fonts(false);
-            context.set_gray_fill_color(0.0, 1.0);
-            context.set_rgb_stroke_color(0.0, 0.0, 0.0, 1.0);
+        match color_effect {
+            RasterColorEffect::Preblend(color) => {
+                let [red, green, blue, alpha] = [color.red, color.green, color.blue, color.alpha]
+                    .map(|channel| f64::from(channel) / 255.0);
+                context.set_alpha(alpha);
+                context.set_rgb_fill_color(red, green, blue, 1.0);
+                context.set_rgb_stroke_color(red, green, blue, 1.0);
+            }
+            RasterColorEffect::Dilation(dilation) if dilation > 0 => {
+                let luminance = f64::from(dilation) * 0.25;
+                context.set_should_smooth_fonts(true);
+                context.set_gray_fill_color(luminance, 1.0);
+                context.set_rgb_stroke_color(luminance, luminance, luminance, 1.0);
+            }
+            _ => {
+                context.set_should_smooth_fonts(false);
+                context.set_gray_fill_color(0.0, 1.0);
+                context.set_rgb_stroke_color(0.0, 0.0, 0.0, 1.0);
+            }
         }
     }
 
@@ -964,28 +897,26 @@ mod renderer {
 
             let retained_before_rasterizer = collection_source.strong_count();
             let mut rasterizer = MacGlyphRenderer::new();
-            let mut native_ids = Vec::new();
+
             for (font_id, face_index) in [(FontId(1), 1), (FontId(2), 2)] {
-                native_ids.push(
-                    rasterizer
-                        .load_face(RasterFace {
-                            font_id,
-                            source_id: 1,
-                            source: &collection_source,
-                            face_index,
-                            normalized_coords: &[],
-                            variations: &[],
-                            synthesis: FontSynthesis::default(),
-                            has_color_glyphs: false,
-                        })
-                        .unwrap(),
-                );
+                rasterizer
+                    .load_face(RasterFace {
+                        font_id,
+                        source_id: 1,
+                        source: &collection_source,
+                        face_index,
+                        normalized_coords: &[],
+                        variations: &[],
+                        synthesis: FontSynthesis::default(),
+                        has_color_glyphs: false,
+                    })
+                    .unwrap();
             }
 
             assert_eq!(rasterizer.sources.len(), 1);
             assert!(Arc::ptr_eq(
-                &rasterizer.faces.fonts[native_ids[0].0]._source_data,
-                &rasterizer.faces.fonts[native_ids[1].0]._source_data,
+                &rasterizer.faces[&FontId(1)]._source_data,
+                &rasterizer.faces[&FontId(2)]._source_data,
             ));
             assert_eq!(
                 collection_source.strong_count(),

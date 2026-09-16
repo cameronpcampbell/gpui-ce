@@ -86,14 +86,9 @@ pub struct InlineLayout {
     pub size: Size<Pixels>,
 }
 
-#[derive(Clone, Copy)]
-struct InlineBoxPlacement {
-    line_index: Option<usize>,
-    vertical_align: VerticalAlign,
-}
-
 fn base_inline_line_bounds(metrics: InlineTextMetrics, line_height: Pixels) -> (Pixels, Pixels) {
     let half_leading = ((line_height - metrics.ascent - metrics.descent) / 2.).max(Pixels::ZERO);
+
     (
         -metrics.ascent - half_leading,
         metrics.descent + half_leading,
@@ -150,24 +145,15 @@ pub fn align_inline_boxes(
         .iter()
         .map(|request| (request.id, request.vertical_align))
         .collect::<FxHashMap<_, _>>();
-    let box_placements = boxes
-        .iter()
-        .map(|inline_box| {
-            let vertical_align = request_alignments
+    let mut boxes_by_line = vec![Vec::new(); lines.len()];
+
+    for (box_idx, inline_box) in boxes.iter().enumerate() {
+        if let Some(line_boxes) = boxes_by_line.get_mut(inline_box.line_index) {
+            let align = request_alignments
                 .get(&inline_box.id)
                 .copied()
                 .unwrap_or(VerticalAlign::Baseline);
-            InlineBoxPlacement {
-                line_index: (inline_box.line_index < lines.len()).then_some(inline_box.line_index),
-                vertical_align,
-            }
-        })
-        .collect::<Vec<_>>();
-    let mut box_indices_by_line = vec![Vec::new(); lines.len()];
-
-    for (box_idx, placement) in box_placements.iter().enumerate() {
-        if let Some(line_idx) = placement.line_index {
-            box_indices_by_line[line_idx].push(box_idx);
+            line_boxes.push((box_idx, align));
         }
     }
 
@@ -185,9 +171,8 @@ pub fn align_inline_boxes(
         let mut top_box_height = Pixels::ZERO;
         let mut bottom_box_height = Pixels::ZERO;
 
-        for box_idx in &box_indices_by_line[line_idx] {
-            let inline_box = &boxes[*box_idx];
-            let placement = box_placements[*box_idx];
+        for &(box_idx, align) in &boxes_by_line[line_idx] {
+            let inline_box = &boxes[box_idx];
             expand_inline_line_for_box(
                 &mut top,
                 &mut bottom,
@@ -195,7 +180,7 @@ pub fn align_inline_boxes(
                 &mut bottom_box_height,
                 inline_box.bounds.size.height,
                 metrics,
-                placement.vertical_align,
+                align,
             );
         }
 
@@ -205,16 +190,10 @@ pub fn align_inline_boxes(
         line.size.height = bottom - top;
         line.baseline = -top;
 
-        for box_idx in &box_indices_by_line[line_idx] {
-            let inline_box = &mut boxes[*box_idx];
-            let placement = box_placements[*box_idx];
-            inline_box.bounds.origin.y = line_y
-                + aligned_inline_box_y(
-                    *line,
-                    metrics,
-                    inline_box.bounds.size.height,
-                    placement.vertical_align,
-                );
+        for &(box_idx, align) in &boxes_by_line[line_idx] {
+            let inline_box = &mut boxes[box_idx];
+            inline_box.bounds.origin.y =
+                line_y + aligned_inline_box_y(*line, metrics, inline_box.bounds.size.height, align);
         }
 
         line_y += line.size.height;

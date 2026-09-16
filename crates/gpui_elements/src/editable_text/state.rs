@@ -163,17 +163,8 @@ impl EditableTextState {
         self.selected_range.byte_range()
     }
 
-    pub(super) fn selection_direction(&self) -> Option<NavigationDirection> {
-        match self
-            .selected_range
-            .focus
-            .index
-            .cmp(&self.selected_range.anchor.index)
-        {
-            std::cmp::Ordering::Less => Some(NavigationDirection::Forward),
-            std::cmp::Ordering::Equal => None,
-            std::cmp::Ordering::Greater => Some(NavigationDirection::Back),
-        }
+    pub(super) fn caret_selection(&self) -> CaretSelection {
+        self.selected_range
     }
 
     /// Returns the position of the caret in utf8 character space.
@@ -320,17 +311,35 @@ impl EditableTextState {
             .map(|point| point + self.layout_data.document_offset)
     }
 
-    fn cluster_deletion_range(&self, direction: NavigationDirection) -> Option<Range<usize>> {
-        let range = match direction {
-            NavigationDirection::Back => self
-                .current_document()?
-                .logical_cluster_before(self.caret()),
-            NavigationDirection::Forward => {
-                self.current_document()?.logical_cluster_after(self.caret())
-            }
-        }?;
+    fn layout_deletion_range(
+        &self,
+        direction: NavigationDirection,
+        boundary: TextBoundary,
+    ) -> Option<Range<usize>> {
+        let document = self.current_document()?;
+        let caret = self.caret();
 
-        (!range.is_empty() && range.end <= self.as_str().len()).then_some(range)
+        let movement = match (direction, boundary) {
+            (NavigationDirection::Back, TextBoundary::Graphmeme) => {
+                return document
+                    .logical_cluster_before(caret)
+                    .filter(|range| !range.is_empty() && range.end <= self.as_str().len());
+            }
+            (NavigationDirection::Forward, TextBoundary::Graphmeme) => {
+                return document
+                    .logical_cluster_after(caret)
+                    .filter(|range| !range.is_empty() && range.end <= self.as_str().len());
+            }
+            (NavigationDirection::Back, TextBoundary::Word) => TextMovement::VisualWordLeft,
+            (NavigationDirection::Forward, TextBoundary::Word) => TextMovement::VisualWordRight,
+            (NavigationDirection::Back, TextBoundary::Line) => TextMovement::HardLineStart,
+            (NavigationDirection::Forward, TextBoundary::Line) => TextMovement::HardLineEnd,
+            (_, TextBoundary::Document) => return None,
+        };
+
+        let target = document.move_caret(caret, movement, None).0.index;
+
+        Some(target.min(caret.index)..target.max(caret.index))
     }
 
     /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
@@ -385,10 +394,6 @@ impl EditableTextState {
         document.move_caret(endpoint, opposite_edge, None).0
     }
 
-    fn find_point_for_caret(&self, caret: CaretPosition) -> Point<Pixels> {
-        self.point_for_caret(caret).unwrap_or_default()
-    }
-
     fn line_range_for_cut(&self) -> Range<usize> {
         let caret = self.caret();
         let range = if let Some(document) = self.current_document() {
@@ -438,7 +443,9 @@ impl EditableTextState {
         };
 
         // point will be relative to content_size, and may or may not be within the current scroll_bounds
-        let point = self.find_point_for_caret(self.visible_caret());
+        let point = self
+            .point_for_caret(self.visible_caret())
+            .unwrap_or_default();
 
         // this scroll_offset diverges from the rest of gpui, as it is stored in the
         // positive real number space (interactivity stores it in the negatives)
@@ -478,7 +485,7 @@ impl EditableTextState {
     /// Will cause the current scroll position/offset to update on the next frame,
     /// if the line the carent is on is out of view.
     pub fn move_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
-        self.move_to_caret(self.caret_for_index(caret_pos), cx);
+        self.set_caret(self.caret_for_index(caret_pos), false, cx);
     }
 
     fn caret_for_index(&self, caret_pos: usize) -> CaretPosition {
@@ -492,28 +499,37 @@ impl EditableTextState {
         }
     }
 
-    fn move_to_caret(&mut self, mut caret: CaretPosition, context: &mut Context<Self>) {
-        context.emit(CaretNotify::PauseBlinking);
-        caret.index = caret.index.min(self.storage.content_utf8().len());
-        self.selected_range = CaretSelection::collapsed(caret);
-        self.preferred_x = None;
-        self.scroll_to_caret();
-        context.notify();
-    }
-
     /// Changes the current selection to extend to the provided position.
     ///
     /// Will cause the current scroll position/offset to update on the next frame,
     /// if the line the carent is on is out of view.
     pub fn select_to(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
-        self.select_to_caret(self.caret_for_index(caret_pos), cx);
+        self.set_caret(self.caret_for_index(caret_pos), true, cx);
     }
 
-    fn select_to_caret(&mut self, mut caret: CaretPosition, context: &mut Context<Self>) {
+    fn set_caret(&mut self, caret: CaretPosition, extend: bool, context: &mut Context<Self>) {
+        let selection = if extend {
+            self.selected_range.with_focus(caret)
+        } else {
+            CaretSelection::collapsed(caret)
+        };
+
+        self.set_selection(selection, None, context);
+    }
+
+    fn set_selection(
+        &mut self,
+        mut selection: CaretSelection,
+        preferred_x: Option<Pixels>,
+        context: &mut Context<Self>,
+    ) {
         context.emit(CaretNotify::PauseBlinking);
-        caret.index = caret.index.min(self.as_str().len());
-        self.selected_range = self.selected_range.with_focus(caret);
-        self.preferred_x = None;
+        let storage_len = self.as_str().len();
+        selection.focus.index = selection.focus.index.min(storage_len);
+        selection.anchor.index = selection.anchor.index.min(storage_len);
+        self.selected_range = selection;
+        self.preferred_x = preferred_x;
+
         self.scroll_to_caret();
         context.notify();
     }
@@ -542,44 +558,16 @@ impl EditableTextState {
 
         let range = self.selected_range();
         let had_selection = !range.is_empty();
-        let range = match range.is_empty() {
-            false => range,
-            true if matches!(boundary, TextBoundary::Graphmeme) => {
-                self.cluster_deletion_range(direction).unwrap_or_else(|| {
-                    self.storage
-                        .range_from_caret(self.caret_pos(), direction, boundary)
-                })
-            }
-            true if matches!(boundary, TextBoundary::Word | TextBoundary::Line) => self
-                .current_document()
-                .map(|document| {
-                    let movement = match (direction, boundary) {
-                        (NavigationDirection::Back, TextBoundary::Word) => {
-                            TextMovement::VisualWordLeft
-                        }
-                        (NavigationDirection::Forward, TextBoundary::Word) => {
-                            TextMovement::VisualWordRight
-                        }
-                        (NavigationDirection::Back, TextBoundary::Line) => {
-                            TextMovement::HardLineStart
-                        }
-                        (NavigationDirection::Forward, TextBoundary::Line) => {
-                            TextMovement::HardLineEnd
-                        }
-                        _ => unreachable!(),
-                    };
-
-                    let target = document.move_caret(self.caret(), movement, None).0.index;
-                    target.min(self.caret_pos())..target.max(self.caret_pos())
-                })
+        let range = if had_selection {
+            range
+        } else {
+            self.layout_deletion_range(direction, boundary)
                 .unwrap_or_else(|| {
                     self.storage
                         .range_from_caret(self.caret_pos(), direction, boundary)
-                }),
-            true => self
-                .storage
-                .range_from_caret(self.caret_pos(), direction, boundary),
+                })
         };
+
         let storage_len_utf8 = self.storage.content_utf8().len();
         let start = range.start.min(storage_len_utf8);
         let end = range.end.max(start).min(storage_len_utf8);
@@ -625,18 +613,6 @@ impl EditableTextState {
         self.move_to(caret_pos, cx);
     }
 
-    fn move_visual(&mut self, forward: bool, extend: bool, context: &mut Context<Self>) {
-        self.move_semantic(
-            if forward {
-                TextMovement::VisualRight
-            } else {
-                TextMovement::VisualLeft
-            },
-            extend,
-            context,
-        );
-    }
-
     fn move_semantic(&mut self, movement: TextMovement, extend: bool, context: &mut Context<Self>) {
         if let Some(document) = self.current_document() {
             let moved = document.move_selection(
@@ -646,15 +622,8 @@ impl EditableTextState {
                 self.preferred_x,
                 self.layout_data.line_height,
             );
-            context.emit(CaretNotify::PauseBlinking);
-            let storage_len = self.storage.content_utf8().len();
-            let mut selection = moved.selection;
-            selection.focus.index = selection.focus.index.min(storage_len);
-            selection.anchor.index = selection.anchor.index.min(storage_len);
-            self.selected_range = selection;
-            self.preferred_x = moved.preferred_x;
-            self.scroll_to_caret();
-            context.notify();
+            self.set_selection(moved.selection, moved.preferred_x, context);
+
             return;
         }
 
@@ -689,37 +658,19 @@ impl EditableTextState {
                 | TextMovement::VisualWordLeft
                 | TextMovement::VisualWordRight
         );
-        let collapse_selection = !extend && !self.selected_range.is_empty() && horizontal;
-        let base = if collapse_selection {
-            let idx = match direction {
-                NavigationDirection::Back => self
-                    .selected_range
-                    .focus
-                    .index
-                    .min(self.selected_range.anchor.index),
-                NavigationDirection::Forward => self
-                    .selected_range
-                    .focus
-                    .index
-                    .max(self.selected_range.anchor.index),
-            };
+        let idx = if !extend && !self.selected_range.is_empty() && horizontal {
+            let range = self.selected_range();
 
-            self.move_to_caret(CaretPosition::new(idx, CaretAffinity::Downstream), context);
-            return;
+            match direction {
+                NavigationDirection::Back => range.start,
+                NavigationDirection::Forward => range.end,
+            }
         } else {
-            self.caret_pos()
+            self.storage
+                .offset_from_caret(self.caret_pos(), direction, boundary)
         };
 
-        let caret = CaretPosition::new(
-            self.storage.offset_from_caret(base, direction, boundary),
-            CaretAffinity::Downstream,
-        );
-
-        if extend {
-            self.select_to_caret(caret, context);
-        } else {
-            self.move_to_caret(caret, context);
-        }
+        self.set_caret(CaretPosition::downstream(idx), extend, context);
     }
 
     /// Sets the current selection to be the entire text in the storage medium
@@ -868,35 +819,6 @@ impl EditableTextState {
         let storage_len_utf8 = self.as_str().len();
         range.start.min(storage_len_utf8)..range.end.min(storage_len_utf8)
     }
-
-    fn ime_mark_text_in_range(&mut self, range: &Range<usize>, text_len: usize) {
-        self.marked_range = match text_len {
-            0 => None,
-            _ => Some(range.start..range.start + text_len),
-        };
-    }
-
-    fn ime_mark_selected_range(
-        &mut self,
-        range_overwritten: &Range<usize>,
-        new_selected_range_utf16: &Option<Range<usize>>,
-        inserted_text: &str,
-    ) {
-        self.selected_range = {
-            let new_range = new_selected_range_utf16.as_ref();
-            let new_range = new_range.map(|range_utf16| {
-                utf16_to_utf8_offset(inserted_text, range_utf16.start) + range_overwritten.start
-                    ..utf16_to_utf8_offset(inserted_text, range_utf16.end) + range_overwritten.start
-            });
-            let new_range = new_range.unwrap_or_else(|| {
-                range_overwritten.start + inserted_text.len()
-                    ..range_overwritten.start + inserted_text.len()
-            });
-            new_range.into()
-        };
-
-        self.preferred_x = None;
-    }
 }
 
 // IME handler
@@ -921,11 +843,9 @@ impl EntityInputHandler for EditableTextState {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        let selection_range = self.selected_range();
-        let direction = self.selection_direction();
         Some(UTF16Selection {
-            range: self.storage.utf_range_8to16(&selection_range),
-            reversed: direction == Some(NavigationDirection::Back),
+            range: self.storage.utf_range_8to16(&self.selected_range()),
+            reversed: self.selected_range.focus.index > self.selected_range.anchor.index,
         })
     }
 
@@ -969,8 +889,15 @@ impl EntityInputHandler for EditableTextState {
         let range = self.ime_resolve_range(range_utf16);
         let text_to_insert = self.validate_incoming_text(&range, text_to_insert);
         self.replace_text(range.clone(), text_to_insert.as_ref());
-        self.ime_mark_text_in_range(&range, text_to_insert.len());
-        self.ime_mark_selected_range(&range, &new_selected_range_utf16, text_to_insert.as_ref());
+
+        let text_len = text_to_insert.len();
+        self.marked_range = (text_len > 0).then_some(range.start..range.start + text_len);
+        let selection = new_selected_range_utf16.map_or(text_len..text_len, |range_utf16| {
+            utf16_to_utf8_offset(&text_to_insert, range_utf16.start)
+                ..utf16_to_utf8_offset(&text_to_insert, range_utf16.end)
+        });
+        self.selected_range = (range.start + selection.start..range.start + selection.end).into();
+
         self.emit_text_changed(cx);
         cx.notify();
     }
@@ -1096,11 +1023,11 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn nav_left(&mut self, _: &NavLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.move_visual(false, false, cx);
+        self.move_semantic(TextMovement::VisualLeft, false, cx);
     }
 
     fn nav_right(&mut self, _: &NavRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.move_visual(true, false, cx);
+        self.move_semantic(TextMovement::VisualRight, false, cx);
     }
 
     fn nav_up(&mut self, _: &NavUp, _window: &mut Window, context: &mut Context<'app, Self>) {
@@ -1150,11 +1077,11 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn select_left(&mut self, _: &SelectLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.move_visual(false, true, cx);
+        self.move_semantic(TextMovement::VisualLeft, true, cx);
     }
 
     fn select_right(&mut self, _: &SelectRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.move_visual(true, true, cx);
+        self.move_semantic(TextMovement::VisualRight, true, cx);
     }
 
     fn select_up(&mut self, _: &SelectUp, _window: &mut Window, context: &mut Context<'app, Self>) {
@@ -1302,8 +1229,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
                     self.select_line_at(caret.index, cx);
                 }
             }
-            _ if event.modifiers.shift => self.select_to_caret(caret, cx),
-            _ => self.move_to_caret(caret, cx),
+            _ => self.set_caret(caret, event.modifiers.shift, cx),
         }
 
         self.mouse_anchor =
@@ -1338,7 +1264,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
             }
 
             self.mouse_caret = Some((self.selected_range.with_focus(caret), mouse_caret));
-            self.select_to_caret(caret, cx);
+            self.set_caret(caret, true, cx);
         }
     }
 }

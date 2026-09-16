@@ -563,12 +563,12 @@ impl<E: Element> Drawable<E> {
         }
     }
 
-    fn compute_layout_as_root(
+    pub(crate) fn layout_as_root(
         &mut self,
         available_space: Size<AvailableSpace>,
         window: &mut Window,
         cx: &mut App,
-    ) -> (LayoutId, Size<Pixels>) {
+    ) -> Size<Pixels> {
         if matches!(&self.phase, ElementDrawPhase::Start) {
             self.request_layout(window, cx);
         }
@@ -612,17 +612,7 @@ impl<E: Element> Drawable<E> {
             _ => panic!("cannot measure after painting"),
         };
 
-        (layout_id, window.layout_bounds(layout_id).size)
-    }
-
-    pub(crate) fn layout_as_root(
-        &mut self,
-        available_space: Size<AvailableSpace>,
-        window: &mut Window,
-        context: &mut App,
-    ) -> Size<Pixels> {
-        self.compute_layout_as_root(available_space, window, context)
-            .1
+        window.layout_bounds(layout_id).size
     }
 }
 

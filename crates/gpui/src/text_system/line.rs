@@ -53,11 +53,10 @@ impl ShapedLine {
             align,
             align_width,
             &self.layout.visual_lines,
+            TextPaintPass::Foreground,
             window,
             cx,
-        )?;
-
-        Ok(())
+        )
     }
 
     /// Paint the background of the line to the window.
@@ -70,18 +69,17 @@ impl ShapedLine {
         window: &mut Window,
         cx: &mut App,
     ) -> Result<()> {
-        paint_visual_background(
+        paint_visual_text(
             origin,
             &self.layout,
             line_height,
             align,
             align_width,
             &self.layout.visual_lines,
+            TextPaintPass::Background,
             window,
             cx,
-        )?;
-
-        Ok(())
+        )
     }
 }
 
@@ -124,11 +122,10 @@ impl WrappedLine {
             align,
             align_width,
             &self.layout.visual_lines,
+            TextPaintPass::Foreground,
             window,
             cx,
-        )?;
-
-        Ok(())
+        )
     }
 
     /// Paint the background of line of text to the window.
@@ -146,18 +143,17 @@ impl WrappedLine {
             None => self.layout.wrap_width,
         };
 
-        paint_visual_background(
+        paint_visual_text(
             origin,
             &self.layout.layout,
             line_height,
             align,
             align_width,
             &self.layout.visual_lines,
+            TextPaintPass::Background,
             window,
             cx,
-        )?;
-
-        Ok(())
+        )
     }
 }
 
@@ -223,7 +219,7 @@ fn paint_inline_layout(
                 pass,
                 &text_system,
                 window,
-            )?;
+            );
         }
 
         Ok(())
@@ -244,6 +240,7 @@ pub(crate) fn place_inline_layout(
     let anchor = content_origin + point(alignment_offset, Pixels::ZERO);
     let placed_anchor = window.pixel_snap_point(anchor);
     let delta = placed_anchor - anchor;
+
     InlineLayoutPlacement {
         origin: content_origin + delta,
         delta,
@@ -259,7 +256,7 @@ fn paint_visual_line(
     pass: TextPaintPass,
     text_system: &TextSystem,
     window: &mut Window,
-) -> Result<()> {
+) {
     let context = FragmentPaintContext {
         line_origin,
         line_height,
@@ -270,17 +267,15 @@ fn paint_visual_line(
     };
 
     for fragment in &layout.paint_fragments[visual_line.fragment_range.clone()] {
-        paint_text_fragment(fragment, &context, window)?;
+        paint_text_fragment(fragment, &context, window);
     }
-
-    Ok(())
 }
 
 fn paint_text_fragment(
     fragment: &PaintFragment,
     context: &FragmentPaintContext<'_>,
     window: &mut Window,
-) -> Result<()> {
+) {
     paint_fragment_decorations_at(
         fragment,
         context.line_origin,
@@ -292,7 +287,7 @@ fn paint_text_fragment(
     );
 
     if context.pass == TextPaintPass::Background {
-        return Ok(());
+        return;
     }
 
     let max_glyph_size = context
@@ -335,6 +330,7 @@ fn paint_text_fragment(
 
         if let Err(error) = result {
             let error_idx = GLYPH_PAINT_ERRORS.fetch_add(1, Ordering::Relaxed);
+
             if error_idx < MAX_LOGGED_GLYPH_PAINT_ERRORS {
                 log::error!(
                     "failed to paint glyph {:?} from font {:?}: {error:#}",
@@ -346,8 +342,6 @@ fn paint_text_fragment(
             }
         }
     }
-
-    Ok(())
 }
 
 fn paint_visual_text(
@@ -357,6 +351,7 @@ fn paint_visual_text(
     align: TextAlign,
     align_width: Option<Pixels>,
     visual_lines: &[VisualLine],
+    pass: TextPaintPass,
     window: &mut Window,
     cx: &mut App,
 ) -> Result<()> {
@@ -380,49 +375,12 @@ fn paint_visual_text(
                 line_origin,
                 line_height,
                 line_origin.y + padding_top + layout.ascent,
-                TextPaintPass::Foreground,
+                pass,
                 &text_system,
                 window,
-            )?;
-        }
-        Ok(())
-    })
-}
-
-fn paint_visual_background(
-    origin: Point<Pixels>,
-    layout: &LineLayout,
-    line_height: Pixels,
-    align: TextAlign,
-    align_width: Option<Pixels>,
-    visual_lines: &[VisualLine],
-    window: &mut Window,
-    cx: &mut App,
-) -> Result<()> {
-    if visual_lines.is_empty() {
-        return Ok(());
-    }
-
-    let line_bounds = visual_text_bounds(origin, line_height, align, align_width, visual_lines);
-    window.paint_layer(line_bounds, |window| {
-        let padding_top = (line_height - layout.ascent - layout.descent) / 2.;
-        let text_system = cx.text_system().clone();
-        for (line_idx, line) in visual_lines.iter().enumerate() {
-            let line_origin = point(
-                visual_line_origin_x(origin.x, align, align_width, line),
-                origin.y + line_idx as f32 * line_height,
             );
-            paint_visual_line(
-                layout,
-                line,
-                line_origin,
-                line_height,
-                line_origin.y + padding_top + layout.ascent,
-                TextPaintPass::Background,
-                &text_system,
-                window,
-            )?;
         }
+
         Ok(())
     })
 }

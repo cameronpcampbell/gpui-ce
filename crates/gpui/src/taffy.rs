@@ -114,9 +114,6 @@ impl TaffyLayoutEngine {
         scale_factor: f32,
         children: &[LayoutId],
     ) -> LayoutId {
-        let vertical_align = style.vertical_align;
-        let direction = style.direction;
-        let unicode_bidi = style.effective_unicode_bidi();
         let taffy_style = style.to_taffy(rem_size, scale_factor);
 
         let node_id = if children.is_empty() {
@@ -132,10 +129,8 @@ impl TaffyLayoutEngine {
                 .into()
         };
 
-        self.record_vertical_align(node_id, vertical_align);
-        self.display_and_position
-            .insert(node_id, (style.display, style.position));
-        self.record_direction(node_id, direction, unicode_bidi);
+        self.record_style(node_id, &style);
+
         node_id
     }
 
@@ -152,9 +147,6 @@ impl TaffyLayoutEngine {
         ) -> Size<Pixels>
         + 'static,
     ) -> LayoutId {
-        let vertical_align = style.vertical_align;
-        let direction = style.direction;
-        let unicode_bidi = style.effective_unicode_bidi();
         let taffy_style = style.to_taffy(rem_size, scale_factor);
         let measure = Box::new(measure) as Box<MeasureFn>;
         #[cfg(feature = "stacker")]
@@ -166,29 +158,29 @@ impl TaffyLayoutEngine {
                 taffy_style,
                 NodeContext {
                     measure,
-                    unicode_bidi,
+                    unicode_bidi: style.effective_unicode_bidi(),
                 },
             )
             .expect(EXPECT_MESSAGE)
             .into();
-        self.record_vertical_align(node_id, vertical_align);
-        self.display_and_position
-            .insert(node_id, (style.display, style.position));
-        self.record_direction(node_id, direction, unicode_bidi);
+        self.record_style(node_id, &style);
+
         node_id
     }
 
-    fn record_direction(
-        &mut self,
-        node_id: LayoutId,
-        authored: Direction,
-        unicode_bidi: UnicodeBidi,
-    ) {
+    fn record_style(&mut self, node_id: LayoutId, style: &Style) {
+        if style.vertical_align != VerticalAlign::Baseline {
+            self.vertical_alignments
+                .insert(node_id, style.vertical_align);
+        }
+
+        self.display_and_position
+            .insert(node_id, (style.display, style.position));
         self.directions.insert(
             node_id,
             DirectionMetadata {
-                authored,
-                unicode_bidi,
+                authored: style.direction,
+                unicode_bidi: style.effective_unicode_bidi(),
                 source_direction: None,
                 auto_direction_hint: None,
                 logical_children: None,
@@ -228,6 +220,7 @@ impl TaffyLayoutEngine {
         node_id: LayoutId,
     ) -> Option<ResolvedDirection> {
         let metadata = self.directions.get(&node_id)?;
+
         (metadata.authored == Direction::Inherit)
             .then(|| self.auto_direction(node_id))
             .flatten()
@@ -246,38 +239,21 @@ impl TaffyLayoutEngine {
     fn auto_direction(&self, node_id: LayoutId) -> Option<ResolvedDirection> {
         let metadata = self.directions.get(&node_id)?;
 
-        if let Some(direction) = metadata.source_direction {
+        if let Some(direction) = metadata.source_direction.or(metadata.auto_direction_hint) {
             return Some(direction);
         }
 
-        if let Some(direction) = metadata.auto_direction_hint {
-            return Some(direction);
+        if let Some(children) = &metadata.logical_children {
+            return children
+                .iter()
+                .find_map(|child| self.auto_direction_contribution(*child));
         }
 
-        let logical_children = metadata.logical_children.clone().unwrap_or_else(|| {
-            self.taffy
-                .children(node_id.into())
-                .expect(EXPECT_MESSAGE)
-                .into_iter()
-                .map(LayoutId::from)
-                .collect()
-        });
-
-        for child_id in &logical_children {
-            let Some(child) = self.directions.get(child_id) else {
-                continue;
-            };
-
-            if child.authored != Direction::Inherit {
-                continue;
-            }
-
-            if let Some(direction) = self.auto_direction(*child_id) {
-                return Some(direction);
-            }
-        }
-
-        None
+        self.taffy
+            .children(node_id.into())
+            .expect(EXPECT_MESSAGE)
+            .into_iter()
+            .find_map(|child| self.auto_direction_contribution(child.into()))
     }
 
     fn resolve_directions(
@@ -348,12 +324,6 @@ impl TaffyLayoutEngine {
             .chain(logical_children)
         {
             self.resolve_direction_subtree(child_id, resolved, visited, changed);
-        }
-    }
-
-    fn record_vertical_align(&mut self, node_id: LayoutId, vertical_align: VerticalAlign) {
-        if vertical_align != VerticalAlign::Baseline {
-            self.vertical_alignments.insert(node_id, vertical_align);
         }
     }
 

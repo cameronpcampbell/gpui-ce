@@ -29,17 +29,6 @@ use swash::{
 
 const CANONICAL_FONT_ID_BIT: usize = 1 << (usize::BITS - 1);
 
-/// The identity assigned to one immutable font-data blob.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct SourceIdentity(u64);
-
-impl SourceIdentity {
-    /// Returns the stable identity carried by a Fontique blob.
-    fn of(data: &Blob<u8>) -> Self {
-        Self(data.id())
-    }
-}
-
 /// One design-space variation coordinate for an exact font instance.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FontVariation {
@@ -195,7 +184,7 @@ impl From<Synthesis> for SynthesisKey {
 /// Full identity of a selected font instance.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct FontKey {
-    source_identity: SourceIdentity,
+    source_id: u64,
     face_index: u32,
     normalized_coords: Vec<NormalizedCoord>,
     synthesis: SynthesisKey,
@@ -216,7 +205,6 @@ pub(crate) struct LoadedFont {
     pub(crate) synthesis: Synthesis,
     /// Whether this face advertises color glyph data.
     pub(crate) has_color_glyphs: bool,
-    source_identity: SourceIdentity,
 }
 
 /// Color glyph data parsed once for all glyphs in a shaped run.
@@ -389,14 +377,6 @@ impl LoadedFont {
             .context("Skrifa could not parse the stored font face")
     }
 
-    fn location(&self) -> Location {
-        let mut location = Location::new(self.normalized_coords.len());
-        location
-            .coords_mut()
-            .copy_from_slice(&self.normalized_coords);
-        location
-    }
-
     /// Builds a glyph-level view of the face's color artwork.
     pub(crate) fn color_glyphs(&self) -> Result<ColorGlyphClassifier<'_>> {
         let font = self.skrifa_ref()?;
@@ -416,8 +396,8 @@ impl LoadedFont {
     /// Reads global metrics in font units from the canonical bytes.
     pub(crate) fn metrics(&self) -> Result<FontMetrics> {
         let font = self.skrifa_ref()?;
-        let location = self.location();
-        let metrics = font.metrics(SkrifaSize::unscaled(), &location);
+        let metrics = font.metrics(SkrifaSize::unscaled(), self.normalized_coords.as_slice());
+
         Ok(FontMetrics {
             units_per_em: metrics.units_per_em.into(),
             ascent: metrics.ascent,
@@ -451,16 +431,16 @@ impl LoadedFont {
     /// Returns the unscaled advance for a glyph.
     pub(crate) fn advance(&self, glyph_id: GlyphId) -> Result<Size<f32>> {
         let font = self.skrifa_ref()?;
-        let location = self.location();
-        let metrics = font.glyph_metrics(SkrifaSize::unscaled(), &location);
+        let metrics = font.glyph_metrics(SkrifaSize::unscaled(), self.normalized_coords.as_slice());
         let glyph_id = skrifa::GlyphId::new(glyph_id.0);
+
         Ok(size(metrics.advance_width(glyph_id).unwrap_or(0.0), 0.0))
     }
 
     pub(crate) fn raster_face(&self, font_id: FontId) -> RasterFace<'_> {
         RasterFace {
             font_id,
-            source_id: self.source_identity.0,
+            source_id: self.data.id(),
             source: &self.data,
             face_index: self.index,
             normalized_coords: &self.normalized_coords,
@@ -471,15 +451,14 @@ impl LoadedFont {
     }
 
     pub(crate) fn data_identity(&self) -> u64 {
-        self.source_identity.0
+        self.data.id()
     }
 
     /// Returns the glyph's control bounds in font units.
     pub(crate) fn glyph_bounds(&self, glyph_id: GlyphId) -> Result<Bounds<f32>> {
         let font = self.skrifa_ref()?;
-        let location = self.location();
         let bounds = font
-            .glyph_metrics(SkrifaSize::unscaled(), &location)
+            .glyph_metrics(SkrifaSize::unscaled(), self.normalized_coords.as_slice())
             .bounds(skrifa::GlyphId::new(glyph_id.0));
         let Some(bounds) = bounds else {
             return Ok(Bounds::default());
@@ -540,7 +519,7 @@ impl FontStore {
         let variations =
             verified_design_variations(&font, &canonical_coords, synthesis, shaping_variations)?;
         let key = FontKey {
-            source_identity: SourceIdentity::of(&data),
+            source_id: data.id(),
             face_index: idx,
             normalized_coords: canonical_coords.clone(),
             synthesis: synthesis.into(),
@@ -558,7 +537,6 @@ impl FontStore {
         let has_color_glyphs = [*b"CBDT", *b"sbix", *b"COLR", *b"SVG "]
             .into_iter()
             .any(|tag| font.table_data(Tag::new(&tag)).is_some());
-        let source_identity = SourceIdentity::of(&data);
         self.fonts.push(LoadedFont {
             data,
             index: idx,
@@ -566,7 +544,6 @@ impl FontStore {
             variations,
             synthesis,
             has_color_glyphs,
-            source_identity,
         });
 
         self.ids_by_key.insert(key, font_id);
@@ -640,18 +617,10 @@ fn canonical_index(font_id: FontId) -> Option<usize> {
 }
 
 /// Swash raster state used by Linux, web, and explicit fallback construction.
+#[derive(Default)]
 pub struct SwashGlyphRasterizer {
     scale_context: ScaleContext,
     cache_keys: HashMap<FontId, SwashCacheKey>,
-}
-
-impl Default for SwashGlyphRasterizer {
-    fn default() -> Self {
-        Self {
-            scale_context: ScaleContext::new(),
-            cache_keys: HashMap::default(),
-        }
-    }
 }
 
 impl GlyphRasterizer for SwashGlyphRasterizer {
@@ -725,17 +694,10 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
                 )
             }
             swash::scale::image::Content::Mask
-                if params.raster_style.mode == GlyphRenderMode::Color =>
+                if params.raster_style.mode == GlyphRenderMode::Color
+                    && params.raster_style.foreground_dependency
+                        != ForegroundDependency::AlphaOnly =>
             {
-                if params.raster_style.foreground_dependency == ForegroundDependency::AlphaOnly {
-                    return Ok(RasterizedGlyph {
-                        bounds,
-                        size: bounds.size,
-                        format: RasterizedGlyphFormat::AlphaMask,
-                        pixels: image.data,
-                    });
-                }
-
                 let color = match params.raster_style.color_effect {
                     gpui::RasterColorEffect::Preblend(color) => color,
                     gpui::RasterColorEffect::Independent => gpui::Rgba8 {
@@ -871,18 +833,15 @@ fn glyph_is_intentionally_empty(face: &RasterFace<'_>, glyph_id: GlyphId) -> Res
 
     let skrifa_id = skrifa::GlyphId::new(glyph_id.0);
     let outlines = font.outline_glyphs();
+
     if outlines.format().is_some() {
         let outline = outlines
             .get(skrifa_id)
             .context("cannot parse the selected glyph's outline")?;
-        let mut location = Location::new(face.normalized_coords.len());
-        location
-            .coords_mut()
-            .copy_from_slice(face.normalized_coords);
         let mut pen = DrawablePathPen::default();
         outline
             .draw(
-                DrawSettings::unhinted(SkrifaSize::unscaled(), &location),
+                DrawSettings::unhinted(SkrifaSize::unscaled(), face.normalized_coords),
                 &mut pen,
             )
             .context("cannot inspect the selected glyph's outline")?;

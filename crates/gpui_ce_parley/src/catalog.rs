@@ -1,7 +1,8 @@
-use fontique::{Attributes, FontStyle, FontWeight, FontWidth, QueryFamily, QueryStatus};
-
 use anyhow::{Result, bail};
-use fontique::{Blob, Collection, CollectionOptions, GenericFamily, SourceCache};
+use fontique::{
+    Attributes, Blob, Collection, CollectionOptions, FontStyle, FontWeight, FontWidth,
+    GenericFamily, QueryFamily, QueryStatus, SourceCache,
+};
 use parking_lot::RwLock;
 
 #[cfg(test)]
@@ -17,33 +18,10 @@ pub enum SystemFonts {
     Skip,
 }
 
-#[derive(Clone)]
 struct CatalogState {
     collection: Collection,
     sources: SourceCache,
     generation: u64,
-}
-
-impl CatalogState {
-    fn register_fonts(&mut self, fonts: &[Blob<u8>]) -> Result<()> {
-        let mut validator = Collection::new(CollectionOptions {
-            shared: false,
-            system_fonts: false,
-        });
-
-        for blob in fonts {
-            if validator.register_fonts(blob.clone(), None).is_empty() {
-                bail!("font data did not contain a supported font face");
-            }
-        }
-
-        for blob in fonts {
-            self.collection.register_fonts(blob.clone(), None);
-        }
-
-        self.generation = self.generation.wrapping_add(1);
-        Ok(())
-    }
 }
 
 /// Shared font enumeration and registration for GPUI text backends.
@@ -60,13 +38,7 @@ impl FontCatalog {
             system_fonts: system_fonts == SystemFonts::Load,
         });
 
-        Self {
-            state: RwLock::new(CatalogState {
-                collection,
-                sources: SourceCache::new_shared(),
-                generation: 0,
-            }),
-        }
+        Self::from_shared(collection, SourceCache::new_shared())
     }
 
     pub(crate) fn from_shared(collection: Collection, sources: SourceCache) -> Self {
@@ -80,10 +52,24 @@ impl FontCatalog {
     }
 
     pub(crate) fn register_fonts(&self, fonts: &[Blob<u8>]) -> Result<()> {
+        let mut validator = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+
+        for blob in fonts {
+            if validator.register_fonts(blob.clone(), None).is_empty() {
+                bail!("font data did not contain a supported font face");
+            }
+        }
+
         let mut state = self.state.write();
-        let mut next = state.clone();
-        next.register_fonts(fonts)?;
-        *state = next;
+
+        for blob in fonts {
+            state.collection.register_fonts(blob.clone(), None);
+        }
+
+        state.generation = state.generation.wrapping_add(1);
 
         Ok(())
     }
@@ -162,38 +148,37 @@ fn resolve(state: &mut CatalogState, request: &FaceRequest<'_>) -> Option<Resolv
         gpui::FontStyle::Oblique => FontStyle::Oblique(None),
     };
 
+    let mut query = state.collection.query(&mut state.sources);
+    query.set_families(request.families.iter().map(|family| match family {
+        FaceFamily::Named(name) => QueryFamily::Named(name),
+        FaceFamily::SystemUi => QueryFamily::Generic(GenericFamily::SystemUi),
+    }));
+    query.set_attributes(Attributes::new(
+        FontWidth::NORMAL,
+        style,
+        FontWeight::new(request.weight),
+    ));
+
     let mut selected = None;
-    {
-        let mut query = state.collection.query(&mut state.sources);
-        query.set_families(request.families.iter().map(|family| match family {
-            FaceFamily::Named(name) => QueryFamily::Named(name),
-            FaceFamily::SystemUi => QueryFamily::Generic(GenericFamily::SystemUi),
-        }));
+    query.matches_with(|font| {
+        if request.character.is_some_and(|character| {
+            font.charmap()
+                .and_then(|charmap| charmap.map(character))
+                .is_none()
+        }) {
+            return QueryStatus::Continue;
+        }
 
-        query.set_attributes(Attributes::new(
-            FontWidth::NORMAL,
-            style,
-            FontWeight::new(request.weight),
-        ));
-        query.matches_with(|font| {
-            if request.character.is_some_and(|character| {
-                font.charmap()
-                    .and_then(|charmap| charmap.map(character))
-                    .is_none()
-            }) {
-                return QueryStatus::Continue;
-            }
-
-            selected = Some((font.blob.clone(), font.index, font.synthesis));
-            QueryStatus::Stop
+        selected = Some(ResolvedFace {
+            data: font.blob.clone(),
+            index: font.index,
+            synthesis: font.synthesis,
         });
-    }
 
-    selected.map(|(data, idx, synthesis)| ResolvedFace {
-        data,
-        index: idx,
-        synthesis,
-    })
+        QueryStatus::Stop
+    });
+
+    selected
 }
 
 #[cfg(test)]

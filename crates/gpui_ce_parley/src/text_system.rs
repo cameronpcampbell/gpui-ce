@@ -19,8 +19,8 @@ use std::{
 };
 
 use crate::{
-    FaceFamily, FaceRequest, FontCatalog, FontStore, GlyphRasterizer, SwashGlyphRasterizer,
-    SystemFonts,
+    ColorGlyphKind, FaceFamily, FaceRequest, FontCatalog, FontStore, GlyphRasterizer,
+    SwashGlyphRasterizer, SystemFonts,
 };
 
 use anyhow::{Context as _, Result};
@@ -30,12 +30,10 @@ use gpui::{
     InlineVisualLine, LineLayout, PaintFragment, PaintStyle, ParagraphDirection, Pixels,
     PlatformTextLayout, PlatformTextSystem, Point, PositionedInlineBox, PreparedRasterStyle,
     RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, ResolvedDirection, ShapedGlyph, Size,
-    TextAlign, TextLayoutRequest, TextMovement, TextRenderingMode, TextRun, TextSelectionKind,
-    UnicodeBidi, VisualDirection, VisualLine, align_inline_boxes, point, px, size,
+    TextAlign, TextLayoutOptions, TextLayoutRequest, TextMovement, TextRenderingMode, TextRun,
+    TextSelectionKind, UnicodeBidi, VisualDirection, VisualLine, align_inline_boxes, point, px,
+    size,
 };
-
-#[cfg(test)]
-use gpui::TextLayoutOptions;
 
 use parking_lot::{Mutex, RwLock};
 use parley::setting::Tag;
@@ -150,7 +148,7 @@ struct ParagraphResultCacheKey {
     source_map: SourceMap,
     wrap: Option<(Pixels, Option<usize>)>,
     inline_text_metrics: Option<InlineTextMetrics>,
-    text_align: Option<TextAlign>,
+    text_align: TextAlign,
     alignment_width: Option<Pixels>,
 }
 
@@ -653,44 +651,12 @@ impl From<RasterStyleRequest> for RasterStyleCacheKey {
 
 type RasterStyleCache = BoundedCache<RasterStyleCacheKey, PreparedRasterStyle, 256>;
 
-#[derive(Clone, Copy)]
-struct ColorGlyphSupport {
-    colr_v0: bool,
-    colr_v1: bool,
-    cbdt: bool,
-    sbix: bool,
-    svg: bool,
-}
-
-impl ColorGlyphSupport {
-    fn from_rasterizer(rasterizer: &dyn GlyphRasterizer) -> Self {
-        Self {
-            colr_v0: rasterizer.supports_color_glyph(crate::ColorGlyphKind::ColrV0),
-            colr_v1: rasterizer.supports_color_glyph(crate::ColorGlyphKind::ColrV1),
-            cbdt: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Cbdt),
-            sbix: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Sbix),
-            svg: rasterizer.supports_color_glyph(crate::ColorGlyphKind::Svg),
-        }
-    }
-
-    fn supports(self, kind: crate::ColorGlyphKind) -> bool {
-        match kind {
-            crate::ColorGlyphKind::ColrV0 => self.colr_v0,
-            crate::ColorGlyphKind::ColrV1 => self.colr_v1,
-            crate::ColorGlyphKind::Cbdt => self.cbdt,
-            crate::ColorGlyphKind::Sbix => self.sbix,
-            crate::ColorGlyphKind::Svg => self.svg,
-        }
-    }
-}
-
 #[derive(Clone)]
 struct ParleyLayoutResult {
     layout: LineLayout,
     inline_lines: Vec<InlineVisualLine>,
     inline_boxes: Vec<PositionedInlineBox>,
     size: Size<Pixels>,
-    is_rtl: bool,
 }
 
 fn inline_alignment_offset(
@@ -1070,30 +1036,13 @@ impl PlatformTextLayout for ParleyLayout {
     ) -> std::result::Result<usize, usize> {
         let closest = self
             .caret_from_point(point, line_height)
-            .unwrap_or_else(|caret| caret)
+            .map_err(|caret| caret.index)?
             .index;
-
-        if self.text.is_empty() || point.y < Pixels::ZERO || line_height <= Pixels::ZERO {
-            return Err(closest);
-        }
-
-        let line_idx = (point.y / line_height) as usize;
-        let Some(line) = self.layout.get(line_idx) else {
-            return Err(closest);
-        };
-
-        let metrics = line.metrics();
-        let left = metrics.inline_min_coord + metrics.offset;
-        let right = left + metrics.advance;
-
-        if f32::from(point.x) < left || f32::from(point.x) >= right {
-            return Err(closest);
-        }
 
         Cluster::from_point(
             &self.layout,
             point.x.into(),
-            self.native_y_for_line(line_idx),
+            self.native_y_for_line(Self::line_index_from_point(point, line_height)),
         )
         .map(|(cluster, _)| cluster.text_range().start)
         .ok_or(closest)
@@ -1374,7 +1323,7 @@ pub struct ParleyTextSystem {
     rasterizer: Mutex<Box<dyn GlyphRasterizer>>,
     raster_styles: Mutex<RasterStyleCache>,
     foreground_dependencies: Mutex<HashMap<(FontId, GlyphId), gpui::ForegroundDependency>>,
-    color_glyph_support: ColorGlyphSupport,
+    color_glyph_formats: Vec<ColorGlyphKind>,
     recommended_rendering_mode: TextRenderingMode,
     automatic_optical_sizing: bool,
     parley: Mutex<ParleyState>,
@@ -1409,15 +1358,25 @@ impl ParleyTextSystem {
         rasterizer: impl GlyphRasterizer + 'static,
     ) -> Self {
         let (parley, catalog) = ParleyState::new(system_fonts);
-        let color_glyph_support = ColorGlyphSupport::from_rasterizer(&rasterizer);
+        let color_glyph_formats = [
+            ColorGlyphKind::ColrV0,
+            ColorGlyphKind::ColrV1,
+            ColorGlyphKind::Cbdt,
+            ColorGlyphKind::Sbix,
+            ColorGlyphKind::Svg,
+        ]
+        .into_iter()
+        .filter(|kind| rasterizer.supports_color_glyph(*kind))
+        .collect();
         let recommended_rendering_mode = rasterizer.recommended_mode();
+
         Self {
             catalog,
             fonts: RwLock::new(FontStore::default()),
             rasterizer: Mutex::new(Box::new(rasterizer)),
             raster_styles: Mutex::default(),
             foreground_dependencies: Mutex::default(),
-            color_glyph_support,
+            color_glyph_formats,
             recommended_rendering_mode,
             automatic_optical_sizing: false,
             parley: Mutex::new(parley),
@@ -1449,28 +1408,26 @@ impl ParleyTextSystem {
         self
     }
 
+    fn font_families<'a>(&'a self, descriptor: &'a Font) -> impl Iterator<Item = FaceFamily<'a>> {
+        std::iter::once(descriptor.family.as_ref())
+            .chain(
+                descriptor
+                    .fallbacks
+                    .iter()
+                    .flat_map(|fallbacks| fallbacks.fallback_list().iter().map(String::as_str)),
+            )
+            .flat_map(|name| face_families(name, &self.system_font_fallback))
+    }
+
     fn resolve_canonical_font(&self, descriptor: &Font) -> Result<FontId> {
-        let mut families = Vec::with_capacity(
-            1 + descriptor
-                .fallbacks
-                .as_ref()
-                .map_or(0, |fallbacks| fallbacks.fallback_list().len()),
-        );
-        push_face_families(
-            &mut families,
-            descriptor.family.as_ref(),
-            &self.system_font_fallback,
-        );
-
-        if let Some(fallbacks) = &descriptor.fallbacks {
-            for family in fallbacks.fallback_list() {
-                push_face_families(&mut families, family, &self.system_font_fallback);
-            }
-        }
-
-        for family in &self.additional_fallbacks {
-            push_face_families(&mut families, family, &self.system_font_fallback);
-        }
+        let families = self
+            .font_families(descriptor)
+            .chain(
+                self.additional_fallbacks
+                    .iter()
+                    .flat_map(|name| face_families(name, &self.system_font_fallback)),
+            )
+            .collect::<Vec<_>>();
 
         let resolved = self
             .catalog
@@ -1481,49 +1438,39 @@ impl ParleyTextSystem {
                 character: None,
             })
             .with_context(|| format!("Fontique could not resolve '{}'", descriptor.family))?;
-        let font_id = self.fonts.write().intern_synthesized(
-            resolved.data,
-            resolved.index,
-            resolved.synthesis,
-        )?;
-        Ok(font_id)
+
+        self.fonts
+            .write()
+            .intern_synthesized(resolved.data, resolved.index, resolved.synthesis)
     }
 
     fn parley_layout(
         &self,
-        text: &str,
-        font_size: Pixels,
-        runs: &[TextRun],
-        wrap: Option<(Pixels, Option<usize>)>,
+        request: TextLayoutRequest<'_>,
         inline_boxes: &[InlineBoxRequest],
         text_styles: &[InlineTextStyle],
         line_height: Option<Pixels>,
         inline_text_metrics: Option<InlineTextMetrics>,
-        text_align: Option<TextAlign>,
-        alignment_width: Option<Pixels>,
-        direction: ParagraphDirection,
-        unicode_bidi: UnicodeBidi,
         bidi_scopes: &[InlineBidiScope],
     ) -> Result<ParleyLayoutResult> {
         // Parley 0.11 resolves one base direction per layout, including across newlines.
-        if !text.chars().any(is_paragraph_separator) {
+        if !request.text.chars().any(is_paragraph_separator) {
             return self.parley_paragraph_layout(
-                text,
-                font_size,
-                runs,
-                wrap,
+                request,
                 inline_boxes,
                 text_styles,
                 line_height,
                 inline_text_metrics,
-                text_align,
-                alignment_width,
-                direction,
-                unicode_bidi,
                 bidi_scopes,
             );
         }
 
+        let TextLayoutRequest {
+            text,
+            font_size,
+            runs,
+            options,
+        } = request;
         let run_ranges = run_ranges(runs);
 
         let mut paragraphs = Vec::new();
@@ -1605,26 +1552,23 @@ impl ParleyTextSystem {
                     ..*inline_box
                 })
                 .collect::<Vec<_>>();
-            let paragraph_wrap = wrap.map(|(width, max_lines)| {
-                // Clamping stops soft wrapping after the budget, but preserves hard breaks.
-                (
-                    width,
-                    max_lines.map(|count| count.saturating_sub(visual_lines.len())),
-                )
-            });
             let mut result = self.parley_paragraph_layout(
-                &text[source.content.clone()],
-                font_size,
-                &paragraph_runs,
-                paragraph_wrap,
+                TextLayoutRequest {
+                    text: &text[source.content.clone()],
+                    runs: &paragraph_runs,
+                    options: TextLayoutOptions {
+                        // Clamping stops soft wrapping after the budget, but preserves hard breaks.
+                        line_clamp: options
+                            .line_clamp
+                            .map(|count| count.saturating_sub(visual_lines.len())),
+                        ..options
+                    },
+                    ..request
+                },
                 &paragraph_boxes,
                 &paragraph_styles,
                 line_height,
                 inline_text_metrics,
-                text_align,
-                alignment_width,
-                direction,
-                unicode_bidi,
                 &bidi_scopes
                     .iter()
                     .filter_map(|scope| {
@@ -1674,7 +1618,7 @@ impl ParleyTextSystem {
 
             let last_line = result.inline_lines.last().unwrap();
             let newline_width = (result.layout.ascent + result.layout.descent) * 0.25;
-            let newline = if result.is_rtl {
+            let newline = if result.layout.visual_lines[0].direction.is_rtl() {
                 last_line.origin.x - newline_width..last_line.origin.x
             } else {
                 let newline_x = last_line.origin.x + last_line.size.width;
@@ -1695,7 +1639,6 @@ impl ParleyTextSystem {
             positioned_inline_boxes.extend(result.inline_boxes);
         }
 
-        let is_rtl = visual_lines[0].direction.is_rtl();
         let platform_layout = ParleyDocumentLayout::new(paragraphs, text, document_size);
 
         Ok(ParleyLayoutResult {
@@ -1712,26 +1655,34 @@ impl ParleyTextSystem {
             inline_lines,
             inline_boxes: positioned_inline_boxes,
             size: document_size,
-            is_rtl,
         })
     }
 
     fn parley_paragraph_layout(
         &self,
-        text: &str,
-        font_size: Pixels,
-        runs: &[TextRun],
-        wrap: Option<(Pixels, Option<usize>)>,
+        request: TextLayoutRequest<'_>,
         inline_boxes: &[InlineBoxRequest],
         text_styles: &[InlineTextStyle],
         line_height: Option<Pixels>,
         inline_text_metrics: Option<InlineTextMetrics>,
-        text_align: Option<TextAlign>,
-        alignment_width: Option<Pixels>,
-        direction: ParagraphDirection,
-        unicode_bidi: UnicodeBidi,
         bidi_scopes: &[InlineBidiScope],
     ) -> Result<ParleyLayoutResult> {
+        let TextLayoutRequest {
+            text,
+            font_size,
+            runs,
+            options,
+        } = request;
+        let TextLayoutOptions {
+            wrap_width,
+            line_clamp,
+            text_align,
+            alignment_width,
+            direction,
+            unicode_bidi,
+        } = options;
+        let wrap = (wrap_width.is_some() || line_clamp.is_some())
+            .then_some((wrap_width.unwrap_or(Pixels::MAX), line_clamp));
         let source_text_len = text.len();
         let source_runs = runs;
         let prepared = prepare_bidi_text(
@@ -1788,26 +1739,19 @@ impl ParleyTextSystem {
             let family_lists = runs
                 .iter()
                 .map(|run| {
-                    let descriptor = &run.font;
-                    let mut families = Vec::new();
-                    push_parley_families(
-                        &mut families,
-                        descriptor.family.as_ref(),
-                        &self.system_font_fallback,
-                    );
-
-                    if let Some(fallbacks) = &descriptor.fallbacks {
-                        for family in fallbacks.fallback_list() {
-                            push_parley_families(&mut families, family, &self.system_font_fallback);
-                        }
-                    }
-
-                    families.extend(
-                        self.additional_fallbacks
-                            .iter()
-                            .map(|family| FontFamilyName::Named(Cow::Borrowed(family.as_str()))),
-                    );
-                    families
+                    self.font_families(&run.font)
+                        .chain(
+                            self.additional_fallbacks
+                                .iter()
+                                .map(|family| FaceFamily::Named(family)),
+                        )
+                        .map(|family| match family {
+                            FaceFamily::Named(name) => FontFamilyName::Named(Cow::Borrowed(name)),
+                            FaceFamily::SystemUi => {
+                                FontFamilyName::Generic(GenericFamily::SystemUi)
+                            }
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
             let feature_lists = runs
@@ -2002,17 +1946,15 @@ impl ParleyTextSystem {
                 .unwrap_or_default();
 
             match text_align {
-                Some(TextAlign::Start) if layout.is_rtl() => width,
-                Some(TextAlign::End) if !layout.is_rtl() => width,
-                Some(TextAlign::Right) => width,
-                Some(TextAlign::Center) => width / 2.,
+                TextAlign::Start if layout.is_rtl() => width,
+                TextAlign::End if !layout.is_rtl() => width,
+                TextAlign::Right => width,
+                TextAlign::Center => width / 2.,
                 _ => Pixels::ZERO,
             }
         });
 
-        if let Some(text_align) = text_align
-            && empty_alignment.is_none()
-        {
+        if empty_alignment.is_none() {
             let alignment = match text_align {
                 TextAlign::Start => Alignment::Start,
                 TextAlign::End => Alignment::End,
@@ -2046,11 +1988,7 @@ impl ParleyTextSystem {
         let mut ascent = px(0.0);
         let mut descent = px(0.0);
 
-        let mut saw_line = false;
-
         for (line_idx, line) in layout.lines().enumerate() {
-            saw_line = true;
-
             let fragment_start = paint_fragments.len();
             let metrics = *line.metrics();
             let line_x =
@@ -2112,8 +2050,6 @@ impl ParleyTextSystem {
                 // Resolve leading from the input ranges. Parley 0.11 can report the
                 // following style's line height in a shaped run's cached metrics.
                 let range = run.text_range();
-                let source_run = glyph_run.style().brush.source_run;
-
                 let first_style =
                     text_styles.partition_point(|style| style.range.end <= range.start);
                 let run_line_height = text_styles[first_style..]
@@ -2139,10 +2075,6 @@ impl ParleyTextSystem {
                     continue;
                 }
 
-                let paint_style = PaintStyle::from(&runs[source_run]);
-                let underline_offset = Some(px(run_metrics.underline_offset));
-                let strikethrough_offset = Some(px(run_metrics.strikethrough_offset));
-
                 let glyphs = {
                     let fonts = self.fonts.read();
                     let color_glyphs = fonts
@@ -2158,22 +2090,23 @@ impl ParleyTextSystem {
                                 position: point(px(glyph.x) - line_x, px(glyph.y - baseline)),
                                 is_emoji: color_glyphs
                                     .available_kinds(glyph_id)
-                                    .any(|kind| self.color_glyph_support.supports(kind)),
+                                    .any(|kind| self.color_glyph_formats.contains(&kind)),
                             }
                         })
                         .collect()
                 };
 
                 let start = px(glyph_run.offset()) - line_x;
+                let source_run = prepared.run_sources[glyph_run.style().brush.source_run];
                 paint_fragments.push(PaintFragment {
                     source_run,
                     font_id,
                     font_size: px(run.font_size()),
                     glyphs,
                     x_range: start..start + px(glyph_run.advance()),
-                    style: paint_style,
-                    underline_offset,
-                    strikethrough_offset,
+                    style: PaintStyle::from(&source_runs[source_run]),
+                    underline_offset: Some(px(run_metrics.underline_offset)),
+                    strikethrough_offset: Some(px(run_metrics.strikethrough_offset)),
                 });
             }
 
@@ -2207,7 +2140,7 @@ impl ParleyTextSystem {
             descent = descent.max(px(metrics.descent));
         }
 
-        if !saw_line {
+        if visual_lines.is_empty() {
             anyhow::bail!("Parley produced no line");
         }
 
@@ -2230,12 +2163,6 @@ impl ParleyTextSystem {
             );
         }
 
-        for fragment in &mut paint_fragments {
-            fragment.source_run = prepared.run_sources[fragment.source_run];
-            fragment.style = PaintStyle::from(&source_runs[fragment.source_run]);
-        }
-
-        let is_rtl = layout.is_rtl();
         let platform_layout = ParleyLayout::new(layout, paragraph_text, inline_lines.clone());
         let platform_layout: Arc<dyn PlatformTextLayout> = Arc::new(SourceMappedLayout {
             source_len: source_text_len,
@@ -2247,7 +2174,7 @@ impl ParleyTextSystem {
             width,
             ascent,
             descent,
-            visual_lines: visual_lines.iter().cloned().collect(),
+            visual_lines: visual_lines.into_iter().collect(),
             paint_fragments,
             len: source_text_len,
             platform_layout,
@@ -2258,7 +2185,6 @@ impl ParleyTextSystem {
             inline_lines,
             inline_boxes: positioned_inline_boxes,
             size,
-            is_rtl,
         };
         self.paragraph_result_cache
             .lock()
@@ -2281,36 +2207,17 @@ fn run_ranges(runs: &[TextRun]) -> Vec<Range<usize>> {
         .collect()
 }
 
-fn push_face_families<'a>(
-    families: &mut Vec<FaceFamily<'a>>,
+fn face_families<'a>(
     name: &'a str,
     system_font_fallback: &'a str,
-) {
-    if name == ".SystemUIFont" {
-        families.push(FaceFamily::SystemUi);
-        families.push(FaceFamily::Named(system_font_fallback));
-    } else {
-        families.push(FaceFamily::Named(canonical_family(
+) -> impl Iterator<Item = FaceFamily<'a>> {
+    (name == ".SystemUIFont")
+        .then_some(FaceFamily::SystemUi)
+        .into_iter()
+        .chain(std::iter::once(FaceFamily::Named(canonical_family(
             name,
             system_font_fallback,
-        )));
-    }
-}
-
-fn push_parley_families<'a>(
-    families: &mut Vec<FontFamilyName<'a>>,
-    name: &'a str,
-    system_font_fallback: &'a str,
-) {
-    if name == ".SystemUIFont" {
-        families.push(FontFamilyName::Generic(GenericFamily::SystemUi));
-        families.push(FontFamilyName::Named(Cow::Borrowed(system_font_fallback)));
-    } else {
-        families.push(FontFamilyName::Named(Cow::Borrowed(canonical_family(
-            name,
-            system_font_fallback,
-        ))));
-    }
+        ))))
 }
 
 fn canonical_family<'a>(name: &'a str, system: &'a str) -> &'a str {
@@ -2420,7 +2327,7 @@ impl PlatformTextSystem for ParleyTextSystem {
                     .get(request.font_id)
                     .and_then(|font| {
                         font.foreground_dependency(request.glyph_id, |kind| {
-                            self.color_glyph_support.supports(kind)
+                            self.color_glyph_formats.contains(&kind)
                         })
                         .ok()
                     })
@@ -2454,64 +2361,37 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout {
-        let wrap = (request.options.wrap_width.is_some() || request.options.line_clamp.is_some())
-            .then_some((
-                request.options.wrap_width.unwrap_or(Pixels::MAX),
-                request.options.line_clamp,
-            ));
-        self.parley_layout(
-            request.text,
-            request.font_size,
-            request.runs,
-            wrap,
-            &[],
-            &[],
-            None,
-            None,
-            Some(request.options.text_align),
-            request.options.alignment_width,
-            request.options.direction,
-            request.options.unicode_bidi,
-            &[],
-        )
-        .expect("Parley failed to lay out a validated GPUI document")
-        .layout
+        self.parley_layout(request, &[], &[], None, None, &[])
+            .expect("Parley failed to lay out a validated GPUI document")
+            .layout
     }
 
     fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> InlineLayout {
-        let wrap = (request.options.wrap_width.is_some() || request.options.line_clamp.is_some())
-            .then_some((
-                request.options.wrap_width.unwrap_or(Pixels::MAX),
-                request.options.line_clamp,
-            ));
         let result = self
             .parley_layout(
-                request.text,
-                request.font_size,
-                request.runs,
-                wrap,
+                TextLayoutRequest {
+                    text: request.text,
+                    font_size: request.font_size,
+                    runs: request.runs,
+                    options: request.options,
+                },
                 request.boxes,
                 request.text_styles,
                 Some(request.line_height),
                 Some(request.text_metrics),
-                Some(request.options.text_align),
-                request.options.alignment_width,
-                request.options.direction,
-                request.options.unicode_bidi,
                 request.bidi_scopes,
             )
             .expect("Parley failed to lay out a validated GPUI inline document");
+
+        let alignment_offset = inline_alignment_offset(
+            request.options.text_align,
+            result.layout.visual_lines[0].direction,
+            &result.inline_lines,
+        );
+
         InlineLayout {
             layout: std::sync::Arc::new(result.layout),
-            alignment_offset: inline_alignment_offset(
-                request.options.text_align,
-                if result.is_rtl {
-                    ResolvedDirection::RightToLeft
-                } else {
-                    ResolvedDirection::LeftToRight
-                },
-                &result.inline_lines,
-            ),
+            alignment_offset,
             lines: result.inline_lines,
             boxes: result.inline_boxes,
             size: result.size,
@@ -3725,18 +3605,20 @@ mod tests {
             let document = layout_wrapped(&system, text, px(18.), &runs, px(80.), max_lines);
             let previous = system
                 .parley_paragraph_layout(
-                    text,
-                    px(18.),
-                    &runs,
-                    Some((px(80.), max_lines)),
+                    TextLayoutRequest {
+                        text,
+                        font_size: px(18.),
+                        runs: &runs,
+                        options: TextLayoutOptions {
+                            wrap_width: Some(px(80.)),
+                            line_clamp: max_lines,
+                            ..TextLayoutOptions::default()
+                        },
+                    },
                     &[],
                     &[],
                     None,
                     None,
-                    None,
-                    None,
-                    ParagraphDirection::Auto,
-                    UnicodeBidi::Normal,
                     &[],
                 )
                 .unwrap();

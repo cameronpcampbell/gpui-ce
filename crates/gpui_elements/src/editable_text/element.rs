@@ -3,8 +3,9 @@ use crate::editable_text::StringStorage;
 
 #[cfg(test)]
 use gpui::{
-    AppContext, Context, Direction, EntityInputHandler, HeadlessAppContext, PlatformInput,
-    PlatformTextSystem, Render, ScaledPixels, TestTextSystem, WindowHandle, div, hsla, prelude::*,
+    AppContext, Context, Direction, EntityInputHandler, HeadlessAppContext, NavigationDirection,
+    PlatformInput, PlatformTextSystem, Render, ScaledPixels, TestTextSystem, WindowHandle, div,
+    hsla, prelude::*,
 };
 
 #[cfg(test)]
@@ -20,10 +21,10 @@ use crate::editable_text::{
     state::AccessibilityText,
 };
 use gpui::{
-    A11ySubtreeBuilder, App, Bounds, CaretPosition, CursorStyle, DefiniteLength, DispatchPhase,
-    Display, Element, ElementId, ElementInputHandler, Entity, FocusHandle, Focusable, Hitbox,
-    HitboxBehavior, Hsla, InteractiveElement, Interactivity, IntoElement, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, PaintQuad,
+    A11ySubtreeBuilder, App, Bounds, CaretPosition, CaretSelection, CursorStyle, DefiniteLength,
+    DispatchPhase, Display, Element, ElementId, ElementInputHandler, Entity, FocusHandle,
+    Focusable, Hitbox, HitboxBehavior, Hsla, InteractiveElement, Interactivity, IntoElement,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
     ParagraphDirection, Pixels, Point, SharedString, Size, StatefulInteractiveElement, Style,
     StyleRefinement, Styled, TextAlign, TextLayout, TextLayoutOptions, UnicodeBidi, WeakEntity,
     Window, WrappedLine, accesskit, fill, point, px, relative, size,
@@ -357,7 +358,7 @@ impl Element for EditableTextElement {
             let show_placeholder = state.as_str().is_empty();
             let direction_text = SharedString::from(state.as_str());
             let text = match show_placeholder {
-                false => Some(SharedString::from(state.as_str())),
+                false => Some(direction_text.clone()),
                 true => self.placeholder.clone(),
             };
 
@@ -483,11 +484,7 @@ impl Element for EditableTextElement {
         let accessible_text = window.is_a11y_active().then(|| state.accessibility_text());
         let (accessible_anchor, accessible_focus) =
             accessible_text.as_ref().map_or((0, 0), |text| {
-                accessible_selection(
-                    &text.byte_offsets,
-                    state.selected_range(),
-                    state.selection_direction(),
-                )
+                accessible_selection(&text.byte_offsets, state.caret_selection())
             });
         let elements = PrepaintElements::build_elements(
             state,
@@ -539,15 +536,25 @@ impl Element for EditableTextElement {
             }
 
             // Actually draw the elements we constructed during prepaint
-            for PrepaintLine { line, point, align } in prepaint.elements.lines.drain(..) {
-                let _ = line.paint(point, line_height, align, Some(bounds), window, cx);
+            if let Some(document) = prepaint.elements.document.take() {
+                let _ = document.paint(
+                    prepaint.interactivity.document_origin(),
+                    line_height,
+                    TextAlign::Left,
+                    Some(bounds),
+                    window,
+                    cx,
+                );
             }
+
             for quad in prepaint.elements.ime_marked.drain(..) {
                 window.paint_quad(quad);
             }
+
             for quad in prepaint.elements.selection.drain(..) {
                 window.paint_quad(quad);
             }
+
             if let Some(quad) = prepaint.elements.caret.take() {
                 window.paint_quad(quad);
             }
@@ -565,30 +572,17 @@ impl Element for EditableTextElement {
     }
 }
 
-fn accessible_selection(
-    byte_offsets: &[usize],
-    selection: Range<usize>,
-    direction: Option<NavigationDirection>,
-) -> (usize, usize) {
+fn accessible_selection(byte_offsets: &[usize], selection: CaretSelection) -> (usize, usize) {
     let byte_to_character = |offset: usize| {
         byte_offsets
             .partition_point(|byte_offset| *byte_offset <= offset)
             .saturating_sub(1)
     };
-    match direction {
-        Some(NavigationDirection::Forward) => (
-            byte_to_character(selection.end),
-            byte_to_character(selection.start),
-        ),
-        Some(NavigationDirection::Back) => (
-            byte_to_character(selection.start),
-            byte_to_character(selection.end),
-        ),
-        None => {
-            let caret = byte_to_character(selection.start);
-            (caret, caret)
-        }
-    }
+
+    (
+        byte_to_character(selection.anchor.index),
+        byte_to_character(selection.focus.index),
+    )
 }
 
 impl EditableTextElement {
@@ -749,7 +743,6 @@ impl PrelayoutState {
                 };
 
                 if let Some(size) = self.prev_layout_state.size
-                    && (wrap_width.is_none() || wrap_width == self.prev_layout_state.wrap_width)
                     && truncation.width.is_none()
                     && self.storage_version == self.prev_layout_state.last_seen_storage_version
                     && self.prev_layout_state.options == options
@@ -799,7 +792,6 @@ impl PrelayoutState {
                     // updated during prepaint
                     scroll_bounds: Bounds::default(),
                     state: EditableTextLayoutState {
-                        wrap_width,
                         size: Some(size),
                         last_seen_storage_version: self.storage_version,
                         options,
@@ -832,38 +824,15 @@ impl PrelayoutState {
     }
 }
 
-struct PrepaintLine {
-    line: Arc<WrappedLine>,
-    point: Point<Pixels>,
-    align: TextAlign,
-}
-
-const STACK_ALLOCATED_LINES: usize = 100usize;
-const STACK_ALLOCATED_QUADS_SELECTION: usize = 20usize;
-const STACK_ALLOCATED_QUADS_IME_MARKED: usize = 2usize;
-
 #[derive(Default)]
 struct PrepaintElements {
-    lines: SmallVec<[PrepaintLine; STACK_ALLOCATED_LINES]>,
-    selection: SmallVec<[PaintQuad; STACK_ALLOCATED_QUADS_SELECTION]>,
-    ime_marked: SmallVec<[PaintQuad; STACK_ALLOCATED_QUADS_IME_MARKED]>,
+    document: Option<Arc<WrappedLine>>,
+    selection: SmallVec<[PaintQuad; 20]>,
+    ime_marked: SmallVec<[PaintQuad; 2]>,
     caret: Option<PaintQuad>,
 }
 
 impl PrepaintElements {
-    fn build_quads(
-        offset_corners: Vec<(Point<Pixels>, Point<Pixels>)>,
-        origin: Point<Pixels>,
-        color: Hsla,
-    ) -> impl Iterator<Item = PaintQuad> {
-        offset_corners
-            .into_iter()
-            .map(move |(offset_start, offset_end)| {
-                let bounds = Bounds::from_corners(origin + offset_start, origin + offset_end);
-                fill(bounds, color)
-            })
-    }
-
     fn build_elements(
         state: &EditableTextState,
         prepaint: &InteractivityPrepaint,
@@ -872,80 +841,68 @@ impl PrepaintElements {
         caret_height: DefiniteLength,
         window: &mut Window,
     ) -> PrepaintElements {
-        let InteractivityPrepaint {
-            hitbox: _,
-            scroll_offset,
-            document_offset: _,
-            inner_bounds,
-            caret_visible,
-        } = prepaint;
-
-        let caret = state.visible_caret();
-        let selection = state.selected_range();
-        let ime_range = state.marked_range();
-
         let mut elements = PrepaintElements::default();
+        let Some(document) = &state.layout_data.document else {
+            return elements;
+        };
 
         let line_height = state.layout_data.line_height;
-        let mut caret_point = None::<Point<Pixels>>;
+        let document_top = prepaint.scroll_offset.y;
+        let document_bottom = document_top + line_height * document.line_count() as f32;
 
-        if let Some(document) = &state.layout_data.document {
-            let line_y = scroll_offset.y;
-            let line_bottom = line_y + line_height * document.line_count() as f32;
-            let line_visible = line_bottom >= Pixels::ZERO && line_y <= inner_bounds.size.height;
-
-            if line_visible {
-                let document_origin = prepaint.document_origin();
-                elements.lines.push(PrepaintLine {
-                    line: document.clone(),
-                    point: document_origin,
-                    align: TextAlign::Left,
-                });
-
-                if !selection.is_empty() {
-                    let offset_corners =
-                        build_quad_over_text(&selection, document, line_height, Pixels::ZERO);
-                    elements.selection.extend(PrepaintElements::build_quads(
-                        offset_corners,
-                        document_origin,
-                        colors.selection,
-                    ));
-                }
-
-                if let Some(ime_range) = &ime_range
-                    && !ime_range.is_empty()
-                {
-                    const MARKED_TEXT_UNDERLINE_THICKNESS: f32 = 2.0;
-                    let underline_thickness = px(MARKED_TEXT_UNDERLINE_THICKNESS);
-                    let underline_offset = line_height - underline_thickness;
-
-                    let offset_corners =
-                        build_quad_over_text(&ime_range, document, line_height, underline_offset);
-                    elements.ime_marked.extend(PrepaintElements::build_quads(
-                        offset_corners,
-                        document_origin,
-                        colors.ime_underline,
-                    ));
-                }
-
-                let caret_px = document
-                    .position_for_caret(caret, line_height)
-                    .unwrap_or_default();
-                caret_point = Some(document_origin + caret_px);
-            }
+        if document_bottom < Pixels::ZERO || document_top > prepaint.inner_bounds.size.height {
+            return elements;
         }
 
-        if *caret_visible && let Some(caret_point) = caret_point {
+        let document_origin = prepaint.document_origin();
+        let quads = |range: Range<usize>, color, offset_y| {
+            let start = range.start.min(document.text.len());
+            let end = range.end.min(document.text.len());
+
+            document
+                .selection_bounds(start..end, line_height)
+                .into_iter()
+                .map(move |bounds| {
+                    fill(
+                        Bounds::from_corners(
+                            document_origin + bounds.origin + point(Pixels::ZERO, offset_y),
+                            document_origin + bounds.bottom_right(),
+                        ),
+                        color,
+                    )
+                })
+        };
+
+        elements.document = Some(document.clone());
+
+        if !state.selected_range().is_empty() {
+            elements.selection.extend(quads(
+                state.selected_range(),
+                colors.selection,
+                Pixels::ZERO,
+            ));
+        }
+
+        if let Some(range) = state.marked_range().filter(|range| !range.is_empty()) {
+            elements
+                .ime_marked
+                .extend(quads(range, colors.ime_underline, line_height - px(2.)));
+        }
+
+        if prepaint.caret_visible {
+            let caret_point = document_origin
+                + document
+                    .position_for_caret(state.visible_caret(), line_height)
+                    .unwrap_or_default();
             let caret_height = caret_height.to_pixels(line_height.into(), window.rem_size());
             let vertical_offset = (line_height - caret_height) / 2.;
-            let quad = fill(
+            elements.caret = Some(fill(
                 Bounds::new(
                     caret_point + point(Pixels::ZERO, vertical_offset),
                     size(caret_width, caret_height),
                 ),
                 colors.caret,
-            );
-            elements.caret = Some(quad);
+            ));
         }
 
         elements
@@ -969,26 +926,6 @@ fn editable_document_offset(document: &WrappedLine, line_height: Pixels) -> Poin
     }
 
     point(-left, Pixels::ZERO)
-}
-
-fn build_quad_over_text(
-    containing_range: &Range<usize>,
-    document: &WrappedLine,
-    line_height: Pixels,
-    offset_y: Pixels,
-) -> Vec<(Point<Pixels>, Point<Pixels>)> {
-    let start = containing_range.start.min(document.text.len());
-    let end = containing_range.end.min(document.text.len());
-    document
-        .selection_bounds(start..end, line_height)
-        .into_iter()
-        .map(|bounds| {
-            (
-                point(bounds.left(), bounds.top() + offset_y),
-                point(bounds.right(), bounds.bottom()),
-            )
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -1698,21 +1635,17 @@ mod tests {
             .map(|(offset, _)| offset)
             .collect::<Vec<_>>();
         byte_offsets.push(text.len());
-        let selection = 1.."A😀日本".len();
+        let selection = CaretSelection::from(1.."A😀日本".len());
 
+        assert_eq!(accessible_selection(&byte_offsets, selection), (4, 1));
         assert_eq!(
             accessible_selection(
                 &byte_offsets,
-                selection.clone(),
-                Some(NavigationDirection::Forward),
+                CaretSelection::new(selection.focus, selection.anchor),
             ),
-            (4, 1)
-        );
-        assert_eq!(
-            accessible_selection(&byte_offsets, selection, Some(NavigationDirection::Back)),
             (1, 4)
         );
-        assert_eq!(accessible_selection(&byte_offsets, 5..5, None), (2, 2));
+        assert_eq!(accessible_selection(&byte_offsets, 5.into()), (2, 2));
     }
 
     #[test]

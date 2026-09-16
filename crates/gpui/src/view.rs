@@ -477,29 +477,22 @@ impl<V: View> Element for ViewElement<V> {
 
                         let refreshing = mem::replace(&mut window.refreshing, true);
                         let prepaint_start = window.prepaint_index();
-                        let (mut element, mut accessed_entities) =
-                            if let Some(mut element) = request_layout.element.take() {
-                                let mut accessed_entities =
-                                    mem::take(&mut request_layout.accessed_entities);
-                                let ((), additional_entities) = cx.detect_accessed_entities(|cx| {
-                                    element.layout_as_root(bounds.size.into(), window, cx);
-                                    element.prepaint_at(bounds.origin, window, cx);
-                                });
-                                accessed_entities.extend(additional_entities);
-                                (element, accessed_entities)
-                            } else {
-                                cx.detect_accessed_entities(|cx| {
-                                    let mut element = self
-                                        .view
-                                        .take()
-                                        .unwrap()
-                                        .render(window, cx)
-                                        .into_any_element();
-                                    element.layout_as_root(bounds.size.into(), window, cx);
-                                    element.prepaint_at(bounds.origin, window, cx);
-                                    element
-                                })
-                            };
+                        let mut accessed_entities =
+                            mem::take(&mut request_layout.accessed_entities);
+                        let (element, additional_entities) = cx.detect_accessed_entities(|cx| {
+                            let mut element = request_layout.element.take().unwrap_or_else(|| {
+                                self.view
+                                    .take()
+                                    .unwrap()
+                                    .render(window, cx)
+                                    .into_any_element()
+                            });
+                            element.layout_as_root(bounds.size.into(), window, cx);
+                            element.prepaint_at(bounds.origin, window, cx);
+
+                            element
+                        });
+                        accessed_entities.extend(additional_entities);
 
                         if let Some(detached_layout_id) = request_layout.detached_layout_id.take() {
                             let contribution =
