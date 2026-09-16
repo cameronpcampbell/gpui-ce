@@ -403,10 +403,13 @@ impl EditableTextState {
             .unwrap_or_else(|closest| closest)
     }
 
-    fn mouse_selection_endpoint(
+    /// Returns the caret for `endpoint`, using `opposite_endpoint` as the selection's other end.
+    /// Across visual lines, it maps an upper line's end to its start or a lower line's start to its
+    /// end; otherwise, it returns `endpoint` unchanged.
+    fn adjust_drag_endpoint_at_visual_line_edge(
         &self,
         endpoint: CaretPosition,
-        opposite: CaretPosition,
+        opposite_endpoint: CaretPosition,
     ) -> CaretPosition {
         let Some(document) = self.current_document() else {
             return endpoint;
@@ -416,23 +419,30 @@ impl EditableTextState {
         let Some(endpoint_point) = document.position_for_caret(endpoint, line_height) else {
             return endpoint;
         };
-        let Some(opposite_point) = document.position_for_caret(opposite, line_height) else {
+        let Some(opposite_endpoint_point) =
+            document.position_for_caret(opposite_endpoint, line_height)
+        else {
             return endpoint;
         };
 
-        let (edge, opposite_edge) = if opposite_point.y > endpoint_point.y {
+        let (endpoint_edge, target_edge) = if opposite_endpoint_point.y > endpoint_point.y {
             (TextMovement::VisualLineEnd, TextMovement::VisualLineStart)
-        } else if opposite_point.y < endpoint_point.y {
+        } else if opposite_endpoint_point.y < endpoint_point.y {
             (TextMovement::VisualLineStart, TextMovement::VisualLineEnd)
         } else {
             return endpoint;
         };
 
-        if document.caret_movement(endpoint, edge, None).caret.index != endpoint.index {
+        if document
+            .caret_movement(endpoint, endpoint_edge, None)
+            .caret
+            .index
+            != endpoint.index
+        {
             return endpoint;
         }
 
-        document.caret_movement(endpoint, opposite_edge, None).caret
+        document.caret_movement(endpoint, target_edge, None).caret
     }
 
     fn line_range_for_cut(&self) -> Range<usize> {
@@ -1291,8 +1301,10 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
             let mut selection_focus = pointer_caret;
 
             if let Some(anchor) = self.selection_drag_anchor {
-                self.selected_range.anchor = self.mouse_selection_endpoint(anchor, selection_focus);
-                selection_focus = self.mouse_selection_endpoint(selection_focus, anchor);
+                self.selected_range.anchor =
+                    self.adjust_drag_endpoint_at_visual_line_edge(anchor, selection_focus);
+                selection_focus =
+                    self.adjust_drag_endpoint_at_visual_line_edge(selection_focus, anchor);
             }
 
             self.selection_drag_visual_caret = Some(SelectionDragVisualCaret {
