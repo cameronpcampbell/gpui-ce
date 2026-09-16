@@ -17,6 +17,23 @@ use std::{
 const CARET_PIXELS_EPSILON: Pixels = gpui::px(4.);
 
 #[derive(Clone, Copy)]
+enum SelectionGroup {
+    Word,
+    Line,
+    Document,
+}
+
+impl SelectionGroup {
+    fn layout_kind(self) -> Option<TextSelectionKind> {
+        match self {
+            Self::Word => Some(TextSelectionKind::Word),
+            Self::Line => Some(TextSelectionKind::HardLine),
+            Self::Document => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct SelectionDragVisualCaret {
     /// The selection state for which `position` is the displayed caret.
     selection: CaretSelection,
@@ -747,7 +764,9 @@ impl EditableTextState {
 
     /// Sets the current selection to be the entire text in the storage medium
     pub fn select_document(&mut self, cx: &mut Context<Self>) {
-        self.selected_range = (0, self.storage.content_utf8().len()).into();
+        let range = self.storage_selection_at(0, SelectionGroup::Document);
+
+        self.selected_range = range.into();
         self.caret_position_x = None;
         cx.notify();
     }
@@ -791,45 +810,50 @@ impl EditableTextState {
         }
     }
 
-    fn select_word_at(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
-        self.selected_range = self.storage.word_range_at(caret_pos).into();
-        self.caret_position_x = None;
-        cx.notify();
-    }
-
-    fn select_line_at(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
+    fn storage_selection_at(&self, caret_pos: usize, group: SelectionGroup) -> Range<usize> {
         use NavigationDirection::*;
         use TextBoundary::*;
 
-        let line_start = self.storage.offset_from_caret(caret_pos, Back, HardLine);
-        let line_end = self.storage.offset_from_caret(caret_pos, Forward, HardLine);
-        let line_end_with_newline = if line_end < self.storage.content_utf8().len() {
-            self.storage.offset_from_caret(line_end, Forward, Cluster)
-        } else {
-            line_end
-        };
-        self.selected_range = (line_start, line_end_with_newline).into();
-        self.caret_position_x = None;
-        cx.notify();
+        match group {
+            SelectionGroup::Word => self.storage.word_range_at(caret_pos),
+            SelectionGroup::Line => {
+                let line_start = self.storage.offset_from_caret(caret_pos, Back, HardLine);
+                let line_end = self.storage.offset_from_caret(caret_pos, Forward, HardLine);
+                let line_end_with_newline = if line_end < self.storage.content_utf8().len() {
+                    self.storage.offset_from_caret(line_end, Forward, Cluster)
+                } else {
+                    line_end
+                };
+
+                line_start..line_end_with_newline
+            }
+            SelectionGroup::Document => 0..self.storage.content_utf8().len(),
+        }
     }
 
-    fn select_layout_at(
+    fn select_group_at(
         &mut self,
         point: Point<Pixels>,
         line_height: Pixels,
-        kind: TextSelectionKind,
+        group: SelectionGroup,
         cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(document) = self.current_document() else {
-            return false;
+    ) {
+        let range = match group.layout_kind() {
+            Some(kind) => {
+                if let Some(document) = self.current_document() {
+                    document.selection_from_point(point, line_height, kind)
+                } else {
+                    let caret_pos = self.caret_for_pixel_point(point, line_height).index;
+
+                    self.storage_selection_at(caret_pos, group)
+                }
+            }
+            None => 0..self.storage.content_utf8().len(),
         };
 
-        self.selected_range = document
-            .selection_from_point(point, line_height, kind)
-            .into();
+        self.selected_range = range.into();
         self.caret_position_x = None;
         cx.notify();
-        true
     }
 }
 
@@ -1294,29 +1318,22 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         const TRIPLE_CLICK: usize = 3;
 
         let line_height = self.layout_data.line_height;
-        let caret = self.caret_for_pixel_point(text_position, line_height);
-
         self.is_selecting = true;
         self.selection_drag_visual_caret = None;
         self.apply_click(event.click_count, text_position);
 
         match self.click_count {
             DOUBLE_CLICK => {
-                if !self.select_layout_at(text_position, line_height, TextSelectionKind::Word, cx) {
-                    self.select_word_at(caret.index, cx);
-                }
+                self.select_group_at(text_position, line_height, SelectionGroup::Word, cx)
             }
             TRIPLE_CLICK => {
-                if !self.select_layout_at(
-                    text_position,
-                    line_height,
-                    TextSelectionKind::HardLine,
-                    cx,
-                ) {
-                    self.select_line_at(caret.index, cx);
-                }
+                self.select_group_at(text_position, line_height, SelectionGroup::Line, cx)
             }
-            _ => self.set_caret(caret, event.modifiers.shift, cx),
+            _ => {
+                let caret = self.caret_for_pixel_point(text_position, line_height);
+
+                self.set_caret(caret, event.modifiers.shift, cx);
+            }
         }
 
         self.selection_drag_anchor =
@@ -1370,7 +1387,7 @@ mod tests {
 
     use super::*;
     use crate::editable_text::StringStorage;
-    use gpui::{AppContext, Entity, IntoElement, Render, TestAppContext, WindowHandle, div};
+    use gpui::{AppContext, Entity, IntoElement, Render, TestAppContext, WindowHandle, div, px};
 
     struct TestView {
         input: Entity<EditableTextState>,
@@ -1994,6 +2011,24 @@ mod tests {
             let range = input.storage.word_range_at(8);
             assert_eq!(range.start, 6);
             assert_eq!(range.end, 11);
+        });
+    }
+
+    #[gpui::test]
+    fn test_select_group_at_falls_back_without_a_current_layout(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "first line\nlast word", 0);
+        update_test_input(view, cx, |input, _window, cx| {
+            let position = point(px(0.), px(0.));
+            let line_height = px(16.);
+
+            input.select_group_at(position, line_height, SelectionGroup::Word, cx);
+            assert_eq!(input.selected_range(), 16..20);
+
+            input.select_group_at(position, line_height, SelectionGroup::Line, cx);
+            assert_eq!(input.selected_range(), 11..20);
+
+            input.select_group_at(position, line_height, SelectionGroup::Document, cx);
+            assert_eq!(input.selected_range(), 0..20);
         });
     }
 
