@@ -52,4 +52,4 @@ and [`plaintext` scrolling](https://github.com/web-platform-tests/wpt/blob/maste
 - GPUI has no HTML shadow-tree, table, or specialized form-control direction rules.
 - Content without source text does not affect automatic direction.
 
-Run `cargo run -p gpui_ce_elements --example direction` for an interactive demo.
+Run `cargo run -p gpui-ce --example direction` for an interactive demo.

@@ -79,7 +79,7 @@ impl Render for DirectionExample {
                     .rounded_lg()
                     .border_1()
                     .border_color(rgb(0x475569))
-                    .child("مرحبا من GPUI · Direction-aware text · 12345")
+                    .child("مرحبا GPUI · Direction-aware text · 12345")
                     .child(
                         div()
                             .p_2()
@@ -116,7 +116,7 @@ impl Render for DirectionExample {
                         text_input("direction-input")
                             .direction(self.direction)
                             .text_start()
-                            .placeholder("Type text; Auto uses the value, not this placeholder")
+                            .placeholder("Type text")
                             .border_1()
                             .border_color(rgb(0x94a3b8))
                             .rounded_md()
@@ -145,6 +145,7 @@ fn main() {
             },
         )
         .unwrap();
+
         cx.activate(true);
     });
 }
