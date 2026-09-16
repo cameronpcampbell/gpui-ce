@@ -52,9 +52,9 @@ use crate::{
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::{
-    CaretAffinity, CaretPosition, InlineVisualLine, PaintFragment, PaintStyle, PlatformTextLayout,
-    PositionedInlineBox, ResolvedDirection, ShapedGlyph, TextAlign, TextMovement,
-    TextSelectionKind, VisualDirection, VisualLine, align_inline_boxes, size,
+    CaretAffinity, CaretMovement, CaretPosition, InlineVisualLine, PaintFragment, PaintStyle,
+    PlatformTextLayout, PositionedInlineBox, ResolvedDirection, ShapedGlyph, TextAlign,
+    TextMovement, TextSelectionKind, VisualDirection, VisualLine, align_inline_boxes, size,
 };
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use anyhow::bail;
@@ -1355,12 +1355,12 @@ impl PlatformTextLayout for TestPlatformTextLayout {
             .map(|stops| stops[0].0..stops[1].0)
     }
 
-    fn move_caret(
+    fn caret_movement(
         &self,
         caret: CaretPosition,
         movement: TextMovement,
         preferred_x: Option<Pixels>,
-    ) -> (CaretPosition, Option<Pixels>) {
+    ) -> CaretMovement {
         let idx = match movement {
             TextMovement::VisualLeft => {
                 self.move_visual(caret, VisualDirection::Left)
@@ -1406,10 +1406,10 @@ impl PlatformTextLayout for TestPlatformTextLayout {
                 })
             });
 
-        (
-            self.refresh_caret(CaretPosition::new(idx, CaretAffinity::Downstream)),
+        CaretMovement {
+            caret: self.refresh_caret(CaretPosition::new(idx, CaretAffinity::Downstream)),
             preferred_x,
-        )
+        }
     }
 
     fn selection_from_point(

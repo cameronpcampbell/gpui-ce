@@ -20,14 +20,14 @@ use crate::{
 
 use anyhow::{Context as _, Result};
 use gpui::{
-    Bounds, CaretAffinity, CaretPosition, Font, FontId, FontMetrics, GlyphId, InlineBidiScope,
-    InlineBoxRequest, InlineLayout, InlineLayoutRequest, InlineTextMetrics, InlineTextStyle,
-    InlineVisualLine, LineLayout, PaintFragment, PaintStyle, ParagraphDirection, Pixels,
-    PlatformTextLayout, PlatformTextSystem, Point, PositionedInlineBox, PreparedRasterStyle,
-    RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, ResolvedDirection, ShapedGlyph, Size,
-    TextAlign, TextLayoutOptions, TextLayoutRequest, TextMovement, TextRenderingMode, TextRun,
-    TextSelectionKind, UnicodeBidi, VisualDirection, VisualLine, align_inline_boxes, point, px,
-    size,
+    Bounds, CaretAffinity, CaretMovement, CaretPosition, Font, FontId, FontMetrics, GlyphId,
+    InlineBidiScope, InlineBoxRequest, InlineLayout, InlineLayoutRequest, InlineTextMetrics,
+    InlineTextStyle, InlineVisualLine, LineLayout, PaintFragment, PaintStyle, ParagraphDirection,
+    Pixels, PlatformTextLayout, PlatformTextSystem, Point, PositionedInlineBox,
+    PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph, RenderGlyphParams, ResolvedDirection,
+    ShapedGlyph, Size, TextAlign, TextLayoutOptions, TextLayoutRequest, TextMovement,
+    TextRenderingMode, TextRun, TextSelectionKind, UnicodeBidi, VisualDirection, VisualLine,
+    align_inline_boxes, point, px, size,
 };
 
 use parking_lot::{Mutex, RwLock};
@@ -354,12 +354,12 @@ impl PlatformTextLayout for SourceMappedLayout {
         None
     }
 
-    fn move_caret(
+    fn caret_movement(
         &self,
         caret: CaretPosition,
         movement: TextMovement,
         preferred_x: Option<Pixels>,
-    ) -> (CaretPosition, Option<Pixels>) {
+    ) -> CaretMovement {
         let direction = match movement {
             TextMovement::VisualLeft => Some(VisualDirection::Left),
             TextMovement::VisualRight => Some(VisualDirection::Right),
@@ -367,14 +367,20 @@ impl PlatformTextLayout for SourceMappedLayout {
         };
 
         if let Some(direction) = direction {
-            return (self.move_visual(caret, direction).unwrap_or(caret), None);
+            return CaretMovement {
+                caret: self.move_visual(caret, direction).unwrap_or(caret),
+                preferred_x: None,
+            };
         }
 
-        let (caret, preferred_x) =
+        let CaretMovement { caret, preferred_x } =
             self.inner
-                .move_caret(self.map.backend_caret(caret), movement, preferred_x);
+                .caret_movement(self.map.backend_caret(caret), movement, preferred_x);
 
-        (self.map.source_caret(caret), preferred_x)
+        CaretMovement {
+            caret: self.map.source_caret(caret),
+            preferred_x,
+        }
     }
 
     fn selection_from_point(
@@ -1186,12 +1192,12 @@ impl PlatformTextLayout for ParleyLayout {
             .cloned()
     }
 
-    fn move_caret(
+    fn caret_movement(
         &self,
         caret: CaretPosition,
         movement: TextMovement,
         preferred_x: Option<Pixels>,
-    ) -> (CaretPosition, Option<Pixels>) {
+    ) -> CaretMovement {
         let cursor = self.cursor(caret);
         let moved = match movement {
             TextMovement::VisualLeft | TextMovement::VisualRight => {
@@ -1201,7 +1207,10 @@ impl PlatformTextLayout for ParleyLayout {
                     VisualDirection::Right
                 };
 
-                return (self.move_visual(caret, direction).unwrap_or(caret), None);
+                return CaretMovement {
+                    caret: self.move_visual(caret, direction).unwrap_or(caret),
+                    preferred_x: None,
+                };
             }
             TextMovement::VisualWordLeft => cursor.previous_visual_word(&self.layout),
             TextMovement::VisualWordRight => cursor.next_visual_word(&self.layout),
@@ -1237,17 +1246,26 @@ impl PlatformTextLayout for ParleyLayout {
                         selection.next_line(&self.layout, false)
                     };
 
-                    return (Self::caret_position(moved.focus()), preferred_x);
+                    return CaretMovement {
+                        caret: Self::caret_position(moved.focus()),
+                        preferred_x,
+                    };
                 };
 
                 let x = preferred_x
                     .map_or_else(|| cursor.geometry(&self.layout, 0.0).x0 as f32, f32::from);
                 let moved = Cursor::from_point(&self.layout, x, self.native_y_for_line(target_idx));
-                return (Self::caret_position(moved), Some(px(x)));
+                return CaretMovement {
+                    caret: Self::caret_position(moved),
+                    preferred_x: Some(px(x)),
+                };
             }
         };
 
-        (Self::caret_position(moved), None)
+        CaretMovement {
+            caret: Self::caret_position(moved),
+            preferred_x: None,
+        }
     }
 
     fn selection_from_point(
@@ -3363,7 +3381,10 @@ mod tests {
                 (TextMovement::HardLineStart, source.content.start),
                 (TextMovement::HardLineEnd, source.content.end),
             ] {
-                assert_eq!(native.move_caret(before, movement, None).0.index, expected);
+                assert_eq!(
+                    native.caret_movement(before, movement, None).caret.index,
+                    expected
+                );
             }
         }
 
@@ -3372,26 +3393,31 @@ mod tests {
         assert_eq!(native.refresh_caret(inside).index, crlf);
 
         let start = CaretPosition::default();
-        let (down, preferred_x) = native.move_caret(start, TextMovement::VisualDown, None);
+        let down = native.caret_movement(start, TextMovement::VisualDown, None);
         assert_eq!(
-            geometry(down).origin.y,
+            geometry(down.caret).origin.y,
             geometry(start).origin.y + line_height
         );
-        assert_eq!(preferred_x, Some(geometry(start).origin.x));
+        assert_eq!(down.preferred_x, Some(geometry(start).origin.x));
 
         let mut vertical_caret = start;
         let mut preferred_x = None;
 
         for line_idx in 1..native.line_count() {
-            (vertical_caret, preferred_x) =
-                native.move_caret(vertical_caret, TextMovement::VisualDown, preferred_x);
+            let moved =
+                native.caret_movement(vertical_caret, TextMovement::VisualDown, preferred_x);
+            vertical_caret = moved.caret;
+            preferred_x = moved.preferred_x;
+
             assert_eq!(geometry(vertical_caret).origin.y, line_height * line_idx);
             assert_eq!(preferred_x, Some(geometry(start).origin.x));
         }
 
         for line_idx in (0..native.line_count() - 1).rev() {
-            (vertical_caret, preferred_x) =
-                native.move_caret(vertical_caret, TextMovement::VisualUp, preferred_x);
+            let moved = native.caret_movement(vertical_caret, TextMovement::VisualUp, preferred_x);
+            vertical_caret = moved.caret;
+            preferred_x = moved.preferred_x;
+
             assert_eq!(geometry(vertical_caret).origin.y, line_height * line_idx);
         }
 
@@ -3407,7 +3433,7 @@ mod tests {
             let empty_row = native
                 .caret_from_point(point(edge_x, line_height * 1.5), line_height)
                 .unwrap_or_else(|caret| caret);
-            let word = native.move_caret(empty_row, movement, None).0;
+            let word = native.caret_movement(empty_row, movement, None).caret;
             assert_ne!(geometry(word).origin.y, geometry(empty_row).origin.y);
         }
 
@@ -3987,15 +4013,15 @@ mod tests {
         let middle = CaretPosition::new(2, CaretAffinity::Downstream);
         assert_eq!(
             single_line
-                .move_caret(middle, TextMovement::VisualUp, None)
-                .0
+                .caret_movement(middle, TextMovement::VisualUp, None)
+                .caret
                 .index,
             0
         );
         assert_eq!(
             single_line
-                .move_caret(middle, TextMovement::VisualDown, None)
-                .0
+                .caret_movement(middle, TextMovement::VisualDown, None)
+                .caret
                 .index,
             single_line_text.len()
         );

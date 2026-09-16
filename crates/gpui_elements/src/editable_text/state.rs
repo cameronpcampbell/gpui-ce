@@ -354,7 +354,9 @@ impl EditableTextState {
             .map(|point| point + self.layout_data.document_offset)
     }
 
-    fn layout_deletion_range(
+    /// Returns the storage range a deletion command should remove using the current text layout.
+    /// Returns `None` when the current layout cannot provide the range.
+    fn deletion_range_from_layout(
         &self,
         direction: NavigationDirection,
         boundary: TextBoundary,
@@ -380,7 +382,7 @@ impl EditableTextState {
             (_, TextBoundary::Document) => return None,
         };
 
-        let target = document.move_caret(caret, movement, None).0.index;
+        let target = document.caret_movement(caret, movement, None).caret.index;
 
         Some(target.min(caret.index)..target.max(caret.index))
     }
@@ -430,18 +432,18 @@ impl EditableTextState {
             return endpoint;
         };
 
-        if document.move_caret(endpoint, edge, None).0.index != endpoint.index {
+        if document.caret_movement(endpoint, edge, None).caret.index != endpoint.index {
             return endpoint;
         }
 
-        document.move_caret(endpoint, opposite_edge, None).0
+        document.caret_movement(endpoint, opposite_edge, None).caret
     }
 
     fn line_range_for_cut(&self) -> Range<usize> {
         let caret = self.caret();
         let range = if let Some(document) = self.current_document() {
             let [start, end] = [TextMovement::HardLineStart, TextMovement::HardLineEnd]
-                .map(|movement| document.move_caret(caret, movement, None).0.index);
+                .map(|movement| document.caret_movement(caret, movement, None).caret.index);
             start.min(end)..start.max(end)
         } else {
             self.storage.offset_from_caret(
@@ -604,7 +606,7 @@ impl EditableTextState {
         let range = if had_selection {
             range
         } else {
-            self.layout_deletion_range(direction, boundary)
+            self.deletion_range_from_layout(direction, boundary)
                 .unwrap_or_else(|| {
                     self.storage
                         .range_from_caret(self.caret_pos(), direction, boundary)

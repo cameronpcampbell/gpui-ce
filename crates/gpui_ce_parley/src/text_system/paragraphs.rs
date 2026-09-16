@@ -1,5 +1,5 @@
 use gpui::{
-    Bounds, CaretPosition, Pixels, PlatformTextLayout, Point, Size, TextMovement,
+    Bounds, CaretMovement, CaretPosition, Pixels, PlatformTextLayout, Point, Size, TextMovement,
     TextSelectionKind, VisualDirection, point, px,
 };
 use std::{ops::Range, sync::Arc};
@@ -340,12 +340,12 @@ impl PlatformTextLayout for ParleyDocumentLayout {
             .cloned()
     }
 
-    fn move_caret(
+    fn caret_movement(
         &self,
         caret: CaretPosition,
         movement: TextMovement,
         preferred_x: Option<Pixels>,
-    ) -> (CaretPosition, Option<Pixels>) {
+    ) -> CaretMovement {
         let caret = self.refresh_caret(caret);
         let direction = match movement {
             TextMovement::VisualLeft | TextMovement::VisualWordLeft => Some(VisualDirection::Left),
@@ -359,10 +359,10 @@ impl PlatformTextLayout for ParleyDocumentLayout {
             movement,
             TextMovement::VisualLeft | TextMovement::VisualRight
         ) {
-            return (
-                self.move_visual(caret, direction.unwrap()).unwrap_or(caret),
-                None,
-            );
+            return CaretMovement {
+                caret: self.move_visual(caret, direction.unwrap()).unwrap_or(caret),
+                preferred_x: None,
+            };
         }
 
         if matches!(movement, TextMovement::VisualUp | TextMovement::VisualDown) {
@@ -378,33 +378,47 @@ impl PlatformTextLayout for ParleyDocumentLayout {
             let Some(target_idx) = target_idx else {
                 let idx = if delta < 0 { 0 } else { self.len() };
 
-                return (
-                    self.refresh_caret(CaretPosition::new(idx, caret.affinity)),
+                return CaretMovement {
+                    caret: self.refresh_caret(CaretPosition::new(idx, caret.affinity)),
                     preferred_x,
-                );
+                };
             };
             let x = preferred_x.unwrap_or(geometry.origin.x);
             let moved = self
                 .caret_from_point(point(x, px(target_idx as f32 + 0.5)), px(1.0))
                 .unwrap_or_else(|caret| caret);
 
-            return (moved, Some(x));
+            return CaretMovement {
+                caret: moved,
+                preferred_x: Some(x),
+            };
         }
 
         let paragraph_idx = self.paragraph_for_index(caret.index);
         let paragraph = &self.paragraphs[paragraph_idx];
         let local = paragraph.local_caret(caret);
-        let (moved, preferred_x) = paragraph.native.move_caret(local, movement, preferred_x);
+        let CaretMovement {
+            caret: moved,
+            preferred_x,
+        } = paragraph
+            .native
+            .caret_movement(local, movement, preferred_x);
 
         if let Some(direction) = direction
             && paragraph.native.caret_geometry(moved, px(1.0))
                 == paragraph.native.caret_geometry(local, px(1.0))
             && let Some(edge) = self.adjacent_edge(paragraph_idx, direction)
         {
-            return (edge, preferred_x);
+            return CaretMovement {
+                caret: edge,
+                preferred_x,
+            };
         }
 
-        (paragraph.global_caret(moved), preferred_x)
+        CaretMovement {
+            caret: paragraph.global_caret(moved),
+            preferred_x,
+        }
     }
 
     fn selection_from_point(

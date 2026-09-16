@@ -209,30 +209,39 @@ pub fn align_inline_boxes(
 pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
     /// Length of the source text in UTF-8 bytes.
     fn len(&self) -> usize;
+
     /// Number of visual lines.
     fn line_count(&self) -> usize;
+
     /// Natural layout size reported by the backend.
     fn size(&self) -> Size<Pixels>;
+
     /// Returns the source index of the cluster under a point.
     fn index_from_point(&self, point: Point<Pixels>, line_height: Pixels) -> Result<usize, usize>;
+
     /// Returns the closest caret for a point. Points outside a visual row return `Err`.
     fn caret_from_point(
         &self,
         point: Point<Pixels>,
         line_height: Pixels,
     ) -> Result<CaretPosition, CaretPosition>;
+
     /// Returns the caret rectangle.
     fn caret_geometry(&self, caret: CaretPosition, line_height: Pixels) -> Option<Bounds<Pixels>>;
+
     /// Snaps a caret to a native cluster boundary.
     fn refresh_caret(&self, caret: CaretPosition) -> CaretPosition;
+
     /// Moves one caret stop in visual order.
     fn move_visual(
         &self,
         caret: CaretPosition,
         direction: VisualDirection,
     ) -> Option<CaretPosition>;
+
     /// Returns selection rectangles in visual order.
     fn selection_geometry(&self, range: Range<usize>, line_height: Pixels) -> Vec<Bounds<Pixels>>;
+
     /// Native range rectangles and their visual line indices, without selection-only extensions.
     /// Backends supporting inline flow should preserve actual vertical metrics here.
     fn inline_geometry(&self, range: Range<usize>) -> Vec<(Bounds<Pixels>, usize)> {
@@ -265,15 +274,18 @@ pub trait PlatformTextLayout: Send + Sync + std::fmt::Debug {
 
     /// Returns the atomic logical cluster before the caret.
     fn logical_cluster_before(&self, caret: CaretPosition) -> Option<Range<usize>>;
+
     /// Returns the atomic logical cluster after the caret.
     fn logical_cluster_after(&self, caret: CaretPosition) -> Option<Range<usize>>;
-    /// Moves a caret using backend-native text semantics.
-    fn move_caret(
+
+    /// Returns the caret and preferred horizontal position after applying a movement.
+    fn caret_movement(
         &self,
         caret: CaretPosition,
         movement: TextMovement,
         preferred_x: Option<Pixels>,
-    ) -> (CaretPosition, Option<Pixels>);
+    ) -> CaretMovement;
+
     /// Returns the word or line selected at a point.
     fn selection_from_point(
         &self,
@@ -495,6 +507,15 @@ impl CaretSelection {
     }
 }
 
+/// The result of calculating a caret movement through a laid-out document.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CaretMovement {
+    /// The caret at the requested destination.
+    pub caret: CaretPosition,
+    /// The horizontal position retained by successive vertical movements.
+    pub preferred_x: Option<Pixels>,
+}
+
 /// The result of moving or extending a selection through a laid-out document.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CaretSelectionMove {
@@ -669,16 +690,17 @@ impl ShapedTextLayout {
         self.layout.platform_layout.logical_cluster_after(caret)
     }
 
-    /// Moves a caret using the backend's visual and line-breaking model.
-    pub fn move_caret(
+    /// Returns the caret and preferred horizontal position after applying `movement`.
+    /// This only calculates the destination and does not mutate editor state.
+    pub fn caret_movement(
         &self,
         caret: CaretPosition,
         movement: TextMovement,
         preferred_x: Option<Pixels>,
-    ) -> (CaretPosition, Option<Pixels>) {
+    ) -> CaretMovement {
         self.layout
             .platform_layout
-            .move_caret(caret, movement, preferred_x)
+            .caret_movement(caret, movement, preferred_x)
     }
 
     /// Moves or extends an affinity-aware selection using visual text order.
@@ -733,7 +755,11 @@ impl ShapedTextLayout {
             };
         }
 
-        let (focus, preferred_x) = self.move_caret(selection.focus, movement, preferred_x);
+        let CaretMovement {
+            caret: focus,
+            preferred_x,
+        } = self.caret_movement(selection.focus, movement, preferred_x);
+
         CaretSelectionMove {
             selection: if extend {
                 selection.with_focus(focus)
