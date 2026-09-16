@@ -677,8 +677,14 @@ impl EditableTextState {
         self.move_to(caret_pos, cx);
     }
 
-    /// Moves or extends by visual caret, word, or line boundaries, unlike `move_to`, which
-    /// collapses the selection at an absolute byte offset.
+    fn nav_semantic(&mut self, movement: TextMovement, cx: &mut Context<Self>) {
+        self.move_semantic(movement, false, cx);
+    }
+
+    fn select_semantic(&mut self, movement: TextMovement, cx: &mut Context<Self>) {
+        self.move_semantic(movement, true, cx);
+    }
+
     fn move_semantic(&mut self, movement: TextMovement, extend: bool, cx: &mut Context<Self>) {
         if let Some(document) = self.current_document() {
             let moved = document.move_selection(
@@ -1113,37 +1119,37 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn nav_left(&mut self, _: &NavLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.move_semantic(TextMovement::VisualLeft, false, cx);
+        self.nav_semantic(TextMovement::VisualLeft, cx);
     }
 
     fn nav_right(&mut self, _: &NavRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.move_semantic(TextMovement::VisualRight, false, cx);
+        self.nav_semantic(TextMovement::VisualRight, cx);
     }
 
     fn nav_up(&mut self, _: &NavUp, _window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
-            self.move_semantic(TextMovement::VisualLineStart, false, cx);
+            self.nav_semantic(TextMovement::VisualLineStart, cx);
             return;
         }
 
-        self.move_semantic(TextMovement::VisualUp, false, cx);
+        self.nav_semantic(TextMovement::VisualUp, cx);
     }
 
     fn nav_down(&mut self, _: &NavDown, _window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
-            self.move_semantic(TextMovement::VisualLineEnd, false, cx);
+            self.nav_semantic(TextMovement::VisualLineEnd, cx);
             return;
         }
 
-        self.move_semantic(TextMovement::VisualDown, false, cx);
+        self.nav_semantic(TextMovement::VisualDown, cx);
     }
 
     fn nav_line_start(&mut self, _: &NavLineStart, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.move_semantic(TextMovement::HardLineStart, false, cx);
+        self.nav_semantic(TextMovement::HardLineStart, cx);
     }
 
     fn nav_line_end(&mut self, _: &NavLineEnd, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.move_semantic(TextMovement::HardLineEnd, false, cx);
+        self.nav_semantic(TextMovement::HardLineEnd, cx);
     }
 
     fn nav_start(&mut self, _: &NavDocumentStart, _w: &mut Window, cx: &mut Context<'app, Self>) {
@@ -1155,11 +1161,11 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn nav_left_word(&mut self, _: &NavWordLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.move_semantic(TextMovement::VisualWordLeft, false, cx);
+        self.nav_semantic(TextMovement::VisualWordLeft, cx);
     }
 
     fn nav_right_word(&mut self, _: &NavWordRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.move_semantic(TextMovement::VisualWordRight, false, cx);
+        self.nav_semantic(TextMovement::VisualWordRight, cx);
     }
 
     fn select_all(&mut self, _: &SelectAll, _w: &mut Window, cx: &mut Context<'app, Self>) {
@@ -1167,11 +1173,11 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
     }
 
     fn select_left(&mut self, _: &SelectLeft, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.move_semantic(TextMovement::VisualLeft, true, cx);
+        self.select_semantic(TextMovement::VisualLeft, cx);
     }
 
     fn select_right(&mut self, _: &SelectRight, _w: &mut Window, cx: &mut Context<'app, Self>) {
-        self.move_semantic(TextMovement::VisualRight, true, cx);
+        self.select_semantic(TextMovement::VisualRight, cx);
     }
 
     fn select_up(&mut self, _: &SelectUp, _window: &mut Window, cx: &mut Context<'app, Self>) {
@@ -1181,7 +1187,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
             return;
         }
 
-        self.move_semantic(TextMovement::VisualUp, true, cx);
+        self.select_semantic(TextMovement::VisualUp, cx);
     }
 
     fn select_down(&mut self, _: &SelectDown, _window: &mut Window, cx: &mut Context<'app, Self>) {
@@ -1191,7 +1197,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
             return;
         }
 
-        self.move_semantic(TextMovement::VisualDown, true, cx);
+        self.select_semantic(TextMovement::VisualDown, cx);
     }
 
     fn select_start(
@@ -1213,7 +1219,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         _w: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
-        self.move_semantic(TextMovement::VisualWordLeft, true, cx);
+        self.select_semantic(TextMovement::VisualWordLeft, cx);
     }
 
     fn select_right_word(
@@ -1222,7 +1228,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         _w: &mut Window,
         cx: &mut Context<'app, Self>,
     ) {
-        self.move_semantic(TextMovement::VisualWordRight, true, cx);
+        self.select_semantic(TextMovement::VisualWordRight, cx);
     }
 
     fn cut(&mut self, _: &Cut, _w: &mut Window, cx: &mut Context<'app, Self>) {
