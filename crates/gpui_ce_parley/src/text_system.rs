@@ -210,12 +210,12 @@ impl SourceMappedLayout {
             return mapped;
         }
 
-        let start = CaretPosition::downstream(0);
+        let start = CaretPosition::attached_to_next_cluster(0);
         if self.source_len == 0 {
             return start;
         }
 
-        let end = CaretPosition::upstream(self.source_len);
+        let end = CaretPosition::attached_to_previous_cluster(self.source_len);
         let mapped = match mapped.index {
             0 => start,
             idx if idx == self.source_len => end,
@@ -2538,8 +2538,8 @@ mod tests {
                 layout_directional(&system, text, direction, TextAlign::Start, Some(px(240.0)));
 
             for expected in [
-                CaretPosition::downstream(0),
-                CaretPosition::upstream(text.len()),
+                CaretPosition::attached_to_next_cluster(0),
+                CaretPosition::attached_to_previous_cluster(text.len()),
             ] {
                 let expected_bounds = layout
                     .platform_layout

@@ -430,13 +430,13 @@ impl CaretPosition {
         }
     }
 
-    /// Creates a caret attached to the logically following cluster.
-    pub const fn downstream(idx: usize) -> Self {
+    /// Creates a caret attached to the next logical cluster.
+    pub const fn attached_to_next_cluster(idx: usize) -> Self {
         Self::new(idx, CaretAffinity::Downstream)
     }
 
-    /// Creates a caret attached to the logically preceding cluster.
-    pub const fn upstream(idx: usize) -> Self {
+    /// Creates a caret attached to the previous logical cluster.
+    pub const fn attached_to_previous_cluster(idx: usize) -> Self {
         Self::new(idx, CaretAffinity::Upstream)
     }
 }
@@ -646,7 +646,7 @@ impl ShapedTextLayout {
             return None;
         }
 
-        self.visual_position_for_caret(CaretPosition::downstream(idx), line_height)
+        self.visual_position_for_caret(CaretPosition::attached_to_next_cluster(idx), line_height)
     }
 
     /// Returns the visual position in pixels for an affinity-aware caret.

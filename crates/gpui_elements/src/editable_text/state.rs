@@ -560,9 +560,9 @@ impl EditableTextState {
         let index = caret_pos.min(len);
 
         if index > 0 && index == len {
-            CaretPosition::upstream(index)
+            CaretPosition::attached_to_previous_cluster(index)
         } else {
-            CaretPosition::downstream(index)
+            CaretPosition::attached_to_next_cluster(index)
         }
     }
 
@@ -737,7 +737,7 @@ impl EditableTextState {
                 .offset_from_caret(self.caret_pos(), direction, boundary)
         };
 
-        self.set_caret(CaretPosition::downstream(idx), extend, cx);
+        self.set_caret(CaretPosition::attached_to_next_cluster(idx), extend, cx);
     }
 
     /// Sets the current selection to be the entire text in the storage medium
@@ -1537,7 +1537,7 @@ mod tests {
             input.nav_end(&NavDocumentEnd, window, cx);
             assert_eq!(
                 input.selected_range,
-                CaretSelection::collapsed(CaretPosition::upstream(18))
+                CaretSelection::collapsed(CaretPosition::attached_to_previous_cluster(18))
             );
         });
     }
@@ -1630,8 +1630,8 @@ mod tests {
             assert_eq!(
                 input.selected_range,
                 CaretSelection::from_focus_anchor(
-                    CaretPosition::upstream(11),
-                    CaretPosition::downstream(6),
+                    CaretPosition::attached_to_previous_cluster(11),
+                    CaretPosition::attached_to_next_cluster(6),
                 )
             );
         });
@@ -1654,8 +1654,8 @@ mod tests {
     #[gpui::test]
     fn test_backspace_deletes_previous_grapheme(cx: &mut TestAppContext) {
         for (caret, expected_text, expected_caret) in [
-            (5, "hell", CaretPosition::upstream(4)),
-            (1, "ello", CaretPosition::downstream(0)),
+            (5, "hell", CaretPosition::attached_to_previous_cluster(4)),
+            (1, "ello", CaretPosition::attached_to_next_cluster(0)),
         ] {
             let view = create_test_input(cx, "hello", caret);
             update_test_input(view, cx, |input, window, cx| {
@@ -1687,7 +1687,7 @@ mod tests {
             assert_eq!(input.as_str(), "Hi ");
             assert_eq!(
                 input.selected_range,
-                CaretSelection::collapsed(CaretPosition::upstream(3))
+                CaretSelection::collapsed(CaretPosition::attached_to_previous_cluster(3))
             );
         });
     }
@@ -1709,8 +1709,8 @@ mod tests {
     #[gpui::test]
     fn test_delete_deletes_next_grapheme(cx: &mut TestAppContext) {
         for (caret, expected_text, expected_caret) in [
-            (0, "ello", CaretPosition::downstream(0)),
-            (4, "hell", CaretPosition::upstream(4)),
+            (0, "ello", CaretPosition::attached_to_next_cluster(0)),
+            (4, "hell", CaretPosition::attached_to_previous_cluster(4)),
         ] {
             let view = create_test_input(cx, "hello", caret);
             update_test_input(view, cx, |input, window, cx| {
@@ -1799,7 +1799,7 @@ mod tests {
             assert_eq!(input.as_str(), "hello there world");
             assert_eq!(
                 input.selected_range,
-                CaretSelection::collapsed(CaretPosition::upstream(11))
+                CaretSelection::collapsed(CaretPosition::attached_to_previous_cluster(11))
             );
         });
     }
@@ -1919,7 +1919,7 @@ mod tests {
             input.move_to(1000, cx);
             assert_eq!(
                 input.selected_range,
-                CaretSelection::collapsed(CaretPosition::upstream(5))
+                CaretSelection::collapsed(CaretPosition::attached_to_previous_cluster(5))
             );
 
             input.selected_range = 0.into();
@@ -1927,8 +1927,8 @@ mod tests {
             assert_eq!(
                 input.selected_range,
                 CaretSelection::from_focus_anchor(
-                    CaretPosition::upstream(5),
-                    CaretPosition::downstream(0),
+                    CaretPosition::attached_to_previous_cluster(5),
+                    CaretPosition::attached_to_next_cluster(0),
                 )
             );
         });
@@ -2263,8 +2263,8 @@ mod tests {
             assert_eq!(
                 input.selected_range,
                 CaretSelection::from_focus_anchor(
-                    CaretPosition::upstream(11),
-                    CaretPosition::downstream(5),
+                    CaretPosition::attached_to_previous_cluster(11),
+                    CaretPosition::attached_to_next_cluster(5),
                 )
             );
         });
@@ -2635,7 +2635,7 @@ mod tests {
             assert_eq!(input.as_str(), "hello");
             assert_eq!(
                 input.selected_range,
-                CaretSelection::collapsed(CaretPosition::upstream(5))
+                CaretSelection::collapsed(CaretPosition::attached_to_previous_cluster(5))
             );
         });
     }

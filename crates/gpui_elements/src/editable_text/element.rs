@@ -916,8 +916,8 @@ fn editable_document_offset(document: &ShapedText, line_height: Pixels) -> Point
     let mut left = Pixels::ZERO;
 
     for caret in [
-        CaretPosition::downstream(0),
-        CaretPosition::upstream(document.text.len()),
+        CaretPosition::attached_to_next_cluster(0),
+        CaretPosition::attached_to_previous_cluster(document.text.len()),
     ] {
         if let Some(visual_position) = document.visual_position_for_caret(caret, line_height) {
             left = left.min(visual_position.x);
@@ -1114,7 +1114,7 @@ mod tests {
         }
 
         fn point(&mut self, idx: usize) -> Point<Pixels> {
-            self.point_for_caret(CaretPosition::downstream(idx))
+            self.point_for_caret(CaretPosition::attached_to_next_cluster(idx))
         }
 
         fn update_input(
@@ -1284,7 +1284,7 @@ mod tests {
         fixture.cx.update(|cx| {
             assert_eq!(
                 fixture.input.read(cx).caret_selection(),
-                CaretSelection::collapsed(CaretPosition::upstream(text.len()))
+                CaretSelection::collapsed(CaretPosition::attached_to_previous_cluster(text.len()))
             );
         });
         fixture.assert_quads(SELECTION_COLOR, Vec::new());
@@ -1446,8 +1446,8 @@ mod tests {
             ("English 123", 3, Direction::LeftToRight),
             ("مرحبا", "مر".len(), Direction::RightToLeft),
         ] {
-            let start = CaretPosition::downstream(0);
-            let end = CaretPosition::upstream(text.len());
+            let start = CaretPosition::attached_to_next_cluster(0);
+            let end = CaretPosition::attached_to_previous_cluster(text.len());
             for (endpoint, opposite) in [(start, end), (end, start)] {
                 let mut fixture =
                     BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
@@ -1462,7 +1462,7 @@ mod tests {
                 fixture.down(endpoint_point);
                 fixture.assert_caret_selection(endpoint.index, endpoint);
 
-                for drag_anchor in [CaretPosition::downstream(anchor), opposite] {
+                for drag_anchor in [CaretPosition::attached_to_next_cluster(anchor), opposite] {
                     let mut fixture = BidiInputFixture::new_with_direction(
                         text, 8.0, 320.0, false, 1.0, direction,
                     );
@@ -1483,7 +1483,10 @@ mod tests {
                     cx,
                 );
             });
-            fixture.assert_caret_selection(anchor, CaretPosition::upstream(text.len()));
+            fixture.assert_caret_selection(
+                anchor,
+                CaretPosition::attached_to_previous_cluster(text.len()),
+            );
         }
     }
 
@@ -1510,12 +1513,18 @@ mod tests {
                 assert_eq!(state.as_str(), remaining);
                 state.caret()
             });
-            assert_eq!(caret, CaretPosition::upstream(remaining.len()));
+            assert_eq!(
+                caret,
+                CaretPosition::attached_to_previous_cluster(remaining.len())
+            );
 
             let document = fixture.document();
             let line_height = fixture.line_height();
             let downstream = document
-                .visual_position_for_caret(CaretPosition::downstream(caret.index), line_height)
+                .visual_position_for_caret(
+                    CaretPosition::attached_to_next_cluster(caret.index),
+                    line_height,
+                )
                 .unwrap();
             let upstream = document
                 .visual_position_for_caret(caret, line_height)
@@ -1678,7 +1687,7 @@ mod tests {
     fn wrapped_opposite_direction_drag_reaches_the_document_end() {
         let text = "English text wraps here";
         let anchor = 3;
-        let end = CaretPosition::upstream(text.len());
+        let end = CaretPosition::attached_to_previous_cluster(text.len());
         let mut fixture = BidiInputFixture::new_with_direction(
             text,
             8.0,
