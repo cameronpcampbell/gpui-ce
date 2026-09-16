@@ -677,6 +677,8 @@ impl EditableTextState {
         self.move_to(caret_pos, cx);
     }
 
+    /// Moves or extends by visual caret, word, or line boundaries, unlike `move_to`, which
+    /// collapses the selection at an absolute byte offset.
     fn move_semantic(&mut self, movement: TextMovement, extend: bool, cx: &mut Context<Self>) {
         if let Some(document) = self.current_document() {
             let moved = document.move_selection(
