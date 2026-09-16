@@ -350,7 +350,7 @@ impl EditableTextState {
 
     fn point_for_caret(&self, caret: CaretPosition) -> Option<Point<Pixels>> {
         self.current_document()?
-            .position_for_caret(caret, self.layout_data.line_height)
+            .visual_position_for_caret(caret, self.layout_data.line_height)
             .map(|point| point + self.layout_data.document_offset)
     }
 
@@ -416,22 +416,25 @@ impl EditableTextState {
         };
 
         let line_height = self.layout_data.line_height;
-        let Some(endpoint_point) = document.position_for_caret(endpoint, line_height) else {
+        let Some(endpoint_visual_position) =
+            document.visual_position_for_caret(endpoint, line_height)
+        else {
             return endpoint;
         };
-        let Some(opposite_endpoint_point) =
-            document.position_for_caret(opposite_endpoint, line_height)
+        let Some(opposite_visual_position) =
+            document.visual_position_for_caret(opposite_endpoint, line_height)
         else {
             return endpoint;
         };
 
-        let (endpoint_edge, target_edge) = if opposite_endpoint_point.y > endpoint_point.y {
-            (TextMovement::VisualLineEnd, TextMovement::VisualLineStart)
-        } else if opposite_endpoint_point.y < endpoint_point.y {
-            (TextMovement::VisualLineStart, TextMovement::VisualLineEnd)
-        } else {
-            return endpoint;
-        };
+        let (endpoint_edge, target_edge) =
+            if opposite_visual_position.y > endpoint_visual_position.y {
+                (TextMovement::VisualLineEnd, TextMovement::VisualLineStart)
+            } else if opposite_visual_position.y < endpoint_visual_position.y {
+                (TextMovement::VisualLineStart, TextMovement::VisualLineEnd)
+            } else {
+                return endpoint;
+            };
 
         if document
             .caret_movement(endpoint, endpoint_edge, None)
@@ -971,10 +974,10 @@ impl EntityInputHandler for EditableTextState {
 
         if start == end {
             let caret = CaretPosition::new(start, CaretAffinity::Downstream);
-            let position = document.position_for_caret(caret, line_height)?;
+            let visual_position = document.visual_position_for_caret(caret, line_height)?;
             return Some(Bounds::from_corners(
-                document_origin + position,
-                document_origin + position + point(CARET_PIXELS_EPSILON, line_height),
+                document_origin + visual_position,
+                document_origin + visual_position + point(CARET_PIXELS_EPSILON, line_height),
             ));
         }
 
@@ -996,7 +999,9 @@ impl EntityInputHandler for EditableTextState {
     ) -> Option<usize> {
         let point =
             point + self.layout_data.scroll_bounds.origin - self.layout_data.document_offset;
-        let index = self.caret_for_pixel_point(point, window.line_height()).index;
+        let index = self
+            .caret_for_pixel_point(point, window.line_height())
+            .index;
         Some(self.storage.utf_offset_8to16(index))
     }
 }

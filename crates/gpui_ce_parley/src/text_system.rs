@@ -2880,7 +2880,7 @@ mod tests {
 
         for caret in seen {
             let bounds = wrapped
-                .position_for_caret(caret, line_height)
+                .visual_position_for_caret(caret, line_height)
                 .expect("native caret must have geometry");
             assert!(f32::from(bounds.x).is_finite() && f32::from(bounds.y).is_finite());
         }

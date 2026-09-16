@@ -895,7 +895,7 @@ impl PrepaintElements {
         if prepaint.caret_visible {
             let caret_point = document_origin
                 + document
-                    .position_for_caret(state.visible_caret(), line_height)
+                    .visual_position_for_caret(state.visible_caret(), line_height)
                     .unwrap_or_default();
             let caret_height = caret_height.to_pixels(line_height.into(), window.rem_size());
             let vertical_offset = (line_height - caret_height) / 2.;
@@ -919,8 +919,8 @@ fn editable_document_offset(document: &ShapedText, line_height: Pixels) -> Point
         CaretPosition::downstream(0),
         CaretPosition::upstream(document.text.len()),
     ] {
-        if let Some(position) = document.position_for_caret(caret, line_height) {
-            left = left.min(position.x);
+        if let Some(visual_position) = document.visual_position_for_caret(caret, line_height) {
+            left = left.min(visual_position.x);
         }
     }
 
@@ -1107,7 +1107,7 @@ mod tests {
             let line_height = self.line_height();
             let local = self
                 .document()
-                .position_for_caret(caret, line_height)
+                .visual_position_for_caret(caret, line_height)
                 .unwrap();
 
             self.origin() + local + point(px(0.), line_height / 2.)
@@ -1231,10 +1231,15 @@ mod tests {
             let origin = self.origin();
             let document = self.document();
             let line_height = self.line_height();
-            let caret_point = document.position_for_caret(caret, line_height).unwrap();
+            let caret_visual_position = document
+                .visual_position_for_caret(caret, line_height)
+                .unwrap();
             self.assert_quads(
                 CARET_COLOR,
-                vec![Bounds::new(origin + caret_point, size(px(2.), line_height))],
+                vec![Bounds::new(
+                    origin + caret_visual_position,
+                    size(px(2.), line_height),
+                )],
             );
 
             let expected = document
@@ -1510,9 +1515,11 @@ mod tests {
             let document = fixture.document();
             let line_height = fixture.line_height();
             let downstream = document
-                .position_for_caret(CaretPosition::downstream(caret.index), line_height)
+                .visual_position_for_caret(CaretPosition::downstream(caret.index), line_height)
                 .unwrap();
-            let upstream = document.position_for_caret(caret, line_height).unwrap();
+            let upstream = document
+                .visual_position_for_caret(caret, line_height)
+                .unwrap();
             assert_ne!(upstream.x, downstream.x);
 
             fixture.assert_selection(caret.index, caret.index);

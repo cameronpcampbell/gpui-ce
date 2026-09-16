@@ -646,11 +646,11 @@ impl ShapedTextLayout {
             return None;
         }
 
-        self.position_for_caret(CaretPosition::downstream(idx), line_height)
+        self.visual_position_for_caret(CaretPosition::downstream(idx), line_height)
     }
 
-    /// Returns the pixel position for an affinity-aware caret.
-    pub fn position_for_caret(
+    /// Returns the visual position in pixels for an affinity-aware caret.
+    pub fn visual_position_for_caret(
         &self,
         caret: CaretPosition,
         line_height: Pixels,
@@ -726,13 +726,15 @@ impl ShapedTextLayout {
             );
 
         if !extend && !selection.is_empty() && horizontal {
-            let focus_position = self.position_for_caret(selection.focus, line_height);
-            let anchor_position = self.position_for_caret(selection.anchor, line_height);
-            let (visual_start, visual_end) = focus_position
-                .zip(anchor_position)
-                .map(|(focus_position, anchor_position)| {
-                    if (focus_position.y, focus_position.x)
-                        <= (anchor_position.y, anchor_position.x)
+            let focus_visual_position =
+                self.visual_position_for_caret(selection.focus, line_height);
+            let anchor_visual_position =
+                self.visual_position_for_caret(selection.anchor, line_height);
+            let (visual_start, visual_end) = focus_visual_position
+                .zip(anchor_visual_position)
+                .map(|(focus_visual_position, anchor_visual_position)| {
+                    if (focus_visual_position.y, focus_visual_position.x)
+                        <= (anchor_visual_position.y, anchor_visual_position.x)
                     {
                         (selection.focus, selection.anchor)
                     } else {
