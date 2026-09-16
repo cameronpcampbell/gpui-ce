@@ -3,10 +3,7 @@ use fontique::{
     Attributes, Blob, Collection, CollectionOptions, FontStyle, FontWeight, FontWidth,
     GenericFamily, QueryFamily, QueryStatus, SourceCache,
 };
-use parking_lot::RwLock;
-
-#[cfg(test)]
-use std::borrow::Cow;
+use parley::FontContext;
 
 /// Controls whether a Parley text system loads operating-system fonts.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -18,97 +15,64 @@ pub enum SystemFonts {
     Skip,
 }
 
-struct CatalogState {
-    collection: Collection,
-    sources: SourceCache,
-    generation: u64,
-}
-
-/// Shared font enumeration and registration for GPUI text backends.
-pub(crate) struct FontCatalog {
-    state: RwLock<CatalogState>,
-}
-
-impl FontCatalog {
-    /// Creates a font catalog with the selected system-font policy.
-    #[cfg(test)]
-    fn new(system_fonts: SystemFonts) -> Self {
-        let collection = Collection::new(CollectionOptions {
-            shared: true,
-            system_fonts: system_fonts == SystemFonts::Load,
-        });
-
-        Self::from_shared(collection, SourceCache::new_shared())
-    }
-
-    pub(crate) fn from_shared(collection: Collection, sources: SourceCache) -> Self {
-        Self {
-            state: RwLock::new(CatalogState {
-                collection,
-                sources,
-                generation: 0,
-            }),
-        }
-    }
-
-    pub(crate) fn register_fonts(&self, fonts: &[Blob<u8>]) -> Result<()> {
-        let mut validator = Collection::new(CollectionOptions {
+pub(crate) fn new_font_context(system_fonts: SystemFonts) -> FontContext {
+    FontContext {
+        collection: Collection::new(CollectionOptions {
             shared: false,
-            system_fonts: false,
-        });
-
-        for blob in fonts {
-            if validator.register_fonts(blob.clone(), None).is_empty() {
-                bail!("font data did not contain a supported font face");
-            }
-        }
-
-        let mut state = self.state.write();
-
-        for blob in fonts {
-            state.collection.register_fonts(blob.clone(), None);
-        }
-
-        state.generation = state.generation.wrapping_add(1);
-
-        Ok(())
-    }
-
-    #[cfg(test)]
-    fn register_bytes(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
-        let fonts = fonts
-            .into_iter()
-            .map(|bytes| Blob::from(bytes.into_owned()))
-            .collect::<Vec<_>>();
-
-        self.register_fonts(&fonts)
-    }
-
-    /// Returns the available family names in stable display order.
-    pub(crate) fn family_names(&self) -> Vec<String> {
-        let mut state = self.state.write();
-        let mut names = state
-            .collection
-            .family_names()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        names.sort_unstable();
-        names.dedup();
-        names
-    }
-
-    /// Returns the number of successful registration batches.
-    pub(crate) fn generation(&self) -> u64 {
-        self.state.read().generation
-    }
-
-    /// Returns a loaded face matching the requested family and attributes.
-    pub(crate) fn resolve(&self, request: &FaceRequest<'_>) -> Option<ResolvedFace> {
-        resolve(&mut self.state.write(), request)
+            system_fonts: system_fonts == SystemFonts::Load,
+        }),
+        source_cache: SourceCache::default(),
     }
 }
 
-/// Font attributes understood by the shared catalog.
+pub(crate) fn validate_font_blobs(fonts: &[Blob<u8>]) -> Result<()> {
+    let mut validator = Collection::new(CollectionOptions {
+        shared: false,
+        system_fonts: false,
+    });
+
+    for blob in fonts {
+        if validator.register_fonts(blob.clone(), None).is_empty() {
+            bail!("font data did not contain a supported font face");
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn register_font_blobs(context: &mut FontContext, fonts: &[Blob<u8>]) {
+    for blob in fonts {
+        context.collection.register_fonts(blob.clone(), None);
+    }
+}
+
+#[cfg(test)]
+fn register_bytes(context: &mut FontContext, fonts: &[&[u8]]) -> Result<()> {
+    let blobs = fonts
+        .iter()
+        .map(|bytes| Blob::from(bytes.to_vec()))
+        .collect::<Vec<_>>();
+
+    validate_font_blobs(&blobs)?;
+    register_font_blobs(context, &blobs);
+
+    Ok(())
+}
+
+/// Returns the available family names in stable display order.
+pub(crate) fn family_names(context: &mut FontContext) -> Vec<String> {
+    let mut names = context
+        .collection
+        .family_names()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+
+    names
+}
+
+/// Font attributes used for direct Fontique queries.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FaceRequest<'a> {
     /// Ordered font families to query.
@@ -141,14 +105,17 @@ pub(crate) struct ResolvedFace {
     pub(crate) synthesis: fontique::Synthesis,
 }
 
-fn resolve(state: &mut CatalogState, request: &FaceRequest<'_>) -> Option<ResolvedFace> {
+pub(crate) fn resolve_face(
+    context: &mut FontContext,
+    request: &FaceRequest<'_>,
+) -> Option<ResolvedFace> {
     let style = match request.style {
         gpui::FontStyle::Normal => FontStyle::Normal,
         gpui::FontStyle::Italic => FontStyle::Italic,
         gpui::FontStyle::Oblique => FontStyle::Oblique(None),
     };
 
-    let mut query = state.collection.query(&mut state.sources);
+    let mut query = context.collection.query(&mut context.source_cache);
     query.set_families(request.families.iter().map(|family| match family {
         FaceFamily::Named(name) => QueryFamily::Named(name),
         FaceFamily::SystemUi => QueryFamily::Generic(GenericFamily::SystemUi),
@@ -193,71 +160,62 @@ mod tests {
 
     #[test]
     fn registered_fonts_are_enumerated_and_resolved() {
-        let catalog = FontCatalog::new(SystemFonts::Skip);
-        catalog
-            .register_bytes(vec![
-                Cow::Borrowed(IBM_PLEX),
-                Cow::Borrowed(IBM_PLEX_SEMIBOLD_ITALIC),
-                Cow::Borrowed(LILEX),
-            ])
-            .unwrap();
+        let mut context = new_font_context(SystemFonts::Skip);
+        register_bytes(&mut context, &[IBM_PLEX, IBM_PLEX_SEMIBOLD_ITALIC, LILEX]).unwrap();
 
-        assert_eq!(catalog.family_names(), ["IBM Plex Sans", "Lilex"]);
+        assert_eq!(family_names(&mut context), ["IBM Plex Sans", "Lilex"]);
 
-        let latin = catalog
-            .resolve(&FaceRequest {
-                families: &[FaceFamily::Named("IBM Plex Sans")],
-                weight: 400.0,
-                style: gpui::FontStyle::Normal,
-                character: Some('m'),
-            })
-            .unwrap();
+        let mut resolve = |request| resolve_face(&mut context, request);
+        let latin = resolve(&FaceRequest {
+            families: &[FaceFamily::Named("IBM Plex Sans")],
+            weight: 400.0,
+            style: gpui::FontStyle::Normal,
+            character: Some('m'),
+        })
+        .unwrap();
         assert_eq!(latin.data.as_ref(), IBM_PLEX);
         assert_eq!(latin.index, 0);
 
-        let semibold_italic = catalog
-            .resolve(&FaceRequest {
-                families: &[FaceFamily::Named("IBM Plex Sans")],
-                weight: 600.0,
-                style: gpui::FontStyle::Italic,
-                character: None,
-            })
-            .unwrap();
+        let semibold_italic = resolve(&FaceRequest {
+            families: &[FaceFamily::Named("IBM Plex Sans")],
+            weight: 600.0,
+            style: gpui::FontStyle::Italic,
+            character: None,
+        })
+        .unwrap();
         assert_eq!(semibold_italic.data.as_ref(), IBM_PLEX_SEMIBOLD_ITALIC);
 
         assert!(
-            catalog
-                .resolve(&FaceRequest {
-                    families: &[FaceFamily::Named("IBM Plex Sans")],
-                    weight: 400.0,
-                    style: gpui::FontStyle::Normal,
-                    character: Some('\u{1F9A5}'),
-                })
-                .is_none()
+            resolve(&FaceRequest {
+                families: &[FaceFamily::Named("IBM Plex Sans")],
+                weight: 400.0,
+                style: gpui::FontStyle::Normal,
+                character: Some('\u{1F9A5}'),
+            })
+            .is_none()
         );
     }
 
     #[test]
     fn font_registration_is_atomic() {
-        let catalog = FontCatalog::new(SystemFonts::Skip);
-        catalog.register_bytes(vec![Cow::Borrowed(LILEX)]).unwrap();
-        let families_before = catalog.family_names();
+        let mut context = new_font_context(SystemFonts::Skip);
+        register_bytes(&mut context, &[LILEX]).unwrap();
+        let families_before = family_names(&mut context);
+
+        assert!(register_bytes(&mut context, &[IBM_PLEX, b"not a font"]).is_err());
+        assert_eq!(family_names(&mut context), families_before);
 
         assert!(
-            catalog
-                .register_bytes(vec![Cow::Borrowed(IBM_PLEX), Cow::Borrowed(b"not a font")])
-                .is_err()
-        );
-        assert_eq!(catalog.family_names(), families_before);
-        assert!(
-            catalog
-                .resolve(&FaceRequest {
+            resolve_face(
+                &mut context,
+                &FaceRequest {
                     families: &[FaceFamily::Named("IBM Plex Sans")],
                     weight: 400.0,
                     style: gpui::FontStyle::Normal,
                     character: None,
-                })
-                .is_none()
+                },
+            )
+            .is_none()
         );
     }
 }

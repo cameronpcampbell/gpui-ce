@@ -11,16 +11,14 @@ use gpui::{
 };
 
 #[cfg(test)]
-use std::{
-    cell::Cell,
-    cell::RefCell,
-    rc::Rc,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::{cell::Cell, cell::RefCell, rc::Rc, sync::atomic::AtomicUsize};
 
 use crate::{
-    ColorGlyphKind, FaceFamily, FaceRequest, FontCatalog, FontStore, GlyphRasterizer,
-    SwashGlyphRasterizer, SystemFonts,
+    ColorGlyphKind, FontStore, GlyphRasterizer, SwashGlyphRasterizer, SystemFonts,
+    catalog::{
+        FaceFamily, FaceRequest, family_names, new_font_context, register_font_blobs, resolve_face,
+        validate_font_blobs,
+    },
 };
 
 use anyhow::{Context as _, Result};
@@ -49,7 +47,10 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     hash::Hash,
     ops::Range,
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 
@@ -60,8 +61,8 @@ use paragraphs::{
 };
 
 struct ParleyState {
-    fonts: FontContext,
-    layout: LayoutContext<ParleyBrush>,
+    font_context: FontContext,
+    layout_context: LayoutContext<ParleyBrush>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -88,6 +89,7 @@ impl From<&TextRun> for ParleyShapingRun {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ParagraphCacheKey {
+    font_generation: u64,
     text: Arc<str>,
     font_size: Pixels,
     runs: Vec<ParleyShapingRun>,
@@ -1295,31 +1297,18 @@ impl PlatformTextLayout for ParleyLayout {
 }
 
 impl ParleyState {
-    fn new(system_fonts: SystemFonts) -> (Self, FontCatalog) {
-        let collection = fontique::Collection::new(fontique::CollectionOptions {
-            shared: true,
-            system_fonts: system_fonts == SystemFonts::Load,
-        });
-
-        let source_cache = fontique::SourceCache::new_shared();
-        let catalog = FontCatalog::from_shared(collection.clone(), source_cache.clone());
-        (
-            Self {
-                fonts: FontContext {
-                    collection,
-                    source_cache,
-                },
-                layout: LayoutContext::new(),
-            },
-            catalog,
-        )
+    fn new(system_fonts: SystemFonts) -> Self {
+        Self {
+            font_context: new_font_context(system_fonts),
+            layout_context: LayoutContext::new(),
+        }
     }
 }
 
 /// Shapes with Parley and paints exact font instances with an injected glyph rasterizer.
 pub struct ParleyTextSystem {
-    catalog: FontCatalog,
-    fonts: RwLock<FontStore>,
+    font_instances: RwLock<FontStore>,
+    font_generation: AtomicU64,
     rasterizer: Mutex<Box<dyn GlyphRasterizer>>,
     raster_styles: Mutex<RasterStyleCache>,
     foreground_dependencies: Mutex<HashMap<(FontId, GlyphId), gpui::ForegroundDependency>>,
@@ -1357,7 +1346,7 @@ impl ParleyTextSystem {
         system_font_fallback: impl Into<String>,
         rasterizer: impl GlyphRasterizer + 'static,
     ) -> Self {
-        let (parley, catalog) = ParleyState::new(system_fonts);
+        let parley = ParleyState::new(system_fonts);
         let color_glyph_formats = [
             ColorGlyphKind::ColrV0,
             ColorGlyphKind::ColrV1,
@@ -1371,8 +1360,8 @@ impl ParleyTextSystem {
         let recommended_rendering_mode = rasterizer.recommended_mode();
 
         Self {
-            catalog,
-            fonts: RwLock::new(FontStore::default()),
+            font_instances: RwLock::new(FontStore::default()),
+            font_generation: AtomicU64::new(0),
             rasterizer: Mutex::new(Box::new(rasterizer)),
             raster_styles: Mutex::default(),
             foreground_dependencies: Mutex::default(),
@@ -1429,19 +1418,26 @@ impl ParleyTextSystem {
             )
             .collect::<Vec<_>>();
 
-        let resolved = self
-            .catalog
-            .resolve(&FaceRequest {
-                families: &families,
-                weight: descriptor.weight.0,
-                style: descriptor.style,
-                character: None,
-            })
-            .with_context(|| format!("Fontique could not resolve '{}'", descriptor.family))?;
+        let resolved = {
+            let mut state = self.parley.lock();
 
-        self.fonts
-            .write()
-            .intern_synthesized(resolved.data, resolved.index, resolved.synthesis)
+            resolve_face(
+                &mut state.font_context,
+                &FaceRequest {
+                    families: &families,
+                    weight: descriptor.weight.0,
+                    style: descriptor.style,
+                    character: None,
+                },
+            )
+            .with_context(|| format!("Fontique could not resolve '{}'", descriptor.family))?
+        };
+
+        self.font_instances.write().intern_synthesized(
+            resolved.data,
+            resolved.index,
+            resolved.synthesis,
+        )
     }
 
     fn parley_layout(
@@ -1709,6 +1705,7 @@ impl ParleyTextSystem {
         };
         let paragraph_text: Arc<str> = text.into();
         let cache_key = ParagraphCacheKey {
+            font_generation: self.font_generation.load(Ordering::Acquire),
             text: paragraph_text.clone(),
             font_size,
             runs: runs.iter().map(ParleyShapingRun::from).collect(),
@@ -1787,8 +1784,11 @@ impl ParleyTextSystem {
             });
 
             let mut state = self.parley.lock();
-            let ParleyState { fonts, layout } = &mut *state;
-            let mut builder = layout.ranged_builder(fonts, text, 1.0, false);
+            let ParleyState {
+                font_context,
+                layout_context,
+            } = &mut *state;
+            let mut builder = layout_context.ranged_builder(font_context, text, 1.0, false);
             builder.set_line_break_override(Some(CHROMIUM_LINE_BREAK_OVERRIDE));
             builder.push_default(StyleProperty::FontSize(f32::from(font_size)));
 
@@ -2036,7 +2036,7 @@ impl ParleyTextSystem {
                 let shaping_variations = self
                     .automatic_optical_sizing
                     .then(|| [crate::FontVariation::new(*b"opsz", run.font_size())]);
-                let font_id = self.fonts.write().intern(
+                let font_id = self.font_instances.write().intern(
                     run.font().data.clone(),
                     run.font().index,
                     &normalized_coords,
@@ -2076,8 +2076,8 @@ impl ParleyTextSystem {
                 }
 
                 let glyphs = {
-                    let fonts = self.fonts.read();
-                    let color_glyphs = fonts
+                    let font_instances = self.font_instances.read();
+                    let color_glyphs = font_instances
                         .get(font_id)
                         .context("canonical font missing after interning")?
                         .color_glyphs()?;
@@ -2235,23 +2235,36 @@ impl PlatformTextSystem for ParleyTextSystem {
             .into_iter()
             .map(|bytes| fontique::Blob::from(bytes.into_owned()))
             .collect::<Vec<_>>();
-        self.catalog.register_fonts(&blobs)?;
-        self.paragraph_cache.lock().clear();
-        self.paragraph_result_cache.lock().clear();
+
+        validate_font_blobs(&blobs)?;
+
+        {
+            let mut state = self.parley.lock();
+            register_font_blobs(&mut state.font_context, &blobs);
+
+            let _previous_generation = self.font_generation.fetch_add(1, Ordering::Release);
+            self.paragraph_cache.lock().clear();
+            self.paragraph_result_cache.lock().clear();
+        }
 
         Ok(())
     }
 
     fn all_font_names(&self) -> Vec<String> {
-        let mut names = self.catalog.family_names();
+        let mut names = {
+            let mut state = self.parley.lock();
+
+            family_names(&mut state.font_context)
+        };
         names.extend([".SystemUIFont", ".ZedSans", ".ZedMono"].map(str::to_owned));
         names.sort_unstable();
         names.dedup();
+
         names
     }
 
     fn font_generation(&self) -> u64 {
-        self.catalog.generation()
+        self.font_generation.load(Ordering::Acquire)
     }
 
     fn font_id(&self, descriptor: &Font) -> Result<FontId> {
@@ -2259,7 +2272,7 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn font_metrics(&self, font_id: FontId) -> FontMetrics {
-        self.fonts
+        self.font_instances
             .read()
             .get(font_id)
             .expect("Parley FontId missing from its store")
@@ -2268,7 +2281,7 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
-        self.fonts
+        self.font_instances
             .read()
             .get(font_id)
             .context("Parley FontId missing from its store")?
@@ -2276,7 +2289,7 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
-        self.fonts
+        self.font_instances
             .read()
             .get(font_id)
             .context("Parley FontId missing from its store")?
@@ -2284,7 +2297,7 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn glyph_for_char(&self, font_id: FontId, character: char) -> Option<GlyphId> {
-        self.fonts
+        self.font_instances
             .read()
             .get(font_id)?
             .glyph_for_char(character)
@@ -2292,8 +2305,8 @@ impl PlatformTextSystem for ParleyTextSystem {
     }
 
     fn rasterize_glyph(&self, params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
-        let fonts = self.fonts.read();
-        let font = fonts
+        let font_instances = self.font_instances.read();
+        let font = font_instances
             .get(params.font_id)
             .context("Parley FontId missing from its store")?;
         let data_identity = font.data_identity();
@@ -2322,7 +2335,7 @@ impl PlatformTextSystem for ParleyTextSystem {
                 dependency
             } else {
                 let dependency = self
-                    .fonts
+                    .font_instances
                     .read()
                     .get(request.font_id)
                     .and_then(|font| {
@@ -3957,6 +3970,8 @@ mod tests {
             .shape_text(text, px(18.0), &[run], None, None)
             .unwrap();
         assert_ne!(fallback_id, after.paint_fragments[0].font_id);
+        let source_serif_regular = backend.font_id(&font("Source Serif 4")).unwrap();
+        assert_eq!(after.paint_fragments[0].font_id, source_serif_regular);
 
         backend
             .add_fonts(vec![Cow::Borrowed(IBM_PLEX_SEMIBOLD)])
@@ -3969,7 +3984,6 @@ mod tests {
         variable.weight = GpuiFontWeight(725.0);
         variable.style = GpuiFontStyle::Oblique;
         let variable_id = backend.font_id(&variable).unwrap();
-        let source_serif_regular = backend.font_id(&font("Source Serif 4")).unwrap();
         assert_ne!(source_serif_regular, variable_id);
     }
 
@@ -4362,7 +4376,7 @@ mod tests {
 
         let optical_value = |font_id| {
             system
-                .fonts
+                .font_instances
                 .read()
                 .get(font_id)
                 .unwrap()
