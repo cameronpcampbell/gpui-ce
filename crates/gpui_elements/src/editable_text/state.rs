@@ -450,39 +450,52 @@ impl EditableTextState {
 
     fn line_range_for_cut(&self) -> Range<usize> {
         let caret = self.caret();
-        let range = if let Some(document) = self.current_document() {
-            let [start, end] = [TextMovement::HardLineStart, TextMovement::HardLineEnd]
-                .map(|movement| document.caret_movement(caret, movement, None).caret.index);
-            start.min(end)..start.max(end)
-        } else {
-            self.storage.offset_from_caret(
-                caret.index,
-                NavigationDirection::Back,
-                TextBoundary::Line,
-            )
-                ..self.storage.offset_from_caret(
+
+        let range = match self.current_document() {
+            Some(document) => {
+                let [start, end] = [TextMovement::HardLineStart, TextMovement::HardLineEnd]
+                    .map(|movement| document.caret_movement(caret, movement, None).caret.index);
+
+                start.min(end)..start.max(end)
+            }
+            None => {
+                let start = self.storage.offset_from_caret(
+                    caret.index,
+                    NavigationDirection::Back,
+                    TextBoundary::Line,
+                );
+
+                let end = self.storage.offset_from_caret(
                     caret.index,
                     NavigationDirection::Forward,
                     TextBoundary::Line,
-                )
+                );
+
+                start..end
+            }
         };
 
         if range.end < self.as_str().len() {
-            range.start
-                ..self.storage.offset_from_caret(
-                    range.end,
-                    NavigationDirection::Forward,
-                    TextBoundary::Graphmeme,
-                )
-        } else if range.start > 0 {
-            self.storage.offset_from_caret(
+            let end = self.storage.offset_from_caret(
+                range.end,
+                NavigationDirection::Forward,
+                TextBoundary::Graphmeme,
+            );
+
+            return range.start..end;
+        }
+
+        if range.start > 0 {
+            let start = self.storage.offset_from_caret(
                 range.start,
                 NavigationDirection::Back,
                 TextBoundary::Graphmeme,
-            )..range.end
-        } else {
-            range
+            );
+
+            return start..range.end;
         }
+
+        range
     }
 }
 
