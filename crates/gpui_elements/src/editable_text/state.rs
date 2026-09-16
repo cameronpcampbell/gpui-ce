@@ -885,6 +885,33 @@ impl EditableTextState {
         let storage_len_utf8 = self.as_str().len();
         range.start.min(storage_len_utf8)..range.end.min(storage_len_utf8)
     }
+
+    fn ime_mark_text_in_range(&mut self, range: &Range<usize>, text_len: usize) {
+        self.marked_range = (text_len > 0).then_some(range.start..range.start + text_len);
+    }
+
+    fn ime_mark_selected_range(
+        &mut self,
+        range_overwritten: &Range<usize>,
+        new_selected_range_utf16: &Option<Range<usize>>,
+        inserted_text: &str,
+    ) {
+        let text_len = inserted_text.len();
+
+        let selection =
+            new_selected_range_utf16
+                .as_ref()
+                .map_or(text_len..text_len, |range_utf16| {
+                    utf16_to_utf8_offset(inserted_text, range_utf16.start)
+                        ..utf16_to_utf8_offset(inserted_text, range_utf16.end)
+                });
+
+        self.selected_range = (range_overwritten.start + selection.start
+            ..range_overwritten.start + selection.end)
+            .into();
+
+        self.caret_position_x = None;
+    }
 }
 
 // IME handler
@@ -956,13 +983,8 @@ impl EntityInputHandler for EditableTextState {
         let text_to_insert = self.validate_incoming_text(&range, text_to_insert);
         self.replace_text(range.clone(), text_to_insert.as_ref());
 
-        let text_len = text_to_insert.len();
-        self.marked_range = (text_len > 0).then_some(range.start..range.start + text_len);
-        let selection = new_selected_range_utf16.map_or(text_len..text_len, |range_utf16| {
-            utf16_to_utf8_offset(&text_to_insert, range_utf16.start)
-                ..utf16_to_utf8_offset(&text_to_insert, range_utf16.end)
-        });
-        self.selected_range = (range.start + selection.start..range.start + selection.end).into();
+        self.ime_mark_text_in_range(&range, text_to_insert.len());
+        self.ime_mark_selected_range(&range, &new_selected_range_utf16, text_to_insert.as_ref());
 
         self.emit_text_changed(cx);
         cx.notify();
