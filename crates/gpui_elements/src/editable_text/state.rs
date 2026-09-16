@@ -5,8 +5,8 @@ use crate::editable_text::{
 use gpui::{
     App, Bounds, CaretAffinity, CaretPosition, CaretSelection, ClipboardItem, Context, ElementId,
     Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, NavigationDirection, Pixels,
-    Point, TextMovement, TextSelectionKind, UTF16Selection, Window, WrappedLine, point,
-    utf16_to_utf8_offset,
+    Point, Subscription, TextMovement, TextSelectionKind, UTF16Selection, Window, WrappedLine,
+    point, utf16_to_utf8_offset,
 };
 use std::{borrow::Cow, cell::RefCell, ops::Range, sync::Arc};
 
@@ -20,11 +20,6 @@ pub struct EditableTextState {
 
     /// The affinity-aware selection currently active in this input.
     /// Its focus is the input cursor and its anchor remains fixed while extending the selection.
-    ///
-    /// NOTE: because each input has its own selection state, its trivial for users to have
-    /// multiple selections active across multiple inputs at the same time.
-    /// This could be considered undesirable behavior, and could prompt the question of
-    /// whether there should be a mechanism to clear selection when focus is lost.
     selected_range: CaretSelection,
     preferred_x: Option<Pixels>,
 
@@ -41,6 +36,7 @@ pub struct EditableTextState {
     click_count: usize,
 
     focus_handle: FocusHandle,
+    blur_subscription: Option<Subscription>,
     history: Option<EditableTextHistory>,
 
     accessibility_text: RefCell<Option<Arc<AccessibilityText>>>,
@@ -132,6 +128,7 @@ impl EditableTextState {
             click_count: 0,
 
             focus_handle: cx.focus_handle(),
+            blur_subscription: None,
             // TODO: what is the best way to give users access to configure this via element
             history: Some(EditableTextHistory::default()),
             accessibility_text: RefCell::default(),
@@ -181,6 +178,33 @@ impl EditableTextState {
             Some((selection, caret)) if selection == self.selected_range => caret,
             _ => self.caret(),
         }
+    }
+
+    pub(super) fn observe_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.blur_subscription.is_some() {
+            return;
+        }
+
+        let focus_handle = self.focus_handle.clone();
+        let subscription = cx.on_blur(&focus_handle, window, |_state, window, context| {
+            context.defer_in(window, |state, _window, context| {
+                state.clear_selection(context);
+            });
+        });
+        self.blur_subscription = Some(subscription);
+    }
+
+    fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        self.selected_range = CaretSelection::collapsed(self.selected_range.focus);
+        self.preferred_x = None;
+
+        self.is_selecting = false;
+        self.mouse_anchor = None;
+        self.mouse_caret = None;
+        self.last_click_position = None;
+        self.click_count = 0;
+
+        cx.notify();
     }
 
     /// Returns the IME marked range for character operations.

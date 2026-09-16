@@ -343,6 +343,7 @@ impl Element for EditableTextElement {
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
         let entity = self.find_or_create_state(window, cx);
+        entity.update(cx, |state, context| state.observe_blur(window, context));
         let caret = self.find_or_create_caret(&entity, window, cx);
 
         if let Some(duration) = self.caret_blink_interval.take()
@@ -1140,6 +1141,24 @@ mod tests {
             self.context.run_until_parked();
         }
 
+        fn activate(&mut self) {
+            self.context
+                .update_window(self.window.into(), |_view, window, _context| {
+                    window.activate_window();
+                })
+                .unwrap();
+            self.context.run_until_parked();
+        }
+
+        fn blur(&mut self) {
+            self.context
+                .update_window(self.window.into(), |_view, window, context| {
+                    window.blur(context);
+                })
+                .unwrap();
+            self.context.run_until_parked();
+        }
+
         fn dispatch(&mut self, event: PlatformInput) {
             self.context
                 .update_window(self.window.into(), |_view, window, context| {
@@ -1255,6 +1274,28 @@ mod tests {
                 assert!((actual.size.height - expected.size.height).abs() <= px(1.));
             }
         }
+    }
+
+    #[test]
+    fn editable_text_clears_selection_when_blurred() {
+        let text = "selected text";
+        let mut fixture = BidiInputFixture::new(text, 8.0, 300.0, false, 1.0);
+        fixture.activate();
+        fixture.update_input(|state, context| state.select_to(text.len(), context));
+        fixture.context.update(|context| {
+            assert_eq!(fixture.input.read(context).selected_range(), 0..text.len());
+        });
+
+        fixture.blur();
+
+        fixture.context.update(|context| {
+            assert_eq!(
+                fixture.input.read(context).caret_selection(),
+                CaretSelection::collapsed(CaretPosition::upstream(text.len()))
+            );
+        });
+        fixture.assert_quads(SELECTION_COLOR, Vec::new());
+        fixture.assert_quads(CARET_COLOR, Vec::new());
     }
 
     #[test]
