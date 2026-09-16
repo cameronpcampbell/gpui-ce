@@ -15,10 +15,7 @@ use std::{cell::Cell, cell::RefCell, rc::Rc, sync::atomic::AtomicUsize};
 
 use crate::{
     ColorGlyphKind, FontStore, GlyphRasterizer, SwashGlyphRasterizer, SystemFonts,
-    catalog::{
-        FaceFamily, FaceRequest, family_names, new_font_context, register_font_blobs, resolve_face,
-        validate_font_blobs,
-    },
+    catalog::{family_names, new_font_context, register_font_blobs, resolve_face},
 };
 
 use anyhow::{Context as _, Result};
@@ -1376,7 +1373,10 @@ impl ParleyTextSystem {
         self
     }
 
-    fn font_families<'a>(&'a self, descriptor: &'a Font) -> impl Iterator<Item = FaceFamily<'a>> {
+    fn font_families<'a>(
+        &'a self,
+        descriptor: &'a Font,
+    ) -> impl Iterator<Item = FontFamilyName<'a>> {
         std::iter::once(descriptor.family.as_ref())
             .chain(
                 descriptor
@@ -1402,12 +1402,9 @@ impl ParleyTextSystem {
 
             resolve_face(
                 &mut state.font_context,
-                &FaceRequest {
-                    families: &families,
-                    weight: descriptor.weight.0,
-                    style: descriptor.style,
-                    character: None,
-                },
+                &families,
+                descriptor.weight.0,
+                descriptor.style,
             )
             .with_context(|| format!("Fontique could not resolve '{}'", descriptor.family))?
         };
@@ -1712,24 +1709,16 @@ impl ParleyTextSystem {
         let mut layout = if let Some(layout) = self.paragraph_cache.lock().get(&cache_key) {
             layout
         } else {
-            let family_lists = runs
-                .iter()
-                .map(|run| {
-                    self.font_families(&run.font)
-                        .chain(
-                            self.additional_fallbacks
-                                .iter()
-                                .map(|family| FaceFamily::Named(family)),
-                        )
-                        .map(|family| match family {
-                            FaceFamily::Named(name) => FontFamilyName::Named(Cow::Borrowed(name)),
-                            FaceFamily::SystemUi => {
-                                FontFamilyName::Generic(GenericFamily::SystemUi)
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
+            let family_lists =
+                runs.iter()
+                    .map(|run| {
+                        self.font_families(&run.font)
+                            .chain(self.additional_fallbacks.iter().map(|family| {
+                                FontFamilyName::Named(Cow::Borrowed(family.as_str()))
+                            }))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
             let feature_lists = runs
                 .iter()
                 .map(|run| {
@@ -2180,13 +2169,12 @@ fn run_ranges(runs: &[TextRun]) -> Vec<Range<usize>> {
 fn face_families<'a>(
     name: &'a str,
     system_font_fallback: &'a str,
-) -> impl Iterator<Item = FaceFamily<'a>> {
+) -> impl Iterator<Item = FontFamilyName<'a>> {
     (name == ".SystemUIFont")
-        .then_some(FaceFamily::SystemUi)
+        .then_some(FontFamilyName::Generic(GenericFamily::SystemUi))
         .into_iter()
-        .chain(std::iter::once(FaceFamily::Named(canonical_family(
-            name,
-            system_font_fallback,
+        .chain(std::iter::once(FontFamilyName::Named(Cow::Borrowed(
+            canonical_family(name, system_font_fallback),
         ))))
 }
 
@@ -2206,11 +2194,9 @@ impl PlatformTextSystem for ParleyTextSystem {
             .map(|bytes| fontique::Blob::from(bytes.into_owned()))
             .collect::<Vec<_>>();
 
-        validate_font_blobs(&blobs)?;
-
         {
             let mut state = self.parley.lock();
-            register_font_blobs(&mut state.font_context, &blobs);
+            register_font_blobs(&mut state.font_context, &blobs)?;
 
             let _previous_generation = self.font_generation.fetch_add(1, Ordering::Release);
             self.paragraph_cache.lock().clear();

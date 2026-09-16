@@ -1,9 +1,9 @@
 use anyhow::{Result, bail};
 use fontique::{
-    Attributes, Blob, Collection, CollectionOptions, FontStyle, FontWeight, FontWidth,
-    GenericFamily, QueryFamily, QueryFont, QueryStatus, SourceCache,
+    Attributes, Blob, Collection, CollectionOptions, FontStyle, FontWeight, FontWidth, QueryFamily,
+    QueryFont, QueryStatus, SourceCache,
 };
-use parley::FontContext;
+use parley::{FontContext, FontFamilyName};
 
 /// Controls whether a Parley text system loads operating-system fonts.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -25,7 +25,7 @@ pub(crate) fn new_font_context(system_fonts: SystemFonts) -> FontContext {
     }
 }
 
-pub(crate) fn validate_font_blobs(fonts: &[Blob<u8>]) -> Result<()> {
+pub(crate) fn register_font_blobs(context: &mut FontContext, fonts: &[Blob<u8>]) -> Result<()> {
     let mut validator = Collection::new(CollectionOptions {
         shared: false,
         system_fonts: false,
@@ -37,13 +37,11 @@ pub(crate) fn validate_font_blobs(fonts: &[Blob<u8>]) -> Result<()> {
         }
     }
 
-    Ok(())
-}
-
-pub(crate) fn register_font_blobs(context: &mut FontContext, fonts: &[Blob<u8>]) {
     for blob in fonts {
         context.collection.register_fonts(blob.clone(), None);
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -53,10 +51,7 @@ fn register_bytes(context: &mut FontContext, fonts: &[&[u8]]) -> Result<()> {
         .map(|bytes| Blob::from(bytes.to_vec()))
         .collect::<Vec<_>>();
 
-    validate_font_blobs(&blobs)?;
-    register_font_blobs(context, &blobs);
-
-    Ok(())
+    register_font_blobs(context, &blobs)
 }
 
 /// Returns the available family names in stable display order.
@@ -72,59 +67,31 @@ pub(crate) fn family_names(context: &mut FontContext) -> Vec<String> {
     names
 }
 
-/// Font attributes used for direct Fontique queries.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct FaceRequest<'a> {
-    /// Ordered font families to query.
-    pub(crate) families: &'a [FaceFamily<'a>],
-    /// OpenType weight, normally in the range 1 through 1000.
-    pub(crate) weight: f32,
-    /// Requested style.
-    pub(crate) style: gpui::FontStyle,
-    /// Optional character that the selected face must cover.
-    pub(crate) character: Option<char>,
-}
-
-/// A named or generic family used for direct font resolution.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum FaceFamily<'a> {
-    /// A concrete family name.
-    Named(&'a str),
-    /// The platform's user-interface font.
-    SystemUi,
-}
-
 pub(crate) fn resolve_face(
     context: &mut FontContext,
-    request: &FaceRequest<'_>,
+    families: &[FontFamilyName<'_>],
+    weight: f32,
+    style: gpui::FontStyle,
 ) -> Option<QueryFont> {
-    let style = match request.style {
+    let style = match style {
         gpui::FontStyle::Normal => FontStyle::Normal,
         gpui::FontStyle::Italic => FontStyle::Italic,
         gpui::FontStyle::Oblique => FontStyle::Oblique(None),
     };
 
     let mut query = context.collection.query(&mut context.source_cache);
-    query.set_families(request.families.iter().map(|family| match family {
-        FaceFamily::Named(name) => QueryFamily::Named(name),
-        FaceFamily::SystemUi => QueryFamily::Generic(GenericFamily::SystemUi),
+    query.set_families(families.iter().map(|family| match family {
+        FontFamilyName::Named(name) => QueryFamily::Named(name.as_ref()),
+        FontFamilyName::Generic(generic) => QueryFamily::Generic(*generic),
     }));
     query.set_attributes(Attributes::new(
         FontWidth::NORMAL,
         style,
-        FontWeight::new(request.weight),
+        FontWeight::new(weight),
     ));
 
     let mut selected = None;
     query.matches_with(|font| {
-        if request.character.is_some_and(|character| {
-            font.charmap()
-                .and_then(|charmap| charmap.map(character))
-                .is_none()
-        }) {
-            return QueryStatus::Continue;
-        }
-
         selected = Some(font.clone());
 
         QueryStatus::Stop
@@ -150,35 +117,14 @@ mod tests {
 
         assert_eq!(family_names(&mut context), ["IBM Plex Sans", "Lilex"]);
 
-        let mut resolve = |request| resolve_face(&mut context, request);
-        let latin = resolve(&FaceRequest {
-            families: &[FaceFamily::Named("IBM Plex Sans")],
-            weight: 400.0,
-            style: gpui::FontStyle::Normal,
-            character: Some('m'),
-        })
-        .unwrap();
+        let families = [FontFamilyName::Named("IBM Plex Sans".into())];
+        let mut resolve = |weight, style| resolve_face(&mut context, &families, weight, style);
+        let latin = resolve(400.0, gpui::FontStyle::Normal).unwrap();
         assert_eq!(latin.blob.as_ref(), IBM_PLEX);
         assert_eq!(latin.index, 0);
 
-        let semibold_italic = resolve(&FaceRequest {
-            families: &[FaceFamily::Named("IBM Plex Sans")],
-            weight: 600.0,
-            style: gpui::FontStyle::Italic,
-            character: None,
-        })
-        .unwrap();
+        let semibold_italic = resolve(600.0, gpui::FontStyle::Italic).unwrap();
         assert_eq!(semibold_italic.blob.as_ref(), IBM_PLEX_SEMIBOLD_ITALIC);
-
-        assert!(
-            resolve(&FaceRequest {
-                families: &[FaceFamily::Named("IBM Plex Sans")],
-                weight: 400.0,
-                style: gpui::FontStyle::Normal,
-                character: Some('\u{1F9A5}'),
-            })
-            .is_none()
-        );
     }
 
     #[test]
@@ -190,17 +136,7 @@ mod tests {
         assert!(register_bytes(&mut context, &[IBM_PLEX, b"not a font"]).is_err());
         assert_eq!(family_names(&mut context), families_before);
 
-        assert!(
-            resolve_face(
-                &mut context,
-                &FaceRequest {
-                    families: &[FaceFamily::Named("IBM Plex Sans")],
-                    weight: 400.0,
-                    style: gpui::FontStyle::Normal,
-                    character: None,
-                },
-            )
-            .is_none()
-        );
+        let families = [FontFamilyName::Named("IBM Plex Sans".into())];
+        assert!(resolve_face(&mut context, &families, 400.0, gpui::FontStyle::Normal).is_none());
     }
 }
