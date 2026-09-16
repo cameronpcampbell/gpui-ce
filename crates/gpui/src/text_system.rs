@@ -328,7 +328,7 @@ impl WindowTextSystem {
         runs: &[TextRun],
         wrap_width: Option<Pixels>,
         line_clamp: Option<usize>,
-    ) -> Result<WrappedLine> {
+    ) -> Result<ShapedText> {
         self.shape_text_with_options(
             text,
             font_size,
@@ -349,13 +349,13 @@ impl WindowTextSystem {
         font_size: Pixels,
         runs: &[TextRun],
         options: TextLayoutOptions,
-    ) -> Result<WrappedLine> {
+    ) -> Result<ShapedText> {
         let text = text.into();
         let layout = self
             .line_layout_cache
-            .layout_wrapped_line_with_options(&text, font_size, runs, options);
+            .layout_text_with_options(&text, font_size, runs, options);
 
-        Ok(WrappedLine { layout, text })
+        Ok(ShapedText { layout, text })
     }
 
     /// Layout text and atomic element boxes in one inline formatting context.

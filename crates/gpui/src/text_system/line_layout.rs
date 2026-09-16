@@ -504,9 +504,9 @@ pub struct CaretSelectionMove {
     pub preferred_x: Option<Pixels>,
 }
 
-/// A document layout with its optional wrapping constraint.
+/// The layout of shaped text, including its optional wrapping constraint.
 #[derive(Debug)]
-pub struct WrappedLineLayout {
+pub struct ShapedTextLayout {
     /// The laid out document.
     pub layout: Arc<LineLayout>,
 
@@ -514,7 +514,7 @@ pub struct WrappedLineLayout {
     pub wrap_width: Option<Pixels>,
 }
 
-impl WrappedLineLayout {
+impl ShapedTextLayout {
     /// The length of the underlying text, in utf8 bytes.
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
@@ -528,7 +528,7 @@ impl WrappedLineLayout {
             .min(self.layout.width)
     }
 
-    /// The size of the whole wrapped text for the given line height.
+    /// The size of the complete text for the given line height.
     pub fn size(&self, line_height: Pixels) -> Size<Pixels> {
         Size {
             width: self.width(),
@@ -777,7 +777,7 @@ impl WrappedLineLayout {
     }
 }
 
-impl std::ops::Deref for WrappedLineLayout {
+impl std::ops::Deref for ShapedTextLayout {
     type Target = LineLayout;
 
     fn deref(&self) -> &Self::Target {
@@ -795,7 +795,7 @@ pub(crate) struct LineLayoutCache {
 #[derive(Default)]
 struct FrameCache {
     lines: FrameLayouts<CacheKey, LineLayout>,
-    wrapped_lines: FrameLayouts<CacheKey, WrappedLineLayout>,
+    shaped_texts: FrameLayouts<CacheKey, ShapedTextLayout>,
     inline_layouts: FrameLayouts<InlineCacheKey, InlineLayout>,
 }
 
@@ -875,17 +875,17 @@ fn repaint_line_layout(layout: Arc<LineLayout>, runs: &[TextRun]) -> Arc<LineLay
     Arc::new(repainted)
 }
 
-fn repaint_wrapped_layout(
-    layout: Arc<WrappedLineLayout>,
+fn repaint_shaped_text_layout(
+    layout: Arc<ShapedTextLayout>,
     runs: &[TextRun],
-) -> Arc<WrappedLineLayout> {
+) -> Arc<ShapedTextLayout> {
     let repainted = repaint_line_layout(layout.layout.clone(), runs);
 
     if Arc::ptr_eq(&repainted, &layout.layout) {
         return layout;
     }
 
-    Arc::new(WrappedLineLayout {
+    Arc::new(ShapedTextLayout {
         layout: repainted,
         wrap_width: layout.wrap_width,
     })
@@ -894,7 +894,7 @@ fn repaint_wrapped_layout(
 #[derive(Clone, Default)]
 pub(crate) struct LineLayoutIndex {
     lines_index: usize,
-    wrapped_lines_index: usize,
+    shaped_texts_index: usize,
     inline_layouts_index: usize,
 }
 
@@ -913,7 +913,7 @@ impl LineLayoutCache {
         let frame = self.current_frame.read();
         LineLayoutIndex {
             lines_index: frame.lines.used.len(),
-            wrapped_lines_index: frame.wrapped_lines.used.len(),
+            shaped_texts_index: frame.shaped_texts.used.len(),
             inline_layouts_index: frame.inline_layouts.used.len(),
         }
     }
@@ -941,9 +941,9 @@ impl LineLayoutCache {
             &mut previous_frame.lines,
             range.start.lines_index..range.end.lines_index,
         );
-        current_frame.wrapped_lines.reuse(
-            &mut previous_frame.wrapped_lines,
-            range.start.wrapped_lines_index..range.end.wrapped_lines_index,
+        current_frame.shaped_texts.reuse(
+            &mut previous_frame.shaped_texts,
+            range.start.shaped_texts_index..range.end.shaped_texts_index,
         );
         current_frame.inline_layouts.reuse(
             &mut previous_frame.inline_layouts,
@@ -955,9 +955,9 @@ impl LineLayoutCache {
         let mut current_frame = &mut *self.current_frame.write();
         current_frame.lines.used.truncate(index.lines_index);
         current_frame
-            .wrapped_lines
+            .shaped_texts
             .used
-            .truncate(index.wrapped_lines_index);
+            .truncate(index.shaped_texts_index);
         current_frame
             .inline_layouts
             .used
@@ -969,17 +969,17 @@ impl LineLayoutCache {
         let mut curr_frame = self.current_frame.write();
         std::mem::swap(&mut *prev_frame, &mut *curr_frame);
         curr_frame.lines.clear();
-        curr_frame.wrapped_lines.clear();
+        curr_frame.shaped_texts.clear();
         curr_frame.inline_layouts.clear();
     }
 
-    pub fn layout_wrapped_line_with_options<Text>(
+    pub fn layout_text_with_options<Text>(
         &self,
         text: Text,
         font_size: Pixels,
         runs: &[TextRun],
         options: TextLayoutOptions,
-    ) -> Arc<WrappedLineLayout>
+    ) -> Arc<ShapedTextLayout>
     where
         Text: AsRef<str>,
         SharedString: From<Text>,
@@ -995,15 +995,15 @@ impl LineLayoutCache {
         } as &dyn AsCacheKeyRef;
 
         let current_frame = self.current_frame.upgradable_read();
-        if let Some(layout) = current_frame.wrapped_lines.get(key) {
-            return repaint_wrapped_layout(layout.clone(), runs);
+        if let Some(layout) = current_frame.shaped_texts.get(key) {
+            return repaint_shaped_text_layout(layout.clone(), runs);
         }
 
-        let previous_frame_entry = self.previous_frame.lock().wrapped_lines.remove_entry(key);
+        let previous_frame_entry = self.previous_frame.lock().shaped_texts.remove_entry(key);
         if let Some((key, layout)) = previous_frame_entry {
             let mut current_frame = RwLockUpgradableReadGuard::upgrade(current_frame);
-            current_frame.wrapped_lines.insert(key, layout.clone());
-            repaint_wrapped_layout(layout, runs)
+            current_frame.shaped_texts.insert(key, layout.clone());
+            repaint_shaped_text_layout(layout, runs)
         } else {
             drop(current_frame);
             let text = SharedString::from(text);
@@ -1019,7 +1019,7 @@ impl LineLayoutCache {
                 self.layout_line::<&SharedString>(&text, font_size, runs)
             };
 
-            let layout = Arc::new(WrappedLineLayout {
+            let layout = Arc::new(ShapedTextLayout {
                 layout: document_layout,
                 wrap_width,
             });
@@ -1031,7 +1031,7 @@ impl LineLayoutCache {
             });
 
             let mut current_frame = self.current_frame.write();
-            current_frame.wrapped_lines.insert(key, layout.clone());
+            current_frame.shaped_texts.insert(key, layout.clone());
 
             layout
         }

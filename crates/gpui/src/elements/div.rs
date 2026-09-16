@@ -4976,10 +4976,10 @@ mod tests {
     use super::*;
 
     #[gpui::test]
-    fn inline_div_places_element_children_in_text_flow(context: &mut TestAppContext) {
+    fn inline_div_places_element_children_in_text_flow(cx: &mut TestAppContext) {
         let placed_children = Rc::new(RefCell::new(Vec::new()));
         let captured_bounds = placed_children.clone();
-        let window = context.add_empty_window();
+        let window = cx.add_empty_window();
         let highlight_color = hsla(0.4, 0.6, 0.5, 1.0);
 
         window.draw(
@@ -5032,10 +5032,10 @@ mod tests {
     }
 
     #[gpui::test]
-    fn default_block_preserves_grid_flow_and_hides_none_descendants(context: &mut TestAppContext) {
+    fn default_block_preserves_grid_flow_and_hides_none_descendants(cx: &mut TestAppContext) {
         let hidden_prepainted = Rc::new(Cell::new(false));
         let hidden_prepaint = hidden_prepainted.clone();
-        let window = context.add_empty_window();
+        let window = cx.add_empty_window();
 
         window.draw(
             point(px(10.), px(20.)),

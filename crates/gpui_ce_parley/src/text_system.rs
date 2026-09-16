@@ -2742,8 +2742,8 @@ mod tests {
         assert_eq!(layout.visual_lines[3].text_range, text.len()..text.len());
     }
 
-    fn wrapped(layout: LineLayout, width: Pixels) -> gpui::WrappedLineLayout {
-        gpui::WrappedLineLayout {
+    fn shaped_text_layout(layout: LineLayout, width: Pixels) -> gpui::ShapedTextLayout {
+        gpui::ShapedTextLayout {
             layout: Arc::new(layout),
             wrap_width: Some(width),
         }
@@ -2829,7 +2829,7 @@ mod tests {
         }
 
         let line_height = px(24.0);
-        let wrapped = wrapped(layout.clone(), px(120.0));
+        let wrapped = shaped_text_layout(layout.clone(), px(120.0));
         let mut caret = wrapped
             .closest_caret_for_position(point(px(-100.0), line_height * 0.5), line_height)
             .unwrap_err();
@@ -3166,7 +3166,7 @@ mod tests {
         let system = test_system();
         let text = "שלום עולם\nabc אבג def\nx (مرحبا) y";
         let runs = [text_run(text, "IBM Plex Sans")];
-        let document = wrapped(layout_line(&system, text, px(18.0), &runs), px(500.0));
+        let document = shaped_text_layout(layout_line(&system, text, px(18.0), &runs), px(500.0));
 
         for (left, right) in [("abc", "def"), ("x", "y")] {
             let left_position = document
@@ -3948,7 +3948,7 @@ mod tests {
         let system = test_system();
         for text in ["👩🏽‍💻", "👨‍👩‍👧‍👦", "🇬🇧", "ก้"] {
             let layout = layout_line(&system, text, px(22.0), &[text_run(text, "IBM Plex Sans")]);
-            let wrapped = wrapped(layout, px(500.0));
+            let wrapped = shaped_text_layout(layout, px(500.0));
             assert_eq!(
                 wrapped.logical_cluster_after(CaretPosition::default()),
                 Some(0..text.len()),
@@ -3975,7 +3975,7 @@ mod tests {
         }
 
         let single_line_text = "abcd";
-        let single_line = wrapped(
+        let single_line = shaped_text_layout(
             layout_line(
                 &system,
                 single_line_text,
@@ -4001,7 +4001,7 @@ mod tests {
         );
 
         let text = "abc אבג العربية xyz";
-        let layout = wrapped(
+        let layout = shaped_text_layout(
             layout_wrapped(
                 &system,
                 text,
@@ -4532,7 +4532,7 @@ mod tests {
             fn render(
                 &mut self,
                 _window: &mut Window,
-                _context: &mut Context<Self>,
+                _cx: &mut Context<Self>,
             ) -> impl IntoElement {
                 div().size_full().pl(px(11.)).pt(px(9.)).child(
                     div()
@@ -4581,13 +4581,12 @@ mod tests {
 
         impl Geometry {
             fn read(
-                context: &mut HeadlessAppContext,
+                cx: &mut HeadlessAppContext,
                 window: WindowHandle<InlineTranslationView>,
             ) -> Self {
                 let any_window = window.into();
                 let mut debug_bounds = |selector| {
-                    context
-                        .debug_bounds(any_window, selector)
+                    cx.debug_bounds(any_window, selector)
                         .unwrap()
                         .unwrap_or_else(|| panic!("missing debug bounds for {selector}"))
                 };
@@ -4598,8 +4597,8 @@ mod tests {
                 let nested = debug_bounds(NESTED);
 
                 let text_groups = [
-                    text_group_bounds(context, any_window, first_group_color()),
-                    text_group_bounds(context, any_window, second_group_color()),
+                    text_group_bounds(cx, any_window, first_group_color()),
+                    text_group_bounds(cx, any_window, second_group_color()),
                 ];
 
                 Self {
@@ -4664,11 +4663,11 @@ mod tests {
         }
 
         fn text_group_bounds(
-            context: &mut HeadlessAppContext,
+            cx: &mut HeadlessAppContext,
             window: gpui::AnyWindowHandle,
             color: Hsla,
         ) -> Bounds<Pixels> {
-            let bounds = context.solid_quad_bounds(window, color).unwrap();
+            let bounds = cx.solid_quad_bounds(window, color).unwrap();
             assert_eq!(bounds.len(), 1, "expected one rendered quad for {color:?}");
 
             logical_bounds(bounds[0])
@@ -4691,17 +4690,17 @@ mod tests {
         }
 
         fn update_view<View: Render>(
-            context: &mut HeadlessAppContext,
+            cx: &mut HeadlessAppContext,
             window: WindowHandle<View>,
             edit: impl FnOnce(&mut View),
         ) {
             window
-                .update(context, |view, _window, context| {
+                .update(cx, |view, _window, cx| {
                     edit(view);
-                    context.notify();
+                    cx.notify();
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
         }
 
         #[test]
@@ -4712,26 +4711,26 @@ mod tests {
                 .add_fonts(vec![Cow::Borrowed(IBM_PLEX)])
                 .unwrap();
 
-            let mut context = HeadlessAppContext::new(Arc::new(text_system));
+            let mut cx = HeadlessAppContext::new(Arc::new(text_system));
 
-            let window = context
-                .open_window(size(px(340.), px(180.)), |window, context| {
+            let window = cx
+                .open_window(size(px(340.), px(180.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| InlineTranslationView { width_offset: 0. })
+                    cx.new(|_| InlineTranslationView { width_offset: 0. })
                 })
                 .unwrap();
 
-            context.run_until_parked();
+            cx.run_until_parked();
 
-            let initial = Geometry::read(&mut context, window);
+            let initial = Geometry::read(&mut cx, window);
             initial.assert_valid();
 
             for step in 1..=64 {
-                update_view(&mut context, window, |view| {
+                update_view(&mut cx, window, |view| {
                     view.width_offset = step as f32 / 16.;
                 });
 
-                let translated = Geometry::read(&mut context, window);
+                let translated = Geometry::read(&mut cx, window);
                 translated.assert_valid();
                 translated.assert_moved_as_one_group(initial, step);
                 assert_point_close(
@@ -4741,8 +4740,8 @@ mod tests {
                 );
             }
 
-            update_view(&mut context, window, |view| view.width_offset = 0.);
-            assert_eq!(Geometry::read(&mut context, window), initial);
+            update_view(&mut cx, window, |view| view.width_offset = 0.);
+            assert_eq!(Geometry::read(&mut cx, window), initial);
         }
 
         fn headless() -> HeadlessAppContext {
@@ -4790,11 +4789,11 @@ mod tests {
                 global_id: Option<&gpui::GlobalElementId>,
                 inspector_id: Option<&gpui::InspectorElementId>,
                 window: &mut Window,
-                context: &mut gpui::App,
+                cx: &mut gpui::App,
             ) -> (gpui::LayoutId, Self::RequestLayoutState) {
                 let (layout_id, state) =
                     self.element
-                        .request_layout(global_id, inspector_id, window, context);
+                        .request_layout(global_id, inspector_id, window, cx);
 
                 if self.remeasure {
                     self.measurements.borrow_mut().clear();
@@ -4806,7 +4805,7 @@ mod tests {
                                 gpui::AvailableSpace::Definite(px(width)),
                                 gpui::AvailableSpace::MaxContent,
                             ),
-                            context,
+                            cx,
                         );
                         self.measurements
                             .borrow_mut()
@@ -4824,10 +4823,10 @@ mod tests {
                 bounds: Bounds<Pixels>,
                 state: &mut Self::RequestLayoutState,
                 window: &mut Window,
-                context: &mut gpui::App,
+                cx: &mut gpui::App,
             ) -> Self::PrepaintState {
                 self.element
-                    .prepaint(global_id, inspector_id, bounds, state, window, context)
+                    .prepaint(global_id, inspector_id, bounds, state, window, cx)
             }
 
             fn paint(
@@ -4838,18 +4837,11 @@ mod tests {
                 state: &mut Self::RequestLayoutState,
                 prepaint: &mut Self::PrepaintState,
                 window: &mut Window,
-                context: &mut gpui::App,
+                cx: &mut gpui::App,
             ) {
                 *self.painted.borrow_mut() = state.measured_inline_paragraphs();
-                self.element.paint(
-                    global_id,
-                    inspector_id,
-                    bounds,
-                    state,
-                    prepaint,
-                    window,
-                    context,
-                );
+                self.element
+                    .paint(global_id, inspector_id, bounds, state, prepaint, window, cx);
             }
         }
 
@@ -4890,7 +4882,7 @@ mod tests {
             fn render(
                 &mut self,
                 _window: &mut Window,
-                _context: &mut Context<Self>,
+                _cx: &mut Context<Self>,
             ) -> impl IntoElement {
                 let mut paragraph = div()
                     .block()
@@ -4964,7 +4956,7 @@ mod tests {
 
         #[test]
         fn block_paragraph_paints_grapheme_safe_end_start_and_middle_ellipsis() {
-            let mut context = headless();
+            let mut cx = headless();
 
             for direction in [
                 gpui::TruncateFrom::End,
@@ -4973,14 +4965,14 @@ mod tests {
             ] {
                 let view = OverflowParagraph::new(direction);
                 let painted = view.painted.clone();
-                let window = context
-                    .open_window(size(px(360.), px(180.)), |window, context| {
+                let window = cx
+                    .open_window(size(px(360.), px(180.)), |window, cx| {
                         window.set_scale_factor(SCALE_FACTOR);
 
-                        context.new(|_context| view)
+                        cx.new(|_cx| view)
                     })
                     .unwrap();
-                context.run_until_parked();
+                cx.run_until_parked();
 
                 let captured = painted.borrow();
                 assert_eq!(captured.len(), 1);
@@ -5005,8 +4997,7 @@ mod tests {
                 }
 
                 assert!(
-                    !context
-                        .glyph_bounds(window.into(), first_group_color())
+                    !cx.glyph_bounds(window.into(), first_group_color())
                         .unwrap()
                         .is_empty()
                 );
@@ -5015,17 +5006,15 @@ mod tests {
 
         #[test]
         fn block_paragraph_places_requested_marker_on_second_clamped_line() {
-            let mut context = headless();
+            let mut cx = headless();
             let mut view = OverflowParagraph::new(gpui::TruncateFrom::End);
             view.max_lines = Some(2);
             view.width = 140.;
             let painted = view.painted.clone();
-            let window = context
-                .open_window(size(px(360.), px(180.)), |_window, context| {
-                    context.new(|_context| view)
-                })
+            let window = cx
+                .open_window(size(px(360.), px(180.)), |_window, cx| cx.new(|_cx| view))
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             {
                 let captured = painted.borrow();
@@ -5047,12 +5036,12 @@ mod tests {
             }
 
             window
-                .update(&mut context, |view, _window, context| {
+                .update(&mut cx, |view, _window, cx| {
                     view.marker = false;
-                    context.notify();
+                    cx.notify();
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             let captured = painted.borrow();
             assert_eq!(captured[0].0.as_ref(), OVERFLOW_TEXT);
@@ -5085,18 +5074,15 @@ mod tests {
                             .any(|line| line.advance > *width + px(0.01))
                 })
                 .expect("sample text should have a two-line width with hanging whitespace");
-            let mut context = headless();
+            let mut cx = headless();
             let mut view = OverflowParagraph::new(gpui::TruncateFrom::End);
             view.text = LINE_CLAMP_TEXT;
             view.max_lines = Some(2);
             view.width = f32::from(width);
             let painted = view.painted.clone();
-            context
-                .open_window(size(px(900.), px(180.)), |_window, context| {
-                    context.new(|_context| view)
-                })
+            cx.open_window(size(px(900.), px(180.)), |_window, cx| cx.new(|_cx| view))
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             let captured = painted.borrow();
             let (text, layout) = &captured[0];
@@ -5106,17 +5092,15 @@ mod tests {
 
         #[test]
         fn block_paragraph_remeasures_nowrap_overflow_and_restores_original_text() {
-            let mut context = headless();
+            let mut cx = headless();
             let mut view = OverflowParagraph::new(gpui::TruncateFrom::Middle);
             view.remeasure = true;
             let painted = view.painted.clone();
             let measurements = view.measurements.clone();
-            let window = context
-                .open_window(size(px(2200.), px(180.)), |_window, context| {
-                    context.new(|_context| view)
-                })
+            let window = cx
+                .open_window(size(px(2200.), px(180.)), |_window, cx| cx.new(|_cx| view))
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             {
                 let measured = measurements.borrow();
@@ -5133,7 +5117,7 @@ mod tests {
             let initial = painted.borrow()[0].0.clone();
 
             for width in [90., 2000., 180.] {
-                update_view(&mut context, window, |view| view.width = width);
+                update_view(&mut cx, window, |view| view.width = width);
                 let captured = painted.borrow();
                 assert_paragraph_fits(&captured[0].0, &captured[0].1, width, 1);
 
@@ -5147,28 +5131,28 @@ mod tests {
 
         #[test]
         fn block_ellipsis_preserves_span_metrics_and_only_places_display_ranges() {
-            let mut context = headless();
+            let mut cx = headless();
             let mut view = OverflowParagraph::new(gpui::TruncateFrom::Middle);
             view.styled = true;
             view.width = 260.;
             let painted = view.painted.clone();
-            let window = context
-                .open_window(size(px(360.), px(180.)), |window, context| {
+            let window = cx
+                .open_window(size(px(360.), px(180.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
 
-                    context.new(|_context| view)
+                    cx.new(|_cx| view)
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             for width in [260., 100., 260.] {
-                update_view(&mut context, window, |view| view.width = width);
+                update_view(&mut cx, window, |view| view.width = width);
 
                 let captured = painted.borrow();
                 let (text, layout) = &captured[0];
                 assert_paragraph_fits(text, layout, width, 1);
                 assert!(text.contains('…') && text.ends_with("end"));
-                let spans = quads(&mut context, window.into(), first_group_color());
+                let spans = quads(&mut cx, window.into(), first_group_color());
                 assert_eq!(spans.len(), 1);
                 assert_close(
                     spans[0].size.width,
@@ -5183,10 +5167,9 @@ mod tests {
 
                 if width == 100. {
                     assert!(!text.contains('W'));
-                    assert!(quads(&mut context, window.into(), second_group_color()).is_empty());
+                    assert!(quads(&mut cx, window.into(), second_group_color()).is_empty());
                     assert!(
-                        context
-                            .glyph_bounds(window.into(), second_group_color())
+                        cx.glyph_bounds(window.into(), second_group_color())
                             .unwrap()
                             .is_empty()
                     );
@@ -5207,10 +5190,10 @@ mod tests {
                             .iter()
                             .any(|fragment| fragment.font_size == px(14.))
                     );
-                    let backgrounds = quads(&mut context, window.into(), second_group_color());
+                    let backgrounds = quads(&mut cx, window.into(), second_group_color());
                     assert!(!backgrounds.is_empty());
 
-                    for glyph in context
+                    for glyph in cx
                         .glyph_bounds(window.into(), second_group_color())
                         .unwrap()
                     {
@@ -5225,11 +5208,11 @@ mod tests {
         }
 
         fn quads(
-            context: &mut HeadlessAppContext,
+            cx: &mut HeadlessAppContext,
             window: gpui::AnyWindowHandle,
             color: Hsla,
         ) -> Vec<Bounds<Pixels>> {
-            let mut bounds: Vec<_> = context
+            let mut bounds: Vec<_> = cx
                 .solid_quad_bounds(window, color)
                 .unwrap()
                 .into_iter()
@@ -5314,20 +5297,20 @@ mod tests {
 
         #[test]
         fn nested_spans_wrap_like_flat_styled_text_without_boundary_breaks() {
-            let mut context = headless();
-            let nested = context
-                .open_window(size(px(360.), px(300.)), |window, context| {
+            let mut cx = headless();
+            let nested = cx
+                .open_window(size(px(360.), px(300.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| NestedWrapping {
+                    cx.new(|_| NestedWrapping {
                         width: 130.,
                         flat: false,
                     })
                 })
                 .unwrap();
-            let flat = context
-                .open_window(size(px(360.), px(300.)), |window, context| {
+            let flat = cx
+                .open_window(size(px(360.), px(300.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| NestedWrapping {
+                    cx.new(|_| NestedWrapping {
                         width: 130.,
                         flat: true,
                     })
@@ -5337,23 +5320,23 @@ mod tests {
             for width in [130., 179., 240., 310.] {
                 for window in [nested, flat] {
                     window
-                        .update(&mut context, |view, _, context| {
+                        .update(&mut cx, |view, _, cx| {
                             view.width = width;
-                            context.notify();
+                            cx.notify();
                         })
                         .unwrap();
                 }
 
-                context.run_until_parked();
+                cx.run_until_parked();
                 assert_eq!(
-                    context.debug_bounds(nested.into(), "paragraph").unwrap(),
-                    context.debug_bounds(flat.into(), "paragraph").unwrap()
+                    cx.debug_bounds(nested.into(), "paragraph").unwrap(),
+                    cx.debug_bounds(flat.into(), "paragraph").unwrap()
                 );
 
                 for color in [first_group_color(), second_group_color()] {
                     assert_eq!(
-                        quads(&mut context, nested.into(), color),
-                        quads(&mut context, flat.into(), color),
+                        quads(&mut cx, nested.into(), color),
+                        quads(&mut cx, flat.into(), color),
                         "width {width}"
                     );
                 }
@@ -5410,7 +5393,7 @@ mod tests {
 
         #[test]
         fn inline_sizing_depends_on_parent_context() {
-            let mut context = headless();
+            let mut cx = headless();
 
             for parent_context in [
                 ParentContext::Block,
@@ -5418,21 +5401,21 @@ mod tests {
                 ParentContext::Flex,
                 ParentContext::Grid,
             ] {
-                let window = context
-                    .open_window(size(px(300.), px(240.)), |window, context| {
+                let window = cx
+                    .open_window(size(px(300.), px(240.)), |window, cx| {
                         window.set_scale_factor(SCALE_FACTOR);
-                        context.new(|_| ContextView {
+                        cx.new(|_| ContextView {
                             context: parent_context,
                         })
                     })
                     .unwrap();
-                context.run_until_parked();
+                cx.run_until_parked();
 
-                let span = context
+                let span = cx
                     .debug_bounds(window.into(), "context-inline")
                     .unwrap()
                     .unwrap();
-                let badge = context
+                let badge = cx
                     .debug_bounds(window.into(), "context-badge")
                     .unwrap()
                     .unwrap();
@@ -5502,24 +5485,24 @@ mod tests {
 
         #[test]
         fn blocks_split_nested_spans_and_hidden_absolute_empty_children_add_no_rows() {
-            let mut context = headless();
+            let mut cx = headless();
 
-            let window = context
-                .open_window(size(px(300.), px(240.)), |window, context| {
+            let window = cx
+                .open_window(size(px(300.), px(240.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| MixedFlow)
+                    cx.new(|_| MixedFlow)
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
-            let fragments = quads(&mut context, window.into(), first_group_color());
+            let fragments = quads(&mut cx, window.into(), first_group_color());
             assert_eq!(fragments.len(), 2);
 
-            let block = context
+            let block = cx
                 .debug_bounds(window.into(), "inner-block")
                 .unwrap()
                 .unwrap();
-            let following = context
+            let following = cx
                 .debug_bounds(window.into(), "following-block")
                 .unwrap()
                 .unwrap();
@@ -5536,10 +5519,7 @@ mod tests {
             );
             assert_close(following.origin.y, fragments[1].bottom(), "no phantom rows");
 
-            let paragraph = context
-                .debug_bounds(window.into(), "mixed")
-                .unwrap()
-                .unwrap();
+            let paragraph = cx.debug_bounds(window.into(), "mixed").unwrap().unwrap();
             assert_close(
                 paragraph.bottom(),
                 following.bottom(),
@@ -5612,53 +5592,38 @@ mod tests {
 
         #[test]
         fn inline_flex_and_box_only_spans_move_as_atomic_content() {
-            let mut context = headless();
+            let mut cx = headless();
 
-            let window = context
-                .open_window(size(px(340.), px(240.)), |window, context| {
+            let window = cx
+                .open_window(size(px(340.), px(240.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| AtomicFlow { width: 150. })
+                    cx.new(|_| AtomicFlow { width: 150. })
                 })
                 .unwrap();
             let mut previous = None;
 
             for width in [150., 290.] {
-                update_view(&mut context, window, |view| view.width = width);
+                update_view(&mut cx, window, |view| view.width = width);
 
-                let badge = context
-                    .debug_bounds(window.into(), "badge")
-                    .unwrap()
-                    .unwrap();
-                let span = context
-                    .debug_bounds(window.into(), "box-span")
-                    .unwrap()
-                    .unwrap();
+                let badge = cx.debug_bounds(window.into(), "badge").unwrap().unwrap();
+                let span = cx.debug_bounds(window.into(), "box-span").unwrap().unwrap();
 
-                let left = context
-                    .debug_bounds(window.into(), "badge-a")
-                    .unwrap()
-                    .unwrap();
-                let right = context
-                    .debug_bounds(window.into(), "badge-b")
-                    .unwrap()
-                    .unwrap();
+                let left = cx.debug_bounds(window.into(), "badge-a").unwrap().unwrap();
+                let right = cx.debug_bounds(window.into(), "badge-b").unwrap().unwrap();
 
-                let icon_span = context
+                let icon_span = cx
                     .debug_bounds(window.into(), "icon-span")
                     .unwrap()
                     .unwrap();
-                let image = context
-                    .debug_bounds(window.into(), "image")
-                    .unwrap()
-                    .unwrap();
-                let svg = context.debug_bounds(window.into(), "svg").unwrap().unwrap();
+                let image = cx.debug_bounds(window.into(), "image").unwrap().unwrap();
+                let svg = cx.debug_bounds(window.into(), "svg").unwrap().unwrap();
 
                 assert_bounds_close(icon_span, image.union(&svg), "box-only span bounds");
                 assert_close(image.size.width, px(12.), "inline image stays atomic");
                 assert_close(svg.size.width, px(14.), "inline SVG stays atomic");
                 assert_bounds_close(span, badge, "badge span bounds");
 
-                let backgrounds = quads(&mut context, window.into(), first_group_color());
+                let backgrounds = quads(&mut cx, window.into(), first_group_color());
                 assert_eq!(backgrounds.len(), 1);
                 assert_bounds_close(backgrounds[0], badge, "badge span background");
 
@@ -5721,10 +5686,10 @@ mod tests {
                 _: Option<&gpui::GlobalElementId>,
                 _: Option<&gpui::InspectorElementId>,
                 window: &mut Window,
-                context: &mut gpui::App,
+                cx: &mut gpui::App,
             ) -> (gpui::LayoutId, ()) {
                 self.counts[1].set(self.counts[1].get() + 1);
-                (self.element.request_layout(window, context), ())
+                (self.element.request_layout(window, cx), ())
             }
 
             fn prepaint(
@@ -5734,10 +5699,10 @@ mod tests {
                 _: Bounds<Pixels>,
                 _: &mut (),
                 window: &mut Window,
-                context: &mut gpui::App,
+                cx: &mut gpui::App,
             ) {
                 self.counts[2].set(self.counts[2].get() + 1);
-                self.element.prepaint(window, context);
+                self.element.prepaint(window, cx);
             }
 
             fn paint(
@@ -5748,10 +5713,10 @@ mod tests {
                 _: &mut (),
                 _: &mut (),
                 window: &mut Window,
-                context: &mut gpui::App,
+                cx: &mut gpui::App,
             ) {
                 self.counts[3].set(self.counts[3].get() + 1);
-                self.element.paint(window, context);
+                self.element.paint(window, cx);
             }
         }
 
@@ -5789,14 +5754,14 @@ mod tests {
                         span.inline_flex().w(px(100.)).h(px(110.))
                     })
                     .on_hover(move |value, _, _| hovered.set(*value))
-                    .tooltip(|_, context| context.new(|_| InlineTooltip).into())
+                    .tooltip(|_, cx| cx.new(|_| InlineTooltip).into())
                     .tooltip_show_delay(std::time::Duration::from_millis(10))
                     .track_focus(&self.focus)
                     .bg(first_group_color())
                     .debug_selector(|| "interactive-span".into())
-                    .on_click(move |_, window, context| {
+                    .on_click(move |_, window, cx| {
                         clicks.set(clicks.get() + 1);
-                        focus.focus(window, context);
+                        focus.focus(window, cx);
                     })
                     .child(gpui::text!(
                         "these words can wrap across several lines with a short ending"
@@ -5833,39 +5798,38 @@ mod tests {
         }
 
         fn click(
-            context: &mut HeadlessAppContext,
+            cx: &mut HeadlessAppContext,
             window: gpui::AnyWindowHandle,
             position: Point<Pixels>,
         ) {
-            context
-                .update_window(window, |_, window, context| {
-                    window.simulate_mouse_move(position, context);
-                    window.dispatch_event(
-                        gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
-                            position,
-                            button: gpui::MouseButton::Left,
-                            click_count: 1,
-                            ..Default::default()
-                        }),
-                        context,
-                    );
-                    window.dispatch_event(
-                        gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
-                            position,
-                            button: gpui::MouseButton::Left,
-                            click_count: 1,
-                            ..Default::default()
-                        }),
-                        context,
-                    );
-                })
-                .unwrap();
-            context.run_until_parked();
+            cx.update_window(window, |_, window, cx| {
+                window.simulate_mouse_move(position, cx);
+                window.dispatch_event(
+                    gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                        position,
+                        button: gpui::MouseButton::Left,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                        position,
+                        button: gpui::MouseButton::Left,
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+            })
+            .unwrap();
+            cx.run_until_parked();
         }
 
         #[test]
         fn fragment_interaction_reflows_scrolls_and_preserves_wrapped_element_lifecycle() {
-            let mut context = headless();
+            let mut cx = headless();
             let clicks = Rc::new(Cell::new(0));
             let hovered = Rc::new(Cell::new(false));
 
@@ -5873,12 +5837,12 @@ mod tests {
             let callback = Rc::new(RefCell::new(Vec::new()));
 
             let scroll = gpui::ScrollHandle::new();
-            let focus = context.update(|context| context.focus_handle());
+            let focus = cx.update(|cx| cx.focus_handle());
 
-            let window = context
-                .open_window(size(px(350.), px(300.)), |window, context| {
+            let window = cx
+                .open_window(size(px(350.), px(300.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| InteractiveFlow {
+                    cx.new(|_| InteractiveFlow {
                         width: 190.,
                         large: false,
                         atomic: false,
@@ -5891,9 +5855,9 @@ mod tests {
                     })
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
-            let regions = quads(&mut context, window.into(), first_group_color());
+            let regions = quads(&mut cx, window.into(), first_group_color());
             assert!(regions.len() >= 3);
 
             let union = regions
@@ -5905,24 +5869,19 @@ mod tests {
             assert_eq!(callback.borrow().len(), 3);
             assert_eq!(callback.borrow()[1], union);
 
-            click(&mut context, window.into(), regions[0].center());
-            click(
-                &mut context,
-                window.into(),
-                regions.last().unwrap().center(),
-            );
+            click(&mut cx, window.into(), regions[0].center());
+            click(&mut cx, window.into(), regions.last().unwrap().center());
             assert_eq!(clicks.get(), 2);
             assert!(hovered.get());
             assert!(
-                context
-                    .update_window(window.into(), |_, window, _| focus.is_focused(window))
+                cx.update_window(window.into(), |_, window, _| focus.is_focused(window))
                     .unwrap()
             );
 
             let gap = gpui::point(regions[0].origin.x / 2., regions[0].center().y);
             assert!(union.contains(&gap) && !regions.iter().any(|right| right.contains(&gap)));
 
-            click(&mut context, window.into(), gap);
+            click(&mut cx, window.into(), gap);
             assert_eq!(
                 clicks.get(),
                 2,
@@ -5931,78 +5890,72 @@ mod tests {
 
             assert!(!hovered.get());
 
-            context
-                .update_window(window.into(), |_, window, context| {
-                    window.simulate_mouse_move(regions[0].center(), context)
-                })
-                .unwrap();
-            context.run_until_parked();
-            context.advance_clock(std::time::Duration::from_millis(20));
-            context.run_until_parked();
+            cx.update_window(window.into(), |_, window, cx| {
+                window.simulate_mouse_move(regions[0].center(), cx)
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.advance_clock(std::time::Duration::from_millis(20));
+            cx.run_until_parked();
             assert!(
-                context
-                    .debug_bounds(window.into(), "inline-tooltip")
+                cx.debug_bounds(window.into(), "inline-tooltip")
                     .unwrap()
                     .is_some()
             );
 
-            context
-                .update_window(window.into(), |_, window, context| {
-                    window.simulate_mouse_move(gap, context)
-                })
-                .unwrap();
-            context.run_until_parked();
-            context.advance_clock(std::time::Duration::from_secs(1));
-            context.run_until_parked();
+            cx.update_window(window.into(), |_, window, cx| {
+                window.simulate_mouse_move(gap, cx)
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.advance_clock(std::time::Duration::from_secs(1));
+            cx.run_until_parked();
             assert!(
-                context
-                    .debug_bounds(window.into(), "inline-tooltip")
+                cx.debug_bounds(window.into(), "inline-tooltip")
                     .unwrap()
                     .is_none()
             );
 
             window
-                .update(&mut context, |view, _, context| {
+                .update(&mut cx, |view, _, cx| {
                     view.width = 250.;
                     view.large = true;
-                    context.notify();
+                    cx.notify();
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
-            let resized = quads(&mut context, window.into(), first_group_color());
+            let resized = quads(&mut cx, window.into(), first_group_color());
             assert_ne!(resized, regions);
             assert!(resized.iter().any(|right| right.size.height >= px(34.)));
 
-            click(&mut context, window.into(), resized[1].center());
+            click(&mut cx, window.into(), resized[1].center());
             assert_eq!(clicks.get(), 3);
 
             scroll.set_offset(gpui::point(px(0.), px(-24.)));
-            window
-                .update(&mut context, |_, _, context| context.notify())
-                .unwrap();
-            context.run_until_parked();
+            window.update(&mut cx, |_, _, cx| cx.notify()).unwrap();
+            cx.run_until_parked();
 
-            let scrolled = quads(&mut context, window.into(), first_group_color());
+            let scrolled = quads(&mut cx, window.into(), first_group_color());
             assert_close(
                 scrolled[1].origin.y,
                 resized[1].origin.y - px(24.),
                 "scroll updates fragment origin",
             );
 
-            click(&mut context, window.into(), scrolled[1].center());
+            click(&mut cx, window.into(), scrolled[1].center());
             assert_eq!(clicks.get(), 4);
 
             scroll.set_offset(Point::default());
             window
-                .update(&mut context, |view, _, context| {
+                .update(&mut cx, |view, _, cx| {
                     view.atomic = true;
-                    context.notify();
+                    cx.notify();
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
-            let atomic = context
+            let atomic = cx
                 .debug_bounds(window.into(), "interactive-span")
                 .unwrap()
                 .unwrap();
@@ -6078,23 +6031,23 @@ mod tests {
 
         #[test]
         fn mixed_font_sizes_colors_and_underlines_paint_in_their_wrapped_rows() {
-            let mut context = headless();
+            let mut cx = headless();
 
-            let window = context
-                .open_window(size(px(320.), px(300.)), |window, context| {
+            let window = cx
+                .open_window(size(px(320.), px(300.)), |window, cx| {
                     window.set_scale_factor(SCALE_FACTOR);
-                    context.new(|_| MixedTypography)
+                    cx.new(|_| MixedTypography)
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             let mut glyph_heights = Vec::new();
 
             for color in [first_group_color(), second_group_color()] {
-                let backgrounds = quads(&mut context, window.into(), color);
+                let backgrounds = quads(&mut cx, window.into(), color);
                 assert!(!backgrounds.is_empty());
 
-                let underlines: Vec<_> = context
+                let underlines: Vec<_> = cx
                     .underline_bounds(window.into(), color)
                     .unwrap()
                     .into_iter()
@@ -6114,7 +6067,7 @@ mod tests {
                     );
                 }
 
-                let glyphs: Vec<_> = context
+                let glyphs: Vec<_> = cx
                     .glyph_bounds(window.into(), color)
                     .unwrap()
                     .into_iter()
@@ -6139,7 +6092,7 @@ mod tests {
                 );
             }
 
-            assert!(quads(&mut context, window.into(), first_group_color()).len() >= 2);
+            assert!(quads(&mut cx, window.into(), first_group_color()).len() >= 2);
             assert!(
                 glyph_heights[0] > glyph_heights[1] * 1.5,
                 "glyph painting must use each shaped run's font size"
@@ -6165,7 +6118,7 @@ mod tests {
             fn render(
                 &mut self,
                 _window: &mut Window,
-                _context: &mut Context<Self>,
+                _cx: &mut Context<Self>,
             ) -> impl IntoElement {
                 div().flex().justify_start().size_full().child(
                     div()
@@ -6180,7 +6133,7 @@ mod tests {
             fn render(
                 &mut self,
                 _window: &mut Window,
-                _context: &mut Context<Self>,
+                _cx: &mut Context<Self>,
             ) -> impl IntoElement {
                 div().size_full().child(self.text.clone())
             }
@@ -6190,7 +6143,7 @@ mod tests {
             fn render(
                 &mut self,
                 _window: &mut Window,
-                _context: &mut Context<Self>,
+                _cx: &mut Context<Self>,
             ) -> impl IntoElement {
                 let item = |selector: &'static str| {
                     div()
@@ -6289,47 +6242,46 @@ mod tests {
         }
 
         fn bounds(
-            context: &mut HeadlessAppContext,
+            cx: &mut HeadlessAppContext,
             window: gpui::AnyWindowHandle,
             selector: &str,
         ) -> Bounds<Pixels> {
-            context
-                .debug_bounds(window, selector)
+            cx.debug_bounds(window, selector)
                 .unwrap()
                 .unwrap_or_else(|| panic!("missing {selector}"))
         }
 
         #[test]
         fn direction_updates_logical_and_flex_relative_alignment() {
-            let mut context = HeadlessAppContext::new(test_system());
-            let window = context
-                .open_window(size(px(320.0), px(160.0)), |_window, context| {
-                    let cached_child = context.new(|_| CachedDirectionChild);
-                    let cached_arabic = context.new(|_| CachedArabicChild {
+            let mut cx = HeadlessAppContext::new(test_system());
+            let window = cx
+                .open_window(size(px(320.0), px(160.0)), |_window, cx| {
+                    let cached_child = cx.new(|_| CachedDirectionChild);
+                    let cached_arabic = cx.new(|_| CachedArabicChild {
                         text: "مرحبا".into(),
                     });
-                    context.new(|_| DirectionFlexView {
+                    cx.new(|_| DirectionFlexView {
                         direction: gpui::Direction::RightToLeft,
                         cached_child,
                         cached_arabic,
                     })
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             let any_window = window.into();
-            let logical_row = bounds(&mut context, any_window, "logical-row");
-            let logical_first = bounds(&mut context, any_window, "logical-first");
-            let flex_row = bounds(&mut context, any_window, "flex-row");
-            let flex_first = bounds(&mut context, any_window, "flex-first");
-            let grid_row = bounds(&mut context, any_window, "grid-row");
-            let grid_first = bounds(&mut context, any_window, "grid-first");
-            let cached_row = bounds(&mut context, any_window, "cached-row");
-            let cached_first = bounds(&mut context, any_window, "cached-first");
-            let auto_cached_row = bounds(&mut context, any_window, "auto-cached-row");
-            let auto_cached_item = bounds(&mut context, any_window, "auto-cached-item");
-            let deferred_row = bounds(&mut context, any_window, "deferred-row");
-            let deferred_first = bounds(&mut context, any_window, "deferred-first");
+            let logical_row = bounds(&mut cx, any_window, "logical-row");
+            let logical_first = bounds(&mut cx, any_window, "logical-first");
+            let flex_row = bounds(&mut cx, any_window, "flex-row");
+            let flex_first = bounds(&mut cx, any_window, "flex-first");
+            let grid_row = bounds(&mut cx, any_window, "grid-row");
+            let grid_first = bounds(&mut cx, any_window, "grid-first");
+            let cached_row = bounds(&mut cx, any_window, "cached-row");
+            let cached_first = bounds(&mut cx, any_window, "cached-first");
+            let auto_cached_row = bounds(&mut cx, any_window, "auto-cached-row");
+            let auto_cached_item = bounds(&mut cx, any_window, "auto-cached-item");
+            let deferred_row = bounds(&mut cx, any_window, "deferred-row");
+            let deferred_first = bounds(&mut cx, any_window, "deferred-first");
             assert!(logical_first.origin.x > logical_row.center().x);
             assert!(flex_first.right() < flex_row.center().x);
             assert!(grid_first.origin.x > grid_row.center().x);
@@ -6338,19 +6290,19 @@ mod tests {
             assert!(deferred_first.origin.x > deferred_row.center().x);
 
             window
-                .update(&mut context, |view, _, context| {
+                .update(&mut cx, |view, _, cx| {
                     view.direction = gpui::Direction::LeftToRight;
-                    context.notify();
+                    cx.notify();
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
-            let logical_first = bounds(&mut context, any_window, "logical-first");
-            let flex_first = bounds(&mut context, any_window, "flex-first");
-            let grid_first = bounds(&mut context, any_window, "grid-first");
-            let cached_first = bounds(&mut context, any_window, "cached-first");
-            let auto_cached_item = bounds(&mut context, any_window, "auto-cached-item");
-            let deferred_first = bounds(&mut context, any_window, "deferred-first");
+            let logical_first = bounds(&mut cx, any_window, "logical-first");
+            let flex_first = bounds(&mut cx, any_window, "flex-first");
+            let grid_first = bounds(&mut cx, any_window, "grid-first");
+            let cached_first = bounds(&mut cx, any_window, "cached-first");
+            let auto_cached_item = bounds(&mut cx, any_window, "auto-cached-item");
+            let deferred_first = bounds(&mut cx, any_window, "deferred-first");
             assert!(logical_first.right() < logical_row.center().x);
             assert!(flex_first.origin.x > flex_row.center().x);
             assert!(grid_first.right() < grid_row.center().x);
@@ -6359,16 +6311,16 @@ mod tests {
             assert!(deferred_first.right() < deferred_row.center().x);
 
             window
-                .update(&mut context, |view, _, context| {
-                    view.cached_arabic.update(context, |child, context| {
+                .update(&mut cx, |view, _, cx| {
+                    view.cached_arabic.update(cx, |child, cx| {
                         child.text = "English".into();
-                        context.notify();
+                        cx.notify();
                     });
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
-            let auto_cached_item = bounds(&mut context, any_window, "auto-cached-item");
+            let auto_cached_item = bounds(&mut cx, any_window, "auto-cached-item");
             assert!(auto_cached_item.right() < auto_cached_row.center().x);
         }
     }

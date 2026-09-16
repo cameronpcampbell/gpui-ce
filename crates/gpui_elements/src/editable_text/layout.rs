@@ -1,4 +1,4 @@
-use gpui::{Bounds, Pixels, Point, Size, WrappedLine};
+use gpui::{Bounds, Pixels, Point, ShapedText, Size};
 use std::sync::Arc;
 
 /// Data used across successive layout requests to gauge whether layout must be recomputed.
@@ -24,7 +24,7 @@ pub(super) struct EditableTextLayoutResult {
     pub state: EditableTextLayoutState,
     /// The document layout produced by the painter's `prepaint`.
     /// Cached so IME `bounds_for_range` / `character_index_for_point` can evaluate without re-shaping.
-    pub document: Option<Arc<WrappedLine>>,
+    pub document: Option<Arc<ShapedText>>,
     pub line_height: Pixels,
     /// Translation that keeps aligned overflow in the scrollable coordinate space.
     pub document_offset: Point<Pixels>,

@@ -8,9 +8,9 @@ use crate::{
     ActiveTooltip, AnyView, App, AppContext, Bounds, DispatchPhase, Element, ElementId,
     GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
     LayoutId, LineLayout, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParagraphDirection, Pixels,
-    Point, SharedString, Size, TextAlign, TextLayoutOptions, TextOverflow, TextRun, TextStyle,
-    TextTransform, TooltipId, UnicodeBidi, WhiteSpace, Window, WrappedLine, WrappedLineLayout, px,
-    register_tooltip_mouse_handlers, set_tooltip_on_window,
+    Point, ShapedText, ShapedTextLayout, SharedString, Size, TextAlign, TextLayoutOptions,
+    TextOverflow, TextRun, TextStyle, TextTransform, TooltipId, UnicodeBidi, WhiteSpace, Window,
+    px, register_tooltip_mouse_handlers, set_tooltip_on_window,
 };
 use anyhow::Context as _;
 use gpui_util::ResultExt;
@@ -635,7 +635,7 @@ struct TextLayoutState {
 
 struct TextLayoutInner {
     len: usize,
-    document: Option<WrappedLine>,
+    document: Option<ShapedText>,
     line_height: Pixels,
     truncate_width: Option<Pixels>,
     options: TextLayoutOptions,
@@ -1117,14 +1117,14 @@ impl TextLayout {
     }
 
     /// Retrieve the layout for the line containing the given byte index.
-    pub fn line_layout_for_index(&self, index: usize) -> Option<Arc<WrappedLineLayout>> {
+    pub fn line_layout_for_index(&self, index: usize) -> Option<Arc<ShapedTextLayout>> {
         let element_state = self.measured();
         let document = element_state.document.as_ref()?;
         (index <= document.len()).then(|| document.layout.clone())
     }
 
     /// Retrieve all line layouts in source order.
-    pub fn line_layouts(&self) -> SmallVec<[Arc<WrappedLineLayout>; 1]> {
+    pub fn line_layouts(&self) -> SmallVec<[Arc<ShapedTextLayout>; 1]> {
         self.measured()
             .document
             .iter()
@@ -1823,11 +1823,7 @@ mod tests {
     }
 
     impl Render for CenteredTextView {
-        fn render(
-            &mut self,
-            _window: &mut Window,
-            _context: &mut Context<Self>,
-        ) -> impl IntoElement {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div()
                 .flex()
                 .items_center()
@@ -1938,9 +1934,9 @@ mod tests {
             )]);
 
             for step in 1..=32 {
-                test_window.update(|view, _, context| {
+                test_window.update(|view, _, cx| {
                     view.extent = step as f32;
-                    context.notify();
+                    cx.notify();
                 });
 
                 test_window.draw();

@@ -4698,7 +4698,7 @@ impl Window {
     ///
     /// The y component of the origin is the baseline of the glyph.
     /// You should generally prefer to use the [`ShapedLine::paint`](crate::ShapedLine::paint) or
-    /// [`WrappedLine::paint`](crate::WrappedLine::paint) methods in the [`TextSystem`](crate::TextSystem).
+    /// [`ShapedText::paint`](crate::ShapedText::paint) methods in the [`TextSystem`](crate::TextSystem).
     /// This method is only useful if you need to paint a single glyph that has already been shaped.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
@@ -4823,7 +4823,7 @@ impl Window {
     ///
     /// The y component of the origin is the baseline of the glyph.
     /// You should generally prefer to use the [`ShapedLine::paint`](crate::ShapedLine::paint) or
-    /// [`WrappedLine::paint`](crate::WrappedLine::paint) methods in the [`TextSystem`](crate::TextSystem).
+    /// [`ShapedText::paint`](crate::ShapedText::paint) methods in the [`TextSystem`](crate::TextSystem).
     /// This method is only useful if you need to paint a single emoji that has already been shaped.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
@@ -8043,11 +8043,7 @@ mod tests {
     struct RasterFormatView;
 
     impl Render for RasterFormatView {
-        fn render(
-            &mut self,
-            _window: &mut Window,
-            _context: &mut Context<Self>,
-        ) -> impl IntoElement {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let color = hsla(0.6, 0.7, 0.4, 0.8);
             let alternate_color = hsla(0.1, 0.6, 0.3, 0.8);
             div().size_full().opacity(0.5).child(
@@ -8154,11 +8150,7 @@ mod tests {
     struct FragmentFailureView;
 
     impl Render for FragmentFailureView {
-        fn render(
-            &mut self,
-            _window: &mut Window,
-            _context: &mut Context<Self>,
-        ) -> impl IntoElement {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div().size_full().child("x😀")
         }
     }

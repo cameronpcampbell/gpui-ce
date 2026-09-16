@@ -1,6 +1,6 @@
 use crate::{
-    App, Bounds, InlineLayout, LineLayout, PaintFragment, Pixels, Point, Result, SharedString,
-    TextAlign, TextSystem, VisualLine, Window, WrappedLineLayout, fill, point, size,
+    App, Bounds, InlineLayout, LineLayout, PaintFragment, Pixels, Point, Result, ShapedTextLayout,
+    SharedString, TextAlign, TextSystem, VisualLine, Window, fill, point, size,
 };
 use derive_more::{Deref, DerefMut};
 use std::sync::{
@@ -83,24 +83,24 @@ impl ShapedLine {
     }
 }
 
-/// A line of text that has been shaped, decorated, and wrapped by the text layout system.
+/// Text that has been shaped and decorated by the text layout system.
 #[derive(Debug, Deref, DerefMut)]
-pub struct WrappedLine {
+pub struct ShapedText {
     #[deref]
     #[deref_mut]
-    pub(crate) layout: Arc<WrappedLineLayout>,
-    /// The text that was shaped for this line.
+    pub(crate) layout: Arc<ShapedTextLayout>,
+    /// The text that was shaped.
     pub text: SharedString,
 }
 
-impl WrappedLine {
-    /// The length of the underlying, unwrapped layout, in utf-8 bytes.
+impl ShapedText {
+    /// The length of the text in UTF-8 bytes.
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.layout.len()
     }
 
-    /// Paint this line of text to the window.
+    /// Paint this text to the window.
     pub fn paint(
         &self,
         origin: Point<Pixels>,
@@ -128,7 +128,7 @@ impl WrappedLine {
         )
     }
 
-    /// Paint the background of line of text to the window.
+    /// Paint the background of this text to the window.
     pub fn paint_background(
         &self,
         origin: Point<Pixels>,
@@ -163,19 +163,14 @@ impl InlineLayout {
         &self,
         origin: Point<Pixels>,
         window: &mut Window,
-        context: &mut App,
+        cx: &mut App,
     ) -> Result<()> {
-        paint_inline_layout(self, origin, TextPaintPass::Background, window, context)
+        paint_inline_layout(self, origin, TextPaintPass::Background, window, cx)
     }
 
     /// Paint the glyphs and foreground decorations in this inline layout.
-    pub fn paint(
-        &self,
-        origin: Point<Pixels>,
-        window: &mut Window,
-        context: &mut App,
-    ) -> Result<()> {
-        paint_inline_layout(self, origin, TextPaintPass::Foreground, window, context)
+    pub fn paint(&self, origin: Point<Pixels>, window: &mut Window, cx: &mut App) -> Result<()> {
+        paint_inline_layout(self, origin, TextPaintPass::Foreground, window, cx)
     }
 }
 
@@ -199,13 +194,13 @@ fn paint_inline_layout(
     origin: Point<Pixels>,
     pass: TextPaintPass,
     window: &mut Window,
-    context: &mut App,
+    cx: &mut App,
 ) -> Result<()> {
     if inline.lines.is_empty() {
         return Ok(());
     }
 
-    let text_system = context.text_system().clone();
+    let text_system = cx.text_system().clone();
     let placement = place_inline_layout(origin, inline.alignment_offset, window);
     window.paint_layer(Bounds::new(placement.origin, inline.size), |window| {
         for (line, visual_line) in inline.lines.iter().zip(&inline.layout.visual_lines) {

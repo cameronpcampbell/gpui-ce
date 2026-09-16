@@ -5,12 +5,24 @@ use crate::editable_text::{
 use gpui::{
     App, Bounds, CaretAffinity, CaretPosition, CaretSelection, ClipboardItem, Context, ElementId,
     Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, NavigationDirection, Pixels,
-    Point, Subscription, TextMovement, TextSelectionKind, UTF16Selection, Window, WrappedLine,
+    Point, ShapedText, Subscription, TextMovement, TextSelectionKind, UTF16Selection, Window,
     point, utf16_to_utf8_offset,
 };
-use std::{borrow::Cow, cell::RefCell, ops::Range, sync::Arc};
+use std::{
+    borrow::Cow,
+    cell::{Ref, RefCell},
+    ops::Range,
+};
 
 const CARET_PIXELS_EPSILON: Pixels = gpui::px(4.);
+
+#[derive(Clone, Copy)]
+struct SelectionDragVisualCaret {
+    /// The selection state for which `position` is the displayed caret.
+    selection: CaretSelection,
+    /// The caret position directly under the pointer.
+    position: CaretPosition,
+}
 
 /// Internal state for EditableText elements.
 pub struct EditableTextState {
@@ -21,15 +33,18 @@ pub struct EditableTextState {
     /// The affinity-aware selection currently active in this input.
     /// Its focus is the input cursor and its anchor remains fixed while extending the selection.
     selected_range: CaretSelection,
-    preferred_x: Option<Pixels>,
+    /// The horizontal caret position preserved across consecutive vertical movements.
+    caret_position_x: Option<Pixels>,
 
     /// The utf-8 character range of `storage` which is being composed by IME
     marked_range: Option<Range<usize>>,
 
     /// True while the user is in the act of highlighting a section of the text (e.g. during mouse pressed & dragging).
     is_selecting: bool,
-    mouse_anchor: Option<CaretPosition>,
-    mouse_caret: Option<(CaretSelection, CaretPosition)>,
+    /// The anchor captured when a single-click selection drag begins.
+    selection_drag_anchor: Option<CaretPosition>,
+    /// The pointer-aligned caret for the current drag selection.
+    selection_drag_visual_caret: Option<SelectionDragVisualCaret>,
     /// The last ui location relative to the element that the user clicked. Used to filter when a user clicks multiple times in the same area.
     last_click_position: Option<Point<Pixels>>,
     /// The number of times the user has clicked `last_click_position`. Used to determine which click behavior to trigger, depending on single, double, or triple clicks.
@@ -39,7 +54,7 @@ pub struct EditableTextState {
     blur_subscription: Option<Subscription>,
     history: Option<EditableTextHistory>,
 
-    accessibility_text: RefCell<Option<Arc<AccessibilityText>>>,
+    accessibility_text_metrics: RefCell<Option<AccessibilityTextMetrics>>,
 
     pub(super) layout_data: EditableTextLayoutResult,
 }
@@ -118,12 +133,12 @@ impl EditableTextState {
             storage: Box::new(storage),
 
             selected_range: 0.into(),
-            preferred_x: None,
+            caret_position_x: None,
             marked_range: None,
 
             is_selecting: false,
-            mouse_anchor: None,
-            mouse_caret: None,
+            selection_drag_anchor: None,
+            selection_drag_visual_caret: None,
             last_click_position: None,
             click_count: 0,
 
@@ -131,7 +146,7 @@ impl EditableTextState {
             blur_subscription: None,
             // TODO: what is the best way to give users access to configure this via element
             history: Some(EditableTextHistory::default()),
-            accessibility_text: RefCell::default(),
+            accessibility_text_metrics: RefCell::default(),
 
             layout_data: EditableTextLayoutResult::default(),
         }
@@ -174,8 +189,8 @@ impl EditableTextState {
     }
 
     pub(super) fn visible_caret(&self) -> CaretPosition {
-        match self.mouse_caret {
-            Some((selection, caret)) if selection == self.selected_range => caret,
+        match self.selection_drag_visual_caret {
+            Some(drag_caret) if drag_caret.selection == self.selected_range => drag_caret.position,
             _ => self.caret(),
         }
     }
@@ -186,9 +201,9 @@ impl EditableTextState {
         }
 
         let focus_handle = self.focus_handle.clone();
-        let subscription = cx.on_blur(&focus_handle, window, |_state, window, context| {
-            context.defer_in(window, |state, _window, context| {
-                state.clear_selection(context);
+        let subscription = cx.on_blur(&focus_handle, window, |_state, window, cx| {
+            cx.defer_in(window, |state, _window, cx| {
+                state.clear_selection(cx);
             });
         });
         self.blur_subscription = Some(subscription);
@@ -196,11 +211,11 @@ impl EditableTextState {
 
     fn clear_selection(&mut self, cx: &mut Context<Self>) {
         self.selected_range = CaretSelection::collapsed(self.selected_range.focus);
-        self.preferred_x = None;
+        self.caret_position_x = None;
 
         self.is_selecting = false;
-        self.mouse_anchor = None;
-        self.mouse_caret = None;
+        self.selection_drag_anchor = None;
+        self.selection_drag_visual_caret = None;
         self.last_click_position = None;
         self.click_count = 0;
 
@@ -212,40 +227,44 @@ impl EditableTextState {
         self.marked_range.clone()
     }
 
-    pub(super) fn accessibility_text(&self) -> Arc<AccessibilityText> {
+    pub(super) fn accessibility_text_metrics(&self) -> Ref<'_, AccessibilityTextMetrics> {
         let version = self.storage.version();
-        if let Some(text) = self
-            .accessibility_text
+        let metrics_are_current = self
+            .accessibility_text_metrics
             .borrow()
             .as_ref()
-            .filter(|text| text.version == version)
-        {
-            return text.clone();
+            .is_some_and(|metrics| metrics.version == version);
+
+        if !metrics_are_current {
+            let text = self.storage.content_utf8();
+
+            let mut byte_offsets = text
+                .char_indices()
+                .map(|(offset, _)| offset)
+                .collect::<Vec<_>>();
+
+            byte_offsets.push(text.len());
+
+            *self.accessibility_text_metrics.borrow_mut() = Some(AccessibilityTextMetrics {
+                version,
+                character_lengths: text
+                    .chars()
+                    .map(|character| character.len_utf8() as u8)
+                    .collect(),
+                byte_offsets,
+            });
         }
 
-        let text = self.storage.content_utf8();
-        let mut byte_offsets = text
-            .char_indices()
-            .map(|(offset, _)| offset)
-            .collect::<Vec<_>>();
-        byte_offsets.push(text.len());
-        let accessibility_text = Arc::new(AccessibilityText {
-            version,
-            text: text.to_owned(),
-            character_lengths: text
-                .chars()
-                .map(|character| character.len_utf8() as u8)
-                .collect(),
-            byte_offsets,
-        });
-        *self.accessibility_text.borrow_mut() = Some(accessibility_text.clone());
-        accessibility_text
+        Ref::map(self.accessibility_text_metrics.borrow(), |metrics| {
+            metrics
+                .as_ref()
+                .expect("accessibility text metrics were prepared above")
+        })
     }
 }
 
-pub(super) struct AccessibilityText {
+pub(super) struct AccessibilityTextMetrics {
     version: u16,
-    pub(super) text: String,
     pub(super) character_lengths: Vec<u8>,
     pub(super) byte_offsets: Vec<usize>,
 }
@@ -310,7 +329,7 @@ impl EditableTextState {
         self.record_history(range.clone(), text_to_insert.len());
         self.storage.replace_range(range, text_to_insert);
         self.selected_range = CaretSelection::collapsed(CaretPosition::new(end_pos, affinity));
-        self.preferred_x = None;
+        self.caret_position_x = None;
         self.marked_range = None;
     }
 
@@ -321,7 +340,7 @@ impl EditableTextState {
 
 // Screen space (text layout engine output) & String space transformers
 impl EditableTextState {
-    fn current_document(&self) -> Option<&WrappedLine> {
+    fn current_document(&self) -> Option<&ShapedText> {
         if self.layout_data.state.last_seen_storage_version != self.storage.version() {
             return None;
         }
@@ -531,31 +550,31 @@ impl EditableTextState {
         self.set_caret(self.caret_for_index(caret_pos), true, cx);
     }
 
-    fn set_caret(&mut self, caret: CaretPosition, extend: bool, context: &mut Context<Self>) {
+    fn set_caret(&mut self, caret: CaretPosition, extend: bool, cx: &mut Context<Self>) {
         let selection = if extend {
             self.selected_range.with_focus(caret)
         } else {
             CaretSelection::collapsed(caret)
         };
 
-        self.set_selection(selection, None, context);
+        self.set_selection(selection, None, cx);
     }
 
     fn set_selection(
         &mut self,
         mut selection: CaretSelection,
-        preferred_x: Option<Pixels>,
-        context: &mut Context<Self>,
+        caret_position_x: Option<Pixels>,
+        cx: &mut Context<Self>,
     ) {
-        context.emit(CaretNotify::PauseBlinking);
+        cx.emit(CaretNotify::PauseBlinking);
         let storage_len = self.as_str().len();
         selection.focus.index = selection.focus.index.min(storage_len);
         selection.anchor.index = selection.anchor.index.min(storage_len);
         self.selected_range = selection;
-        self.preferred_x = preferred_x;
+        self.caret_position_x = caret_position_x;
 
         self.scroll_to_caret();
-        context.notify();
+        cx.notify();
     }
 
     /// Removes a chunk of text at the cursor/selection.
@@ -637,16 +656,16 @@ impl EditableTextState {
         self.move_to(caret_pos, cx);
     }
 
-    fn move_semantic(&mut self, movement: TextMovement, extend: bool, context: &mut Context<Self>) {
+    fn move_semantic(&mut self, movement: TextMovement, extend: bool, cx: &mut Context<Self>) {
         if let Some(document) = self.current_document() {
             let moved = document.move_selection(
                 self.selected_range,
                 movement,
                 extend,
-                self.preferred_x,
+                self.caret_position_x,
                 self.layout_data.line_height,
             );
-            self.set_selection(moved.selection, moved.preferred_x, context);
+            self.set_selection(moved.selection, moved.preferred_x, cx);
 
             return;
         }
@@ -694,13 +713,13 @@ impl EditableTextState {
                 .offset_from_caret(self.caret_pos(), direction, boundary)
         };
 
-        self.set_caret(CaretPosition::downstream(idx), extend, context);
+        self.set_caret(CaretPosition::downstream(idx), extend, cx);
     }
 
     /// Sets the current selection to be the entire text in the storage medium
     pub fn select_document(&mut self, cx: &mut Context<Self>) {
         self.selected_range = (0, self.storage.content_utf8().len()).into();
-        self.preferred_x = None;
+        self.caret_position_x = None;
         cx.notify();
     }
 
@@ -745,7 +764,7 @@ impl EditableTextState {
 
     fn select_word_at(&mut self, caret_pos: usize, cx: &mut Context<Self>) {
         self.selected_range = self.storage.word_range_at(caret_pos).into();
-        self.preferred_x = None;
+        self.caret_position_x = None;
         cx.notify();
     }
 
@@ -761,7 +780,7 @@ impl EditableTextState {
             line_end
         };
         self.selected_range = (line_start, line_end_with_newline).into();
-        self.preferred_x = None;
+        self.caret_position_x = None;
         cx.notify();
     }
 
@@ -770,7 +789,7 @@ impl EditableTextState {
         point: Point<Pixels>,
         line_height: Pixels,
         kind: TextSelectionKind,
-        context: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> bool {
         let Some(document) = self.current_document() else {
             return false;
@@ -779,8 +798,8 @@ impl EditableTextState {
         self.selected_range = document
             .selection_from_point(point, line_height, kind)
             .into();
-        self.preferred_x = None;
-        context.notify();
+        self.caret_position_x = None;
+        cx.notify();
         true
     }
 }
@@ -822,7 +841,7 @@ impl EditableTextState {
         // Replace the slice with the history value
         self.storage.replace_range(range, &entry.old_text);
         self.selected_range = entry.selected_range;
-        self.preferred_x = None;
+        self.caret_position_x = None;
 
         // Push the entry onto the redo stack so the undo can be undone
         history.push(dst, entry.as_inverted(removed_text));
@@ -979,7 +998,7 @@ use super::{actions::*, history::HistoryKind};
 impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState {
     fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<'app, Self>) {
         self.selected_range = 0.into();
-        self.preferred_x = None;
+        self.caret_position_x = None;
         cx.notify();
 
         window.blur(cx);
@@ -1054,22 +1073,22 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         self.move_semantic(TextMovement::VisualRight, false, cx);
     }
 
-    fn nav_up(&mut self, _: &NavUp, _window: &mut Window, context: &mut Context<'app, Self>) {
+    fn nav_up(&mut self, _: &NavUp, _window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
-            self.move_semantic(TextMovement::VisualLineStart, false, context);
+            self.move_semantic(TextMovement::VisualLineStart, false, cx);
             return;
         }
 
-        self.move_semantic(TextMovement::VisualUp, false, context);
+        self.move_semantic(TextMovement::VisualUp, false, cx);
     }
 
-    fn nav_down(&mut self, _: &NavDown, _window: &mut Window, context: &mut Context<'app, Self>) {
+    fn nav_down(&mut self, _: &NavDown, _window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
-            self.move_semantic(TextMovement::VisualLineEnd, false, context);
+            self.move_semantic(TextMovement::VisualLineEnd, false, cx);
             return;
         }
 
-        self.move_semantic(TextMovement::VisualDown, false, context);
+        self.move_semantic(TextMovement::VisualDown, false, cx);
     }
 
     fn nav_line_start(&mut self, _: &NavLineStart, _w: &mut Window, cx: &mut Context<'app, Self>) {
@@ -1108,33 +1127,24 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         self.move_semantic(TextMovement::VisualRight, true, cx);
     }
 
-    fn select_up(&mut self, _: &SelectUp, _window: &mut Window, context: &mut Context<'app, Self>) {
+    fn select_up(&mut self, _: &SelectUp, _window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
             // semantically equivalent to select document
-            self.select_linear(NavigationDirection::Back, TextBoundary::Document, context);
+            self.select_linear(NavigationDirection::Back, TextBoundary::Document, cx);
             return;
         }
 
-        self.move_semantic(TextMovement::VisualUp, true, context);
+        self.move_semantic(TextMovement::VisualUp, true, cx);
     }
 
-    fn select_down(
-        &mut self,
-        _: &SelectDown,
-        _window: &mut Window,
-        context: &mut Context<'app, Self>,
-    ) {
+    fn select_down(&mut self, _: &SelectDown, _window: &mut Window, cx: &mut Context<'app, Self>) {
         if !self.layout_data.supports_multiline {
             // semantically equivalent to select document
-            self.select_linear(
-                NavigationDirection::Forward,
-                TextBoundary::Document,
-                context,
-            );
+            self.select_linear(NavigationDirection::Forward, TextBoundary::Document, cx);
             return;
         }
 
-        self.move_semantic(TextMovement::VisualDown, true, context);
+        self.move_semantic(TextMovement::VisualDown, true, cx);
     }
 
     fn select_start(
@@ -1234,7 +1244,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         let caret = self.caret_for_pixel_point(text_position, line_height);
 
         self.is_selecting = true;
-        self.mouse_caret = None;
+        self.selection_drag_visual_caret = None;
         self.apply_click(event.click_count, text_position);
 
         match self.click_count {
@@ -1256,7 +1266,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
             _ => self.set_caret(caret, event.modifiers.shift, cx),
         }
 
-        self.mouse_anchor =
+        self.selection_drag_anchor =
             (self.click_count == 1 && !event.modifiers.shift).then_some(self.selected_range.anchor);
     }
 
@@ -1267,7 +1277,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         _cx: &mut Context<'app, Self>,
     ) {
         self.is_selecting = false;
-        self.mouse_anchor = None;
+        self.selection_drag_anchor = None;
     }
 
     fn on_mouse_move(
@@ -1278,17 +1288,20 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         cx: &mut Context<'app, Self>,
     ) {
         if self.is_selecting && self.click_count == 1 {
-            let mouse_caret =
+            let pointer_caret =
                 self.caret_for_pixel_point(text_position, self.layout_data.line_height);
-            let mut caret = mouse_caret;
+            let mut selection_focus = pointer_caret;
 
-            if let Some(anchor) = self.mouse_anchor {
-                self.selected_range.anchor = self.mouse_selection_endpoint(anchor, caret);
-                caret = self.mouse_selection_endpoint(caret, anchor);
+            if let Some(anchor) = self.selection_drag_anchor {
+                self.selected_range.anchor = self.mouse_selection_endpoint(anchor, selection_focus);
+                selection_focus = self.mouse_selection_endpoint(selection_focus, anchor);
             }
 
-            self.mouse_caret = Some((self.selected_range.with_focus(caret), mouse_caret));
-            self.set_caret(caret, true, cx);
+            self.selection_drag_visual_caret = Some(SelectionDragVisualCaret {
+                selection: self.selected_range.with_focus(selection_focus),
+                position: pointer_caret,
+            });
+            self.set_caret(selection_focus, true, cx);
         }
     }
 }
@@ -2429,7 +2442,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn cut_without_selection_removes_complete_hard_line(context: &mut TestAppContext) {
+    fn cut_without_selection_removes_complete_hard_line(cx: &mut TestAppContext) {
         for (name, text, caret, remaining, expected_clipboard) in [
             (
                 "middle",
@@ -2443,13 +2456,13 @@ mod tests {
             ("empty", "line1\n\nline3", 6, "line1\nline3", "\n"),
             ("only", "hello", 2, "", "hello"),
         ] {
-            let view = create_test_input(context, text, caret);
-            update_test_input(view, context, |input, window, context| {
-                input.cut(&Cut, window, context);
+            let view = create_test_input(cx, text, caret);
+            update_test_input(view, cx, |input, window, cx| {
+                input.cut(&Cut, window, cx);
                 assert_eq!(input.as_str(), remaining, "{name}");
             });
 
-            let clipboard = context.read_from_clipboard().and_then(|item| item.text());
+            let clipboard = cx.read_from_clipboard().and_then(|item| item.text());
             assert_eq!(clipboard.as_deref(), Some(expected_clipboard), "{name}");
         }
     }
@@ -2675,45 +2688,34 @@ mod tests {
     }
 
     #[gpui::test]
-    fn ime_composition_uses_relative_utf16_ranges_around_surrogate_pairs(
-        context: &mut TestAppContext,
-    ) {
-        let view = create_test_input(context, "A😀B", 0);
-        update_test_input(view, context, |input, window, context| {
-            input.replace_and_mark_text_in_range(Some(1..3), "にほん", Some(1..2), window, context);
+    fn ime_composition_uses_relative_utf16_ranges_around_surrogate_pairs(cx: &mut TestAppContext) {
+        let view = create_test_input(cx, "A😀B", 0);
+        update_test_input(view, cx, |input, window, cx| {
+            input.replace_and_mark_text_in_range(Some(1..3), "にほん", Some(1..2), window, cx);
             assert_eq!(input.as_str(), "AにほんB");
             assert_eq!(
-                input.marked_text_range(window, context),
+                input.marked_text_range(window, cx),
                 Some(1..4),
                 "marked ranges exposed to the platform use document UTF-16 offsets"
             );
             assert_eq!(
-                input
-                    .selected_text_range(false, window, context)
-                    .unwrap()
-                    .range,
+                input.selected_text_range(false, window, cx).unwrap().range,
                 2..3,
                 "composition selections are relative to the inserted text"
             );
 
-            input.replace_and_mark_text_in_range(None, "日本", None, window, context);
+            input.replace_and_mark_text_in_range(None, "日本", None, window, cx);
             assert_eq!(input.as_str(), "A日本B");
-            assert_eq!(input.marked_text_range(window, context), Some(1..3));
+            assert_eq!(input.marked_text_range(window, cx), Some(1..3));
             assert_eq!(
-                input
-                    .selected_text_range(false, window, context)
-                    .unwrap()
-                    .range,
+                input.selected_text_range(false, window, cx).unwrap().range,
                 3..3
             );
 
-            input.unmark_text(window, context);
-            assert_eq!(input.marked_text_range(window, context), None);
+            input.unmark_text(window, cx);
+            assert_eq!(input.marked_text_range(window, cx), None);
             assert_eq!(
-                input
-                    .selected_text_range(false, window, context)
-                    .unwrap()
-                    .range,
+                input.selected_text_range(false, window, cx).unwrap().range,
                 3..3
             );
         });

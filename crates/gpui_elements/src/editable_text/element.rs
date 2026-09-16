@@ -18,16 +18,15 @@ use crate::editable_text::{
     BLINK_INTERVAL_500MS, Caret, EditableTextState,
     actions::{DEFAULT_INPUT_CONTEXT, EditableTextActionElement, EditableTextActionHandler},
     layout::{EditableTextLayoutResult, EditableTextLayoutState},
-    state::AccessibilityText,
 };
 use gpui::{
     A11ySubtreeBuilder, App, Bounds, CaretPosition, CaretSelection, CursorStyle, DefiniteLength,
     DispatchPhase, Display, Element, ElementId, ElementInputHandler, Entity, FocusHandle,
     Focusable, Hitbox, HitboxBehavior, Hsla, InteractiveElement, Interactivity, IntoElement,
     LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    ParagraphDirection, Pixels, Point, SharedString, Size, StatefulInteractiveElement, Style,
-    StyleRefinement, Styled, TextAlign, TextLayout, TextLayoutOptions, UnicodeBidi, WeakEntity,
-    Window, WrappedLine, accesskit, fill, point, px, relative, size,
+    ParagraphDirection, Pixels, Point, ShapedText, SharedString, Size, StatefulInteractiveElement,
+    Style, StyleRefinement, Styled, TextAlign, TextLayout, TextLayoutOptions, UnicodeBidi,
+    WeakEntity, Window, accesskit, fill, point, px, relative, size,
 };
 use palette::IntoColor;
 use smallvec::SmallVec;
@@ -276,7 +275,7 @@ pub struct PrepaintState {
     interactivity: InteractivityPrepaint,
     focus_handle: FocusHandle,
     elements: PrepaintElements,
-    accessible_text: Option<Arc<AccessibilityText>>,
+    accessible_text_run: Option<accesskit::Node>,
     accessible_anchor: usize,
     accessible_focus: usize,
 }
@@ -312,13 +311,10 @@ impl Element for EditableTextElement {
         prepaint: &mut Self::PrepaintState,
         builder: &mut A11ySubtreeBuilder,
     ) {
-        let accessible_text = prepaint
-            .accessible_text
-            .as_ref()
+        let text_run = prepaint
+            .accessible_text_run
+            .take()
             .expect("accessibility data was prepared while building the tree");
-        let mut text_run = accesskit::Node::new(accesskit::Role::TextRun);
-        text_run.set_value(accessible_text.text.clone());
-        text_run.set_character_lengths(accessible_text.character_lengths.clone());
         let text_run_id = builder.synthetic_node_id("text");
         builder.push_child(text_run_id, text_run);
         builder
@@ -343,7 +339,7 @@ impl Element for EditableTextElement {
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
         let entity = self.find_or_create_state(window, cx);
-        entity.update(cx, |state, context| state.observe_blur(window, context));
+        entity.update(cx, |state, cx| state.observe_blur(window, cx));
         let caret = self.find_or_create_caret(&entity, window, cx);
 
         if let Some(duration) = self.caret_blink_interval.take()
@@ -482,11 +478,19 @@ impl Element for EditableTextElement {
         );
 
         let state = request_layout.state.read(cx);
-        let accessible_text = window.is_a11y_active().then(|| state.accessibility_text());
-        let (accessible_anchor, accessible_focus) =
-            accessible_text.as_ref().map_or((0, 0), |text| {
-                accessible_selection(&text.byte_offsets, state.caret_selection())
-            });
+        let (accessible_text_run, accessible_anchor, accessible_focus) = if window.is_a11y_active()
+        {
+            let metrics = state.accessibility_text_metrics();
+            let (anchor, focus) =
+                accessible_selection(&metrics.byte_offsets, state.caret_selection());
+            let mut text_run = accesskit::Node::new(accesskit::Role::TextRun);
+            text_run.set_value(state.as_str());
+            text_run.set_character_lengths(metrics.character_lengths.clone());
+
+            (Some(text_run), anchor, focus)
+        } else {
+            (None, 0, 0)
+        };
         let elements = PrepaintElements::build_elements(
             state,
             &prepaint,
@@ -501,7 +505,7 @@ impl Element for EditableTextElement {
             interactivity: prepaint,
             focus_handle,
             elements,
-            accessible_text,
+            accessible_text_run,
             accessible_anchor,
             accessible_focus,
         }
@@ -827,7 +831,7 @@ impl PrelayoutState {
 
 #[derive(Default)]
 struct PrepaintElements {
-    document: Option<Arc<WrappedLine>>,
+    document: Option<Arc<ShapedText>>,
     selection: SmallVec<[PaintQuad; 20]>,
     ime_marked: SmallVec<[PaintQuad; 2]>,
     caret: Option<PaintQuad>,
@@ -908,7 +912,7 @@ impl PrepaintElements {
     }
 }
 
-fn editable_document_offset(document: &WrappedLine, line_height: Pixels) -> Point<Pixels> {
+fn editable_document_offset(document: &ShapedText, line_height: Pixels) -> Point<Pixels> {
     let mut left = Pixels::ZERO;
 
     for caret in [
@@ -951,11 +955,7 @@ mod tests {
     }
 
     impl Render for BidiInputView {
-        fn render(
-            &mut self,
-            _window: &mut Window,
-            _context: &mut Context<Self>,
-        ) -> impl IntoElement {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div().p(px(24.)).child(
                 editable_text("bidi-input")
                     .state(self.input.downgrade())
@@ -994,7 +994,7 @@ mod tests {
         window: WindowHandle<BidiInputView>,
         padding: Pixels,
         scale: f32,
-        context: HeadlessAppContext,
+        cx: HeadlessAppContext,
     }
 
     impl BidiInputFixture {
@@ -1039,16 +1039,15 @@ mod tests {
                 ])
                 .unwrap();
 
-            let mut context = HeadlessAppContext::new(Arc::new(system));
-            let input = context.update(|context| {
-                context.new(|context| EditableTextState::new(StringStorage::from(text), context))
-            });
+            let mut cx = HeadlessAppContext::new(Arc::new(system));
+            let input =
+                cx.update(|cx| cx.new(|cx| EditableTextState::new(StringStorage::from(text), cx)));
 
-            let window = context
-                .open_window(size(px(500.), px(240.)), |window, context| {
+            let window = cx
+                .open_window(size(px(500.), px(240.)), |window, cx| {
                     window.set_scale_factor(scale);
 
-                    context.new(|_context| BidiInputView {
+                    cx.new(|_cx| BidiInputView {
                         input: input.clone(),
                         padding: px(padding),
                         width: px(width),
@@ -1059,57 +1058,48 @@ mod tests {
                     })
                 })
                 .unwrap();
-            context.run_until_parked();
+            cx.run_until_parked();
 
             Self {
                 input,
                 window,
                 padding: px(padding),
                 scale,
-                context,
+                cx,
             }
         }
 
         fn origin(&mut self) -> Point<Pixels> {
-            let bounds = only_quad(&mut self.context, self.window.into(), INPUT_COLOR)
+            let bounds = only_quad(&mut self.cx, self.window.into(), INPUT_COLOR)
                 .map(|value| px(value.as_f32() / self.scale));
-            let (scroll, document_offset) = self.context.update(|context| {
-                let layout = &self.input.read(context).layout_data;
+            let (scroll, document_offset) = self.cx.update(|cx| {
+                let layout = &self.input.read(cx).layout_data;
                 (layout.scroll_bounds.origin, layout.document_offset)
             });
 
             bounds.origin + point(self.padding, self.padding) - scroll + document_offset
         }
 
-        fn document(&mut self) -> Arc<WrappedLine> {
-            self.context.update(|context| {
-                self.input
-                    .read(context)
-                    .layout_data
-                    .document
-                    .clone()
-                    .unwrap()
-            })
+        fn document(&mut self) -> Arc<ShapedText> {
+            self.cx
+                .update(|cx| self.input.read(cx).layout_data.document.clone().unwrap())
         }
 
         fn line_height(&mut self) -> Pixels {
-            self.context
-                .update(|context| self.input.read(context).layout_data.line_height)
+            self.cx
+                .update(|cx| self.input.read(cx).layout_data.line_height)
         }
 
         fn scroll(&mut self, offset: Point<Pixels>) {
-            self.context.update(|context| {
-                self.input.update(context, |state, context| {
+            self.cx.update(|cx| {
+                self.input.update(cx, |state, cx| {
                     state.layout_data.next_scroll_offset = Some(offset);
-                    context.notify();
+                    cx.notify();
                 })
             });
-            self.context.run_until_parked();
-            self.context.update(|context| {
-                assert_eq!(
-                    self.input.read(context).layout_data.scroll_bounds.origin,
-                    offset
-                );
+            self.cx.run_until_parked();
+            self.cx.update(|cx| {
+                assert_eq!(self.input.read(cx).layout_data.scroll_bounds.origin, offset);
             });
         }
 
@@ -1131,41 +1121,41 @@ mod tests {
             &mut self,
             update: impl FnOnce(&mut EditableTextState, &mut Context<EditableTextState>),
         ) {
-            self.context
-                .update_window(self.window.into(), |_view, window, context| {
-                    let focus_handle = self.input.read(context).focus_handle(context);
-                    window.focus(&focus_handle, context);
-                    self.input.update(context, update);
+            self.cx
+                .update_window(self.window.into(), |_view, window, cx| {
+                    let focus_handle = self.input.read(cx).focus_handle(cx);
+                    window.focus(&focus_handle, cx);
+                    self.input.update(cx, update);
                 })
                 .unwrap();
-            self.context.run_until_parked();
+            self.cx.run_until_parked();
         }
 
         fn activate(&mut self) {
-            self.context
-                .update_window(self.window.into(), |_view, window, _context| {
+            self.cx
+                .update_window(self.window.into(), |_view, window, _cx| {
                     window.activate_window();
                 })
                 .unwrap();
-            self.context.run_until_parked();
+            self.cx.run_until_parked();
         }
 
         fn blur(&mut self) {
-            self.context
-                .update_window(self.window.into(), |_view, window, context| {
-                    window.blur(context);
+            self.cx
+                .update_window(self.window.into(), |_view, window, cx| {
+                    window.blur(cx);
                 })
                 .unwrap();
-            self.context.run_until_parked();
+            self.cx.run_until_parked();
         }
 
         fn dispatch(&mut self, event: PlatformInput) {
-            self.context
-                .update_window(self.window.into(), |_view, window, context| {
-                    window.dispatch_event(event, context);
+            self.cx
+                .update_window(self.window.into(), |_view, window, cx| {
+                    window.dispatch_event(event, cx);
                 })
                 .unwrap();
-            self.context.run_until_parked();
+            self.cx.run_until_parked();
         }
 
         fn key_down(&mut self, keystroke: &str) {
@@ -1222,9 +1212,7 @@ mod tests {
         }
 
         fn assert_selection(&mut self, anchor: usize, focus: usize) {
-            let caret = self
-                .context
-                .update(|context| self.input.read(context).caret());
+            let caret = self.cx.update(|cx| self.input.read(cx).caret());
             assert_eq!(caret.index, focus);
             self.assert_caret_selection(anchor, caret);
         }
@@ -1232,8 +1220,8 @@ mod tests {
         fn assert_caret_selection(&mut self, anchor: usize, focus: CaretPosition) {
             let focus_idx = focus.index;
             let range = anchor.min(focus_idx)..anchor.max(focus_idx);
-            let caret = self.context.update(|context| {
-                let state = self.input.read(context);
+            let caret = self.cx.update(|cx| {
+                let state = self.input.read(cx);
                 assert_eq!(state.selected_range(), range);
                 assert_eq!(state.caret(), focus);
 
@@ -1259,7 +1247,7 @@ mod tests {
 
         fn assert_quads(&mut self, color: Hsla, expected: Vec<Bounds<Pixels>>) {
             let actual = self
-                .context
+                .cx
                 .solid_quad_bounds(self.window.into(), color)
                 .unwrap();
             assert_eq!(actual.len(), expected.len(), "quad count for {color:?}");
@@ -1281,16 +1269,16 @@ mod tests {
         let text = "selected text";
         let mut fixture = BidiInputFixture::new(text, 8.0, 300.0, false, 1.0);
         fixture.activate();
-        fixture.update_input(|state, context| state.select_to(text.len(), context));
-        fixture.context.update(|context| {
-            assert_eq!(fixture.input.read(context).selected_range(), 0..text.len());
+        fixture.update_input(|state, cx| state.select_to(text.len(), cx));
+        fixture.cx.update(|cx| {
+            assert_eq!(fixture.input.read(cx).selected_range(), 0..text.len());
         });
 
         fixture.blur();
 
-        fixture.context.update(|context| {
+        fixture.cx.update(|cx| {
             assert_eq!(
-                fixture.input.read(context).caret_selection(),
+                fixture.input.read(cx).caret_selection(),
                 CaretSelection::collapsed(CaretPosition::upstream(text.len()))
             );
         });
@@ -1364,11 +1352,11 @@ mod tests {
         ] {
             let mut fixture =
                 BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
-            fixture.context.update(|context| {
-                context.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
+            fixture.cx.update(|cx| {
+                cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
             });
-            fixture.context.run_until_parked();
-            fixture.update_input(|input, context| input.move_to(middle, context));
+            fixture.cx.run_until_parked();
+            fixture.update_input(|input, cx| input.move_to(middle, cx));
 
             fixture.change_modifiers(Modifiers::shift());
             fixture.key_down("shift-home");
@@ -1379,7 +1367,7 @@ mod tests {
             fixture.assert_selection(line_end, line_end);
             fixture.key_up("shift-end");
 
-            fixture.update_input(|input, context| input.move_to(middle, context));
+            fixture.update_input(|input, cx| input.move_to(middle, cx));
             fixture.key_down("shift-end");
             fixture.assert_selection(line_end, line_end);
             fixture.key_up("shift-end");
@@ -1388,9 +1376,9 @@ mod tests {
             fixture.assert_selection(line_start, line_start);
             fixture.key_up("shift-home");
 
-            fixture.update_input(|input, context| {
-                input.move_to(outer_start, context);
-                input.select_to(outer_end, context);
+            fixture.update_input(|input, cx| {
+                input.move_to(outer_start, cx);
+                input.select_to(outer_end, cx);
             });
             fixture.key_down("shift-home");
             fixture.assert_selection(line_end + 1, line_end + 1);
@@ -1405,7 +1393,7 @@ mod tests {
     fn parley_hebrew_click_uses_the_painted_gap() {
         let mut fixture = BidiInputFixture::new("שלום עולם", 8., 320., false, 1.5);
         let mut glyphs = fixture
-            .context
+            .cx
             .glyph_bounds(fixture.window.into(), TEXT_COLOR)
             .unwrap();
         glyphs.sort_by(|left, right| left.origin.x.partial_cmp(&right.origin.x).unwrap());
@@ -1482,12 +1470,12 @@ mod tests {
 
             let mut fixture =
                 BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
-            fixture.update_input(|state, context| {
-                state.move_to(anchor, context);
+            fixture.update_input(|state, cx| {
+                state.move_to(anchor, cx);
                 state.select_linear(
                     NavigationDirection::Forward,
                     crate::editable_text::TextBoundary::Document,
-                    context,
+                    cx,
                 );
             });
             fixture.assert_caret_selection(anchor, CaretPosition::upstream(text.len()));
@@ -1503,17 +1491,17 @@ mod tests {
             let mut fixture =
                 BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
 
-            fixture.update_input(|state, context| {
-                state.move_to(text.len(), context);
+            fixture.update_input(|state, cx| {
+                state.move_to(text.len(), cx);
                 state.delete_linear(
                     NavigationDirection::Back,
                     crate::editable_text::TextBoundary::Graphmeme,
-                    context,
+                    cx,
                 );
             });
 
-            let caret = fixture.context.update(|context| {
-                let state = fixture.input.read(context);
+            let caret = fixture.cx.update(|cx| {
+                let state = fixture.input.read(cx);
                 assert_eq!(state.as_str(), remaining);
                 state.caret()
             });
@@ -1560,16 +1548,15 @@ mod tests {
             1.0,
             Direction::RightToLeft,
         );
-        let (scroll, document_offset, next_scroll, content_size) =
-            fixture.context.update(|context| {
-                let layout = &fixture.input.read(context).layout_data;
-                (
-                    layout.scroll_bounds.origin,
-                    layout.document_offset,
-                    layout.next_scroll_offset,
-                    layout.state.size,
-                )
-            });
+        let (scroll, document_offset, next_scroll, content_size) = fixture.cx.update(|cx| {
+            let layout = &fixture.input.read(cx).layout_data;
+            (
+                layout.scroll_bounds.origin,
+                layout.document_offset,
+                layout.next_scroll_offset,
+                layout.state.size,
+            )
+        });
         assert!(document_offset.x > Pixels::ZERO);
         assert!(
             scroll.x > Pixels::ZERO
@@ -1598,8 +1585,8 @@ mod tests {
             None,
         );
         let document = fixture.document();
-        let (scroll, document_offset) = fixture.context.update(|context| {
-            let layout = &fixture.input.read(context).layout_data;
+        let (scroll, document_offset) = fixture.cx.update(|cx| {
+            let layout = &fixture.input.read(cx).layout_data;
             (layout.scroll_bounds.origin, layout.document_offset)
         });
 
@@ -1627,20 +1614,20 @@ mod tests {
 
         let marked_start = text[..focus].encode_utf16().count();
         fixture
-            .context
-            .update_window(fixture.window.into(), |_view, window, context| {
-                fixture.input.update(context, |state, context| {
+            .cx
+            .update_window(fixture.window.into(), |_view, window, cx| {
+                fixture.input.update(cx, |state, cx| {
                     state.replace_and_mark_text_in_range(
                         Some(marked_start..marked_start + 1),
                         "ל",
                         None,
                         window,
-                        context,
+                        cx,
                     );
                 });
             })
             .unwrap();
-        fixture.context.run_until_parked();
+        fixture.cx.run_until_parked();
         fixture.scroll(point(px(45.), px(0.)));
 
         let origin = fixture.origin();
@@ -1711,11 +1698,7 @@ mod tests {
     }
 
     impl Render for CenteredEditableTextView {
-        fn render(
-            &mut self,
-            _window: &mut Window,
-            _context: &mut Context<Self>,
-        ) -> impl IntoElement {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div()
                 .flex()
                 .items_center()
@@ -1742,11 +1725,11 @@ mod tests {
     }
 
     fn only_quad(
-        context: &mut HeadlessAppContext,
+        cx: &mut HeadlessAppContext,
         window: gpui::AnyWindowHandle,
         color: Hsla,
     ) -> Bounds<ScaledPixels> {
-        let bounds = context.solid_quad_bounds(window, color).unwrap();
+        let bounds = cx.solid_quad_bounds(window, color).unwrap();
         assert_eq!(bounds.len(), 1, "expected one rendered quad for {color:?}");
         bounds[0]
     }
@@ -1775,25 +1758,25 @@ mod tests {
     #[test]
     fn editable_text_keeps_its_device_pixel_offset_when_its_parent_moves() {
         for scale_factor in [1.0, 1.5] {
-            let mut context = HeadlessAppContext::new(Arc::new(TestTextSystem));
-            let window = context
-                .open_window(size(px(420.0), px(260.0)), |window, context| {
+            let mut cx = HeadlessAppContext::new(Arc::new(TestTextSystem));
+            let window = cx
+                .open_window(size(px(420.0), px(260.0)), |window, cx| {
                     window.set_scale_factor(scale_factor);
-                    let input = context.new(|context| {
-                        let mut state = EditableTextState::new(StringStorage::from("x"), context);
-                        state.select_document(context);
+                    let input = cx.new(|cx| {
+                        let mut state = EditableTextState::new(StringStorage::from("x"), cx);
+                        state.select_document(cx);
                         state
                     });
 
-                    context.new(|_| CenteredEditableTextView { extent: 0.0, input })
+                    cx.new(|_| CenteredEditableTextView { extent: 0.0, input })
                 })
                 .unwrap();
 
-            context.run_until_parked();
+            cx.run_until_parked();
             let any_window = window.into();
-            let initial_container = only_quad(&mut context, any_window, CONTAINER_COLOR);
-            let initial_input = only_quad(&mut context, any_window, INPUT_COLOR);
-            let initial_selection = only_quad(&mut context, any_window, SELECTION_COLOR);
+            let initial_container = only_quad(&mut cx, any_window, CONTAINER_COLOR);
+            let initial_input = only_quad(&mut cx, any_window, INPUT_COLOR);
+            let initial_selection = only_quad(&mut cx, any_window, SELECTION_COLOR);
             let expected_input_offset = initial_input.origin - initial_container.origin;
             let expected_selection_offset = initial_selection.origin - initial_input.origin;
             let mut container_origins = HashSet::from([(
@@ -1803,16 +1786,16 @@ mod tests {
 
             for step in 1..=32 {
                 window
-                    .update(&mut context, |view, _, context| {
+                    .update(&mut cx, |view, _, cx| {
                         view.extent = step as f32;
-                        context.notify();
+                        cx.notify();
                     })
                     .unwrap();
-                context.run_until_parked();
+                cx.run_until_parked();
 
-                let container = only_quad(&mut context, any_window, CONTAINER_COLOR);
-                let input = only_quad(&mut context, any_window, INPUT_COLOR);
-                let selection = only_quad(&mut context, any_window, SELECTION_COLOR);
+                let container = only_quad(&mut cx, any_window, CONTAINER_COLOR);
+                let input = only_quad(&mut cx, any_window, INPUT_COLOR);
+                let selection = only_quad(&mut cx, any_window, SELECTION_COLOR);
                 assert_eq!(
                     input.origin - container.origin,
                     expected_input_offset,

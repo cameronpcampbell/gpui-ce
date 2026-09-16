@@ -107,22 +107,20 @@ fn main() {
     #[cfg(target_family = "wasm")]
     {
         gpui_ce_platform::web_init();
-        let application = gpui_ce_platform::application().run_embedded(|context: &mut App| {
-            context
-                .text_system()
+        let application = gpui_ce_platform::application().run_embedded(|cx: &mut App| {
+            cx.text_system()
                 .add_fonts(fixture_fonts())
                 .expect("failed to load rendering fixture fonts");
-            let bounds = Bounds::centered(None, size(px(1280.0), px(800.0)), context);
-            context
-                .open_window(
-                    WindowOptions {
-                        window_bounds: Some(WindowBounds::Windowed(bounds)),
-                        ..Default::default()
-                    },
-                    |_, context| context.new(|_| ParleyRenderingFixture),
-                )
-                .expect("failed to open browser text window");
-            context.activate(true);
+            let bounds = Bounds::centered(None, size(px(1280.0), px(800.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|_| ParleyRenderingFixture),
+            )
+            .expect("failed to open browser text window");
+            cx.activate(true);
         });
         std::mem::forget(application);
 
@@ -132,10 +130,10 @@ fn main() {
     #[cfg(not(target_family = "wasm"))]
     {
         #[cfg(target_os = "macos")]
-        let mut context = VisualTestAppContext::new(gpui_ce_platform::current_platform(false));
+        let mut cx = VisualTestAppContext::new(gpui_ce_platform::current_platform(false));
 
         #[cfg(not(target_os = "macos"))]
-        let mut context = {
+        let mut cx = {
             let platform = gpui_ce_platform::current_platform(true);
             let text_system = platform.text_system();
 
@@ -147,26 +145,25 @@ fn main() {
             })
         };
 
-        context
-            .update(|context| context.text_system().add_fonts(fixture_fonts()))
+        cx.update(|cx| cx.text_system().add_fonts(fixture_fonts()))
             .expect("failed to load rendering fixture fonts");
 
         #[cfg(target_os = "macos")]
-        let window = context
-            .open_offscreen_window_default(|_, context| context.new(|_| ParleyRenderingFixture))
+        let window = cx
+            .open_offscreen_window_default(|_, cx| cx.new(|_| ParleyRenderingFixture))
             .expect("failed to create offscreen text window");
 
         #[cfg(not(target_os = "macos"))]
-        let window = context
-            .open_window(gpui::size(px(1280.0), px(800.0)), |_, context| {
-                context.new(|_| ParleyRenderingFixture)
+        let window = cx
+            .open_window(gpui::size(px(1280.0), px(800.0)), |_, cx| {
+                cx.new(|_| ParleyRenderingFixture)
             })
             .expect("failed to create the headless text window");
 
         let window = window.into();
-        context.run_until_parked();
+        cx.run_until_parked();
 
-        let primitive_counts = context
+        let primitive_counts = cx
             .update_window(window, |_, window, _| window.rendered_primitive_counts())
             .expect("failed to inspect rendered text");
         let (_, monochrome, subpixel, polychrome) = primitive_counts;
@@ -179,7 +176,7 @@ fn main() {
             "Parley scene contained {polychrome} color emoji sprites, expected at least 9"
         );
 
-        let image = context
+        let image = cx
             .capture_screenshot(window)
             .expect("failed to capture rendered text");
 

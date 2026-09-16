@@ -343,7 +343,7 @@ impl InlineParagraphCollector<'_> {
                 display: Display::Block,
                 ..Style::default()
             },
-            move |known_dimensions, available_space, window, _context| {
+            move |known_dimensions, available_space, window, _cx| {
                 let (options, truncation) = TextLayout::layout_options(
                     &text_style,
                     known_dimensions,
@@ -423,7 +423,7 @@ impl InlineDivFrameState {
         style: &Style,
         children: &[LayoutId],
         window: &mut Window,
-        context: &mut App,
+        cx: &mut App,
     ) -> (LayoutId, Self) {
         let mut paragraph_collector = InlineParagraphCollector {
             frame_state: Self::default(),
@@ -433,7 +433,7 @@ impl InlineDivFrameState {
             text_style: window.text_style(),
             unicode_bidi: style.effective_unicode_bidi(),
             window,
-            cx: context,
+            cx,
         };
 
         for child in children {
@@ -563,7 +563,7 @@ impl InlineDivFrameState {
         }
     }
 
-    pub(super) fn paint_paragraphs(&self, window: &mut Window, context: &mut App) {
+    pub(super) fn paint_paragraphs(&self, window: &mut Window, cx: &mut App) {
         for paragraph in &self.paragraphs {
             let measurement = paragraph.measurement.borrow();
             let layout = &measurement
@@ -572,12 +572,10 @@ impl InlineDivFrameState {
                 .layout;
 
             layout
-                .paint_background(paragraph.paint_origin, window, context)
+                .paint_background(paragraph.paint_origin, window, cx)
                 .log_err();
 
-            layout
-                .paint(paragraph.paint_origin, window, context)
-                .log_err();
+            layout.paint(paragraph.paint_origin, window, cx).log_err();
         }
     }
 }
