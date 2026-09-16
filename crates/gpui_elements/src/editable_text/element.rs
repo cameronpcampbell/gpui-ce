@@ -929,6 +929,8 @@ fn editable_document_offset(document: &WrappedLine, line_height: Pixels) -> Poin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editable_text::actions::default_bindings;
+    use gpui::{KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent};
 
     const CONTAINER_COLOR: Hsla = hsla(0.72, 0.45, 0.32, 1.0);
     const INPUT_COLOR: Hsla = hsla(0.08, 0.55, 0.28, 1.0);
@@ -1147,6 +1149,27 @@ mod tests {
             self.context.run_until_parked();
         }
 
+        fn key_down(&mut self, keystroke: &str) {
+            let keystroke = Keystroke::parse(keystroke).unwrap();
+            self.dispatch(PlatformInput::KeyDown(KeyDownEvent {
+                keystroke,
+                is_held: false,
+                prefer_character_input: false,
+            }));
+        }
+
+        fn key_up(&mut self, keystroke: &str) {
+            let keystroke = Keystroke::parse(keystroke).unwrap();
+            self.dispatch(PlatformInput::KeyUp(KeyUpEvent { keystroke }));
+        }
+
+        fn change_modifiers(&mut self, modifiers: Modifiers) {
+            self.dispatch(PlatformInput::ModifiersChanged(ModifiersChangedEvent {
+                modifiers,
+                ..Default::default()
+            }));
+        }
+
         fn down(&mut self, position: Point<Pixels>) {
             self.dispatch(PlatformInput::MouseDown(MouseDownEvent {
                 position,
@@ -1272,6 +1295,68 @@ mod tests {
                 fixture.drag(anchor);
                 fixture.assert_selection(anchor, targets[2]);
             }
+        }
+    }
+
+    #[test]
+    fn shift_home_and_end_move_without_selecting() {
+        for (text, direction, line_start, middle, line_end, outer_start, outer_end) in [
+            (
+                "first\nsecond\nthird",
+                Direction::LeftToRight,
+                6,
+                9,
+                12,
+                2,
+                15,
+            ),
+            (
+                "first\nabc אבגד def\nthird",
+                Direction::LeftToRight,
+                6,
+                14,
+                22,
+                2,
+                25,
+            ),
+            ("אבגד\nהוזח\nטיכל", Direction::RightToLeft, 9, 13, 17, 4, 22),
+        ] {
+            let mut fixture =
+                BidiInputFixture::new_with_direction(text, 8.0, 320.0, false, 1.0, direction);
+            fixture.context.update(|context| {
+                context.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
+            });
+            fixture.context.run_until_parked();
+            fixture.update_input(|input, context| input.move_to(middle, context));
+
+            fixture.change_modifiers(Modifiers::shift());
+            fixture.key_down("shift-home");
+            fixture.assert_selection(line_start, line_start);
+            fixture.key_up("shift-home");
+
+            fixture.key_down("shift-end");
+            fixture.assert_selection(line_end, line_end);
+            fixture.key_up("shift-end");
+
+            fixture.update_input(|input, context| input.move_to(middle, context));
+            fixture.key_down("shift-end");
+            fixture.assert_selection(line_end, line_end);
+            fixture.key_up("shift-end");
+
+            fixture.key_down("shift-home");
+            fixture.assert_selection(line_start, line_start);
+            fixture.key_up("shift-home");
+
+            fixture.update_input(|input, context| {
+                input.move_to(outer_start, context);
+                input.select_to(outer_end, context);
+            });
+            fixture.key_down("shift-home");
+            fixture.assert_selection(line_end + 1, line_end + 1);
+            fixture.key_up("shift-home");
+
+            fixture.key_down("shift-end");
+            fixture.assert_selection(text.len(), text.len());
         }
     }
 
