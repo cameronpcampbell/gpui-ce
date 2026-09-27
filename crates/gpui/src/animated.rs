@@ -1,6 +1,6 @@
 use std::{ops::Sub, time::Duration};
 
-use crate::{Lerp, Motion, Progress};
+use crate::{AnyMotion, Lerp, Progress};
 
 /// A sampled animated value and its activity state.
 #[derive(Clone)]
@@ -21,7 +21,7 @@ pub struct Animated<T, Time = std::time::Instant> {
     value: T,
     initial_value: T,
     last_value: T,
-    motion: Motion,
+    motion: AnyMotion,
     settled_progress: Option<Progress>,
     started_at: Option<Time>,
 }
@@ -32,12 +32,12 @@ where
     Time: Copy + Sub<Time, Output = Duration>,
 {
     /// Creates a completed animated value.
-    pub fn new(value: T, motion: Motion) -> Self {
+    pub fn new(value: T, motion: impl Into<AnyMotion>) -> Self {
         Self {
             initial_value: value.clone(),
             last_value: value.clone(),
             value,
-            motion,
+            motion: motion.into(),
             settled_progress: None,
             started_at: None,
         }
@@ -60,16 +60,22 @@ where
     }
 
     /// Updates the logical value while preserving positional continuity.
-    pub fn set(&mut self, value: T, motion: &Motion, now: Time) -> bool {
+    pub fn set(&mut self, value: T, motion: impl Into<AnyMotion>, now: Time) -> bool {
         self.retarget(value, motion, now, true)
     }
 
     /// Updates the logical value and restarts from the initial value.
-    pub(crate) fn restart(&mut self, value: T, motion: &Motion, now: Time) -> bool {
+    pub(crate) fn restart(&mut self, value: T, motion: impl Into<AnyMotion>, now: Time) -> bool {
         self.retarget(value, motion, now, false)
     }
 
-    fn retarget(&mut self, value: T, motion: &Motion, now: Time, continuous: bool) -> bool {
+    fn retarget(
+        &mut self,
+        value: T,
+        motion: impl Into<AnyMotion>,
+        now: Time,
+        continuous: bool,
+    ) -> bool {
         if self.value == value {
             return false;
         }
@@ -81,7 +87,7 @@ where
             self.initial_value.clone()
         };
         self.value = value;
-        self.motion = motion.clone();
+        self.motion = motion.into();
         self.settled_progress = None;
         self.started_at = Some(now);
         true
@@ -144,7 +150,7 @@ where
 mod tests {
     use super::*;
 
-    use crate::SpringConfig;
+    use crate::{Motion, SpringConfig};
 
     fn assert_sample(sample: AnimatedSample<f32>, value: f32, progress: Progress, is_active: bool) {
         assert_eq!(

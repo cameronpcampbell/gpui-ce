@@ -1,8 +1,8 @@
 use scheduler::Instant;
 
 use crate::{
-    AbsoluteLength, Animated, Background, Bounds, DefiniteLength, Fill, Hsla, Length, Lerp, Motion,
-    Pixels, RingColor,
+    AbsoluteLength, Animated, AnyMotion, Background, Bounds, DefiniteLength, Fill, Hsla, Length,
+    Lerp, Pixels, RingColor,
 };
 
 #[derive(Clone, Copy)]
@@ -174,7 +174,7 @@ fn apply_auto_size(
     state: &mut Option<AutoSizeTransitionPropertyState>,
     value: &mut Length,
     axis: StyleTransitionAxis,
-    motion: Option<&Motion>,
+    motion: Option<&AnyMotion>,
     context: StyleTransitionContext,
     now: Instant,
     reduce_motion: bool,
@@ -261,7 +261,7 @@ fn apply_auto_size(
 fn evaluate<T>(
     state: &mut Option<StyleTransitionPropertyState<T>>,
     target: Option<T>,
-    motion: &Motion,
+    motion: &AnyMotion,
     now: Instant,
     reduce_motion: bool,
 ) -> (bool, Option<T>)
@@ -276,7 +276,7 @@ where
 fn apply_required<T>(
     state: &mut Option<StyleTransitionPropertyState<T>>,
     value: &mut T,
-    motion: Option<&Motion>,
+    motion: Option<&AnyMotion>,
     now: Instant,
     reduce_motion: bool,
 ) -> bool
@@ -291,7 +291,7 @@ fn apply_required_target<T>(
     state: &mut Option<StyleTransitionPropertyState<T>>,
     value: &mut T,
     target: Option<T>,
-    motion: Option<&Motion>,
+    motion: Option<&AnyMotion>,
     now: Instant,
     reduce_motion: bool,
 ) -> bool
@@ -316,7 +316,7 @@ where
 fn apply_optional<T>(
     state: &mut Option<StyleTransitionPropertyState<T>>,
     value: &mut Option<T>,
-    motion: Option<&Motion>,
+    motion: Option<&AnyMotion>,
     now: Instant,
     reduce_motion: bool,
 ) -> bool
@@ -343,7 +343,7 @@ fn apply_inset(
     state: &mut Option<InsetTransitionPropertyState>,
     value: &mut Length,
     edge: StyleTransitionEdge,
-    motion: Option<&Motion>,
+    motion: Option<&AnyMotion>,
     context: StyleTransitionContext,
     now: Instant,
     reduce_motion: bool,
@@ -436,13 +436,13 @@ impl<T> StyleTransitionPropertyState<T>
 where
     T: Lerp + Clone + PartialEq,
 {
-    fn new(initial_goal: Option<T>, motion: &Motion) -> Self {
+    fn new(initial_goal: Option<T>, motion: &AnyMotion) -> Self {
         Self {
             animated: initial_goal.map(|goal| Animated::new(goal, motion.clone())),
         }
     }
 
-    fn jump_to(&mut self, goal: Option<T>, motion: &Motion) {
+    fn jump_to(&mut self, goal: Option<T>, motion: &AnyMotion) {
         match (self.animated.as_mut(), goal) {
             (Some(animated), Some(goal)) => animated.jump_to(goal),
             (_, Some(goal)) => {
@@ -455,7 +455,7 @@ where
     pub(crate) fn evaluate(
         &mut self,
         goal: Option<T>,
-        motion: &Motion,
+        motion: &AnyMotion,
         now: Instant,
         reduce_motion: bool,
     ) -> (bool, Option<T>) {
@@ -496,9 +496,9 @@ mod tests {
     use super::*;
     use crate::{
         AbsoluteLength, AnyWindowHandle, Bounds, Corners, DefiniteLength, Edges, FocusHandle,
-        InputEvent as _, Length, MotionDurationExt, MouseButton, MouseDownEvent, MouseUpEvent,
-        Pixels, Style, TestAppContext, Window, blue, canvas, div, ease_in_out, point, prelude::*,
-        px, red, relative, rems, size,
+        InputEvent as _, Length, Motion, MotionDurationExt, MouseButton, MouseDownEvent,
+        MouseUpEvent, Pixels, SpringConfig, Style, TestAppContext, Window, blue, canvas, div,
+        ease_in_out, point, prelude::*, px, red, relative, rems, size,
     };
 
     fn length(value: f32) -> Length {
@@ -534,6 +534,49 @@ mod tests {
             transitions.apply(&mut style, &mut state, context, started_at + elapsed, false);
 
         (in_progress, style)
+    }
+
+    #[test]
+    fn spring_style_transitions_overshoot_retarget_and_settle() {
+        let config = SpringConfig::new(100.0, 6.0, 1.0);
+        let transitions = StyleTransitions::new()
+            .flex_grow(config)
+            .opacity(Motion::spring(config).with_epsilon(0.01));
+        let context = StyleTransitionContext::new(None, px(16.0));
+        let started_at = Instant::now();
+        let mut state = StyleTransitionState::default();
+        let mut style = Style::default();
+
+        assert!(!transitions.apply(&mut style, &mut state, context, started_at, false));
+
+        style.flex_grow = 10.0;
+        style.opacity = Some(1.0);
+        assert!(transitions.apply(&mut style, &mut state, context, started_at, false));
+        assert_eq!(style.flex_grow, 0.0);
+
+        let overshoot_at = started_at + Duration::from_millis(350);
+        style.flex_grow = 10.0;
+        style.opacity = Some(1.0);
+        assert!(transitions.apply(&mut style, &mut state, context, overshoot_at, false));
+        assert!(style.flex_grow > 10.0);
+        let overshoot = style.flex_grow;
+
+        style.flex_grow = 20.0;
+        style.opacity = Some(1.0);
+        assert!(transitions.apply(&mut style, &mut state, context, overshoot_at, false));
+        assert_eq!(style.flex_grow, overshoot);
+
+        style.flex_grow = 20.0;
+        style.opacity = Some(1.0);
+        assert!(!transitions.apply(
+            &mut style,
+            &mut state,
+            context,
+            overshoot_at + Duration::from_secs(5),
+            false,
+        ));
+        assert_eq!(style.flex_grow, 20.0);
+        assert_eq!(style.opacity, Some(1.0));
     }
 
     #[test]

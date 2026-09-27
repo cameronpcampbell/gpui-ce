@@ -130,10 +130,12 @@ pub struct DurationDescription {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpringDescription {
     /// The spring's physical parameters.
-    pub config: SpringConfig,
+    pub(crate) config: SpringConfig,
 
     /// The distance and velocity threshold for settling.
-    pub epsilon: f32,
+    pub(crate) epsilon: f32,
+
+    settle_after: Duration,
 }
 
 /// A motion with methods determined by its description type.
@@ -244,18 +246,53 @@ impl Motion<DurationDescription> {
 impl Motion<SpringDescription> {
     /// Creates a spring motion that runs until it settles.
     pub fn spring(config: SpringConfig) -> Self {
+        let epsilon = DEFAULT_SPRING_EPSILON;
+
         Self {
             description: SpringDescription {
                 config,
-                epsilon: DEFAULT_SPRING_EPSILON,
+                epsilon,
+                settle_after: config.settle_time(SpringState::default(), 1.0, epsilon),
             },
         }
+    }
+
+    /// Returns this spring's physical parameters.
+    pub fn config(&self) -> SpringConfig {
+        self.config
+    }
+
+    /// Returns this spring's settling tolerance.
+    pub fn epsilon(&self) -> f32 {
+        self.epsilon
     }
 
     /// Sets the spring's settling tolerance.
     pub fn with_epsilon(mut self, epsilon: f32) -> Self {
         self.description.epsilon = epsilon;
+        self.description.settle_after =
+            self.config
+                .settle_time(SpringState::default(), 1.0, epsilon);
         self
+    }
+
+    /// Evaluates this spring after the supplied elapsed time, starting from rest at zero progress.
+    pub fn sample(&self, elapsed: Duration) -> MotionSample {
+        if elapsed >= self.settle_after {
+            return MotionSample {
+                progress: Progress::END,
+                is_active: false,
+            };
+        }
+
+        let state = self
+            .config
+            .step(SpringState::default(), 1.0, elapsed.as_secs_f32());
+
+        MotionSample {
+            progress: Progress::eased(state.position),
+            is_active: true,
+        }
     }
 
     /// Targets a value or projected path with this spring.
@@ -284,6 +321,84 @@ impl From<Duration> for Motion<DurationDescription> {
 impl From<SpringConfig> for Motion<SpringDescription> {
     fn from(config: SpringConfig) -> Self {
         Self::spring(config)
+    }
+}
+
+/// A duration or spring motion that can be sampled through one interface.
+/// Each spring sample starts from rest, so retargeting an animated value resets its velocity.
+#[derive(Clone)]
+pub enum AnyMotion {
+    /// Motion that runs for a fixed duration.
+    Duration(Motion<DurationDescription>),
+
+    /// Motion that runs until its spring settles.
+    Spring(Motion<SpringDescription>),
+}
+
+impl AnyMotion {
+    /// Evaluates this motion after the supplied elapsed time.
+    pub fn sample(&self, elapsed: Duration) -> MotionSample {
+        match self {
+            Self::Duration(motion) => motion.sample(elapsed),
+            Self::Spring(motion) => motion.sample(elapsed),
+        }
+    }
+
+    /// Evaluates this motion between two timestamps.
+    pub fn sample_at<Time>(&self, started_at: Time, now: Time) -> MotionSample
+    where
+        Time: Sub<Time, Output = Duration>,
+    {
+        self.sample(now - started_at)
+    }
+
+    pub(crate) fn resting_progress(&self) -> Progress {
+        match self {
+            Self::Duration(motion) => motion.resting_progress(),
+            Self::Spring(_) => Progress::END,
+        }
+    }
+}
+
+impl From<Motion<DurationDescription>> for AnyMotion {
+    fn from(motion: Motion<DurationDescription>) -> Self {
+        Self::Duration(motion)
+    }
+}
+
+impl From<Motion<SpringDescription>> for AnyMotion {
+    fn from(motion: Motion<SpringDescription>) -> Self {
+        Self::Spring(motion)
+    }
+}
+
+impl From<Duration> for AnyMotion {
+    fn from(duration: Duration) -> Self {
+        Self::Duration(duration.into())
+    }
+}
+
+impl From<SpringConfig> for AnyMotion {
+    fn from(config: SpringConfig) -> Self {
+        Self::Spring(config.into())
+    }
+}
+
+impl From<&Motion<DurationDescription>> for AnyMotion {
+    fn from(motion: &Motion<DurationDescription>) -> Self {
+        Self::Duration(motion.clone())
+    }
+}
+
+impl From<&Motion<SpringDescription>> for AnyMotion {
+    fn from(motion: &Motion<SpringDescription>) -> Self {
+        Self::Spring(motion.clone())
+    }
+}
+
+impl From<&AnyMotion> for AnyMotion {
+    fn from(motion: &AnyMotion) -> Self {
+        motion.clone()
     }
 }
 
@@ -347,6 +462,20 @@ mod tests {
                 .get()
                 > 1.0
         }));
+
+        let config = SpringConfig::new(100.0, 6.0, 1.0);
+        let native_spring: AnyMotion = config.into();
+        let loose_spring = Motion::spring(config).with_epsilon(0.1);
+        let cutoff = loose_spring.settle_after;
+
+        assert!(native_spring.sample(cutoff).is_active);
+        assert_eq!(
+            AnyMotion::from(loose_spring).sample_at(Duration::ZERO, cutoff),
+            MotionSample {
+                progress: Progress::END,
+                is_active: false,
+            }
+        );
     }
 
     #[test]

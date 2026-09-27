@@ -6,9 +6,9 @@
 mod example_prelude;
 
 use gpui::{
-    AnyElement, App, AppContext, Bounds, Context, ElementId, Lerp, MotionDurationExt, Rgba,
-    SpringConfig, Window, WindowBounds, WindowOptions, actions, div, ease_in_out, millis,
-    prelude::*, px, rgb, size,
+    AnyElement, App, AppContext, Bounds, Context, ElementId, Lerp, MotionDurationExt, Rgba, Window,
+    WindowBounds, WindowOptions, actions, div, ease_in_out, millis, prelude::*, px, rgb, size,
+    spring,
 };
 use smallvec::SmallVec;
 
@@ -55,7 +55,11 @@ impl RenderOnce for Button {
             .bg(base_color)
             .text_color(rgb(0x110F15))
             .children(self.children)
-            .transitions(|transitions| transitions.bg(millis(200).with_easing(ease_in_out)))
+            .transitions(|transitions| {
+                transitions
+                    .bg(millis(200).with_easing(ease_in_out))
+                    .p(spring(600.0, 22.0, 1.0))
+            })
             .hover(|refinement| refinement.bg(hover_color).p(px(50.)))
             .active(|refinement| refinement.bg(active_color))
     }

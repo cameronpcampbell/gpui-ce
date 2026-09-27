@@ -19,6 +19,11 @@ pub struct SpringConfig {
     pub mass: f32,
 }
 
+/// Creates a spring configuration from its physical parameters.
+pub const fn spring(stiffness: f32, damping: f32, mass: f32) -> SpringConfig {
+    SpringConfig::new(stiffness, damping, mass)
+}
+
 impl SpringConfig {
     /// Creates a spring from its physical parameters.
     pub const fn new(stiffness: f32, damping: f32, mass: f32) -> Self {
@@ -510,7 +515,7 @@ impl SpringAnimation<()> {
 impl<T> SpringAnimation<T> {
     /// Sets the settling tolerance in the target's scalar coordinate space.
     pub fn with_epsilon(mut self, epsilon: f32) -> Self {
-        self.motion.epsilon = epsilon;
+        self.motion = self.motion.with_epsilon(epsilon);
         self
     }
 
