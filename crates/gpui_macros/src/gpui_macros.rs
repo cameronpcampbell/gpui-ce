@@ -3,6 +3,7 @@ mod derive_action;
 mod derive_app_context;
 mod derive_element_traits;
 mod derive_into_element;
+mod derive_reflect;
 mod derive_render;
 mod derive_visual_context;
 mod property_test;
@@ -59,6 +60,18 @@ pub fn derive_interactive_element(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(StatefulInteractiveElement)]
 pub fn derive_stateful_interactive_element(input: TokenStream) -> TokenStream {
     derive_element_traits::derive_stateful_interactive_element(input)
+}
+
+/// Registers the GPUI traits implemented by a concrete type for runtime lookup.
+#[proc_macro_derive(Reflect, attributes(reflect))]
+pub fn derive_reflect(input: TokenStream) -> TokenStream {
+    derive_reflect::derive_reflect(input)
+}
+
+/// Makes a trait available as a value for `AnyElement::implements_trait`.
+#[proc_macro_attribute]
+pub fn reflect_trait(args: TokenStream, input: TokenStream) -> TokenStream {
+    derive_reflect::reflect_trait(args, input)
 }
 
 #[proc_macro_derive(Render)]
