@@ -5,11 +5,10 @@
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
 
-use std::time::Duration;
-
 use gpui::{
-    AnyElement, App, AppContext, Bounds, Context, DurationWithEasing, ElementId, Lerp, Rgba,
-    Window, WindowBounds, WindowOptions, actions, div, ease_in_out, prelude::*, px, rgb, size,
+    AnyElement, App, AppContext, Bounds, Context, ElementId, Lerp, MotionDurationExt, Rgba,
+    SpringConfig, Window, WindowBounds, WindowOptions, actions, div, ease_in_out, millis,
+    prelude::*, px, rgb, size,
 };
 use smallvec::SmallVec;
 
@@ -56,10 +55,8 @@ impl RenderOnce for Button {
             .bg(base_color)
             .text_color(rgb(0x110F15))
             .children(self.children)
-            .transitions(|transitions| {
-                transitions.bg(Duration::from_millis(200).with_easing(ease_in_out))
-            })
-            .hover(|refinement| refinement.bg(hover_color))
+            .transitions(|transitions| transitions.bg(millis(200).with_easing(ease_in_out)))
+            .hover(|refinement| refinement.bg(hover_color).p(px(50.)))
             .active(|refinement| refinement.bg(active_color))
     }
 }

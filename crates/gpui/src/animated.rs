@@ -144,6 +144,8 @@ where
 mod tests {
     use super::*;
 
+    use crate::SpringConfig;
+
     fn assert_sample(sample: AnimatedSample<f32>, value: f32, progress: Progress, is_active: bool) {
         assert_eq!(
             (sample.value, sample.progress, sample.is_active),
@@ -260,6 +262,16 @@ mod tests {
             Progress::START
         );
         assert_eq!(animated.value(), &1.0);
+
+        let spring =
+            Motion::new(Duration::from_secs(1)).with_spring(SpringConfig::new(100.0, 6.0, 1.0));
+        let mut animated = Animated::<f32, Duration>::new(0.0, spring.clone());
+        assert!(animated.set(1.0, &spring, Duration::ZERO));
+
+        assert!(
+            (1..100).any(|step| { animated.sample(Duration::from_millis(step * 10)).value > 1.0 })
+        );
+        assert_eq!(animated.sample(Duration::from_secs(1)).value, 1.0);
     }
 
     #[test]

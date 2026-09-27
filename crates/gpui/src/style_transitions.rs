@@ -495,8 +495,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        AbsoluteLength, AnyWindowHandle, Bounds, Corners, DefiniteLength, DurationWithEasing,
-        Edges, FocusHandle, InputEvent as _, Length, MouseButton, MouseDownEvent, MouseUpEvent,
+        AbsoluteLength, AnyWindowHandle, Bounds, Corners, DefiniteLength, Edges, FocusHandle,
+        InputEvent as _, Length, MotionDurationExt, MouseButton, MouseDownEvent, MouseUpEvent,
         Pixels, Style, TestAppContext, Window, blue, canvas, div, ease_in_out, point, prelude::*,
         px, red, relative, rems, size,
     };

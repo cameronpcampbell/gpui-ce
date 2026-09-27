@@ -1,4 +1,11 @@
-use std::{ops::Sub, rc::Rc, time::Duration};
+use std::{
+    ops::{Deref, DerefMut, Sub},
+    rc::Rc,
+    time::Duration,
+};
+
+use crate::spring::DEFAULT_SPRING_EPSILON;
+use crate::{SpringAnimation, SpringConfig, SpringState, SpringTarget};
 
 /// Creates a duration from a number of whole seconds.
 pub const fn secs(seconds: u64) -> Duration {
@@ -10,7 +17,7 @@ pub const fn millis(milliseconds: u64) -> Duration {
     Duration::from_millis(milliseconds)
 }
 
-/// Normalized animation progress.
+/// Animation progress is normalized before easing and may overshoot afterward.
 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
 pub struct Progress(f32);
 
@@ -27,34 +34,39 @@ impl Progress {
         Self(value.clamp(Self::START.0, Self::END.0))
     }
 
-    /// Returns the underlying normalized value.
+    /// Returns the underlying progress value.
     pub const fn get(self) -> f32 {
         self.0
     }
 
-    /// Returns whether this progress has reached the end.
+    /// Returns whether the value is at least one; use [`MotionSample::is_active`]
+    /// to check if motion has finished.
     pub const fn is_complete(self) -> bool {
         self.0 >= Self::END.0
     }
 
-    fn repeating(value: f32) -> Self {
-        Self::clamped(value % Self::END.0)
-    }
-
-    fn contains(value: f32) -> bool {
-        value >= Self::START.0 && value <= Self::END.0
+    fn eased(value: f32) -> Self {
+        assert!(value.is_finite(), "easing must return a finite value");
+        Self(value)
     }
 }
 
-/// Creates motion from a duration and an easing function.
-pub trait DurationWithEasing {
+/// Creates duration-based motion with easing or a sampled spring.
+pub trait MotionDurationExt {
     /// Creates motion with this duration and the supplied easing function.
     fn with_easing(self, easing: impl Fn(f32) -> f32 + 'static) -> Motion;
+
+    /// Samples a spring over this duration, ending when the duration expires.
+    fn with_spring(self, config: SpringConfig) -> Motion;
 }
 
-impl DurationWithEasing for Duration {
+impl MotionDurationExt for Duration {
     fn with_easing(self, easing: impl Fn(f32) -> f32 + 'static) -> Motion {
         Motion::new(self).with_easing(easing)
+    }
+
+    fn with_spring(self, config: SpringConfig) -> Motion {
+        Motion::new(self).with_spring(config)
     }
 }
 
@@ -68,16 +80,9 @@ impl Easing {
         Self(Rc::new(easing))
     }
 
-    /// Evaluates this easing function with normalized progress.
+    /// Evaluates normalized progress without clamping the eased result.
     pub fn sample(&self, progress: Progress) -> Progress {
-        let eased = (self.0)(progress.get());
-
-        debug_assert!(
-            Progress::contains(eased),
-            "easing must return a value between 0 and 1"
-        );
-
-        Progress::clamped(eased)
+        Progress::eased((self.0)(progress.get()))
     }
 }
 
@@ -101,16 +106,16 @@ pub enum Repeat {
 /// The result of evaluating motion at a point in time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MotionSample {
-    /// Eased progress between zero and one.
+    /// Eased progress, which may overshoot zero through one.
     pub progress: Progress,
 
     /// Whether another sample may produce a different value.
     pub is_active: bool,
 }
 
-/// Configuration for one-shot or repeating motion.
+/// Configuration for motion driven by a fixed duration.
 #[derive(Clone)]
-pub struct Motion {
+pub struct DurationDescription {
     /// How long this motion takes.
     pub duration: Duration,
 
@@ -121,13 +126,45 @@ pub struct Motion {
     pub repeat: Repeat,
 }
 
-impl Motion {
+/// Configuration for motion driven by a settling spring.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpringDescription {
+    /// The spring's physical parameters.
+    pub config: SpringConfig,
+
+    /// The distance and velocity threshold for settling.
+    pub epsilon: f32,
+}
+
+/// A motion with methods determined by its description type.
+#[derive(Clone, Debug)]
+pub struct Motion<Description = DurationDescription> {
+    description: Description,
+}
+
+impl<Description> Deref for Motion<Description> {
+    type Target = Description;
+
+    fn deref(&self) -> &Self::Target {
+        &self.description
+    }
+}
+
+impl<Description> DerefMut for Motion<Description> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.description
+    }
+}
+
+impl Motion<DurationDescription> {
     /// Creates one linear motion pass with the supplied duration.
     pub fn new(duration: Duration) -> Self {
         Self {
-            duration,
-            easing: Easing::default(),
-            repeat: Repeat::Once,
+            description: DurationDescription {
+                duration,
+                easing: Easing::default(),
+                repeat: Repeat::Once,
+            },
         }
     }
 
@@ -135,6 +172,28 @@ impl Motion {
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
         self.easing = Easing::new(easing);
         self
+    }
+
+    /// Replaces easing with a spring sampled over this motion's duration.
+    /// Use [`Motion::spring`] for a spring that settles and preserves velocity across retargets.
+    pub fn with_spring(self, config: SpringConfig) -> Self {
+        let duration = self.duration.as_secs_f32();
+        let initial_state = SpringState {
+            position: 0.0,
+            velocity: 0.0,
+        };
+
+        self.with_easing(move |progress| {
+            if progress <= 0.0 {
+                0.0
+            } else if progress >= 1.0 {
+                1.0
+            } else {
+                config
+                    .step(initial_state, 1.0, progress * duration)
+                    .position
+            }
+        })
     }
 
     /// Evaluates this motion after the supplied elapsed time.
@@ -146,13 +205,18 @@ impl Motion {
             };
         }
 
-        let linear_progress = elapsed.as_secs_f32() / self.duration.as_secs_f32();
         let (linear_progress, is_active) = match self.repeat {
             Repeat::Once => {
-                let progress = Progress::clamped(linear_progress);
+                let progress =
+                    Progress::clamped((elapsed.as_secs_f64() / self.duration.as_secs_f64()) as f32);
                 (progress, !progress.is_complete())
             }
-            Repeat::Forever => (Progress::repeating(linear_progress), true),
+            Repeat::Forever => {
+                let duration_nanos = self.duration.as_nanos();
+                let elapsed_nanos = elapsed.as_nanos() % duration_nanos;
+                let progress = elapsed_nanos as f64 / duration_nanos as f64;
+                (Progress::clamped(progress as f32), true)
+            }
         };
 
         MotionSample {
@@ -177,21 +241,51 @@ impl Motion {
     }
 }
 
-impl Default for Motion {
+impl Motion<SpringDescription> {
+    /// Creates a spring motion that runs until it settles.
+    pub fn spring(config: SpringConfig) -> Self {
+        Self {
+            description: SpringDescription {
+                config,
+                epsilon: DEFAULT_SPRING_EPSILON,
+            },
+        }
+    }
+
+    /// Sets the spring's settling tolerance.
+    pub fn with_epsilon(mut self, epsilon: f32) -> Self {
+        self.description.epsilon = epsilon;
+        self
+    }
+
+    /// Targets a value or projected path with this spring.
+    pub fn to<T: SpringTarget>(self, target: T) -> SpringAnimation<T> {
+        SpringAnimation {
+            motion: self,
+            target,
+            initial: None,
+            playback: crate::SpringPlayback::Running,
+        }
+    }
+}
+
+impl Default for Motion<DurationDescription> {
     fn default() -> Self {
         Self::new(Duration::ZERO)
     }
 }
 
-impl From<Duration> for Motion {
+impl From<Duration> for Motion<DurationDescription> {
     fn from(duration: Duration) -> Self {
         Self::new(duration)
     }
 }
 
-/// The former name of [`Motion`].
-#[deprecated(note = "use Motion")]
-pub type MotionInfo = Motion;
+impl From<SpringConfig> for Motion<SpringDescription> {
+    fn from(config: SpringConfig) -> Self {
+        Self::spring(config)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -227,6 +321,7 @@ mod tests {
         for (elapsed, expected) in cases {
             assert_eq!(motion.sample(elapsed), expected);
         }
+
         assert_eq!(
             motion.sample_at(Duration::from_secs(3), Duration::from_secs(5)),
             MotionSample {
@@ -237,6 +332,21 @@ mod tests {
 
         assert_eq!(Progress::clamped(-1.0), Progress::START);
         assert_eq!(Progress::clamped(2.0), Progress::END);
+
+        let spring = Duration::from_secs(1).with_spring(SpringConfig::new(100.0, 6.0, 1.0));
+
+        assert_eq!(spring.sample(Duration::ZERO).progress, Progress::START);
+        assert_eq!(
+            spring.sample(Duration::from_secs(1)).progress,
+            Progress::END
+        );
+        assert!((1..100).any(|step| {
+            spring
+                .sample(Duration::from_millis(step * 10))
+                .progress
+                .get()
+                > 1.0
+        }));
     }
 
     #[test]
@@ -269,6 +379,12 @@ mod tests {
                 progress: Progress::clamped(0.5),
                 is_active: true,
             }
+        );
+
+        let long_elapsed = Duration::from_secs(300 * 24 * 60 * 60) + Duration::from_millis(250);
+        assert_eq!(
+            motion.sample(long_elapsed).progress,
+            Progress::clamped(0.25)
         );
     }
 }
