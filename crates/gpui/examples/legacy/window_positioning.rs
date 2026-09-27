@@ -60,6 +60,7 @@ fn build_window_options(display_id: DisplayId, bounds: Bounds<Pixels>) -> Window
         // Specify the display_id to ensure the window is created on the correct screen
         display_id: Some(display_id),
         titlebar: None,
+        #[cfg(not(target_family = "wasm"))]
         window_background: WindowBackgroundAppearance::Transparent,
         focus: false,
         show: true,

@@ -2355,14 +2355,28 @@ pub enum WindowBackgroundAppearance {
     #[default]
     Opaque,
     /// Plain alpha transparency.
+    #[cfg(any(
+        target_os = "freebsd",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ))]
     Transparent,
     /// Transparency, but the contents behind the window are blurred.
     ///
     /// Not always supported.
+    #[cfg(any(
+        target_os = "freebsd",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ))]
     Blurred,
     /// The Mica backdrop material, supported on Windows 11.
+    #[cfg(target_os = "windows")]
     MicaBackdrop,
     /// The Mica Alt backdrop material, supported on Windows 11.
+    #[cfg(target_os = "windows")]
     MicaAltBackdrop,
 }
 
