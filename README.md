@@ -1,7 +1,7 @@
 <img src="assets/readme/banner.png" alt="GPUI Community Edition banner" width="100%">
 
 <p align="center">
-  <a href="https://gpui-ce.github.io">Website</a> · <a href="crates/gpui/examples/learn">Examples</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="https://discord.gg/ENGHGjrYEn">Discord</a>
+  <a href="https://gpui-ce.github.io">Website</a> ​ · ​ <a href="crates/gpui/examples/learn">Examples</a> ​ · ​ <a href="https://discord.gg/ENGHGjrYEn">Discord</a>
 </p>
 
 # GPUI - Community Edition
