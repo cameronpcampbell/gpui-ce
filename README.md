@@ -114,6 +114,9 @@ It's mostly API compatible with upstream, but that is changing!
 
   [Drawing example](crates/gpui/examples/learn/custom_drawing.rs)
 
+## Setup
+View the [setup guide](SETUP.md) for installation instructions.
+
 ## FAQ
 - Q: What is our AI Policy?
   A: We follow the [Rust Foundation's internal AI usage policy](https://rustfoundation.org/policy/internal-ai-usage-policy/). GPUI-CE is a framework "Made by Humans". We value community participation and take time to understand contributors' intentions and offer guidance.
