@@ -26,7 +26,7 @@ It's mostly API compatible with upstream, but that is changing!
       .child("Hello, GPUI")
   ```
 
-  [Layout example](crates/gpui/examples/learn/layout.rs) · [Styling example](crates/gpui/examples/learn/styling.rs)
+  [Layout example](crates/gpui/examples/learn/layout.rs) ​ · ​ [Styling example](crates/gpui/examples/learn/styling.rs)
 
 - 🔄 State and events
 
@@ -111,10 +111,10 @@ It's mostly API compatible with upstream, but that is changing!
 
 ## FAQ
 - Q: What is our AI Policy?
-    A: We follow the [Rust Foundation's internal AI usage policy](https://rustfoundation.org/policy/internal-ai-usage-policy/). GPUI-CE is a framework "Made by Humans". We value community participation and take time to understand contributors' intentions and offer guidance.
+  A: We follow the [Rust Foundation's internal AI usage policy](https://rustfoundation.org/policy/internal-ai-usage-policy/). GPUI-CE is a framework "Made by Humans". We value community participation and take time to understand contributors' intentions and offer guidance.
 
 - Q: What is the long-term goal of GPUI-CE?
-    A: To become the go-to Rust GUI library for applications of any size. We want reusable components, native platform integration, and control over performance. We build on Zed's work and continue to bring in upstream fixes.
+  A: To become the go-to Rust GUI library for applications of any size. We want reusable components, native platform integration, and control over performance. We build on Zed's work and continue to bring in upstream fixes.
 
 - Q: How does the project compare to other forks in the ecosystem?
-    A: Other forks often develop around the applications that use them. GPUI-CE aims to support a broad range of applications, with a focus on stability.
+  A: Other forks often develop around the applications that use them. GPUI-CE aims to support a broad range of applications, with a focus on stability.
