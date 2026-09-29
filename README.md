@@ -6,7 +6,7 @@
 
 # GPUI - Community Edition
 
-GPUI-CE is a fork of Zed's [GPUI](https://gpui.rs) GUI Framework.
+GPUI-CE is a fork of Zed's [GPUI](https://gpui.rs) UI Framework.
 
 It's mostly API compatible with upstream, but that is changing!
 
@@ -18,11 +18,16 @@ It's mostly API compatible with upstream, but that is changing!
 
   ```rust
   div()
+      .id("some_id_123")
       .flex()
       .items_center()
       .gap_2()
-      .p_4()
       .rounded_lg()
+      .rounded_smoothing(0.8)
+      .bg(rgba(0xffffff30))
+      .backdrop_blur(px(12.0))
+      .transitions(|transitions| transitions.bg(millis(200)))
+      .hover(|style| style.bg(rgba(0xffffff60)))
       .child("Hello, GPUI")
   ```
 
