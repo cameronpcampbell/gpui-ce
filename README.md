@@ -12,7 +12,7 @@ It's mostly API compatible with upstream, but that is changing!
 
 ## Overview:
 
-- 🎨 Web-inspired Styling & Layout
+- Web-inspired Styling & Layout
 
   Build views with familiar elements, flex layouts, and Tailwind-style methods:
 
@@ -33,7 +33,7 @@ It's mostly API compatible with upstream, but that is changing!
 
   [Layout example](crates/gpui/examples/learn/layout.rs) ​ · ​ [Styling example](crates/gpui/examples/learn/styling.rs)
 
-- 🔄 State and events
+- State and events
 
   Use `Entity<T>` to access view and shared application state. Observe changes and call `cx.notify()` when state changes to notify observers and update the view. For a view with a `count` field:
 
@@ -49,7 +49,7 @@ It's mostly API compatible with upstream, but that is changing!
 
   [Interaction example](crates/gpui/examples/learn/interactive_elements.rs)
 
-- ⌨️ Actions and keybinds
+- Actions and keybinds
 
   Define typed actions and bind them to keyboard shortcuts. Call `register_keybinds` during app setup to bind Space and Backspace in the focused counter:
 
@@ -79,7 +79,7 @@ It's mostly API compatible with upstream, but that is changing!
 
   [Keybind example](crates/gpui/examples/learn/actions_and_keybinds.rs)
 
-- ⚡ Virtualized lists
+- Virtualized lists
 
   Use `uniform_list` for large collections of equal-height rows. GPUI requests the item ranges needed for the visible area as you scroll.
 
@@ -98,7 +98,7 @@ It's mostly API compatible with upstream, but that is changing!
 
   [List example](crates/gpui/examples/learn/uniform_list.rs)
 
-- 🖌️ Custom drawing
+- Custom drawing
 
   Use `canvas` to paint directly within a view. Implement `Element` when you need control over layout and rendering, such as for a code editor or custom widget.
 
