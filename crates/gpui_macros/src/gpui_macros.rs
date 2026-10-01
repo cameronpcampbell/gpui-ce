@@ -70,6 +70,16 @@ pub fn derive_reflect(input: TokenStream) -> TokenStream {
 }
 
 /// Makes a trait available as a value for `AnyElement::implements_trait`.
+/// Also generates inheritance metadata and implementations on typed reflected elements.
+///
+/// Traits must be non-generic. Required methods accept borrowed receivers, lifetime
+/// parameters, concrete types, and `impl IntoIterator<Item = ConcreteType>` arguments.
+/// Provided methods keep their original bodies. Supertraits must also be reflected,
+/// except for `Sized`. Associated types and required associated constants are unsupported.
+///
+/// Use qualified paths for imported supertraits. If a trait is re-exported under an
+/// alias used in `trait_set!`, also re-export its generated `__GpuiReflectTraitSchema`
+/// module under the matching alias, such as `__GpuiReflectAliasSchema`.
 #[proc_macro_attribute]
 pub fn reflect_trait(args: TokenStream, input: TokenStream) -> TokenStream {
     derive_reflect::reflect_trait(args, input)
@@ -80,6 +90,12 @@ pub fn reflect_trait(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn trait_set(input: TokenStream) -> TokenStream {
     trait_set::trait_set(input)
+}
+
+#[doc(hidden)]
+#[proc_macro]
+pub fn __collect_reflected_traits(input: TokenStream) -> TokenStream {
+    trait_set::collect_traits(input)
 }
 
 #[proc_macro_derive(Render)]
