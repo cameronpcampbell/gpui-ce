@@ -34,7 +34,7 @@
 use crate::{
     A11ySubtreeBuilder, App, ArenaBox, AvailableSpace, Bounds, Context, DispatchNodeId, ElementId,
     FocusHandle, InspectorElementId, LayoutId, Pixels, Point, Size, Style, Window,
-    reflection::ReflectedElement, util::FluentBuilder, window::with_element_arena,
+    util::FluentBuilder, window::with_element_arena,
 };
 use derive_more::{Deref, DerefMut};
 use std::{
@@ -225,7 +225,7 @@ pub trait ParentElementTyped {
 
 /// This is a helper trait to provide a uniform interface for constructing elements that
 /// can accept any number of any kind of child elements
-#[gpui_macros::reflect_trait(parent)]
+#[gpui_macros::reflect_trait]
 pub trait ParentElement {
     /// Extend this element's children with the given child elements.
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>);
@@ -277,7 +277,9 @@ impl GlobalElementId {
 trait ElementObject {
     fn element_id(&self) -> Option<ElementId>;
 
-    fn inner_element(&mut self) -> &mut dyn Any;
+    fn inner_element(&self) -> &dyn Any;
+
+    fn inner_element_mut(&mut self) -> &mut dyn Any;
 
     fn reflected_type_id(&self) -> std::any::TypeId;
 
@@ -666,7 +668,11 @@ where
         self.element.id()
     }
 
-    fn inner_element(&mut self) -> &mut dyn Any {
+    fn inner_element(&self) -> &dyn Any {
+        &self.element
+    }
+
+    fn inner_element_mut(&mut self) -> &mut dyn Any {
         &mut self.element
     }
 
@@ -724,12 +730,16 @@ impl AnyElement {
     /// Attempt to downcast a reference to the boxed element to a specific type.
     pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
         self.element_object_mut()
-            .inner_element()
+            .inner_element_mut()
             .downcast_mut::<T>()
     }
 
-    pub(crate) fn inner_element(&mut self) -> &mut dyn Any {
-        self.element_object_mut().inner_element()
+    pub(crate) fn inner_element(&self) -> &dyn Any {
+        self.element_object().inner_element()
+    }
+
+    pub(crate) fn inner_element_mut(&mut self) -> &mut dyn Any {
+        self.element_object_mut().inner_element_mut()
     }
 
     pub(crate) fn reflected_type_id(&self) -> std::any::TypeId {
@@ -833,7 +843,7 @@ impl AnyElement {
 
     /// Returns whether this element implements the given reflected trait.
     ///
-    /// GPUI's preset descriptors can be passed directly, for example
+    /// Reflected trait descriptors can be passed directly, for example
     /// `element.implements_trait(gpui::Styled)`. A custom trait annotated with
     /// `#[gpui::reflection::reflect_trait]` has a descriptor with the same name as the trait.
     pub fn implements_trait(
@@ -974,20 +984,6 @@ impl IntoElement for AnyElement {
 
     fn into_any_element(self) -> AnyElement {
         self
-    }
-}
-
-impl<Group> ParentElement for ReflectedElement<Group>
-where
-    Group: crate::reflection::IncludesReflectedTrait<crate::__GpuiReflectParentElement>,
-{
-    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
-        let type_id = self.element.reflected_type_id();
-        let extend = crate::reflection::parent_extender(type_id)
-            .expect("element does not reflect ParentElement");
-        let children = elements.into_iter().collect();
-
-        extend(self.element.inner_element(), children);
     }
 }
 

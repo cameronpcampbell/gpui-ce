@@ -18,6 +18,14 @@ mod other {
     pub trait Draggable {}
 }
 
+mod inherited {
+    #[gpui::reflection::reflect_trait]
+    pub trait Control: gpui::StatefulInteractiveElement {}
+
+    pub use self::__GpuiReflectControlSchema as __GpuiReflectPublicControlSchema;
+    pub use self::Control as PublicControl;
+}
+
 #[derive(gpui::reflection::Reflect)]
 struct Card {
     style: StyleRefinement,
@@ -37,7 +45,7 @@ impl gpui::ParentElement for Card {
 }
 
 #[derive(gpui::reflection::Reflect)]
-#[reflect(Draggable)]
+#[reflect(Draggable, inherited::Control)]
 struct Control {
     interactivity: Interactivity,
 }
@@ -51,6 +59,8 @@ impl gpui::InteractiveElement for Control {
 impl gpui::StatefulInteractiveElement for Control {}
 
 impl Draggable for Control {}
+
+impl inherited::Control for Control {}
 
 impl other::Draggable for Control {}
 
@@ -134,11 +144,27 @@ mod tests {
             drop(traits);
         }
 
+        fn require_inherited_traits<Traits>(traits: Traits)
+        where
+            Traits: gpui::reflection::ReflectedTraits,
+            gpui::reflection::ReflectedElement<Traits::Group>:
+                inherited::Control + gpui::StatefulInteractiveElement + gpui::InteractiveElement,
+        {
+            drop(traits);
+        }
+
         require_other_draggable::<Control>();
         require_selected_traits(gpui::reflection::trait_set!(
             gpui::Styled,
             gpui::ParentElement,
             crate::Draggable,
+        ));
+        require_inherited_traits(inherited::Control);
+        require_inherited_traits(gpui::reflection::trait_set!(
+            inherited::PublicControl,
+            gpui::InteractiveElement,
+            gpui::StatefulInteractiveElement,
+            inherited::Control,
         ));
 
         let card = Card {
@@ -161,6 +187,7 @@ mod tests {
         assert!(control.implements_trait(gpui::InteractiveElement));
         assert!(control.implements_trait(gpui::StatefulInteractiveElement));
         assert!(control.implements_trait(Draggable));
+        assert!(control.implements_trait(inherited::Control));
         assert!(!control.implements_trait(other::Draggable));
         assert!(!control.implements_trait(gpui::Styled));
 
