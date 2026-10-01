@@ -804,8 +804,8 @@ impl AnyElement {
             .unwrap_or_default()
     }
 
-    pub(crate) fn add_class(&mut self, class: crate::SharedString) {
-        self.metadata_mut().classes.push(class);
+    pub(crate) fn classes_mut(&mut self) -> &mut smallvec::SmallVec<[crate::SharedString; 2]> {
+        &mut self.metadata_mut().classes
     }
 
     pub(crate) fn add_selector(&mut self, selector: crate::selector::PendingSelector) {

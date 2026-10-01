@@ -45,7 +45,8 @@ impl RenderOnce for Button {
             .select(
                 Select::children()
                     .reflects(trait_set![gpui::Styled, gpui::ParentElement])
-                    .class("icon"),
+                    .class((any(["icon", "badge"]), not("muted")))
+                    .nth(0),
                 |element| element.text_xl().text_color(rgb(0xfacc15)).child(div()),
             )
     }
@@ -62,10 +63,34 @@ impl Render for ElementSelectorsExample {
             .items_center()
             .justify_center()
             .bg(rgb(0x111827))
+            .flex_col()
+            .gap_4()
             .child(
                 Button::new()
-                    .child(div().child("★").class("icon"))
+                    .child(div().child("★").class(["icon", "accent"]))
                     .child("Favorite"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .children((0_usize..5).map(|idx| {
+                        div()
+                            .id(("badge", idx))
+                            .px_3()
+                            .py_1()
+                            .rounded_md()
+                            .child(format!("{idx}"))
+                            .class("badge")
+                    }))
+                    .select(
+                        Select::children()
+                            .reflects(gpui::Styled)
+                            .class("badge")
+                            .id(not(("badge", 4_usize)))
+                            .every(2),
+                        |element| element.bg(rgb(0x2563eb)).text_color(rgb(0xffffff)),
+                    ),
             )
     }
 }
