@@ -5242,6 +5242,34 @@ impl Window {
             })
     }
 
+    /// Runs temporary layout without applying or advancing positional selectors.
+    /// Non-positional selectors still apply, and nested measurements share the scope.
+    /// Elements laid out in this scope must be discarded rather than reused for display.
+    pub fn with_layout_measurement<ResultType>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> ResultType,
+    ) -> ResultType {
+        crate::selector::with_selector_measurement(|| operation(self))
+    }
+
+    /// Builds, lays out, and discards a temporary element, returning its measured size.
+    /// Construction and layout run inside [`Self::with_layout_measurement`].
+    pub fn measure_element<ElementType>(
+        &mut self,
+        available_space: Size<AvailableSpace>,
+        cx: &mut App,
+        build: impl FnOnce(&mut Self, &mut App) -> ElementType,
+    ) -> Size<Pixels>
+    where
+        ElementType: IntoElement,
+    {
+        self.with_layout_measurement(|window| {
+            let mut element = build(window, cx).into_any_element();
+
+            element.layout_as_root(available_space, window, cx)
+        })
+    }
+
     /// Add a node to the layout tree for the current frame. Takes the `Style` of the element for which
     /// layout is being requested, along with the layout ids of any children. This method is called during
     /// calls to the [`Element::request_layout`] trait method and enables any element to participate in layout.
