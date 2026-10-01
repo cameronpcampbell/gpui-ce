@@ -86,9 +86,10 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         }
     }
 
-    /// Set the easing function to use for this transition.
-    /// The easing function will take a time delta between 0 and 1 and return a new delta
-    /// between 0 and 1
+    /// Sets the forward pass's easing function for this transition.
+    ///
+    /// The easing function maps normalized local pass time to presentation
+    /// progress, which may be non-monotonic or overshoot zero through one.
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
         self.motion = self.motion.with_easing(easing);
         self.clear_cache();
@@ -151,11 +152,9 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
         Ref::map(self.cache.borrow(), |cache| &cache.value)
     }
 
-    /// Evaluates and returns the current progress delta of the transition.
-    ///
-    /// Returns a value between 0.0 and 1.0 representing how far the transition
-    /// has progressed, after applying the easing function. A value of 0.0 means
-    /// the transition just started, and 1.0 means it has completed.
+    /// Returns eased presentation progress, which may overshoot zero through one.
+    /// This does not indicate whole-run completion: restarting iterations begin
+    /// again and alternating iterations run in reverse.
     pub fn evaluate_delta(&self, cx: &App) -> f32 {
         if self.cache.borrow().value.is_some() {
             return self.cache.borrow().progress.get();
@@ -347,6 +346,19 @@ mod tests {
             mutators.reset(cx);
             assert_eq!(*mutators.read_goal(cx), 2.0);
             assert!(mutators.read_cache().is_none());
+
+            let alternating = create_transition(
+                cx,
+                Motion::new(Duration::ZERO).iterations(2).alternate(),
+                0.0_f32,
+            );
+            assert!(alternating.update(cx, |value, _| *value = 100.0));
+            let sample = alternating.sample(cx);
+            assert_eq!(sample.value, Some(0.0));
+            assert_eq!(sample.progress, Progress::START);
+            assert!(!sample.is_active);
+            drop(sample);
+            assert_eq!(alternating.evaluate_delta(cx), 0.0);
         });
     }
 

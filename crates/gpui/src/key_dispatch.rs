@@ -1012,7 +1012,7 @@ mod tests {
 
         cx.update(|window, cx| {
             window.focus(&focus_handle, cx);
-            window.activate_window();
+            window.activate();
         });
 
         cx.simulate_keystrokes("ctrl-b");
@@ -1233,7 +1233,7 @@ mod tests {
         let focus_handle = test.update(cx, |test, _| test.focus_handle.clone());
         cx.update(|window, cx| {
             window.focus(&focus_handle, cx);
-            window.activate_window();
+            window.activate();
         });
 
         let query_prefers_ime_for_printable_keys = |cx: &mut VisualTestContext| {

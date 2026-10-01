@@ -1515,7 +1515,10 @@ impl PlatformWindow for X11Window {
         None
     }
 
-    fn activate(&self) {
+    fn activate(&self, token: Option<&str>) -> bool {
+        if token.is_some() {
+            return false;
+        }
         let data = [1, xproto::Time::CURRENT_TIME.into(), 0, 0, 0];
         let message = xproto::ClientMessageEvent::new(
             32,
@@ -1533,6 +1536,7 @@ impl PlatformWindow for X11Window {
             )
             .log_err();
         xcb_flush(&self.0.xcb);
+        true
     }
 
     fn request_attention(&self) {

@@ -304,13 +304,17 @@ impl PlatformWindow for TestWindow {
         )
     }
 
-    fn activate(&self) {
+    fn activate(&self, token: Option<&str>) -> bool {
+        if token.is_some() {
+            return false;
+        }
         self.0
             .lock()
             .platform
             .upgrade()
             .unwrap()
-            .set_active_window(Some(self.clone()))
+            .set_active_window(Some(self.clone()));
+        true
     }
 
     fn is_active(&self) -> bool {

@@ -18,6 +18,7 @@ pub enum SurfaceSource {
     #[cfg(any(
         target_os = "linux",
         target_os = "freebsd",
+        all(target_os = "macos", feature = "custom-gpu"),
         all(target_family = "wasm", feature = "custom-gpu")
     ))]
     Texture {
@@ -48,6 +49,7 @@ impl std::fmt::Debug for SurfaceSource {
             #[cfg(any(
                 target_os = "linux",
                 target_os = "freebsd",
+                all(target_os = "macos", feature = "custom-gpu"),
                 all(target_family = "wasm", feature = "custom-gpu")
             ))]
             SurfaceSource::Texture { size, .. } => _f
@@ -71,6 +73,7 @@ impl SurfaceSource {
             #[cfg(any(
                 target_os = "linux",
                 target_os = "freebsd",
+                all(target_os = "macos", feature = "custom-gpu"),
                 all(target_family = "wasm", feature = "custom-gpu")
             ))]
             SurfaceSource::Texture { size, .. } => *size,

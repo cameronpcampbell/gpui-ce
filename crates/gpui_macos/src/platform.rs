@@ -677,6 +677,15 @@ impl Platform for MacPlatform {
         Some(MacWindow::ordered_windows())
     }
 
+    #[cfg(feature = "wgpu")]
+    fn set_gpu_requirements(&self, requirements: Box<dyn std::any::Any>) {
+        if let Ok(reqs) = requirements.downcast::<gpui_wgpu::WgpuDeviceRequirements>() {
+            self.0.lock().renderer_context.set_requirements(*reqs);
+        } else {
+            log::warn!("set_gpu_requirements: unexpected type, expected WgpuDeviceRequirements");
+        }
+    }
+
     fn open_window(
         &self,
         handle: AnyWindowHandle,
@@ -698,13 +707,18 @@ impl Platform for MacPlatform {
             )
         };
 
+        let renderer = renderer::new_renderer(
+            renderer_context,
+            options.bounds.size.map(|pixels| pixels.as_f32()),
+            false,
+        )?;
         Ok(Box::new(MacWindow::open(
             handle,
             options,
             cursor_visible,
             foreground_executor,
             background_executor,
-            renderer_context,
+            renderer,
             self.1,
         )))
     }

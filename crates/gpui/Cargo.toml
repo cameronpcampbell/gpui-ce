@@ -40,6 +40,8 @@ screen-capture = ["dep:windows-capture"]
 windows-manifest = ["dep:embed-resource"]
 profiler = ["dep:hdrhistogram"]
 stacker = ["dep:stacksafe"]
+embedded-assets = ["dep:rust-embed"]
+hot-patching = ["dep:dioxus-devtools", "dep:subsecond"]
 
 [lib]
 name = "gpui"
@@ -57,6 +59,7 @@ collections.workspace = true
 criterion = { workspace = true, optional = true }
 ctor.workspace = true
 derive_more.workspace = true
+derive_setters.workspace = true
 etagere.workspace = true
 futures.workspace = true
 futures-concurrency.workspace = true
@@ -86,6 +89,7 @@ resvg = { version = "0.48.1", default-features = false, features = [
   "memmap-fonts",
   "raster-images",
 ] }
+rust-embed = { version = "8.12", optional = true }
 usvg = { version = "0.48.1", default-features = false }
 skrifa.workspace = true
 schemars.workspace = true
@@ -117,6 +121,10 @@ heapless.workspace = true
 [target.'cfg(target_family = "wasm")'.dependencies]
 getrandom = { version = "0.3.4", features = ["wasm_js"] }
 uuid = { workspace = true, features = ["js"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+dioxus-devtools = { version = "=0.7.10", features = ["serve"], optional = true }
+subsecond = { version = "=0.7.10", optional = true }
 
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -185,6 +193,14 @@ name = "interactive_elements"
 path = "examples/learn/interactive_elements.rs"
 
 [[example]]
+name = "actions_and_keybinds"
+path = "examples/learn/actions_and_keybinds.rs"
+
+[[example]]
+name = "uniform_list"
+path = "examples/learn/uniform_list.rs"
+
+[[example]]
 name = "creating_components"
 path = "examples/learn/creating_components.rs"
 
@@ -219,6 +235,10 @@ path = "examples/learn/transitions.rs"
 [[example]]
 name = "style_transitions"
 path = "examples/learn/style_transitions.rs"
+
+[[example]]
+name = "motion_showcase"
+path = "examples/learn/motion_showcase.rs"
 
 [[example]]
 name = "haptic_feedback"
@@ -307,10 +327,6 @@ path = "examples/legacy/tab_stop.rs"
 [[example]]
 name = "tree"
 path = "examples/legacy/tree.rs"
-
-[[example]]
-name = "uniform_list"
-path = "examples/legacy/uniform_list.rs"
 
 [[example]]
 name = "window"

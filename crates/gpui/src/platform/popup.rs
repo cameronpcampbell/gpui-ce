@@ -1,18 +1,36 @@
 use bitflags::bitflags;
 use thiserror::Error;
 
-use crate::{AnyWindowHandle, Bounds, Pixels, Point};
+use crate::{AnyWindowHandle, Bounds, Pixels, Point, util::FluentBuilder};
 
-/// Options for a parent-anchored popup window such as a menu, dropdown, context menu or tooltip.
+/// Options for a popup anchored to a parent window, such as a menu, dropdown, or tooltip.
 ///
 /// A popup is placed relative to an anchor rectangle on its parent window rather than at an
 /// absolute screen position. The platform resolves the final position, so this works both on
 /// systems where the compositor owns window placement (Wayland) and on platforms with absolute
 /// coordinates.
 ///
-/// The popup's size comes from [`WindowOptions::window_bounds`](crate::WindowOptions), whose
-/// origin is ignored. All coordinates are in logical pixels.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The popup's size comes from `window_bounds` in [`WindowOptions`](crate::WindowOptions).
+/// The bounds' origin is ignored. All coordinates are in logical pixels.
+///
+/// Pass the parent window and anchor rectangle to [`Self::new`], then chain setters
+/// to configure placement and input grabbing.
+///
+/// ```
+/// use gpui::{
+///     AnyWindowHandle, Bounds, Pixels,
+///     popup::{PopupAnchor, PopupGravity, PopupOptions},
+/// };
+///
+/// fn menu_options(parent: AnyWindowHandle, anchor_rect: Bounds<Pixels>) -> PopupOptions {
+///     PopupOptions::new(parent, anchor_rect)
+///         .anchor(PopupAnchor::BottomLeft)
+///         .gravity(PopupGravity::BottomRight)
+///         .grab(true)
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, derive_setters::Setters)]
+#[setters(into)]
 pub struct PopupOptions {
     /// The window the popup is anchored to.
     pub parent: AnyWindowHandle,
@@ -51,6 +69,25 @@ pub struct PopupOptions {
     /// to you. Nested grabbing popups must be closed in the reverse order they were opened.
     pub grab: bool,
 }
+
+impl PopupOptions {
+    /// Creates popup options for a parent window and anchor rectangle.
+    ///
+    /// Defaults to centered placement, zero offset, no constraint adjustments, and no input grab.
+    pub fn new(parent: impl Into<AnyWindowHandle>, anchor_rect: Bounds<Pixels>) -> Self {
+        Self {
+            parent: parent.into(),
+            anchor_rect,
+            anchor: PopupAnchor::default(),
+            gravity: PopupGravity::default(),
+            constraint_adjustment: PopupConstraintAdjustment::default(),
+            offset: Point::default(),
+            grab: false,
+        }
+    }
+}
+
+impl FluentBuilder for PopupOptions {}
 
 /// The point of the anchor rectangle that a popup is anchored to.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]

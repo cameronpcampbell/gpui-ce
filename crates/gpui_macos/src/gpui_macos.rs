@@ -16,7 +16,12 @@ mod system_notifications;
 #[cfg(feature = "screen-capture")]
 mod screen_capture;
 
+#[cfg(not(feature = "wgpu"))]
 use gpui_apple::metal_renderer as renderer;
+#[cfg(feature = "wgpu")]
+mod wgpu_renderer;
+#[cfg(feature = "wgpu")]
+use wgpu_renderer as renderer;
 
 #[cfg(feature = "font-kit")]
 mod open_type;

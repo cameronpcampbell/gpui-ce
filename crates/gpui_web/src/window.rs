@@ -719,8 +719,12 @@ impl PlatformWindow for WebWindow {
         None
     }
 
-    fn activate(&self) {
+    fn activate(&self, token: Option<&str>) -> bool {
+        if token.is_some() {
+            return false;
+        }
         self.inner.state.borrow_mut().is_active = true;
+        true
     }
 
     fn is_active(&self) -> bool {

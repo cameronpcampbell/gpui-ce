@@ -1,9 +1,9 @@
 use std::{ops::RangeInclusive, time::Duration};
 
-use crate::{Hsla, Pixels, Rems, Rgba};
+use crate::{Hsla, Motion, Pixels, Rems, Rgba, SpringDescription};
 
 const CRITICAL_DAMPING_TOLERANCE: f32 = 1e-4;
-const DEFAULT_SPRING_EPSILON: f32 = 0.001;
+pub(crate) const DEFAULT_SPRING_EPSILON: f32 = 0.001;
 
 /// The physical parameters of a damped harmonic oscillator.
 ///
@@ -17,6 +17,11 @@ pub struct SpringConfig {
     pub damping: f32,
     /// The moving mass, conventionally written as $m$.
     pub mass: f32,
+}
+
+/// Creates a spring configuration from its physical parameters.
+pub const fn spring(stiffness: f32, damping: f32, mass: f32) -> SpringConfig {
+    SpringConfig::new(stiffness, damping, mass)
 }
 
 impl SpringConfig {
@@ -473,9 +478,8 @@ pub enum SpringPlayback {
 /// A stateful spring animation targeting a value or projected path.
 #[derive(Clone, Debug)]
 pub struct SpringAnimation<T = ()> {
-    pub(crate) config: SpringConfig,
+    pub(crate) motion: Motion<SpringDescription>,
     pub(crate) target: T,
-    pub(crate) epsilon: f32,
     pub(crate) initial: Option<f32>,
     pub(crate) playback: SpringPlayback,
 }
@@ -484,9 +488,8 @@ impl SpringAnimation<()> {
     /// Creates a spring animation builder.
     pub fn new(config: SpringConfig) -> Self {
         Self {
-            config,
+            motion: Motion::spring(config),
             target: (),
-            epsilon: DEFAULT_SPRING_EPSILON,
             initial: None,
             playback: SpringPlayback::Running,
         }
@@ -495,16 +498,14 @@ impl SpringAnimation<()> {
     /// Sets the value or path targeted by this spring.
     pub fn to<T: SpringTarget>(self, target: T) -> SpringAnimation<T> {
         let SpringAnimation {
-            config,
+            motion,
             target: (),
-            epsilon,
             initial,
             playback,
         } = self;
         SpringAnimation {
-            config,
+            motion,
             target,
-            epsilon,
             initial,
             playback,
         }
@@ -514,7 +515,7 @@ impl SpringAnimation<()> {
 impl<T> SpringAnimation<T> {
     /// Sets the settling tolerance in the target's scalar coordinate space.
     pub fn with_epsilon(mut self, epsilon: f32) -> Self {
-        self.epsilon = epsilon;
+        self.motion = self.motion.with_epsilon(epsilon);
         self
     }
 

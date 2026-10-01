@@ -166,7 +166,7 @@ pub fn style_transitions(input: TokenStream) -> TokenStream {
     let config_fields = canonical_fields.iter().map(|field| {
         let name = &field.config_name;
         quote! {
-            #name: Option<crate::Motion>
+            #name: Option<crate::AnyMotion>
         }
     });
 
@@ -178,7 +178,7 @@ pub fn style_transitions(input: TokenStream) -> TokenStream {
             .map(|field| style_transition_config_name(&style_transition_key(&field.path)));
         quote! {
             #[doc = concat!("Transitions changes made by [`Styled::", stringify!(#name), "`].")]
-            pub fn #name(mut self, motion: impl Into<crate::Motion>) -> Self {
+            pub fn #name(mut self, motion: impl Into<crate::AnyMotion>) -> Self {
                 let motion = motion.into();
                 #(self.#config_names = Some(motion.clone());)*
                 self

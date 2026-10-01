@@ -3,8 +3,8 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 use crate::{
     AnyElement, App, AppContext, Element, ElementId, GlobalElementId, InspectorElementId,
-    IntoElement, ParentElement, SpringAnimation, SpringConfig, SpringPlayback, SpringState,
-    SpringTarget, Window,
+    IntoElement, Motion, ParentElement, SpringAnimation, SpringConfig, SpringDescription,
+    SpringPlayback, SpringState, SpringTarget, Window,
 };
 
 pub use easing::*;
@@ -13,59 +13,48 @@ use smallvec::SmallVec;
 /// An animation that can be applied to an element.
 #[derive(Clone)]
 pub struct Animation {
-    /// The amount of time for which this animation should run
-    pub duration: Duration,
-    /// Whether to repeat this animation when it finishes
-    pub oneshot: bool,
+    /// The timing, repetition, and easing applied to this animation.
+    pub motion: Motion,
     /// Whether to derive the phase from a shared clock. See [`Animation::repeat_synced`].
     pub synced: bool,
-    /// A function that maps normalized time to an animated value.
-    /// The result may exceed 0..1 for easing functions that overshoot.
-    pub easing: Rc<dyn Fn(f32) -> f32>,
     /// The maximum number of times per second this animation re-renders.
     /// When `None`, the animation re-renders on every frame.
     pub max_fps: Option<f32>,
 }
 
 impl Animation {
-    /// Create a new animation with the given duration.
-    /// By default the animation will only run once and will use a linear easing function.
-    pub fn new(duration: Duration) -> Self {
+    /// Creates an animation with the given motion.
+    ///
+    /// Duration inputs create one linear motion pass.
+    pub fn new(motion: impl Into<Motion>) -> Self {
         Self {
-            duration,
-            oneshot: true,
+            motion: motion.into(),
             synced: false,
-            easing: Rc::new(linear),
             max_fps: None,
         }
     }
 
     /// Set the animation to loop when it finishes.
     pub fn repeat(mut self) -> Self {
-        self.oneshot = false;
+        self.motion = self.motion.repeat_forever();
         self
     }
 
     /// Set the animation to loop when it finishes, phase-locked to a clock shared by the whole [`App`].
     pub fn repeat_synced(mut self) -> Self {
-        self.oneshot = false;
+        self.motion = self.motion.repeat_forever();
         self.synced = true;
         self
     }
 
-    /// Sets the easing function used to map normalized time to an animated value.
-    ///
-    /// The output is not clamped, allowing physical easing functions such as
-    /// springs to overshoot.
+    /// Sets easing without clamping the output, so curves may overshoot.
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
-        self.easing = Rc::new(easing);
+        self.motion = self.motion.with_easing(easing);
         self
     }
 
-    /// Limit how often this animation re-renders. Instead of re-rendering on
-    /// every frame, the animation schedules its next render `1 / max_fps`
-    /// seconds after the current one. Values that are not finite and positive
-    /// are ignored.
+    /// Limits re-renders to `max_fps` by scheduling a timer between frames.
+    /// Non-finite and non-positive values are ignored.
     pub fn with_max_fps(mut self, max_fps: f32) -> Self {
         self.max_fps = Some(max_fps);
         self
@@ -135,9 +124,8 @@ pub trait AnimationExt {
         T::Output: 'static,
     {
         let SpringAnimation {
-            config,
+            motion,
             target,
-            epsilon,
             initial,
             playback,
         } = animation;
@@ -145,9 +133,8 @@ pub trait AnimationExt {
         SpringAnimationElement {
             id: id.into(),
             element: Some(self),
-            config,
+            motion,
             target: scalar_target,
-            epsilon,
             initial,
             playback,
             animator: Some(Box::new(move |this, value| {
@@ -171,9 +158,8 @@ pub struct AnimationElement<E> {
 pub struct SpringAnimationElement<E> {
     id: ElementId,
     element: Option<E>,
-    config: SpringConfig,
+    motion: Motion<SpringDescription>,
     target: f32,
-    epsilon: f32,
     initial: Option<f32>,
     playback: SpringPlayback,
     animator: Option<Box<dyn FnOnce(E, f32) -> E + 'static>>,
@@ -280,7 +266,7 @@ impl<E: IntoElement + 'static> Element for SpringAnimationElement<E> {
                     velocity: 0.0,
                 },
                 target: self.target,
-                config: self.config,
+                config: self.motion.config,
                 initial,
                 playback: self.playback,
                 updated_at: now,
@@ -297,7 +283,7 @@ impl<E: IntoElement + 'static> Element for SpringAnimationElement<E> {
                 | SpringPlayback::Cancelled => {}
             }
 
-            state.config = self.config;
+            state.config = self.motion.config;
             state.target = self.target;
 
             let done = match self.playback {
@@ -309,10 +295,11 @@ impl<E: IntoElement + 'static> Element for SpringAnimationElement<E> {
                         };
                         true
                     } else {
-                        let done =
-                            state
-                                .config
-                                .is_settled(state.spring, state.target, self.epsilon);
+                        let done = state.config.is_settled(
+                            state.spring,
+                            state.target,
+                            self.motion.epsilon,
+                        );
                         if done {
                             state.spring = SpringState {
                                 position: state.target,
@@ -403,49 +390,36 @@ impl<E: IntoElement + 'static> Element for AnimationElement<E> {
         cx: &mut App,
     ) -> (crate::LayoutId, Self::RequestLayoutState) {
         window.with_element_state(global_id.unwrap(), |state, window| {
+            let now = cx.background_executor().now();
             let mut state = state.unwrap_or_else(|| AnimationState {
-                start: Instant::now(),
+                start: now,
                 animation_ix: 0,
                 delayed_frame_pending: Rc::new(Cell::new(false)),
             });
             let (animation_ix, delta, done) = if cx.reduce_motion() {
                 let animation_ix = self.animations.len() - 1;
-                let delta = if self.animations[animation_ix].oneshot {
-                    1.0
-                } else {
-                    0.0
-                };
+                let delta = self.animations[animation_ix]
+                    .motion
+                    .resting_progress()
+                    .get();
                 (animation_ix, delta, true)
             } else {
                 let animation_ix = state.animation_ix;
-                let duration = self.animations[animation_ix].duration;
-
-                let elapsed = if self.animations[animation_ix].synced && !duration.is_zero() {
-                    let elapsed = cx.background_executor().now() - cx.synced_animation_epoch;
-                    // Reduce modulo the duration before f32 conversion, which loses sub-second precision at scale.
-                    Duration::from_nanos((elapsed.as_nanos() % duration.as_nanos()) as u64)
+                let animation = &self.animations[animation_ix];
+                let elapsed = if animation.synced {
+                    now - cx.synced_animation_epoch
                 } else {
-                    state.start.elapsed()
+                    now - state.start
                 };
-                let mut delta = elapsed.as_secs_f32() / duration.as_secs_f32();
-
-                let mut done = false;
-                if delta > 1.0 {
-                    if self.animations[animation_ix].oneshot {
-                        if animation_ix >= self.animations.len() - 1 {
-                            done = true;
-                        } else {
-                            state.start = Instant::now();
-                            state.animation_ix += 1;
-                        }
-                        delta = 1.0;
-                    } else {
-                        delta %= 1.0;
-                    }
+                let sample = animation.motion.sample(elapsed);
+                let mut done = !sample.is_active;
+                if done && animation_ix < self.animations.len() - 1 {
+                    state.start = now;
+                    state.animation_ix += 1;
+                    done = false;
                 }
-                (animation_ix, delta, done)
+                (animation_ix, sample.progress.get(), done)
             };
-            let delta = (self.animations[animation_ix].easing)(delta);
 
             debug_assert!(delta.is_finite(), "animated value should be finite");
 
@@ -575,6 +549,10 @@ mod tests {
         max_fps: Option<f32>,
     }
 
+    struct AnimationSequenceTestView {
+        rendered_samples: Rc<RefCell<Vec<(usize, f32)>>>,
+    }
+
     struct SyncedAnimationTestView {
         show_second: bool,
         first_deltas: Rc<RefCell<Vec<f32>>>,
@@ -591,9 +569,9 @@ mod tests {
     impl Render for SpringAnimationTestView {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let rendered_values = self.rendered_values.clone();
-            let mut animation = SpringAnimation::new(SpringConfig::new(100.0, 2.0, 1.0))
-                .to(self.target)
+            let mut animation = Motion::spring(SpringConfig::new(100.0, 2.0, 1.0))
                 .with_epsilon(0.01)
+                .to(self.target)
                 .playback(self.playback);
             if let Some(initial) = self.initial {
                 animation = animation.from(initial);
@@ -635,7 +613,7 @@ mod tests {
             let rendered_deltas = self.rendered_deltas.clone();
             // The throttled variant syncs to the shared clock so the deltas
             // follow the test scheduler's clock rather than wall time.
-            let mut animation = Animation::new(Duration::from_secs(1));
+            let mut animation = Animation::new(Motion::new(Duration::from_secs(1)));
             if let Some(max_fps) = self.max_fps {
                 animation = animation.repeat_synced().with_max_fps(max_fps);
             } else {
@@ -649,6 +627,23 @@ mod tests {
                     this
                 },
             ))
+        }
+    }
+
+    impl Render for AnimationSequenceTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let rendered_samples = self.rendered_samples.clone();
+            div().with_animations(
+                "animation-sequence",
+                vec![
+                    Animation::new(Duration::ZERO),
+                    Animation::new(Duration::ZERO),
+                ],
+                move |this, animation_ix, delta| {
+                    rendered_samples.borrow_mut().push((animation_ix, delta));
+                    this
+                },
+            )
         }
     }
 
@@ -681,30 +676,18 @@ mod tests {
         cx.run_until_parked();
         callback_count
     }
-    // Before parent-animation-element, using .with_animation
-    // would not allow chaining .parent after. This is just a
-    // build check that we can call div().id().with_animation().child()
+
     #[test]
-    fn test_animation_parent() {
+    fn test_animation_wrappers_accept_children() {
         div()
             .id("id")
-            //
             .with_animation(
                 "animation",
                 Animation::new(Duration::from_secs(1)),
-                |el, _t| {
-                    //
-                    el
-                },
+                |element, _progress| element,
             )
-            .child(
-                //
-                div(),
-            );
-    }
+            .child(div());
 
-    #[test]
-    fn test_spring_animation_parent() {
         div()
             .id("id")
             .with_spring(
@@ -911,7 +894,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn test_spring_animation_respects_reduced_motion(cx: &mut TestAppContext) {
+    fn test_animations_respect_reduced_motion(cx: &mut TestAppContext) {
         cx.update(|cx| cx.set_reduce_motion(true));
         let rendered_values = Rc::new(RefCell::new(Vec::new()));
         let window = cx.open_window(size(px(100.0), px(100.0)), {
@@ -926,6 +909,25 @@ mod tests {
         cx.run_until_parked();
 
         assert_eq!(*rendered_values.borrow(), vec![px(100.0)]);
+        assert_eq!(simulate_next_frame(&window, cx), 0);
+
+        let (rendered_deltas, window) = open_test_window(cx);
+        assert_eq!(*rendered_deltas.borrow(), vec![0.0]);
+        assert_eq!(simulate_next_frame(&window, cx), 0);
+    }
+
+    #[gpui::test]
+    fn test_zero_duration_animation_sequence_advances_without_nan(cx: &mut TestAppContext) {
+        let rendered_samples = Rc::new(RefCell::new(Vec::new()));
+        let window = cx.open_window(size(px(100.0), px(100.0)), {
+            let rendered_samples = rendered_samples.clone();
+            move |_, _| AnimationSequenceTestView { rendered_samples }
+        });
+        cx.run_until_parked();
+
+        assert_eq!(*rendered_samples.borrow(), vec![(0, 1.0)]);
+        assert_eq!(simulate_next_frame(&window, cx), 1);
+        assert_eq!(*rendered_samples.borrow(), vec![(0, 1.0), (1, 1.0)]);
         assert_eq!(simulate_next_frame(&window, cx), 0);
     }
 
@@ -1024,16 +1026,5 @@ mod tests {
             .advance_clock(Duration::from_secs(300 * 24 * 60 * 60) + Duration::from_millis(500));
         simulate_next_frame(&window, cx);
         assert_eq!(*first_deltas.borrow().last().unwrap(), 0.25);
-    }
-
-    #[gpui::test]
-    fn test_reduce_motion_renders_single_static_frame(cx: &mut TestAppContext) {
-        cx.update(|cx| cx.set_reduce_motion(true));
-        let (rendered_deltas, window) = open_test_window(cx);
-
-        assert_eq!(*rendered_deltas.borrow(), vec![0.0]);
-
-        assert_eq!(simulate_next_frame(&window, cx), 0);
-        assert_eq!(*rendered_deltas.borrow(), vec![0.0]);
     }
 }

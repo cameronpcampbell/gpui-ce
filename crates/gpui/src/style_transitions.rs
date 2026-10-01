@@ -1,8 +1,8 @@
 use scheduler::Instant;
 
 use crate::{
-    AbsoluteLength, Animated, Background, Bounds, DefiniteLength, Fill, Hsla, Length, Lerp, Motion,
-    Pixels, RingColor,
+    AbsoluteLength, Animated, AnimatedSample, AnyMotion, Background, Bounds, DefiniteLength, Fill,
+    Hsla, Length, Lerp, Pixels, Progress, RingColor,
 };
 
 #[derive(Clone, Copy)]
@@ -32,6 +32,37 @@ impl StyleTransitionContext {
 
 pub(crate) struct StyleTransitionPropertyState<T: Lerp + Clone + PartialEq> {
     animated: Option<Animated<T, Instant>>,
+}
+
+struct StyleTransitionEvaluation<T> {
+    value: Option<T>,
+    progress: Progress,
+    is_active: bool,
+}
+
+impl<T> StyleTransitionEvaluation<T> {
+    fn from_sample(sample: AnimatedSample<T>) -> Self {
+        Self {
+            value: Some(sample.value),
+            progress: sample.progress,
+            is_active: sample.is_active,
+        }
+    }
+
+    fn at_target(value: Option<T>) -> Self {
+        Self {
+            value,
+            progress: Progress::END,
+            is_active: false,
+        }
+    }
+
+    /// An inactive sample at Progress::END presents the authored target.
+    /// Other inactive progress retains the sampled presentation, such as an
+    /// alternating run that settles at its origin or a custom easing endpoint.
+    fn presents_authored_target(&self) -> bool {
+        !self.is_active && self.progress == Progress::END
+    }
 }
 
 struct SizeTransitionState<T: Lerp + Clone + PartialEq> {
@@ -174,7 +205,7 @@ fn apply_auto_size(
     state: &mut Option<AutoSizeTransitionPropertyState>,
     value: &mut Length,
     axis: StyleTransitionAxis,
-    motion: Option<&Motion>,
+    motion: Option<&AnyMotion>,
     context: StyleTransitionContext,
     now: Instant,
     reduce_motion: bool,
@@ -241,30 +272,35 @@ fn apply_auto_size(
         animated.set(endpoint, motion, now);
     }
 
-    let sample = animated.sample(now);
+    let evaluation = StyleTransitionEvaluation::from_sample(animated.sample(now));
     state.authored_goal = Some(authored_goal);
 
-    if sample.is_active {
+    if !evaluation.presents_authored_target() {
+        let sampled_value = evaluation
+            .value
+            .expect("an Animated sample always contains a value");
         *value = Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Pixels(
-            sample.value,
+            sampled_value,
         )));
     } else if authored_goal == Length::Auto
         && let Some(bounds_value) = bounds_value
     {
         state.resolved_auto = Some(bounds_value);
         animated.jump_to(bounds_value);
+    } else {
+        animated.adopt_completed_target();
     }
 
-    sample.is_active
+    evaluation.is_active
 }
 
 fn evaluate<T>(
     state: &mut Option<StyleTransitionPropertyState<T>>,
     target: Option<T>,
-    motion: &Motion,
+    motion: &AnyMotion,
     now: Instant,
     reduce_motion: bool,
-) -> (bool, Option<T>)
+) -> StyleTransitionEvaluation<T>
 where
     T: Lerp + Clone + PartialEq,
 {
@@ -276,7 +312,7 @@ where
 fn apply_required<T>(
     state: &mut Option<StyleTransitionPropertyState<T>>,
     value: &mut T,
-    motion: Option<&Motion>,
+    motion: Option<&AnyMotion>,
     now: Instant,
     reduce_motion: bool,
 ) -> bool
@@ -291,7 +327,7 @@ fn apply_required_target<T>(
     state: &mut Option<StyleTransitionPropertyState<T>>,
     value: &mut T,
     target: Option<T>,
-    motion: Option<&Motion>,
+    motion: Option<&AnyMotion>,
     now: Instant,
     reduce_motion: bool,
 ) -> bool
@@ -306,17 +342,19 @@ where
         return false;
     };
 
-    let (in_progress, evaluated_value) = evaluate(state, Some(target), motion, now, reduce_motion);
-    if let Some(evaluated_value) = evaluated_value {
+    let evaluation = evaluate(state, Some(target), motion, now, reduce_motion);
+    if !evaluation.presents_authored_target()
+        && let Some(evaluated_value) = evaluation.value
+    {
         *value = evaluated_value;
     }
-    in_progress
+    evaluation.is_active
 }
 
 fn apply_optional<T>(
     state: &mut Option<StyleTransitionPropertyState<T>>,
     value: &mut Option<T>,
-    motion: Option<&Motion>,
+    motion: Option<&AnyMotion>,
     now: Instant,
     reduce_motion: bool,
 ) -> bool
@@ -328,22 +366,19 @@ where
         return false;
     };
 
-    let restore_none = value.is_none();
     let target = value.clone().unwrap_or_default();
-    let (in_progress, evaluated_value) = evaluate(state, Some(target), motion, now, reduce_motion);
-    *value = if restore_none && !in_progress {
-        None
-    } else {
-        evaluated_value
-    };
-    in_progress
+    let evaluation = evaluate(state, Some(target), motion, now, reduce_motion);
+    if !evaluation.presents_authored_target() {
+        *value = evaluation.value;
+    }
+    evaluation.is_active
 }
 
 fn apply_inset(
     state: &mut Option<InsetTransitionPropertyState>,
     value: &mut Length,
     edge: StyleTransitionEdge,
-    motion: Option<&Motion>,
+    motion: Option<&AnyMotion>,
     context: StyleTransitionContext,
     now: Instant,
     reduce_motion: bool,
@@ -419,30 +454,35 @@ fn apply_inset(
         animated.set(endpoint, motion, now);
     }
 
-    let sample = animated.sample(now);
+    let evaluation = StyleTransitionEvaluation::from_sample(animated.sample(now));
     state.authored_goal = Some(authored_goal);
-    state.active = sample.is_active;
+    state.active = evaluation.is_active;
 
-    if sample.is_active {
+    if !evaluation.presents_authored_target() {
+        let sampled_value = evaluation
+            .value
+            .expect("an Animated sample always contains a value");
         *value = Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Pixels(
-            sample.value,
+            sampled_value,
         )));
+    } else {
+        animated.adopt_completed_target();
     }
 
-    sample.is_active
+    evaluation.is_active
 }
 
 impl<T> StyleTransitionPropertyState<T>
 where
     T: Lerp + Clone + PartialEq,
 {
-    fn new(initial_goal: Option<T>, motion: &Motion) -> Self {
+    fn new(initial_goal: Option<T>, motion: &AnyMotion) -> Self {
         Self {
             animated: initial_goal.map(|goal| Animated::new(goal, motion.clone())),
         }
     }
 
-    fn jump_to(&mut self, goal: Option<T>, motion: &Motion) {
+    fn jump_to(&mut self, goal: Option<T>, motion: &AnyMotion) {
         match (self.animated.as_mut(), goal) {
             (Some(animated), Some(goal)) => animated.jump_to(goal),
             (_, Some(goal)) => {
@@ -452,17 +492,16 @@ where
         }
     }
 
-    pub(crate) fn evaluate(
+    fn evaluate(
         &mut self,
         goal: Option<T>,
-        motion: &Motion,
+        motion: &AnyMotion,
         now: Instant,
         reduce_motion: bool,
-    ) -> (bool, Option<T>) {
+    ) -> StyleTransitionEvaluation<T> {
         if reduce_motion {
             self.jump_to(goal, motion);
-            return (
-                false,
+            return StyleTransitionEvaluation::at_target(
                 self.animated
                     .as_ref()
                     .map(|animated| animated.value().clone()),
@@ -471,17 +510,20 @@ where
 
         let Some(goal) = goal else {
             self.animated = None;
-            return (false, None);
+            return StyleTransitionEvaluation::at_target(None);
         };
 
         let Some(animated) = self.animated.as_mut() else {
             self.animated = Some(Animated::new(goal.clone(), motion.clone()));
-            return (false, Some(goal));
+            return StyleTransitionEvaluation::at_target(Some(goal));
         };
 
         animated.set(goal, motion, now);
-        let sample = animated.sample(now);
-        (sample.is_active, Some(sample.value))
+        let evaluation = StyleTransitionEvaluation::from_sample(animated.sample(now));
+        if evaluation.presents_authored_target() {
+            animated.adopt_completed_target();
+        }
+        evaluation
     }
 }
 
@@ -495,11 +537,25 @@ mod tests {
 
     use super::*;
     use crate::{
-        AbsoluteLength, AnyWindowHandle, Bounds, Corners, DefiniteLength, DurationWithEasing,
-        Edges, FocusHandle, InputEvent as _, Length, MouseButton, MouseDownEvent, MouseUpEvent,
-        Pixels, Style, TestAppContext, Window, blue, canvas, div, ease_in_out, point, prelude::*,
-        px, red, relative, rems, size,
+        AbsoluteLength, AnyWindowHandle, Bounds, Corners, DefiniteLength, Edges, FocusHandle,
+        InputEvent as _, Length, Motion, MotionDurationExt, MouseButton, MouseDownEvent,
+        MouseUpEvent, Pixels, SpringConfig, Style, TestAppContext, Window, blue, canvas, div,
+        ease_in_out, point, prelude::*, px, red, relative, rems, size,
     };
+
+    #[derive(Clone, Debug, Default, PartialEq)]
+    struct EndpointBiased(f32);
+
+    impl Lerp for EndpointBiased {
+        fn lerp(&self, to: &Self, delta: f32) -> Self {
+            let interpolated = self.0 + (to.0 - self.0) * delta;
+            Self(if delta == 1.0 {
+                interpolated + 0.25
+            } else {
+                interpolated
+            })
+        }
+    }
 
     fn length(value: f32) -> Length {
         Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Pixels(px(value))))
@@ -534,6 +590,407 @@ mod tests {
             transitions.apply(&mut style, &mut state, context, started_at + elapsed, false);
 
         (in_progress, style)
+    }
+
+    #[test]
+    fn alternating_style_motion_keeps_its_origin_after_completion() {
+        let started_at = Instant::now();
+        let motion = Motion::new(Duration::from_secs(1))
+            .with_delay(Duration::from_millis(500))
+            .iterations(2)
+            .alternate();
+        let transitions = StyleTransitions::new()
+            .flex_grow(motion.clone())
+            .opacity(motion);
+        let context = StyleTransitionContext::new(None, px(16.0));
+        let mut state = StyleTransitionState::default();
+        let mut style = Style {
+            flex_grow: 4.0,
+            opacity: Some(1.0),
+            ..Style::default()
+        };
+
+        assert!(!transitions.apply(&mut style, &mut state, context, started_at, false));
+
+        for (milliseconds, expected_grow, expected_opacity, active) in [
+            (0, 4.0, Some(1.0), true),
+            (500, 4.0, Some(1.0), true),
+            (1_000, 7.0, Some(0.5), true),
+            (1_500, 10.0, Some(0.0), true),
+            (2_000, 7.0, Some(0.5), true),
+            (2_500, 4.0, Some(1.0), false),
+            (3_000, 4.0, Some(1.0), false),
+        ] {
+            let mut style = Style {
+                flex_grow: 10.0,
+                opacity: None,
+                ..Style::default()
+            };
+            assert_eq!(
+                transitions.apply(
+                    &mut style,
+                    &mut state,
+                    context,
+                    started_at + Duration::from_millis(milliseconds),
+                    false,
+                ),
+                active
+            );
+            assert_eq!(style.flex_grow, expected_grow);
+            assert_eq!(style.opacity, expected_opacity);
+        }
+
+        let mut style = Style {
+            flex_grow: 20.0,
+            opacity: None,
+            ..Style::default()
+        };
+        assert!(!transitions.apply(
+            &mut style,
+            &mut state,
+            context,
+            started_at + Duration::from_millis(3_100),
+            true,
+        ));
+        assert_eq!((style.flex_grow, style.opacity), (20.0, None));
+
+        assert!(!transitions.apply(
+            &mut style,
+            &mut state,
+            context,
+            started_at + Duration::from_millis(3_200),
+            false,
+        ));
+        assert_eq!((style.flex_grow, style.opacity), (20.0, None));
+    }
+
+    #[test]
+    fn required_completion_uses_motion_progress_not_value_equality() {
+        let started_at = Instant::now();
+        let motion: AnyMotion = Motion::new(Duration::from_secs(1)).into();
+        let mut state = None;
+        let mut value = EndpointBiased(10.0);
+
+        assert!(!apply_required(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at,
+            false,
+        ));
+
+        value = EndpointBiased(20.0);
+        assert!(apply_required(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at,
+            false,
+        ));
+        assert_eq!(value, EndpointBiased(10.0));
+
+        value = EndpointBiased(20.0);
+        assert!(apply_required(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at + Duration::from_millis(500),
+            false,
+        ));
+        assert_eq!(value, EndpointBiased(15.0));
+
+        value = EndpointBiased(20.0);
+        assert!(!apply_required(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at + Duration::from_secs(1),
+            false,
+        ));
+        assert_eq!(value, EndpointBiased(20.0));
+
+        value = EndpointBiased(30.0);
+        assert!(apply_required(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at + Duration::from_secs(2),
+            false,
+        ));
+        assert_eq!(value, EndpointBiased(20.0));
+
+        value = EndpointBiased(30.0);
+        assert!(apply_required(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at + Duration::from_millis(2_500),
+            false,
+        ));
+        assert_eq!(value, EndpointBiased(25.0));
+
+        let nonstandard_endpoint: AnyMotion = Motion::new(Duration::from_secs(1))
+            .with_easing(|_| 0.5)
+            .into();
+        let mut state = None;
+        let mut value = 10.0_f32;
+        assert!(!apply_required(
+            &mut state,
+            &mut value,
+            Some(&nonstandard_endpoint),
+            started_at,
+            false,
+        ));
+
+        value = 20.0;
+        assert!(apply_required(
+            &mut state,
+            &mut value,
+            Some(&nonstandard_endpoint),
+            started_at,
+            false,
+        ));
+        assert_eq!(value, 15.0);
+
+        value = 20.0;
+        assert!(!apply_required(
+            &mut state,
+            &mut value,
+            Some(&nonstandard_endpoint),
+            started_at + Duration::from_secs(1),
+            false,
+        ));
+        assert_eq!(value, 15.0);
+    }
+
+    #[test]
+    fn optional_completion_uses_motion_progress_not_value_equality() {
+        let started_at = Instant::now();
+        let motion: AnyMotion = Motion::new(Duration::from_secs(1)).into();
+        let mut state = None;
+        let mut value = Some(EndpointBiased(10.0));
+
+        assert!(!apply_optional(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at,
+            false,
+        ));
+
+        value = None;
+        assert!(apply_optional(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at,
+            false,
+        ));
+        assert_eq!(value, Some(EndpointBiased(10.0)));
+
+        value = None;
+        assert!(!apply_optional(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at + Duration::from_secs(1),
+            false,
+        ));
+        assert_eq!(value, None);
+
+        value = None;
+        assert!(!apply_optional(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at + Duration::from_secs(2),
+            false,
+        ));
+        assert_eq!(value, None);
+
+        let nonstandard_endpoint: AnyMotion = Motion::new(Duration::from_secs(1))
+            .with_easing(|_| 0.5)
+            .into();
+        let mut state = None;
+        let mut value = Some(10.0_f32);
+        assert!(!apply_optional(
+            &mut state,
+            &mut value,
+            Some(&nonstandard_endpoint),
+            started_at,
+            false,
+        ));
+
+        value = None;
+        assert!(apply_optional(
+            &mut state,
+            &mut value,
+            Some(&nonstandard_endpoint),
+            started_at,
+            false,
+        ));
+        assert_eq!(value, Some(5.0));
+
+        value = None;
+        assert!(!apply_optional(
+            &mut state,
+            &mut value,
+            Some(&nonstandard_endpoint),
+            started_at + Duration::from_secs(1),
+            false,
+        ));
+        assert_eq!(value, Some(5.0));
+    }
+
+    #[test]
+    fn optional_some_completion_and_retarget_use_the_authored_endpoint() {
+        let started_at = Instant::now();
+        let motion: AnyMotion = Motion::new(Duration::from_secs(1)).into();
+        let mut state = None;
+        let mut value = Some(EndpointBiased(10.0));
+
+        assert!(!apply_optional(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at,
+            false,
+        ));
+
+        value = Some(EndpointBiased(20.0));
+        assert!(apply_optional(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at,
+            false,
+        ));
+        assert_eq!(value, Some(EndpointBiased(10.0)));
+
+        value = Some(EndpointBiased(20.0));
+        assert!(!apply_optional(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at + Duration::from_secs(1),
+            false,
+        ));
+        assert_eq!(value, Some(EndpointBiased(20.0)));
+
+        value = Some(EndpointBiased(30.0));
+        assert!(apply_optional(
+            &mut state,
+            &mut value,
+            Some(&motion),
+            started_at + Duration::from_secs(2),
+            false,
+        ));
+        assert_eq!(value, Some(EndpointBiased(20.0)));
+    }
+
+    #[test]
+    fn alternating_auto_size_and_inset_keep_resolved_origins() {
+        let started_at = Instant::now();
+        let motion = Motion::new(Duration::from_secs(1))
+            .iterations(2)
+            .alternate();
+        let transitions = StyleTransitions::new().w(motion.clone()).top(motion);
+        let layout_context = StyleTransitionContext::new(None, px(16.0));
+        let prepaint_context = StyleTransitionContext::new(
+            Some(Bounds {
+                origin: point(px(0.0), px(15.0)),
+                size: size(px(100.0), px(40.0)),
+            }),
+            px(16.0),
+        )
+        .with_containing_bounds(Some(Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: size(px(300.0), px(200.0)),
+        }));
+        let mut state = StyleTransitionState::default();
+        let mut style = Style::default();
+
+        assert!(!transitions.apply(&mut style, &mut state, layout_context, started_at, false));
+        assert!(!transitions.apply(&mut style, &mut state, prepaint_context, started_at, false,));
+
+        for (elapsed, expected_width, expected_top, active) in [
+            (Duration::ZERO, 100.0, 15.0, true),
+            (Duration::from_secs(1), 200.0, 5.0, true),
+            (Duration::from_secs(2), 100.0, 15.0, false),
+            (Duration::from_secs(3), 100.0, 15.0, false),
+        ] {
+            let mut style = Style::default();
+            style.size.width = length(200.0);
+            style.inset.top = length(5.0);
+            assert_eq!(
+                transitions.apply(
+                    &mut style,
+                    &mut state,
+                    layout_context,
+                    started_at + elapsed,
+                    false,
+                ),
+                active
+            );
+            assert_eq!(style.size.width, length(expected_width));
+            assert_eq!(style.inset.top, length(expected_top));
+        }
+
+        let mut style = Style::default();
+        style.size.width = length(240.0);
+        style.inset.top = length(8.0);
+        assert!(!transitions.apply(
+            &mut style,
+            &mut state,
+            layout_context,
+            started_at + Duration::from_millis(3_100),
+            true,
+        ));
+        assert_eq!(style.size.width, length(240.0));
+        assert_eq!(style.inset.top, length(8.0));
+    }
+
+    #[test]
+    fn spring_style_transitions_overshoot_retarget_and_settle() {
+        let config = SpringConfig::new(100.0, 6.0, 1.0);
+        let transitions = StyleTransitions::new()
+            .flex_grow(config)
+            .opacity(Motion::spring(config).with_epsilon(0.01));
+        let context = StyleTransitionContext::new(None, px(16.0));
+        let started_at = Instant::now();
+        let mut state = StyleTransitionState::default();
+        let mut style = Style::default();
+
+        assert!(!transitions.apply(&mut style, &mut state, context, started_at, false));
+
+        style.flex_grow = 10.0;
+        style.opacity = Some(1.0);
+        assert!(transitions.apply(&mut style, &mut state, context, started_at, false));
+        assert_eq!(style.flex_grow, 0.0);
+
+        let overshoot_at = started_at + Duration::from_millis(350);
+        style.flex_grow = 10.0;
+        style.opacity = Some(1.0);
+        assert!(transitions.apply(&mut style, &mut state, context, overshoot_at, false));
+        assert!(style.flex_grow > 10.0);
+        let overshoot = style.flex_grow;
+
+        style.flex_grow = 20.0;
+        style.opacity = Some(1.0);
+        assert!(transitions.apply(&mut style, &mut state, context, overshoot_at, false));
+        assert_eq!(style.flex_grow, overshoot);
+
+        style.flex_grow = 20.0;
+        style.opacity = Some(1.0);
+        assert!(!transitions.apply(
+            &mut style,
+            &mut state,
+            context,
+            overshoot_at + Duration::from_secs(5),
+            false,
+        ));
+        assert_eq!(style.flex_grow, 20.0);
+        assert_eq!(style.opacity, Some(1.0));
     }
 
     #[test]

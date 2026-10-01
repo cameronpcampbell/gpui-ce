@@ -153,7 +153,9 @@ impl PlatformWindow for HeadlessWindow {
         None
     }
 
-    fn activate(&self) {}
+    fn activate(&self, _token: Option<&str>) -> bool {
+        false
+    }
 
     fn is_active(&self) -> bool {
         false

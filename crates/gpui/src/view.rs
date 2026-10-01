@@ -164,7 +164,21 @@ mod any_view {
             .a11y
             .view_type_names
             .insert(view.entity_id(), std::any::type_name::<V>());
-        view.update(cx, |view, cx| view.render(window, cx).into_any_element())
+        view.update(cx, |view, cx| {
+            #[cfg(all(
+                feature = "hot-patching",
+                debug_assertions,
+                not(target_family = "wasm")
+            ))]
+            let element = subsecond::HotFn::current(V::render).call((view, window, cx));
+            #[cfg(not(all(
+                feature = "hot-patching",
+                debug_assertions,
+                not(target_family = "wasm")
+            )))]
+            let element = view.render(window, cx);
+            element.into_any_element()
+        })
     }
 }
 
@@ -194,6 +208,22 @@ pub trait View: 'static + Sized {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement;
 }
 
+fn render_view<V: View>(view: V, window: &mut Window, cx: &mut App) -> AnyElement {
+    #[cfg(all(
+        feature = "hot-patching",
+        debug_assertions,
+        not(target_family = "wasm")
+    ))]
+    let element = subsecond::HotFn::current(V::render).call((view, window, cx));
+    #[cfg(not(all(
+        feature = "hot-patching",
+        debug_assertions,
+        not(target_family = "wasm")
+    )))]
+    let element = view.render(window, cx);
+    element.into_any_element()
+}
+
 /// A stateless component (`RenderOnce`) is a `View` with no identity.
 impl<T: RenderOnce> View for T {
     fn entity_id(&self) -> Option<EntityId> {
@@ -202,7 +232,19 @@ impl<T: RenderOnce> View for T {
 
     #[inline]
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        RenderOnce::render(self, window, cx)
+        #[cfg(all(
+            feature = "hot-patching",
+            debug_assertions,
+            not(target_family = "wasm")
+        ))]
+        let element = subsecond::HotFn::current(<T as RenderOnce>::render).call((self, window, cx));
+        #[cfg(not(all(
+            feature = "hot-patching",
+            debug_assertions,
+            not(target_family = "wasm")
+        )))]
+        let element = RenderOnce::render(self, window, cx);
+        element
     }
 }
 
@@ -215,7 +257,19 @@ impl<T: Render> View for Entity<T> {
     #[inline]
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         self.update(cx, |this, cx| {
-            Render::render(this, window, cx).into_any_element()
+            #[cfg(all(
+                feature = "hot-patching",
+                debug_assertions,
+                not(target_family = "wasm")
+            ))]
+            let element = subsecond::HotFn::current(T::render).call((this, window, cx));
+            #[cfg(not(all(
+                feature = "hot-patching",
+                debug_assertions,
+                not(target_family = "wasm")
+            )))]
+            let element = Render::render(this, window, cx);
+            element.into_any_element()
         })
     }
 }
@@ -330,12 +384,7 @@ impl<V: View> Element for ViewElement<V> {
                         (layout_id, None)
                     }
                     _ => {
-                        let mut element = self
-                            .view
-                            .take()
-                            .unwrap()
-                            .render(window, cx)
-                            .into_any_element();
+                        let mut element = render_view(self.view.take().unwrap(), window, cx);
                         let layout_id = element.request_layout(window, cx);
                         (layout_id, Some(element))
                     }
@@ -346,12 +395,7 @@ impl<V: View> Element for ViewElement<V> {
             window.with_id(
                 ElementId::Name(std::any::type_name::<V>().into()),
                 |window| {
-                    let mut element = self
-                        .view
-                        .take()
-                        .unwrap()
-                        .render(window, cx)
-                        .into_any_element();
+                    let mut element = render_view(self.view.take().unwrap(), window, cx);
                     let layout_id = element.request_layout(window, cx);
                     (layout_id, Some(element))
                 },
@@ -403,12 +447,7 @@ impl<V: View> Element for ViewElement<V> {
                         let refreshing = mem::replace(&mut window.refreshing, true);
                         let prepaint_start = window.prepaint_index();
                         let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
-                            let mut element = self
-                                .view
-                                .take()
-                                .unwrap()
-                                .render(window, cx)
-                                .into_any_element();
+                            let mut element = render_view(self.view.take().unwrap(), window, cx);
                             element.layout_as_root(bounds.size.into(), window, cx);
                             element.prepaint_at(bounds.origin, window, cx);
                             element
