@@ -43,27 +43,13 @@ impl RenderTarget {
                         adapter.get_info().name
                     )
                 })?;
-                let pick_alpha = |preferences: &[wgpu::CompositeAlphaMode]| {
-                    preferences
-                        .iter()
-                        .find(|mode| capabilities.alpha_modes.contains(mode))
-                        .copied()
-                        .or_else(|| capabilities.alpha_modes.first().copied())
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "surface reports no alpha modes for adapter {:?}",
-                                adapter.get_info().name
-                            )
-                        })
-                };
-                let transparent = pick_alpha(&[
-                    wgpu::CompositeAlphaMode::PreMultiplied,
-                    wgpu::CompositeAlphaMode::Inherit,
-                ])?;
-                let opaque = pick_alpha(&[
-                    wgpu::CompositeAlphaMode::Opaque,
-                    wgpu::CompositeAlphaMode::Inherit,
-                ])?;
+                let (transparent, opaque) = select_alpha_modes(&capabilities.alpha_modes)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "surface reports no alpha modes for adapter {:?}",
+                            adapter.get_info().name
+                        )
+                    })?;
                 let present_mode = select_present_mode(
                     requested.preferred_present_mode,
                     &capabilities.present_modes,
@@ -243,6 +229,37 @@ fn clamped_size(size: Size<DevicePixels>, maximum: u32) -> (u32, u32) {
     (width, height)
 }
 
+/// The supported alpha modes for transparent and opaque windows, in that order.
+fn select_alpha_modes(
+    supported: &[wgpu::CompositeAlphaMode],
+) -> Option<(wgpu::CompositeAlphaMode, wgpu::CompositeAlphaMode)> {
+    // A non-opaque CAMetalLayer, which WGPU's Metal backend reports as
+    // PostMultiplied, composites what gpui draws there as it does with Metal.
+    #[cfg(target_os = "macos")]
+    const TRANSPARENT: &[wgpu::CompositeAlphaMode] = &[
+        wgpu::CompositeAlphaMode::PreMultiplied,
+        wgpu::CompositeAlphaMode::Inherit,
+        wgpu::CompositeAlphaMode::PostMultiplied,
+    ];
+    #[cfg(not(target_os = "macos"))]
+    const TRANSPARENT: &[wgpu::CompositeAlphaMode] = &[
+        wgpu::CompositeAlphaMode::PreMultiplied,
+        wgpu::CompositeAlphaMode::Inherit,
+    ];
+    const OPAQUE: &[wgpu::CompositeAlphaMode] = &[
+        wgpu::CompositeAlphaMode::Opaque,
+        wgpu::CompositeAlphaMode::Inherit,
+    ];
+    let pick = |preferences: &[wgpu::CompositeAlphaMode]| {
+        preferences
+            .iter()
+            .find(|mode| supported.contains(mode))
+            .or_else(|| supported.first())
+            .copied()
+    };
+    Some((pick(TRANSPARENT)?, pick(OPAQUE)?))
+}
+
 fn clear_color(transparent: bool) -> wgpu::Color {
     if transparent {
         return wgpu::Color::TRANSPARENT;
@@ -257,7 +274,46 @@ fn clear_color(transparent: bool) -> wgpu::Color {
 
 #[cfg(test)]
 mod tests {
-    use super::select_present_mode;
+    use super::{select_alpha_modes, select_present_mode};
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn metal_transparent_windows_are_not_opaque() {
+        // What WGPU's Metal backend reports for a CAMetalLayer.
+        let metal = [
+            wgpu::CompositeAlphaMode::Opaque,
+            wgpu::CompositeAlphaMode::PostMultiplied,
+        ];
+        assert_eq!(
+            select_alpha_modes(&metal),
+            Some((
+                wgpu::CompositeAlphaMode::PostMultiplied,
+                wgpu::CompositeAlphaMode::Opaque,
+            )),
+        );
+    }
+
+    #[test]
+    fn alpha_modes_follow_preference_then_the_first_supported() {
+        use wgpu::CompositeAlphaMode::{Inherit, Opaque, PostMultiplied, PreMultiplied};
+
+        assert_eq!(
+            select_alpha_modes(&[PostMultiplied, Opaque, PreMultiplied]),
+            Some((PreMultiplied, Opaque)),
+        );
+        assert_eq!(select_alpha_modes(&[Inherit]), Some((Inherit, Inherit)));
+        // Neither opaque preference is offered, so opaque windows take the
+        // first mode the surface supports.
+        assert_eq!(
+            select_alpha_modes(&[PostMultiplied]),
+            Some((PostMultiplied, PostMultiplied)),
+        );
+    }
+
+    #[test]
+    fn no_alpha_modes_select_nothing() {
+        assert_eq!(select_alpha_modes(&[]), None);
+    }
 
     #[test]
     fn unsupported_present_mode_falls_back_to_fifo() {

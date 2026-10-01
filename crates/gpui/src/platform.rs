@@ -40,6 +40,7 @@ pub(crate) type PlatformScreenCaptureFrame = core_video::image_buffer::CVImageBu
 // yields no platform sources there.
 pub(crate) type PlatformScreenCaptureFrame = ();
 
+use crate::util::FluentBuilder;
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
     DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Edges, ExternalDragPayload, Font,
@@ -996,7 +997,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
 
     /// Returns the GPU context for this window's renderer.
     /// The returned `Box` contains `(Arc<wgpu::Device>, Arc<wgpu::Queue>)`.
-    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "windows",
+        target_os = "macos"
+    ))]
     fn gpu_context(&self) -> Option<Box<dyn std::any::Any>> {
         None
     }
@@ -1004,7 +1010,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// Returns typed backend-specific GPU context information for custom
     /// controls. The value is intentionally type-erased in this crate so the
     /// core UI crate does not depend on a rendering backend.
-    #[cfg(any(target_family = "wasm", target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(
+        target_family = "wasm",
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "macos"
+    ))]
     fn gpu_context_info(&self) -> Option<Box<dyn std::any::Any>> {
         None
     }
@@ -1015,7 +1026,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// captured the device from `gpu_context` should stop submitting while
     /// this is `Some(true)` and re-acquire the device once it reads
     /// `Some(false)` again.
-    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "windows",
+        target_os = "macos"
+    ))]
     fn gpu_device_lost(&self) -> Option<bool> {
         None
     }
@@ -2068,8 +2084,21 @@ pub enum TextInputAction {
     Send,
 }
 
-/// The variables that can be configured when creating a new window
-#[derive(Debug)]
+/// Options for creating a window.
+///
+/// Chain setters on [`WindowOptions::default`] to override individual fields.
+/// Optional setters accept a value or an `Option`. Pass `None` to clear the field.
+///
+/// ```
+/// use gpui::WindowOptions;
+///
+/// let options = WindowOptions::default()
+///     .focus(false)
+///     .titlebar(None)
+///     .app_id("org.example.app".to_owned());
+/// ```
+#[derive(Debug, derive_setters::Setters)]
+#[setters(into)]
 pub struct WindowOptions {
     /// Specifies the state and bounds of the window in screen coordinates.
     /// - `None`: Inherit the bounds.
@@ -2140,6 +2169,8 @@ pub struct WindowOptions {
     /// Tab group name, allows opening the window as a native tab on macOS 10.12+. Windows with the same tabbing identifier will be grouped together.
     pub tabbing_identifier: Option<String>,
 }
+
+impl FluentBuilder for WindowOptions {}
 
 /// The variables that can be configured when creating a new window
 #[derive(Debug)]
@@ -2270,8 +2301,21 @@ impl Default for WindowOptions {
     }
 }
 
-/// The options that can be configured for a window's titlebar
-#[derive(Debug, Default)]
+/// Options for a window's titlebar.
+///
+/// Chain setters on [`TitlebarOptions::default`] and pass the result to
+/// [`WindowOptions::titlebar()`]. Pass `None` to clear the title or traffic light position.
+///
+/// ```
+/// use gpui::{SharedString, TitlebarOptions, point, px};
+///
+/// let titlebar = TitlebarOptions::default()
+///     .title(SharedString::from("My app"))
+///     .appears_transparent(true)
+///     .traffic_light_position(point(px(16.0), px(16.0)));
+/// ```
+#[derive(Debug, Default, derive_setters::Setters)]
+#[setters(into)]
 pub struct TitlebarOptions {
     /// The initial title of the window
     pub title: Option<SharedString>,
@@ -2283,6 +2327,8 @@ pub struct TitlebarOptions {
     /// The position of the macOS traffic light buttons
     pub traffic_light_position: Option<Point<Pixels>>,
 }
+
+impl FluentBuilder for TitlebarOptions {}
 
 /// The kind of window to create
 #[derive(Clone, Debug, PartialEq, Eq)]
