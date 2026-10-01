@@ -1011,10 +1011,8 @@ impl StateInner {
 
         for (ix, item) in cursor.enumerate() {
             let size = item.size().unwrap_or_else(|| {
-                crate::selector::with_selector_measurement(|| {
-                    let mut element = render_item(ix, window, cx);
-
-                    element.layout_as_root(available_item_space, window, cx)
+                window.measure_element(available_item_space, cx, |window, cx| {
+                    render_item(ix, window, cx)
                 })
             });
 
@@ -1076,13 +1074,18 @@ impl StateInner {
             // If we're within the visible area or the height wasn't cached, render and measure the item's element
             if visible_height < available_height || size.is_none() {
                 let item_index = scroll_top.item_ix + ix;
-                let mut element = render_item(item_index, window, cx);
-                let element_size = if visible_height < available_height {
-                    element.layout_as_root(available_item_space, window, cx)
+                let (element_size, rendered_element) = if visible_height < available_height {
+                    let mut element = render_item(item_index, window, cx);
+                    let element_size = element.layout_as_root(available_item_space, window, cx);
+
+                    (element_size, Some(element))
                 } else {
-                    crate::selector::with_selector_measurement(|| {
-                        element.layout_as_root(available_item_space, window, cx)
-                    })
+                    let element_size =
+                        window.measure_element(available_item_space, cx, |window, cx| {
+                            render_item(item_index, window, cx)
+                        });
+
+                    (element_size, None)
                 };
                 size = Some(element_size);
 
@@ -1111,7 +1114,7 @@ impl StateInner {
                     }
                 }
 
-                if visible_height < available_height {
+                if let Some(element) = rendered_element {
                     item_layouts.push_back(ItemLayout {
                         index: item_index,
                         element,
@@ -1192,10 +1195,8 @@ impl StateInner {
                 let size = if let ListItem::Measured { size, .. } = item {
                     *size
                 } else {
-                    crate::selector::with_selector_measurement(|| {
-                        let mut element = render_item(cursor.start().0, window, cx);
-
-                        element.layout_as_root(available_item_space, window, cx)
+                    window.measure_element(available_item_space, cx, |window, cx| {
+                        render_item(cursor.start().0, window, cx)
                     })
                 };
 
@@ -1319,16 +1320,16 @@ impl StateInner {
                                         break;
                                     };
                                     let size = prev_item.size().unwrap_or_else(|| {
-                                        crate::selector::with_selector_measurement(|| {
-                                            let mut element =
-                                                render_item(cursor.start().0, window, cx);
-                                            let item_available_size = size(
-                                                bounds.size.width.into(),
-                                                AvailableSpace::MinContent,
-                                            );
+                                        let item_available_size = size(
+                                            bounds.size.width.into(),
+                                            AvailableSpace::MinContent,
+                                        );
 
-                                            element.layout_as_root(item_available_size, window, cx)
-                                        })
+                                        window.measure_element(
+                                            item_available_size,
+                                            cx,
+                                            |window, cx| render_item(cursor.start().0, window, cx),
+                                        )
                                     });
                                     item_ix = cursor.start().0;
                                     offset_in_item += size.height;
@@ -1353,14 +1354,11 @@ impl StateInner {
                                 let Some(item) = cursor.item() else { break };
 
                                 let size = item.size().unwrap_or_else(|| {
-                                    crate::selector::with_selector_measurement(|| {
-                                        let mut item = render_item(cursor.start().0, window, cx);
-                                        let item_available_size = size(
-                                            bounds.size.width.into(),
-                                            AvailableSpace::MinContent,
-                                        );
+                                    let item_available_size =
+                                        size(bounds.size.width.into(), AvailableSpace::MinContent);
 
-                                        item.layout_as_root(item_available_size, window, cx)
+                                    window.measure_element(item_available_size, cx, |window, cx| {
+                                        render_item(cursor.start().0, window, cx)
                                     })
                                 });
                                 height -= size.height;
@@ -1497,7 +1495,7 @@ impl Element for List {
                         window.rem_size(),
                     );
 
-                    let layout_response = crate::selector::with_selector_measurement(|| {
+                    let layout_response = window.with_layout_measurement(|window| {
                         state.layout_items(
                             None,
                             available_height,

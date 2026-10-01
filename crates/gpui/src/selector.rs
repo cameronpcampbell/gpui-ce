@@ -458,9 +458,10 @@ pub(crate) fn apply_active_selectors(element: &mut AnyElement) {
 mod tests {
     use super::*;
     use crate::{
-        AnyWindowHandle, AppContext, AvailableSpace, Context, Element, InteractiveElement,
-        ListAlignment, ListState, ParentElement, Render, StyleRefinement, Styled, TestAppContext,
-        Window, any, div, list, not, px, rgb, uniform_list,
+        AnyWindowHandle, App, AppContext, AvailableSpace, Context, Element, Empty,
+        InteractiveElement, ListAlignment, ListState, ParentElement, Pixels, Render, Size,
+        StyleRefinement, Styled, TestAppContext, Window, any, div, list, not, px, rgb, size,
+        uniform_list,
     };
     use std::{cell::Cell, panic, rc::Rc};
 
@@ -658,6 +659,98 @@ mod tests {
         }
     }
 
+    #[crate::test]
+    fn measurement_helpers_preserve_selector_state(cx: &mut TestAppContext) {
+        let available_space = size(AvailableSpace::MaxContent, AvailableSpace::MinContent);
+        let expected_size = size(px(48.), px(24.));
+
+        let measure_nested_row = move |window: &mut Window, cx: &mut App| {
+            let mut element = div().id("nested-measurement").size(px(8.)).class("row");
+
+            element.layout_as_root(available_space, window, cx)
+        };
+
+        let build_measured_row = move |window: &mut Window, cx: &mut App| {
+            let nested_size =
+                window.with_layout_measurement(|window| measure_nested_row(window, cx));
+            let mut element = div().id("during-construction").size(px(8.)).class("row");
+            let constructed_size = element.layout_as_root(available_space, window, cx);
+
+            assert_eq!([nested_size, constructed_size], [expected_size; 2]);
+
+            div().id("measured-root").size(px(8.)).class("row")
+        };
+
+        let build_panicking_row = |_window: &mut Window, _cx: &mut App| -> Empty {
+            panic!("measurement construction failed");
+        };
+
+        let render_rows = move |_bounds: Size<Pixels>, window: &mut Window, cx: &mut App| {
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                window.measure_element(available_space, cx, build_panicking_row);
+            }));
+
+            assert!(result.is_err());
+
+            let measured_size = window.measure_element(available_space, cx, build_measured_row);
+
+            assert_eq!(measured_size, expected_size);
+
+            div()
+                .child(div().id("first").class("row"))
+                .child(div().id("unrelated"))
+                .child(div().id("second").class("row"))
+        };
+
+        let selected = Rc::new(RefCell::new(Vec::new()));
+        let first = selected.clone();
+        let every = selected.clone();
+
+        cx.add_empty_window().draw(
+            Default::default(),
+            size(px(80.), px(120.)),
+            move |_window, _cx| {
+                div()
+                    .child(crate::container_query(render_rows))
+                    .select(
+                        Select::descendants().class("row").reflects(crate::Styled),
+                        |element| element.w(px(48.)).h(px(24.)),
+                    )
+                    .select(
+                        Select::descendants()
+                            .class("row")
+                            .reflects(crate::Styled)
+                            .nth(0),
+                        move |element| {
+                            first
+                                .borrow_mut()
+                                .push(("nth", element.element.element_id().unwrap()));
+
+                            element.h(px(99.))
+                        },
+                    )
+                    .select(
+                        Select::descendants().class("row").every(2),
+                        move |element| {
+                            every
+                                .borrow_mut()
+                                .push(("every", element.element.element_id().unwrap()));
+
+                            element
+                        },
+                    )
+            },
+        );
+
+        assert_eq!(
+            *selected.borrow(),
+            vec![
+                ("nth", ElementId::from("first")),
+                ("every", ElementId::from("first")),
+            ]
+        );
+    }
+
     struct CachedSelectorChild {
         renders: Rc<Cell<usize>>,
     }
@@ -772,16 +865,6 @@ mod tests {
             *selected.borrow(),
             vec![ElementId::from("discarded"), ElementId::from("committed")]
         );
-    }
-
-    #[test]
-    fn restores_measurement_scope_after_unwinding() {
-        let result = panic::catch_unwind(|| {
-            with_selector_measurement(|| panic!("measurement failed"));
-        });
-
-        assert!(result.is_err());
-        ELEMENT_TRAVERSAL.with_borrow(|traversal| assert_eq!(traversal.measurement_depth, 0));
     }
 
     struct SelectorView {

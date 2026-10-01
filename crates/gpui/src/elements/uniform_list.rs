@@ -665,7 +665,7 @@ impl UniformList {
             return Size::default();
         }
 
-        crate::selector::with_selector_measurement(|| {
+        window.with_layout_measurement(|window| {
             let item_idx = cmp::min(self.item_to_measure_index, self.item_count - 1);
             let mut items = (self.render_items)(item_idx..item_idx + 1, window, cx);
 
