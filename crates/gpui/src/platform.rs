@@ -2286,8 +2286,21 @@ impl Default for WindowOptions {
     }
 }
 
-/// The options that can be configured for a window's titlebar
-#[derive(Debug, Default)]
+/// Options for a window's titlebar.
+///
+/// Chain setters on [`TitlebarOptions::default`] and pass the result to
+/// [`WindowOptions::titlebar()`]. Pass `None` to clear the title or traffic light position.
+///
+/// ```
+/// use gpui::{SharedString, TitlebarOptions, point, px};
+///
+/// let titlebar = TitlebarOptions::default()
+///     .title(SharedString::from("My app"))
+///     .appears_transparent(true)
+///     .traffic_light_position(point(px(16.0), px(16.0)));
+/// ```
+#[derive(Debug, Default, derive_setters::Setters)]
+#[setters(into)]
 pub struct TitlebarOptions {
     /// The initial title of the window
     pub title: Option<SharedString>,
@@ -2299,6 +2312,8 @@ pub struct TitlebarOptions {
     /// The position of the macOS traffic light buttons
     pub traffic_light_position: Option<Point<Pixels>>,
 }
+
+impl FluentBuilder for TitlebarOptions {}
 
 /// The kind of window to create
 #[derive(Clone, Debug, PartialEq, Eq)]
