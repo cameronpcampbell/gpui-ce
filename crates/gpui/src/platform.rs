@@ -40,6 +40,7 @@ pub(crate) type PlatformScreenCaptureFrame = core_video::image_buffer::CVImageBu
 // yields no platform sources there.
 pub(crate) type PlatformScreenCaptureFrame = ();
 
+use crate::util::FluentBuilder;
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
     DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Edges, ExternalDragPayload, Font,
@@ -2068,8 +2069,21 @@ pub enum TextInputAction {
     Send,
 }
 
-/// The variables that can be configured when creating a new window
-#[derive(Debug)]
+/// Options for creating a window.
+///
+/// Chain setters on [`WindowOptions::default`] to override individual fields.
+/// Optional setters accept a value or an `Option`. Pass `None` to clear the field.
+///
+/// ```
+/// use gpui::WindowOptions;
+///
+/// let options = WindowOptions::default()
+///     .focus(false)
+///     .titlebar(None)
+///     .app_id("org.example.app".to_owned());
+/// ```
+#[derive(Debug, derive_setters::Setters)]
+#[setters(into)]
 pub struct WindowOptions {
     /// Specifies the state and bounds of the window in screen coordinates.
     /// - `None`: Inherit the bounds.
@@ -2140,6 +2154,8 @@ pub struct WindowOptions {
     /// Tab group name, allows opening the window as a native tab on macOS 10.12+. Windows with the same tabbing identifier will be grouped together.
     pub tabbing_identifier: Option<String>,
 }
+
+impl FluentBuilder for WindowOptions {}
 
 /// The variables that can be configured when creating a new window
 #[derive(Debug)]
