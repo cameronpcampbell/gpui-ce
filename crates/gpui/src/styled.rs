@@ -11,6 +11,7 @@ pub use gpui_macros::{
     visibility_style_methods,
 };
 use palette::{Hsla, IntoColor};
+use refineable::Refineable;
 const ELLIPSIS: SharedString = SharedString::new_static("…");
 
 /// A trait for elements that can be styled.
@@ -23,6 +24,13 @@ const ELLIPSIS: SharedString = SharedString::new_static("…");
 pub trait Styled: Sized {
     /// Returns a reference to the style memory of this element.
     fn style(&mut self) -> &mut StyleRefinement;
+
+    /// Applies the given refinement to this element's style.
+    fn refine_style(mut self, refinement: &StyleRefinement) -> Self {
+        self.style().refine(refinement);
+
+        self
+    }
 
     gpui_macros::style_helpers!();
     gpui_macros::visibility_style_methods!();
