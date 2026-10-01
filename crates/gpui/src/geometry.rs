@@ -12,6 +12,7 @@ use std::borrow::Cow;
 use std::ops::{AddAssign, Range};
 use std::{
     cmp::{self, PartialOrd},
+    f32::consts::GOLDEN_RATIO,
     fmt::{self, Display},
     hash::Hash,
     ops::{Add, Div, Mul, MulAssign, Neg, Sub},
@@ -3786,7 +3787,7 @@ pub const fn relative(fraction: f32) -> Relative {
 
 /// Returns the Golden Ratio, i.e. `~(1.0 + sqrt(5.0)) / 2.0`.
 pub const fn phi() -> Relative {
-    relative(1.618_034)
+    relative(GOLDEN_RATIO)
 }
 
 /// Constructs a `Rems` value representing a length in rems.
