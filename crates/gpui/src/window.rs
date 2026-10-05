@@ -1085,6 +1085,7 @@ pub(crate) struct TooltipRequest {
 }
 
 pub(crate) struct DeferredDraw {
+    selector_context: crate::selector::SelectorContext,
     current_view: EntityId,
     priority: usize,
     parent_node: DispatchNodeId,
@@ -3168,6 +3169,8 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+        let _selector_scope = crate::selector::begin_selector_layout_attempt();
+
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
         #[cfg(feature = "profiler")]
@@ -3635,6 +3638,7 @@ impl Window {
                     rem_size,
                     absolute_offset,
                     prepaint_range,
+                    selector_context,
                 ) = {
                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                     self.element_id_stack
@@ -3649,6 +3653,7 @@ impl Window {
                         deferred_draw.rem_size,
                         deferred_draw.absolute_offset,
                         deferred_draw.prepaint_range.clone(),
+                        deferred_draw.selector_context.clone(),
                     )
                 };
                 self.next_frame.dispatch_tree.set_active_node(parent_node);
@@ -3659,7 +3664,9 @@ impl Window {
                         window.with_rem_size(Some(rem_size), |window| {
                             window.with_absolute_element_offset(absolute_offset, |window| {
                                 crate::DeferredPriorityStackCache::push(priority, cx);
-                                element.prepaint(window, cx);
+                                crate::selector::with_selector_context(selector_context, || {
+                                    element.prepaint(window, cx);
+                                });
                                 crate::DeferredPriorityStackCache::pop(cx);
                             });
                         });
@@ -3709,7 +3716,12 @@ impl Window {
                 self.with_rendered_view(deferred_draw.current_view, |window| {
                     window.with_content_mask(content_mask, |window| {
                         window.with_rem_size(Some(deferred_draw.rem_size), |window| {
-                            element.paint(window, cx);
+                            crate::selector::with_selector_context(
+                                deferred_draw.selector_context.clone(),
+                                || {
+                                    element.paint(window, cx);
+                                },
+                            );
                         });
                     })
                 })
@@ -3777,6 +3789,7 @@ impl Window {
                 [range.start.deferred_draws_index..range.end.deferred_draws_index]
                 .iter()
                 .map(|deferred_draw| DeferredDraw {
+                    selector_context: crate::selector::SelectorContext::default(),
                     current_view: deferred_draw.current_view,
                     parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
                     element_id_stack: deferred_draw.element_id_stack.clone(),
@@ -4340,6 +4353,7 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
         let parent_node = self.next_frame.dispatch_tree.active_node_id().unwrap();
         self.next_frame.deferred_draws.push(DeferredDraw {
+            selector_context: crate::selector::capture_selector_context(),
             current_view: self.current_view(),
             parent_node,
             element_id_stack: self.element_id_stack.clone(),

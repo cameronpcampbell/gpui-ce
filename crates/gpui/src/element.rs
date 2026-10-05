@@ -281,6 +281,8 @@ impl GlobalElementId {
 }
 
 trait ElementObject {
+    fn is_before_layout(&self) -> bool;
+
     fn element_id(&self) -> Option<ElementId>;
 
     fn inner_element(&self) -> &dyn Any;
@@ -704,6 +706,10 @@ where
     E: Element,
     E::RequestLayoutState: 'static,
 {
+    fn is_before_layout(&self) -> bool {
+        matches!(self.phase, ElementDrawPhase::Start)
+    }
+
     fn element_id(&self) -> Option<ElementId> {
         self.element.id()
     }
@@ -764,10 +770,20 @@ impl AnyElement {
         let element = with_element_arena(|arena| arena.alloc(|| Drawable::new(element)))
             .map(|element| element as &mut dyn ElementObject);
 
+        let generated_by = crate::selector::generation_ancestry();
+        let metadata = if generated_by.is_empty() {
+            None
+        } else {
+            let mut metadata = crate::selector::ElementMetadata::new();
+            metadata.node_state = Some(crate::selector::SelectorNodeState::generated(generated_by));
+
+            Some(Box::new(metadata))
+        };
+
         let element = AnyElement {
             element: Some(element),
             reflection,
-            metadata: None,
+            metadata,
         };
         reflection.validate_receiver(element.reflected_type_id());
 
@@ -812,6 +828,26 @@ impl AnyElement {
         self.metadata_mut().selectors.push(selector);
     }
 
+    pub(crate) fn selector_node_state_mut(&mut self) -> &mut crate::selector::SelectorNodeState {
+        self.metadata_mut()
+            .node_state
+            .get_or_insert_with(Default::default)
+    }
+
+    pub(crate) fn selector_generation_ancestry(
+        &self,
+    ) -> smallvec::SmallVec<[crate::selector::SelectorRuleId; 2]> {
+        self.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.node_state.as_ref())
+            .map(|state| state.generated_by.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn is_before_layout(&self) -> bool {
+        self.element_object().is_before_layout()
+    }
+
     fn metadata_mut(&mut self) -> &mut crate::selector::ElementMetadata {
         self.metadata
             .get_or_insert_with(|| Box::new(crate::selector::ElementMetadata::new()))
@@ -841,16 +877,27 @@ impl AnyElement {
         *self = element;
     }
 
-    fn take_attached_selectors(&mut self) -> Vec<crate::selector::PendingSelector> {
+    pub(crate) fn attached_selectors(&self) -> Vec<crate::selector::PendingSelector> {
         self.metadata
-            .as_mut()
-            .map(|metadata| std::mem::take(&mut metadata.selectors))
+            .as_ref()
+            .map(|metadata| metadata.selectors.clone())
             .unwrap_or_default()
     }
 
-    fn restore_attached_selectors(&mut self, mut selectors: Vec<crate::selector::PendingSelector>) {
+    // Keep shared rule handles on both preserved inputs and their replacement roots.
+    pub(crate) fn inherit_attached_selectors(
+        &mut self,
+        mut selectors: Vec<crate::selector::PendingSelector>,
+    ) {
         if let Some(metadata) = self.metadata.as_mut() {
-            selectors.append(&mut metadata.selectors);
+            for selector in &metadata.selectors {
+                if !selectors
+                    .iter()
+                    .any(|attached| attached.identity() == selector.identity())
+                {
+                    selectors.push(selector.clone());
+                }
+            }
         }
 
         if selectors.is_empty() {
@@ -865,23 +912,24 @@ impl AnyElement {
         apply_selectors: bool,
         operation: impl FnOnce(&mut AnyElement) -> ResultType,
     ) -> ResultType {
-        let selectors = self.take_attached_selectors();
+        let selectors = self.attached_selectors();
 
         if selectors.is_empty() && !crate::selector::has_active_selectors() {
-            return operation(self);
+            return crate::selector::with_generation_ancestry(
+                self.selector_generation_ancestry(),
+                || operation(self),
+            );
         }
 
-        let (result, selectors) = crate::selector::with_attached_selectors(selectors, || {
+        crate::selector::with_attached_selectors(&selectors, || {
             if apply_selectors {
                 crate::selector::apply_active_selectors(self);
             }
 
-            crate::selector::with_deeper_selector_depth(|| operation(self))
-        });
-
-        self.restore_attached_selectors(selectors);
-
-        result
+            crate::selector::with_generation_ancestry(self.selector_generation_ancestry(), || {
+                crate::selector::with_deeper_selector_depth(|| operation(self))
+            })
+        })
     }
 
     /// Returns the metadata supplied by the concrete element at erasure.
@@ -907,7 +955,9 @@ impl AnyElement {
     /// Request the layout ID of the element stored in this `AnyElement`.
     /// Used for laying out child elements in a parent element.
     pub fn request_layout(&mut self, window: &mut Window, cx: &mut App) -> LayoutId {
-        self.with_selector_scope(true, |element| {
+        let apply_selectors = self.is_before_layout();
+
+        self.with_selector_scope(apply_selectors, |element| {
             element.element_object_mut().request_layout(window, cx)
         })
     }
@@ -942,7 +992,9 @@ impl AnyElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Size<Pixels> {
-        self.with_selector_scope(true, |element| {
+        let apply_selectors = self.is_before_layout();
+
+        self.with_selector_scope(apply_selectors, |element| {
             element
                 .element_object_mut()
                 .layout_as_root(available_space, window, cx)
