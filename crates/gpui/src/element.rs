@@ -849,6 +849,10 @@ impl Element for AnyElement {
     type RequestLayoutState = ();
     type PrepaintState = ();
 
+    fn into_any(self) -> AnyElement {
+        self
+    }
+
     fn id(&self) -> Option<ElementId> {
         None
     }

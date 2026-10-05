@@ -4645,6 +4645,10 @@ where
     type RequestLayoutState = E::RequestLayoutState;
     type PrepaintState = E::PrepaintState;
 
+    fn into_any(self) -> AnyElement {
+        self.element.into_any()
+    }
+
     fn id(&self) -> Option<ElementId> {
         self.element.id()
     }
@@ -4723,6 +4727,10 @@ impl<E: IntoElement> IntoElement for Stateful<E> {
 
     fn into_element(self) -> Self::Element {
         self.element.into_element()
+    }
+
+    fn into_any_element(self) -> AnyElement {
+        self.element.into_any_element()
     }
 }
 

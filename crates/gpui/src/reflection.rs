@@ -217,6 +217,10 @@ where
     type RequestLayoutState = <AnyElement as Element>::RequestLayoutState;
     type PrepaintState = <AnyElement as Element>::PrepaintState;
 
+    fn into_any(self) -> AnyElement {
+        self.element
+    }
+
     fn id(&self) -> Option<ElementId> {
         <AnyElement as Element>::id(&self.element)
     }
@@ -400,7 +404,7 @@ fn methods_for<Token: ReflectionToken>(type_id: TypeId, token: Token) -> &'stati
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Empty, ParentElement, StyleRefinement, Styled, rgb};
+    use crate::{Div, Empty, InteractiveElement, ParentElement, StyleRefinement, Styled, div, rgb};
 
     mod text {
         #[gpui_macros::reflect_trait]
@@ -612,5 +616,42 @@ mod tests {
         assert_eq!(traits.len(), 6);
         assert!(traits.contains(&descriptor));
         assert!(traits.contains(&ReflectionToken::reflected_trait(text::Text)));
+    }
+
+    #[test]
+    fn transparent_erasure_preserves_concrete_identity() {
+        fn reflected<Token: ReflectionToken>(
+            element: AnyElement,
+            _token: Token,
+        ) -> ReflectedElement<Token::Group> {
+            ReflectedElement::new(element)
+        }
+
+        for route in 0..7 {
+            let mut element = div().id("original").child(Empty).into_any_element();
+            let original = element.downcast_mut::<Div>().unwrap() as *mut Div;
+            let reflected = reflected(element, crate::InteractiveElement);
+            let mut element = match route {
+                0 => reflected.into_any_element(),
+                1 => reflected.into_any(),
+                2 => reflected.into_element().into_any(),
+                3 => reflected.id("renamed").into_any_element(),
+                4 => reflected.id("renamed").into_any(),
+                5 => reflected.id("renamed").into_element().into_any(),
+                _route => reflected.into_any_element().into_any(),
+            };
+
+            let expected_id = if (3..6).contains(&route) {
+                "renamed"
+            } else {
+                "original"
+            };
+
+            let concrete = element.downcast_mut::<Div>().unwrap();
+
+            assert_eq!(concrete as *mut Div, original);
+            assert_eq!(Element::id(concrete), Some(ElementId::from(expected_id)));
+            assert_eq!(element.reflected_type_id(), TypeId::of::<Div>());
+        }
     }
 }
