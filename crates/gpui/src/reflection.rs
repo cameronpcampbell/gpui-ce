@@ -1,4 +1,23 @@
 //! Trait reflection and typed access to erased elements.
+//!
+//! [`reflect_trait`] forwards supported borrowed methods to the original concrete element.
+//! Provided methods use its override or inherited default, and borrowed returns retain their
+//! receiver lifetime. Forwarded signatures accept lifetime parameters, concrete types, and
+//! `impl IntoIterator<Item = ConcreteType>` arguments.
+//!
+//! Provided owned builders run their trait bodies on [`ReflectedElement`], including builders
+//! with generic inputs or `Self` returns. Their concrete overrides do not carry through erasure.
+//! For concrete behavior, call a compatible borrowed operation from the builder default.
+//! Other provided methods can opt into wrapper behavior with `#[reflect(wrapper_default)]`.
+//! The macro consumes this setting and rejects it on required methods, in `cfg_attr`, or when
+//! duplicated. Unsupported provided signatures otherwise produce a diagnostic.
+//!
+//! Callable reflected traits reject associated types and all associated constants, even those
+//! with defaults. A wrapper type can contain elements whose concrete constants differ. Move a
+//! shared constant outside the trait, or use a borrowed getter to expose a concrete value.
+//! Supertraits follow the same rules. GPUI style macros are normalized before classification;
+//! unknown trait-item macros must generate the entire annotated trait or expose their items
+//! directly. Method tables and forwarded implementations preserve direct and nested configuration.
 
 use crate::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
@@ -16,8 +35,6 @@ use std::{
     panic,
     sync::LazyLock,
 };
-#[cfg(test)]
-use std::{cell::Cell, rc::Rc};
 
 /// Identifies a trait made available to element reflection.
 #[derive(Clone, Copy, Debug)]
@@ -161,6 +178,10 @@ where
 }
 
 /// An owned erased element exposing a statically known set of reflected traits.
+///
+/// Supported borrowed methods dispatch to the original concrete element, including provided
+/// defaults and overrides. Owned builders and explicit `#[reflect(wrapper_default)]` methods
+/// inherit their bodies on this wrapper and do not dispatch concrete overrides.
 #[doc(hidden)]
 pub struct ReflectedElement<Group>
 where
@@ -404,17 +425,55 @@ fn methods_for<Token: ReflectionToken>(type_id: TypeId, token: Token) -> &'stati
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Div, Empty, InteractiveElement, ParentElement, StyleRefinement, Styled, div, rgb};
+    use crate::{
+        Div, Empty, InteractiveElement, ParentElement, StyleRefinement, Styled, div, hsla, rgb,
+    };
+    use std::{cell::Cell, rc::Rc};
+
+    const TEXT_LABEL: &str = "body";
 
     mod text {
         #[gpui_macros::reflect_trait]
         pub trait Text {
-            const LABEL: &'static str = "body";
-
             fn read<'element>(&'element self, label: &str) -> &'element str;
             fn edit(&mut self, label: &str) -> &mut String;
             fn append(&mut self, characters: impl IntoIterator<Item = char>);
             fn formatter(&'_ self) -> fn(&str) -> &str;
+
+            fn content(&self) -> &str {
+                self.read("body")
+            }
+
+            fn revise(&mut self) -> &mut String {
+                let content = self.edit("body");
+                content.push('?');
+
+                content
+            }
+
+            #[reflect(wrapper_default)]
+            fn suffix(&mut self, suffix: impl AsRef<str>) {
+                self.edit("body").push_str(suffix.as_ref());
+            }
+
+            #[reflect(wrapper_default)]
+            fn wrapper_label(&self) -> &'static str {
+                "wrapper"
+            }
+
+            #[cfg(all())]
+            #[cfg_attr(any(), cfg(any()))]
+            fn configured(&self) -> &str {
+                self.content()
+            }
+
+            #[cfg(any())]
+            fn unavailable_direct(&self) -> UnavailableType;
+
+            #[cfg_attr(all(), cfg_attr(all(), cfg(any()), allow(dead_code)))]
+            fn unavailable_nested(&self) -> UnavailableType {
+                unreachable!()
+            }
 
             #[cfg_attr(all(), cfg(any()))]
             fn unavailable(&mut self) -> UnavailableType;
@@ -422,26 +481,28 @@ mod tests {
     }
 
     mod branches {
+        use crate::reflection::tests::text;
+
         #[gpui_macros::reflect_trait]
-        pub trait Left: super::text::Text {
-            fn decorate(mut self) -> Self
+        pub trait Left: text::Text {
+            fn decorate(mut self, suffix: impl AsRef<str>) -> Self
             where
                 Self: Sized,
             {
-                self.edit("body").push('!');
+                self.edit("body").push_str(suffix.as_ref());
 
                 self
             }
         }
 
         #[gpui_macros::reflect_trait]
-        pub trait Right: super::text::Text {}
+        pub trait Right: text::Text {}
     }
 
     #[gpui_macros::reflect_trait]
     trait Composite: branches::Left + branches::Right + crate::Styled + crate::ParentElement {}
 
-    #[derive(gpui_macros::Reflect)]
+    #[derive(gpui_macros::Reflect, Default)]
     #[reflect(Composite, text::Text, crate::Styled)]
     struct Card {
         text: String,
@@ -470,8 +531,82 @@ mod tests {
         }
     }
 
-    impl branches::Left for Card {}
+    #[derive(gpui_macros::Reflect, Default)]
+    #[reflect(Composite)]
+    struct Panel {
+        card: Card,
+        text_style: crate::TextStyleRefinement,
+    }
+
+    impl text::Text for Panel {
+        fn read<'element>(&'element self, label: &str) -> &'element str {
+            text::Text::read(&self.card, label)
+        }
+
+        fn edit(&mut self, label: &str) -> &mut String {
+            text::Text::edit(&mut self.card, label)
+        }
+
+        fn append(&mut self, characters: impl IntoIterator<Item = char>) {
+            text::Text::append(&mut self.card, characters);
+        }
+
+        fn formatter(&'_ self) -> fn(&str) -> &str {
+            text::Text::formatter(&self.card)
+        }
+
+        fn content(&self) -> &str {
+            "panel override"
+        }
+
+        fn revise(&mut self) -> &mut String {
+            self.card.text.push('!');
+
+            &mut self.card.text
+        }
+
+        fn suffix(&mut self, _suffix: impl AsRef<str>) {
+            panic!("explicit wrapper defaults must not dispatch concrete overrides");
+        }
+
+        fn wrapper_label(&self) -> &'static str {
+            "concrete"
+        }
+    }
+
+    impl branches::Left for Panel {}
+
+    impl branches::Right for Panel {}
+
+    impl Composite for Panel {}
+
+    impl Styled for Panel {
+        fn style(&mut self) -> &mut StyleRefinement {
+            &mut self.card.style
+        }
+
+        fn text_style(&mut self) -> &mut crate::TextStyleRefinement {
+            &mut self.text_style
+        }
+    }
+
+    impl ParentElement for Panel {
+        fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+            self.card.children.extend(elements);
+        }
+    }
+
+    impl branches::Left for Card {
+        fn decorate(mut self, suffix: impl AsRef<str>) -> Self {
+            self.text.push_str("concrete builder ");
+            self.text.push_str(suffix.as_ref());
+
+            self
+        }
+    }
+
     impl branches::Right for Card {}
+
     impl Composite for Card {}
 
     impl Styled for Card {
@@ -486,59 +621,73 @@ mod tests {
         }
     }
 
-    impl IntoElement for Card {
-        type Element = Self;
+    macro_rules! element_impl {
+        ($name:ty) => {
+            impl IntoElement for $name {
+                type Element = Self;
 
-        fn into_element(self) -> Self {
-            self
-        }
+                fn into_element(self) -> Self {
+                    self
+                }
+            }
+
+            impl Element for $name {
+                type RequestLayoutState = ();
+                type PrepaintState = ();
+
+                fn id(&self) -> Option<ElementId> {
+                    None
+                }
+
+                fn source_location(&self) -> Option<&'static panic::Location<'static>> {
+                    None
+                }
+
+                fn request_layout(
+                    &mut self,
+                    _id: Option<&GlobalElementId>,
+                    _inspector_id: Option<&InspectorElementId>,
+                    _window: &mut Window,
+                    _cx: &mut App,
+                ) -> (LayoutId, ()) {
+                    unreachable!()
+                }
+
+                fn prepaint(
+                    &mut self,
+                    _id: Option<&GlobalElementId>,
+                    _inspector_id: Option<&InspectorElementId>,
+                    _bounds: Bounds<Pixels>,
+                    _request_layout: &mut (),
+                    _window: &mut Window,
+                    _cx: &mut App,
+                ) {
+                    unreachable!()
+                }
+
+                fn paint(
+                    &mut self,
+                    _id: Option<&GlobalElementId>,
+                    _inspector_id: Option<&InspectorElementId>,
+                    _bounds: Bounds<Pixels>,
+                    _request_layout: &mut (),
+                    _prepaint: &mut (),
+                    _window: &mut Window,
+                    _cx: &mut App,
+                ) {
+                    unreachable!()
+                }
+            }
+        };
     }
 
-    impl Element for Card {
-        type RequestLayoutState = ();
-        type PrepaintState = ();
+    element_impl!(Card);
+    element_impl!(Panel);
 
-        fn id(&self) -> Option<ElementId> {
-            None
-        }
-
-        fn source_location(&self) -> Option<&'static panic::Location<'static>> {
-            None
-        }
-
-        fn request_layout(
-            &mut self,
-            _id: Option<&GlobalElementId>,
-            _inspector_id: Option<&InspectorElementId>,
-            _window: &mut Window,
-            _cx: &mut App,
-        ) -> (LayoutId, ()) {
-            unreachable!()
-        }
-
-        fn prepaint(
-            &mut self,
-            _id: Option<&GlobalElementId>,
-            _inspector_id: Option<&InspectorElementId>,
-            _bounds: Bounds<Pixels>,
-            _request_layout: &mut (),
-            _window: &mut Window,
-            _cx: &mut App,
-        ) {
-            unreachable!()
-        }
-
-        fn paint(
-            &mut self,
-            _id: Option<&GlobalElementId>,
-            _inspector_id: Option<&InspectorElementId>,
-            _bounds: Bounds<Pixels>,
-            _request_layout: &mut (),
-            _prepaint: &mut (),
-            _window: &mut Window,
-            _cx: &mut App,
-        ) {
-            unreachable!()
+    fn card() -> Card {
+        Card {
+            text: "hello".into(),
+            ..Default::default()
         }
     }
 
@@ -548,32 +697,35 @@ mod tests {
         ReflectedElement<Traits::Group>: Composite,
     {
         let mut element = ReflectedElement::<Traits::Group>::new(element);
-        let label = <ReflectedElement<Traits::Group> as text::Text>::LABEL;
+        let label = TEXT_LABEL;
+
         assert_eq!(text::Text::read(&element, label), "hello");
         text::Text::edit(&mut element, label).push(' ');
 
         let borrowed = String::from("world");
         let formatter = text::Text::formatter(&element);
+
         assert_eq!(formatter(&borrowed), "world");
         text::Text::append(&mut element, borrowed.chars());
 
-        branches::Left::decorate(element)
+        branches::Left::decorate(element, "!")
             .bg(rgb(0x123456))
+            .invisible()
             .child(Empty)
             .into_any_element()
     }
 
     #[test]
-    fn forwards_methods_and_defaults_through_inherited_selector_groups() {
+    fn forwards_methods_and_owned_builders_through_inherited_groups() {
+        let concrete = branches::Left::decorate(card(), "!");
+
+        assert_eq!(concrete.text, "helloconcrete builder !");
+
         for combined in [false, true] {
-            let calls = Rc::new(Cell::new(0));
-            let element = Card {
-                text: "hello".into(),
-                calls: calls.clone(),
-                style: StyleRefinement::default(),
-                children: Vec::new(),
-            }
-            .into_any_element();
+            let card = card();
+            let calls = card.calls.clone();
+            let element = card.into_any_element();
+
             let mut element = if combined {
                 transform(
                     element,
@@ -589,12 +741,56 @@ mod tests {
             } else {
                 transform(element, Composite)
             };
+
             let card = element.downcast_mut::<Card>().unwrap();
 
             assert_eq!(card.text, "hello world!");
             assert_eq!(calls.get(), 2);
             assert!(card.style.background.is_some());
+            assert_eq!(card.style.visibility, Some(crate::Visibility::Hidden));
             assert_eq!(card.children.len(), 1);
+        }
+    }
+
+    #[test]
+    fn dispatches_defaults_and_overrides_through_one_diamond_group() {
+        let color = hsla(0.5, 0.5, 0.5, 1.0);
+
+        for (overrides, content, revised) in [
+            (false, "hello", "hello?"),
+            (true, "panel override", "hello!"),
+        ] {
+            let original = if overrides {
+                Panel {
+                    card: card(),
+                    ..Default::default()
+                }
+                .into_any_element()
+            } else {
+                card().into_any_element()
+            };
+
+            let mut element = ReflectedElement::<__GpuiReflectCompositeGroup>::new(original);
+
+            assert_eq!(text::Text::content(&element), content);
+            assert_eq!(text::Text::configured(&element), content);
+            assert_eq!(text::Text::revise(&mut element), revised);
+            assert_eq!(text::Text::wrapper_label(&element), "wrapper");
+            text::Text::suffix(&mut element, " suffix");
+
+            let mut element = element.text_color(color).into_any_element();
+            let (card, text_color) = if overrides {
+                let panel = element.downcast_mut::<Panel>().unwrap();
+
+                (&panel.card, panel.text_style.color)
+            } else {
+                let card = element.downcast_mut::<Card>().unwrap();
+
+                (&*card, card.style.text.color)
+            };
+
+            assert_eq!(card.text, format!("{revised} suffix"));
+            assert_eq!(text_color, Some(color));
         }
     }
 
@@ -602,6 +798,7 @@ mod tests {
     fn records_inheritance_and_deduplicates_concrete_implementations() {
         let descriptor = ReflectionToken::reflected_trait(Composite);
         let parents = (descriptor.supertraits)();
+
         assert_eq!(parents.len(), 4);
         assert_eq!(
             (parents[0].supertraits)(),

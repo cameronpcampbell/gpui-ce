@@ -10,6 +10,7 @@ mod property_test;
 mod register_action;
 mod styles;
 mod test;
+mod trait_items;
 mod trait_set;
 
 #[cfg(any(feature = "inspector", debug_assertions))]
@@ -72,10 +73,49 @@ pub fn derive_reflect(input: TokenStream) -> TokenStream {
 /// Makes a trait available as a value for `AnyElement::implements_trait`.
 /// Also generates inheritance metadata and implementations on typed reflected elements.
 ///
-/// Traits must be non-generic. Required methods accept borrowed receivers, lifetime
+/// Traits must be non-generic. Forwarded methods accept `&self` or `&mut self`, lifetime
 /// parameters, concrete types, and `impl IntoIterator<Item = ConcreteType>` arguments.
-/// Provided methods keep their original bodies. Supertraits must also be reflected,
-/// except for `Sized`. Associated types and required associated constants are unsupported.
+/// Both required and provided borrowed methods dispatch to the concrete implementation,
+/// preserving its overrides and inherited defaults through element erasure.
+///
+/// Provided methods with an ordinary `self` or `mut self` receiver keep their bodies on
+/// `ReflectedElement`, including generic builders returning `Self`. Concrete overrides of
+/// these builders do not carry through erasure. Put operations that need concrete dispatch
+/// in compatible borrowed methods, then call them from the builder default.
+///
+/// Mark other intentional wrapper bodies with `#[reflect(wrapper_default)]`. This setting
+/// requires a provided body, and concrete overrides of that method will not be dispatched.
+/// Unsupported signatures otherwise produce an error, including provided borrowed methods.
+/// Conditional method settings inside `cfg_attr` are unsupported. Direct `cfg` and nested
+/// configuration-producing `cfg_attr` are preserved on forwarded methods and their tables.
+///
+/// Supertraits must also be reflected, except for `Sized`. Associated types and all associated
+/// constants are unsupported in callable reflected traits. A single wrapper type can hold
+/// different concrete implementations, so it cannot choose an implementation-specific constant.
+/// Move shared constants outside the trait, or expose a borrowed getter for concrete values.
+///
+/// ```compile_fail
+/// use gpui_macros::reflect_trait;
+///
+/// #[reflect_trait]
+/// trait Limited {
+///     const LIMIT: usize = 12;
+/// }
+///
+/// struct Card;
+/// struct Panel;
+///
+/// impl Limited for Card {
+///     const LIMIT: usize = 24;
+/// }
+///
+/// impl Limited for Panel {
+///     const LIMIT: usize = 48;
+/// }
+/// ```
+///
+/// GPUI style macros inside the trait are expanded before classification. Other trait-item
+/// macros must instead generate the entire annotated trait, or have their items written directly.
 ///
 /// Use qualified paths for imported supertraits. If a trait is re-exported under an
 /// alias used in `trait_set!`, also re-export its generated `__GpuiReflectTraitSchema`
@@ -159,7 +199,7 @@ pub fn derive_visual_context(input: TokenStream) -> TokenStream {
 #[proc_macro]
 #[doc(hidden)]
 pub fn style_helpers(input: TokenStream) -> TokenStream {
-    styles::style_helpers(input)
+    expand_style_macro(input, styles::style_helpers)
 }
 
 /// Generates the style transition builder and application code.
@@ -172,49 +212,49 @@ pub fn style_transitions(input: TokenStream) -> TokenStream {
 /// Generates methods for visibility styles.
 #[proc_macro]
 pub fn visibility_style_methods(input: TokenStream) -> TokenStream {
-    styles::visibility_style_methods(input)
+    expand_style_macro(input, styles::visibility_style_methods)
 }
 
 /// Generates methods for margin styles.
 #[proc_macro]
 pub fn margin_style_methods(input: TokenStream) -> TokenStream {
-    styles::margin_style_methods(input)
+    expand_style_macro(input, styles::margin_style_methods)
 }
 
 /// Generates methods for padding styles.
 #[proc_macro]
 pub fn padding_style_methods(input: TokenStream) -> TokenStream {
-    styles::padding_style_methods(input)
+    expand_style_macro(input, styles::padding_style_methods)
 }
 
 /// Generates methods for position styles.
 #[proc_macro]
 pub fn position_style_methods(input: TokenStream) -> TokenStream {
-    styles::position_style_methods(input)
+    expand_style_macro(input, styles::position_style_methods)
 }
 
 /// Generates methods for overflow styles.
 #[proc_macro]
 pub fn overflow_style_methods(input: TokenStream) -> TokenStream {
-    styles::overflow_style_methods(input)
+    expand_style_macro(input, styles::overflow_style_methods)
 }
 
 /// Generates methods for cursor styles.
 #[proc_macro]
 pub fn cursor_style_methods(input: TokenStream) -> TokenStream {
-    styles::cursor_style_methods(input)
+    expand_style_macro(input, styles::cursor_style_methods)
 }
 
 /// Generates methods for border styles.
 #[proc_macro]
 pub fn border_style_methods(input: TokenStream) -> TokenStream {
-    styles::border_style_methods(input)
+    expand_style_macro(input, styles::border_style_methods)
 }
 
 /// Generates methods for box shadow styles.
 #[proc_macro]
 pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
-    styles::box_shadow_style_methods(input)
+    expand_style_macro(input, styles::box_shadow_style_methods)
 }
 
 /// `#[gpui::test]` can be used to annotate test functions that run with GPUI support.
@@ -379,4 +419,13 @@ pub(crate) fn get_simple_attribute_field(ast: &DeriveInput, name: &'static str) 
         syn::Data::Enum(_) => None,
         syn::Data::Union(_) => None,
     }
+}
+
+fn expand_style_macro(
+    input: TokenStream,
+    expand: fn(proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream>,
+) -> TokenStream {
+    expand(input.into())
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
 }

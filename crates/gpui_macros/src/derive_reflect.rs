@@ -1,3 +1,4 @@
+use crate::trait_items::{UnknownMacros, configuration_attributes, normalize_trait_items};
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
@@ -7,9 +8,9 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 use syn::{
-    Attribute, DeriveInput, FnArg, GenericArgument, GenericParam, ItemTrait, Lifetime,
-    LifetimeParam, Meta, Path, PathArguments, ReturnType, Token, TraitBoundModifier, TraitItem,
-    TraitItemFn, Type, TypeParamBound, parse_macro_input, parse_quote,
+    DeriveInput, FnArg, GenericArgument, GenericParam, ItemTrait, Lifetime, LifetimeParam, Meta,
+    Path, PathArguments, ReturnType, Signature, Token, TraitBoundModifier, TraitItem, TraitItemFn,
+    Type, TypeParamBound, parse_macro_input, parse_quote,
     punctuated::Punctuated,
     visit_mut::{self, VisitMut},
 };
@@ -117,7 +118,7 @@ pub fn reflect_trait(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
-fn expand_trait(input: ItemTrait) -> syn::Result<TokenStream2> {
+fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
     if !input.generics.params.is_empty() || input.generics.where_clause.is_some() {
         return Err(syn::Error::new_spanned(
             &input.ident,
@@ -131,6 +132,8 @@ fn expand_trait(input: ItemTrait) -> syn::Result<TokenStream2> {
             "unsafe traits cannot be forwarded through reflected elements",
         ));
     }
+
+    normalize_trait_items(&mut input, UnknownMacros::Reject)?;
 
     let name = &input.ident;
     let visibility = &input.vis;
@@ -193,10 +196,12 @@ fn expand_trait(input: ItemTrait) -> syn::Result<TokenStream2> {
     let parent_schemas = parents.iter().map(schema_path);
     let mut forwarded = Vec::new();
 
-    for item in &input.items {
+    for item in &mut input.items {
         match item {
-            TraitItem::Fn(method) if method.default.is_none() => {
-                forwarded.push(forward_method(method, name)?);
+            TraitItem::Fn(method) => {
+                if let MethodDispatch::Concrete(signature) = classify_method(method)? {
+                    forwarded.push(forward_method(method, name, signature)?);
+                }
             }
             TraitItem::Type(_) => {
                 return Err(syn::Error::new_spanned(
@@ -204,13 +209,18 @@ fn expand_trait(input: ItemTrait) -> syn::Result<TokenStream2> {
                     "reflected traits cannot have associated types",
                 ));
             }
-            TraitItem::Const(item) if item.default.is_none() => {
+            TraitItem::Const(_) => {
                 return Err(syn::Error::new_spanned(
                     item,
-                    "reflected traits cannot have required associated constants",
+                    "callable reflected traits cannot expose associated constants; move a shared value outside the trait, or expose a borrowed method for concrete values",
                 ));
             }
-            _ => {}
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "reflect_trait cannot classify this trait item; use a supported method declaration",
+                ));
+            }
         }
     }
 
@@ -223,7 +233,7 @@ fn expand_trait(input: ItemTrait) -> syn::Result<TokenStream2> {
             gpui::reflection::ReflectedElement<__GpuiReflectionGroup>: #parent,
         }
     });
-    let configurations = configuration_attributes(&input.attrs);
+    let configurations = configuration_attributes(&input.attrs)?;
     let parent_import_items = parent_schemas.zip(&parent_imports).map(|(schema, import)| {
         quote! {
             #(#configurations)*
@@ -355,34 +365,120 @@ pub(crate) fn schema_path(path: &Path) -> Path {
     schema
 }
 
-fn configuration_attributes(attributes: &[Attribute]) -> Vec<Attribute> {
-    attributes
-        .iter()
-        .filter_map(|attribute| {
-            if attribute.path().is_ident("cfg") {
-                return Some(attribute.clone());
+enum MethodDispatch {
+    Concrete(ForwardedSignature),
+    WrapperDefault,
+}
+
+fn classify_method(method: &mut TraitItemFn) -> syn::Result<MethodDispatch> {
+    let mut wrapper_default = false;
+    let mut attributes = Vec::new();
+
+    for attribute in std::mem::take(&mut method.attrs) {
+        if !attribute.path().is_ident("reflect") {
+            reject_conditional_wrapper_default(&attribute.meta)?;
+            attributes.push(attribute);
+
+            continue;
+        }
+
+        let settings =
+            attribute.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+
+        if settings.is_empty() {
+            return Err(syn::Error::new_spanned(
+                attribute,
+                "expected #[reflect(wrapper_default)] on a provided method",
+            ));
+        }
+
+        for setting in settings {
+            if !matches!(&setting, Meta::Path(path) if path.is_ident("wrapper_default")) {
+                return Err(syn::Error::new_spanned(
+                    setting,
+                    "unknown reflected method setting; expected wrapper_default",
+                ));
             }
 
-            if !attribute.path().is_ident("cfg_attr") {
-                return None;
+            if wrapper_default {
+                return Err(syn::Error::new_spanned(
+                    setting,
+                    "duplicate wrapper_default setting",
+                ));
             }
 
-            let arguments = attribute
-                .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-                .ok()?;
-            let mut arguments = arguments.iter();
-            let condition = arguments.next()?;
-            let configurations = arguments
-                .filter(|argument| argument.path().is_ident("cfg"))
-                .collect::<Vec<_>>();
+            wrapper_default = true;
+        }
+    }
 
-            if configurations.is_empty() {
-                return None;
-            }
+    method.attrs = attributes;
+    configuration_attributes(&method.attrs)?;
 
-            Some(parse_quote!(#[cfg_attr(#condition, #(#configurations),*)]))
-        })
-        .collect()
+    if wrapper_default {
+        if method.default.is_none() {
+            return Err(syn::Error::new_spanned(
+                &method.sig,
+                "wrapper_default requires a provided method body",
+            ));
+        }
+
+        return Ok(MethodDispatch::WrapperDefault);
+    }
+
+    if method.default.is_some()
+        && matches!(method.sig.inputs.first(), Some(FnArg::Receiver(receiver))
+            if receiver.reference.is_none() && receiver.colon_token.is_none())
+    {
+        return Ok(MethodDispatch::WrapperDefault);
+    }
+
+    let signature = validate_forwarded_signature(&method.sig).map_err(|mut error| {
+        if method.default.is_some() {
+            error.combine(syn::Error::new_spanned(
+                &method.sig.ident,
+                "use #[reflect(wrapper_default)] to intentionally run this provided body on ReflectedElement; concrete overrides will not be dispatched",
+            ));
+        }
+
+        error
+    })?;
+
+    Ok(MethodDispatch::Concrete(signature))
+}
+
+fn reject_conditional_wrapper_default(meta: &Meta) -> syn::Result<()> {
+    if !meta.path().is_ident("cfg_attr") {
+        return Ok(());
+    }
+
+    let Meta::List(list) = meta else {
+        return Err(syn::Error::new_spanned(meta, "expected cfg_attr arguments"));
+    };
+    let arguments = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+
+    for attribute in arguments.iter().skip(1) {
+        if attribute.path().is_ident("reflect") {
+            return Err(syn::Error::new_spanned(
+                attribute,
+                "conditional reflected method settings are unsupported; use #[reflect(wrapper_default)] directly",
+            ));
+        }
+
+        reject_conditional_wrapper_default(attribute)?;
+    }
+
+    Ok(())
+}
+
+struct ForwardedSignature {
+    signature: Signature,
+    lifetimes: Punctuated<GenericParam, Token![,]>,
+    element_lifetime: Lifetime,
+    mutable: bool,
+    erased_arguments: Vec<TokenStream2>,
+    argument_names: Vec<syn::Ident>,
+    preparations: Vec<TokenStream2>,
+    output: ReturnType,
 }
 
 struct ForwardedMethod {
@@ -391,13 +487,11 @@ struct ForwardedMethod {
     implementation: TokenStream2,
 }
 
-fn forward_method(method: &TraitItemFn, trait_name: &syn::Ident) -> syn::Result<ForwardedMethod> {
-    let signature = &method.sig;
-    let method_name = &signature.ident;
-
+fn validate_forwarded_signature(signature: &Signature) -> syn::Result<ForwardedSignature> {
     if signature.asyncness.is_some()
         || signature.unsafety.is_some()
         || signature.abi.is_some()
+        || signature.constness.is_some()
         || signature.variadic.is_some()
         || signature.generics.where_clause.is_some()
         || signature.generics.params.iter().any(|parameter| {
@@ -406,20 +500,14 @@ fn forward_method(method: &TraitItemFn, trait_name: &syn::Ident) -> syn::Result<
     {
         return Err(syn::Error::new_spanned(
             signature,
-            "required reflected methods support borrowed receivers, lifetime parameters, and concrete types",
+            "forwarded reflected methods support borrowed receivers, lifetime parameters, and concrete types",
         ));
     }
 
     let Some(FnArg::Receiver(receiver)) = signature.inputs.first() else {
         return Err(syn::Error::new_spanned(
             signature,
-            "required reflected methods must have an &self or &mut self receiver",
-        ));
-    };
-    let Some((_, lifetime)) = &receiver.reference else {
-        return Err(syn::Error::new_spanned(
-            receiver,
-            "required reflected methods must have an &self or &mut self receiver",
+            "forwarded reflected methods must have an &self or &mut self receiver",
         ));
     };
 
@@ -429,6 +517,13 @@ fn forward_method(method: &TraitItemFn, trait_name: &syn::Ident) -> syn::Result<
             "typed receivers are not supported",
         ));
     }
+
+    let Some((_, lifetime)) = &receiver.reference else {
+        return Err(syn::Error::new_spanned(
+            receiver,
+            "forwarded reflected methods must have an &self or &mut self receiver",
+        ));
+    };
 
     let lifetime = lifetime.as_ref().filter(|lifetime| lifetime.ident != "_");
     let element_lifetime = lifetime
@@ -509,21 +604,54 @@ fn forward_method(method: &TraitItemFn, trait_name: &syn::Ident) -> syn::Result<
         OutputLifetimes(&element_lifetime).visit_type_mut(output_type);
     }
 
-    let erased_receiver = if receiver.mutability.is_some() {
+    Ok(ForwardedSignature {
+        signature,
+        lifetimes,
+        element_lifetime,
+        mutable: receiver.mutability.is_some(),
+        erased_arguments,
+        argument_names,
+        preparations,
+        output,
+    })
+}
+
+fn forward_method(
+    method: &TraitItemFn,
+    trait_name: &syn::Ident,
+    lowered: ForwardedSignature,
+) -> syn::Result<ForwardedMethod> {
+    let ForwardedSignature {
+        signature,
+        lifetimes,
+        element_lifetime,
+        mutable,
+        erased_arguments,
+        argument_names,
+        preparations,
+        output,
+    } = lowered;
+
+    let method_name = &signature.ident;
+
+    let erased_receiver = if mutable {
         quote! { &#element_lifetime mut dyn ::std::any::Any }
     } else {
         quote! { &#element_lifetime dyn ::std::any::Any }
     };
-    let downcast = if receiver.mutability.is_some() {
+
+    let downcast = if mutable {
         quote! { downcast_mut }
     } else {
         quote! { downcast_ref }
     };
-    let parts = if receiver.mutability.is_some() {
+
+    let parts = if mutable {
         quote! { __reflection_parts_mut }
     } else {
         quote! { __reflection_parts }
     };
+
     let forwarded_arguments = signature.inputs.iter().skip(1).zip(&argument_names).map(|(argument, name)| {
         if matches!(argument, FnArg::Typed(argument) if matches!(*argument.ty, Type::ImplTrait(_))) {
             return quote! { &mut #name };
@@ -531,7 +659,7 @@ fn forward_method(method: &TraitItemFn, trait_name: &syn::Ident) -> syn::Result<
 
         quote! { #name }
     });
-    let configurations = configuration_attributes(&method.attrs);
+    let configurations = configuration_attributes(&method.attrs)?;
     let lifetime_binder = if lifetimes.is_empty() {
         quote! {}
     } else {
@@ -573,7 +701,7 @@ fn validate_type(type_name: &Type) -> syn::Result<()> {
             {
                 self.0 = Some(syn::Error::new_spanned(
                     type_name,
-                    "required reflected methods cannot use Self or impl Trait outside a supported iterator argument",
+                    "forwarded reflected methods cannot use Self or impl Trait outside a supported iterator argument",
                 ));
 
                 return;
@@ -620,39 +748,188 @@ impl VisitMut for OutputLifetimes<'_> {
 mod tests {
     use super::*;
 
+    fn assert_rejected(item: &str, expected: &str) {
+        let input = syn::parse_str(&format!("trait Invalid {{ {item} }}")).unwrap();
+        let error = expand_trait(input).unwrap_err().to_compile_error();
+
+        assert!(error.to_string().contains(expected), "{item}: {error}");
+    }
+
     #[test]
     fn rejects_signatures_that_cannot_be_forwarded() {
-        for input in [
-            parse_quote!(
-                trait Generic<Item> {}
+        for declaration in [
+            "trait Generic<Item> {}",
+            "trait Associated { type Item; }",
+            "trait Owned { fn consume(self); }",
+            "trait ReturningSelf { fn copy(&self) -> Self; }",
+            "trait GenericMethod { fn update<Type>(&mut self, value: Type); }",
+            "trait AsyncMethod { async fn update(&mut self); }",
+        ] {
+            assert!(expand_trait(syn::parse_str(declaration).unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn accepts_borrowed_defaults_and_wrapper_methods() {
+        for method in [
+            "fn read(&self) -> &str { \"default\" }",
+            "fn build<Input>(self, value: Input) -> Self { self }",
+            "#[reflect(wrapper_default)] fn edit<Input>(&mut self, value: Input) {}",
+            "#[reflect(wrapper_default)] fn read(&self) -> usize { 12 }",
+            "#[reflect(wrapper_default)] fn consume(self: Box<Self>) {}",
+        ] {
+            let input = syn::parse_str(&format!("trait Supported: Sized {{ {method} }}")).unwrap();
+            let output = expand_trait(input).unwrap();
+
+            syn::parse2::<syn::File>(output).unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_defaults_and_invalid_wrapper_settings() {
+        for (item, message) in [
+            (
+                "fn generic<Input>(&self, value: Input) {}",
+                "wrapper_default",
             ),
-            parse_quote!(
-                trait Associated {
-                    type Item;
-                }
+            (
+                "fn copy(&self) -> Self { unreachable!() }",
+                "cannot use Self",
             ),
-            parse_quote!(
-                trait Owned {
-                    fn consume(self);
-                }
+            ("fn consume(self: Box<Self>) {}", "typed receivers"),
+            ("fn create() -> usize { 0 }", "&self or &mut self"),
+            (
+                "async fn update(&mut self) {}",
+                "forwarded reflected methods",
             ),
-            parse_quote!(
-                trait ReturningSelf {
-                    fn copy(&self) -> Self;
-                }
+            (
+                "fn update(&mut self) where Self: Sized {}",
+                "forwarded reflected methods",
             ),
-            parse_quote!(
-                trait GenericMethod {
-                    fn update<Type>(&mut self, value: Type);
-                }
+            (
+                "#[reflect(wrapper_default)] fn required(&self);",
+                "requires a provided method body",
             ),
-            parse_quote!(
-                trait AsyncMethod {
-                    async fn update(&mut self);
-                }
+            (
+                "#[reflect(unknown)] fn read(&self) {}",
+                "unknown reflected method setting",
+            ),
+            (
+                "#[reflect(wrapper_default = true)] fn read(&self) {}",
+                "unknown reflected method setting",
+            ),
+            (
+                "#[reflect()] fn read(&self) {}",
+                "expected #[reflect(wrapper_default)]",
+            ),
+            (
+                "#[reflect(wrapper_default, wrapper_default)] fn read(&self) {}",
+                "duplicate wrapper_default",
+            ),
+            (
+                "#[reflect(wrapper_default)] #[reflect(wrapper_default)] fn read(&self) {}",
+                "duplicate wrapper_default",
+            ),
+            (
+                "#[cfg_attr(all(), reflect(wrapper_default))] fn read(&self) {}",
+                "conditional reflected method settings",
             ),
         ] {
-            assert!(expand_trait(input).is_err());
+            assert_rejected(item, message);
         }
+    }
+
+    #[test]
+    fn rejects_constants_macros_and_unclassified_items() {
+        for item in ["const LIMIT: usize;", "const LIMIT: usize = 12;"] {
+            assert_rejected(item, "cannot expose associated constants");
+        }
+
+        assert_rejected(
+            "#[cfg(any())] external_methods!();",
+            "cannot classify this trait-item macro",
+        );
+
+        let mut input: ItemTrait = parse_quote! { trait Invalid {} };
+        input
+            .items
+            .push(TraitItem::Verbatim(quote! { unsupported; }));
+
+        assert!(
+            expand_trait(input)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot classify this trait item")
+        );
+    }
+
+    #[test]
+    fn retains_nested_configuration() {
+        let input: TraitItemFn = parse_quote! {
+            #[cfg(feature = "enabled")]
+            #[cfg_attr(all(), cfg_attr(all(), cfg(any()), allow(dead_code)), doc = "disabled")]
+            fn content(&self);
+        };
+
+        let expected: TraitItemFn = parse_quote! {
+            #[cfg(feature = "enabled")]
+            #[cfg_attr(all(), cfg_attr(all(), cfg(any())))]
+            fn content(&self);
+        };
+
+        assert_eq!(
+            configuration_attributes(&input.attrs).unwrap(),
+            expected.attrs
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_configuration() {
+        for attribute in [
+            "#[cfg]",
+            "#[cfg_attr(all())]",
+            "#[cfg_attr(all(), cfg_attr(all()))]",
+        ] {
+            assert_rejected(&format!("{attribute} fn read(&self) {{}}"), "cfg");
+        }
+    }
+
+    #[test]
+    fn preserves_order_and_attributes_when_normalizing_macros() {
+        let mut input: ItemTrait = parse_quote! {
+            trait Styled {
+                fn before(&self);
+
+                /// Generated styles.
+                #[cfg_attr(all(), cfg_attr(all(), cfg(any())))]
+                visibility_style_methods!();
+
+                fn after(&self);
+            }
+        };
+        let TraitItem::Macro(invocation) = &input.items[1] else {
+            unreachable!();
+        };
+
+        let attributes = invocation.attrs.clone();
+        normalize_trait_items(&mut input, UnknownMacros::Reject).unwrap();
+
+        for (idx, name) in ["before", "visible", "invisible", "after"]
+            .iter()
+            .enumerate()
+        {
+            let TraitItem::Fn(method) = &input.items[idx] else {
+                panic!("expected a normalized method");
+            };
+
+            assert_eq!(method.sig.ident, name);
+
+            if (1..3).contains(&idx) {
+                assert!(method.attrs.starts_with(&attributes));
+            }
+        }
+
+        expand_trait(input).unwrap();
+        assert_rejected("style_helpers!(invalid);", "unexpected token");
     }
 }
