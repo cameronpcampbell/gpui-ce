@@ -73,6 +73,8 @@ impl Select<NoReflectedTraits> {
     }
 
     /// Requires matching elements to reflect every trait in the given trait set.
+    /// Borrowed callback methods honor concrete defaults and overrides unless marked
+    /// `#[reflect(wrapper_default)]`.
     pub fn reflects<Traits>(mut self, reflected_traits: Traits) -> Select<Traits::Group>
     where
         Traits: ReflectedTraits,
@@ -229,16 +231,11 @@ pub trait SelectableElement: IntoElement + Sized {
         element
     }
 
-    /// Transforms each element matched by the selector before it requests layout.
-    ///
-    /// A rule evaluates a node once at its first eligible layout visit in an attempt,
-    /// including failed predicates. Recomputing an existing layout never applies transforms
-    /// again. The callback may mutate, wrap, discard, or replace its input.
-    ///
-    /// Elements first erased during the callback, and descendants they later create,
-    /// are excluded from that rule. Other rules can still select them. Moving an existing
-    /// erased element preserves its visits and generation ancestry, so untouched original
-    /// descendants inside a new wrapper remain eligible.
+    /// Transforms matches before layout, evaluating each node once per rule and layout attempt.
+    /// Callbacks may mutate, wrap, discard, or replace input; later rules use the returned
+    /// element's ID, classes, and concrete type.
+    /// This rule excludes elements first erased by its callback and descendants they create,
+    /// while existing erased elements keep their visits and generation ancestry.
     ///
     /// ```
     /// use gpui::{ParentElement, Select, SelectableElement, div};
@@ -625,12 +622,122 @@ pub(crate) fn apply_active_selectors(element: &mut AnyElement) {
 mod tests {
     use super::*;
     use crate::{
-        AnyWindowHandle, App, AppContext, AvailableSpace, Context, Element, Empty,
-        InteractiveElement, ListAlignment, ListState, ParentElement, Pixels, Render, Size,
-        StyleRefinement, Styled, TestAppContext, VisualTestContext, Window, any, div, list, not,
-        px, rgb, size, uniform_list,
+        AnyWindowHandle, App, AppContext, AvailableSpace, Bounds, Context, Div, Element, Empty,
+        GlobalElementId, InspectorElementId, InteractiveElement, Interactivity, LayoutId,
+        ListAlignment, ListState, ParentElement, Pixels, Render, Size, StatefulInteractiveElement,
+        StyleRefinement, Styled, TestAppContext, TextStyleRefinement, VisualTestContext, Window,
+        any, div, list, not, px, reflection::trait_set, rgb, rgb_to_hsla, size, uniform_list,
     };
     use std::{cell::Cell, panic, rc::Rc};
+
+    #[gpui_macros::reflect_trait]
+    trait StyledControl: crate::Styled + crate::StatefulInteractiveElement {}
+
+    #[derive(gpui_macros::Reflect)]
+    #[reflect(StyledControl)]
+    struct TextOverride {
+        inner: Div,
+        text: TextStyleRefinement,
+    }
+
+    fn text_override(label: &'static str) -> TextOverride {
+        TextOverride {
+            inner: div().id(label).into_element(),
+            text: TextStyleRefinement::default(),
+        }
+    }
+
+    impl StyledControl for TextOverride {}
+
+    impl Styled for TextOverride {
+        fn style(&mut self) -> &mut StyleRefinement {
+            self.inner.style()
+        }
+
+        fn text_style(&mut self) -> &mut TextStyleRefinement {
+            &mut self.text
+        }
+    }
+
+    impl InteractiveElement for TextOverride {
+        fn interactivity(&mut self) -> &mut Interactivity {
+            self.inner.interactivity()
+        }
+    }
+
+    impl StatefulInteractiveElement for TextOverride {}
+
+    impl ParentElement for TextOverride {
+        fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+            self.inner.extend(elements);
+        }
+    }
+
+    impl IntoElement for TextOverride {
+        type Element = Self;
+
+        fn into_element(self) -> Self {
+            self
+        }
+    }
+
+    impl Element for TextOverride {
+        type RequestLayoutState = <Div as Element>::RequestLayoutState;
+        type PrepaintState = <Div as Element>::PrepaintState;
+
+        fn id(&self) -> Option<ElementId> {
+            Element::id(&self.inner)
+        }
+
+        fn source_location(&self) -> Option<&'static panic::Location<'static>> {
+            self.inner.source_location()
+        }
+
+        fn request_layout(
+            &mut self,
+            global_id: Option<&GlobalElementId>,
+            inspector_id: Option<&InspectorElementId>,
+            window: &mut Window,
+            cx: &mut App,
+        ) -> (LayoutId, Self::RequestLayoutState) {
+            self.inner
+                .request_layout(global_id, inspector_id, window, cx)
+        }
+
+        fn prepaint(
+            &mut self,
+            global_id: Option<&GlobalElementId>,
+            inspector_id: Option<&InspectorElementId>,
+            bounds: Bounds<Pixels>,
+            request_layout: &mut Self::RequestLayoutState,
+            window: &mut Window,
+            cx: &mut App,
+        ) -> Self::PrepaintState {
+            self.inner
+                .prepaint(global_id, inspector_id, bounds, request_layout, window, cx)
+        }
+
+        fn paint(
+            &mut self,
+            global_id: Option<&GlobalElementId>,
+            inspector_id: Option<&InspectorElementId>,
+            bounds: Bounds<Pixels>,
+            request_layout: &mut Self::RequestLayoutState,
+            prepaint: &mut Self::PrepaintState,
+            window: &mut Window,
+            cx: &mut App,
+        ) {
+            self.inner.paint(
+                global_id,
+                inspector_id,
+                bounds,
+                request_layout,
+                prepaint,
+                window,
+                cx,
+            );
+        }
+    }
 
     struct SelectorTestView {
         render: Box<dyn Fn() -> AnyElement>,
@@ -757,12 +864,17 @@ mod tests {
     }
 
     #[crate::test]
-    fn generation_exclusions_survive_mutation_replacement_and_rule_chains(cx: &mut TestAppContext) {
+    fn dispatch_and_generation_survive_mutation_and_replacement(cx: &mut TestAppContext) {
+        let initial_color = rgb_to_hsla(rgb(0x123456));
+        let later_color = rgb_to_hsla(rgb(0x654321));
+
         let generating = Rc::new(RefCell::new(Vec::new()));
+        let reflected = Rc::new(RefCell::new(Vec::new()));
         let later = Rc::new(RefCell::new(Vec::new()));
         let installed = Rc::new(RefCell::new(Vec::new()));
 
         let first = generating.clone();
+        let dispatch = reflected.clone();
         let second = later.clone();
         let new_rules = installed.clone();
 
@@ -771,24 +883,38 @@ mod tests {
             let mut concrete = Some(div().id("captured-concrete"));
 
             div()
-                .child(div().id("mutated").class("icon"))
+                .child(text_override("mutated").class("icon"))
                 .child(div().id("replaced").class("icon"))
                 .select(
-                    Select::descendants()
-                        .class("icon")
-                        .reflects(crate::ParentElement),
+                    Select::descendants().class("icon").reflects(trait_set!(
+                        crate::Styled,
+                        crate::InteractiveElement,
+                        crate::ParentElement
+                    )),
                     move |element| {
                         record_match(&first, &element.element);
 
-                        if element.element.element_id() == Some(ElementId::from("replaced")) {
-                            return div()
-                                .id("from-first")
+                        let mut element = element.text_color(initial_color);
+                        let label = element.element.element_id().unwrap();
+                        let expected_base_color = if label == ElementId::from("mutated") {
+                            None
+                        } else {
+                            Some(initial_color)
+                        };
+
+                        assert_eq!(element.text_style().color, Some(initial_color));
+                        assert_eq!(element.style().text.color, expected_base_color);
+
+                        if label == ElementId::from("replaced") {
+                            return text_override("from-first")
+                                .text_color(initial_color)
                                 .child(div().id("fresh-child").class("icon"))
                                 .class("icon");
                         }
 
-                        if element.element.element_id() == Some(ElementId::from("mutated")) {
+                        if label == ElementId::from("mutated") {
                             return element
+                                .id("renamed")
                                 .child(div().id("appended").class("icon"))
                                 .child(prebuilt.take().unwrap())
                                 .child(concrete.take().unwrap().class("icon"))
@@ -796,6 +922,24 @@ mod tests {
                         }
 
                         element.into_any_element()
+                    },
+                )
+                .select(
+                    Select::descendants().class("icon").reflects(StyledControl),
+                    move |mut element| {
+                        record_match(&dispatch, &element.element);
+                        let label = element.element.element_id();
+
+                        assert_eq!(element.text_style().color, Some(initial_color));
+                        assert!(element.style().text.color.is_none());
+                        assert_eq!(element.interactivity().element_id, label);
+
+                        let mut element = element.text_color(later_color);
+                        let concrete = element.element.downcast_mut::<TextOverride>().unwrap();
+
+                        assert_eq!(concrete.text.color, Some(later_color));
+
+                        element.id(label.unwrap())
                     },
                 )
                 .select(Select::descendants().class("icon"), move |element| {
@@ -827,10 +971,11 @@ mod tests {
         });
 
         assert_matches(&generating, &["mutated", "prebuilt", "replaced"]);
+        assert_matches(&reflected, &["renamed", "from-first"]);
         assert_matches(
             &later,
             &[
-                "mutated",
+                "renamed",
                 "appended",
                 "prebuilt",
                 "captured-concrete",

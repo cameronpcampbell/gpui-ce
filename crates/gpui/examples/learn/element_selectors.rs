@@ -6,7 +6,8 @@ mod example_prelude;
 use example_prelude::init_example;
 use gpui::{
     AnyElement, App, Bounds, Context, Entity, ParentElement, Render, RenderOnce, Select, Window,
-    WindowBounds, WindowOptions, div, prelude::*, px, reflection::trait_set, rgb, size,
+    WindowBounds, WindowOptions, div, prelude::*, px, reflection::trait_set, rgb, rgb_to_hsla,
+    size,
 };
 
 #[derive(IntoElement)]
@@ -47,7 +48,11 @@ impl RenderOnce for Button {
                     .reflects(trait_set![gpui::Styled, gpui::ParentElement])
                     .class((any(["icon", "badge"]), not("muted")))
                     .nth(0),
-                |element| element.text_xl().text_color(rgb(0xfacc15)).child(div()),
+                |mut element| {
+                    element.text_style().color = Some(rgb_to_hsla(rgb(0xfacc15)));
+
+                    element.text_xl().child(div())
+                },
             )
     }
 }
