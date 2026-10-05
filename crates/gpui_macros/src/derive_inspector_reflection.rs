@@ -1,5 +1,4 @@
-//! Implements `#[derive_inspector_reflection]` macro to provide runtime access to trait methods
-//! that have the shape `fn method(self) -> Self`. This code was generated using Zed Agent with Claude Opus 4.
+//! Generates inspector metadata for parameterless owned builders returning `Self`.
 
 use crate::trait_items::{UnknownMacros, configuration_attributes, normalize_trait_items};
 use heck::ToSnakeCase as _;
@@ -32,7 +31,6 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> syn::Result<TokenStream2> 
     let trait_name = &trait_item.ident;
     let vis = &trait_item.vis;
 
-    // Determine if we're being called from within the gpui crate
     let call_site = Span::call_site();
     let inspector_reflection_path = if is_called_from_gpui_crate(call_site) {
         quote! { crate::inspector_reflection }
@@ -40,21 +38,18 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> syn::Result<TokenStream2> 
         quote! { ::gpui::inspector_reflection }
     };
 
-    // Collect method information for methods of form fn name(self) -> Self or fn name(mut self) -> Self
     let mut method_infos = Vec::new();
 
     for item in &trait_item.items {
         if let TraitItem::Fn(method) = item {
             let method_name = &method.sig.ident;
 
-            // Check if method has self or mut self receiver
             let has_valid_self_receiver = method
                 .sig
                 .inputs
                 .iter()
                 .any(|arg| matches!(arg, FnArg::Receiver(r) if r.reference.is_none()));
 
-            // Check if method returns Self
             let returns_self = match &method.sig.output {
                 ReturnType::Type(_, ty) => {
                     matches!(**ty, Type::Path(ref path) if path.path.is_ident("Self"))
@@ -62,13 +57,9 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> syn::Result<TokenStream2> 
                 ReturnType::Default => false,
             };
 
-            // Check if method has exactly one parameter (self or mut self)
             let param_count = method.sig.inputs.len();
 
-            // Include methods of form fn name(self) -> Self or fn name(mut self) -> Self
-            // This includes methods with default implementations
             if has_valid_self_receiver && returns_self && param_count == 1 {
-                // Extract documentation and cfg attributes
                 let doc = extract_doc_comment(&method.attrs);
                 let cfg_attrs = configuration_attributes(&method.attrs)?;
                 method_infos.push((method_name.clone(), doc, cfg_attrs));
@@ -76,14 +67,11 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> syn::Result<TokenStream2> 
         }
     }
 
-    // Generate the reflection module name
     let reflection_mod_name = Ident::new(
         &format!("{}_reflection", trait_name.to_string().to_snake_case()),
         trait_name.span(),
     );
 
-    // Generate wrapper functions for each method
-    // These wrappers use type erasure to allow runtime invocation
     let wrapper_functions = method_infos.iter().map(|(method_name, _doc, cfg_attrs)| {
         let wrapper_name = Ident::new(
             &format!("__wrapper_{}", method_name),
@@ -101,7 +89,6 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> syn::Result<TokenStream2> 
         }
     });
 
-    // Generate method info entries
     let method_info_entries = method_infos.iter().map(|(method_name, doc, cfg_attrs)| {
         let method_name_str = method_name.to_string();
         let wrapper_name = Ident::new(&format!("__wrapper_{}", method_name), method_name.span());
@@ -120,24 +107,23 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> syn::Result<TokenStream2> 
         }
     });
 
-    // Generate the complete output
     let output = quote! {
         #trait_item
 
-        /// Implements function reflection
+        /// Inspector metadata for owned builder methods.
         #vis mod #reflection_mod_name {
             use super::*;
 
             #(#wrapper_functions)*
 
-            /// Get all reflectable methods for a concrete type implementing the trait
+            /// Returns the reflected builders for this concrete type.
             pub fn methods<T: #trait_name + 'static>() -> Vec<#inspector_reflection_path::FunctionReflection<T>> {
                 vec![
                     #(#method_info_entries),*
                 ]
             }
 
-            /// Find a method by name for a concrete type implementing the trait
+            /// Finds a reflected builder by name.
             pub fn find_method<T: #trait_name + 'static>(name: &str) -> Option<#inspector_reflection_path::FunctionReflection<T>> {
                 methods::<T>().into_iter().find(|m| m.name == name)
             }
@@ -170,8 +156,7 @@ fn extract_doc_comment(attrs: &[Attribute]) -> Option<String> {
 }
 
 fn is_called_from_gpui_crate(_span: Span) -> bool {
-    // Check if we're being called from within the gpui crate by examining the call site
-    // This is a heuristic approach - we check if the current crate name is "gpui"
+    // Use the invoking package name to choose internal or external imports.
     std::env::var("CARGO_PKG_NAME").is_ok_and(|name| name == "gpui")
 }
 

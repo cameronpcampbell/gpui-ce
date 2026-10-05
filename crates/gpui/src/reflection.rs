@@ -1,23 +1,7 @@
-//! Trait reflection and typed access to erased elements.
-//!
-//! [`reflect_trait`] forwards supported borrowed methods to the original concrete element.
-//! Provided methods use its override or inherited default, and borrowed returns retain their
-//! receiver lifetime. Forwarded signatures accept lifetime parameters, concrete types, and
-//! `impl IntoIterator<Item = ConcreteType>` arguments.
-//!
-//! Provided owned builders run their trait bodies on [`ReflectedElement`], including builders
-//! with generic inputs or `Self` returns. Their concrete overrides do not carry through erasure.
-//! For concrete behavior, call a compatible borrowed operation from the builder default.
-//! Other provided methods can opt into wrapper behavior with `#[reflect(wrapper_default)]`.
-//! The macro consumes this setting and rejects it on required methods, in `cfg_attr`, or when
-//! duplicated. Unsupported provided signatures otherwise produce a diagnostic.
-//!
-//! Callable reflected traits reject associated types and all associated constants, even those
-//! with defaults. A wrapper type can contain elements whose concrete constants differ. Move a
-//! shared constant outside the trait, or use a borrowed getter to expose a concrete value.
-//! Supertraits follow the same rules. GPUI style macros are normalized before classification;
-//! unknown trait-item macros must generate the entire annotated trait or expose their items
-//! directly. Method tables and forwarded implementations preserve direct and nested configuration.
+//! Typed trait access to erased elements.
+//! Borrowed methods dispatch to concrete defaults and overrides; owned builders and
+//! `#[reflect(wrapper_default)]` methods use the trait body on [`ReflectedElement`].
+//! See [`reflect_trait`] for supported signatures and trait restrictions.
 
 use crate::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
@@ -177,11 +161,9 @@ where
     }
 }
 
-/// An owned erased element exposing a statically known set of reflected traits.
-///
-/// Supported borrowed methods dispatch to the original concrete element, including provided
-/// defaults and overrides. Owned builders and explicit `#[reflect(wrapper_default)]` methods
-/// inherit their bodies on this wrapper and do not dispatch concrete overrides.
+/// An owned erased element exposing a statically known trait set.
+/// Borrowed methods dispatch to its concrete type; owned builders and explicit
+/// `#[reflect(wrapper_default)]` methods use their trait bodies.
 #[doc(hidden)]
 pub struct ReflectedElement<Group>
 where
@@ -324,12 +306,9 @@ where
     }
 }
 
-/// Implemented by `#[derive(Reflect)]` for concrete types whose traits can be inspected.
-///
-/// The derive detects Styled, InteractiveElement, StatefulInteractiveElement, and ParentElement,
-/// including handwritten implementations. All registered traits use generated method tables.
-/// Use `#[reflect(MyTrait)]` to expose a custom trait marked with
-/// `#[gpui::reflection::reflect_trait]`.
+/// Derived by `#[derive(Reflect)]` to register concrete GPUI trait implementations.
+/// Detects Styled, InteractiveElement, StatefulInteractiveElement, and ParentElement;
+/// use `#[reflect(MyTrait)]` for custom traits marked with [`reflect_trait`].
 pub trait Reflect: 'static {
     /// Returns the reflected traits implemented by this type.
     fn reflected_traits() -> Vec<ReflectedTrait>;

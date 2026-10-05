@@ -70,29 +70,20 @@ pub fn derive_reflect(input: TokenStream) -> TokenStream {
     derive_reflect::derive_reflect(input)
 }
 
-/// Makes a trait available as a value for `AnyElement::implements_trait`.
-/// Also generates inheritance metadata and implementations on typed reflected elements.
+/// Generates a trait descriptor for `AnyElement::implements_trait` and typed erased-element adapters.
+/// Borrowed methods dispatch to concrete overrides or defaults; owned builders and
+/// `#[reflect(wrapper_default)]` methods use the trait body on `ReflectedElement`.
 ///
-/// Traits must be non-generic. Forwarded methods accept `&self` or `&mut self`, lifetime
-/// parameters, concrete types, and `impl IntoIterator<Item = ConcreteType>` arguments.
-/// Both required and provided borrowed methods dispatch to the concrete implementation,
-/// preserving its overrides and inherited defaults through element erasure.
+/// Traits must be non-generic, with reflected supertraits except `Sized`, and no associated
+/// types or constants. Forwarded signatures support borrowed receivers, lifetimes, concrete
+/// types, and `impl IntoIterator<Item = ConcreteType>`; other signatures are rejected.
+/// Explicit wrapper defaults require a provided body and a single unconditional setting.
+/// Direct `cfg` and nested configuration-producing `cfg_attr` are preserved.
+/// GPUI style macros are expanded; other item macros must expose their items directly
+/// or generate the whole annotated trait.
 ///
-/// Provided methods with an ordinary `self` or `mut self` receiver keep their bodies on
-/// `ReflectedElement`, including generic builders returning `Self`. Concrete overrides of
-/// these builders do not carry through erasure. Put operations that need concrete dispatch
-/// in compatible borrowed methods, then call them from the builder default.
-///
-/// Mark other intentional wrapper bodies with `#[reflect(wrapper_default)]`. This setting
-/// requires a provided body, and concrete overrides of that method will not be dispatched.
-/// Unsupported signatures otherwise produce an error, including provided borrowed methods.
-/// Conditional method settings inside `cfg_attr` are unsupported. Direct `cfg` and nested
-/// configuration-producing `cfg_attr` are preserved on forwarded methods and their tables.
-///
-/// Supertraits must also be reflected, except for `Sized`. Associated types and all associated
-/// constants are unsupported in callable reflected traits. A single wrapper type can hold
-/// different concrete implementations, so it cannot choose an implementation-specific constant.
-/// Move shared constants outside the trait, or expose a borrowed getter for concrete values.
+/// Qualify imported supertraits and re-export their generated schema modules when aliasing
+/// traits used in `trait_set!`, such as `__GpuiReflectTraitSchema` as `__GpuiReflectAliasSchema`.
 ///
 /// ```compile_fail
 /// use gpui_macros::reflect_trait;
@@ -113,13 +104,6 @@ pub fn derive_reflect(input: TokenStream) -> TokenStream {
 ///     const LIMIT: usize = 48;
 /// }
 /// ```
-///
-/// GPUI style macros inside the trait are expanded before classification. Other trait-item
-/// macros must instead generate the entire annotated trait, or have their items written directly.
-///
-/// Use qualified paths for imported supertraits. If a trait is re-exported under an
-/// alias used in `trait_set!`, also re-export its generated `__GpuiReflectTraitSchema`
-/// module under the matching alias, such as `__GpuiReflectAliasSchema`.
 #[proc_macro_attribute]
 pub fn reflect_trait(args: TokenStream, input: TokenStream) -> TokenStream {
     derive_reflect::reflect_trait(args, input)
