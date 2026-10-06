@@ -786,6 +786,15 @@ mod tests {
         assert_eq!(*matches.borrow(), expected);
     }
 
+    fn selector_row(label: &'static str) -> Div {
+        div()
+            .id(label)
+            .debug_selector(move || label.into())
+            .size(px(8.))
+            .flex_shrink_0()
+            .into_element()
+    }
+
     #[crate::test]
     fn wrapping_preserves_identity_metadata_and_original_descendants(cx: &mut TestAppContext) {
         let wrapped = Rc::new(RefCell::new(Vec::new()));
@@ -878,7 +887,7 @@ mod tests {
         let second = later.clone();
         let new_rules = installed.clone();
 
-        draw_selector_tree(cx, move || {
+        let visual = draw_selector_tree(cx, move || {
             let mut prebuilt = Some(div().id("prebuilt").class("icon"));
             let mut concrete = Some(div().id("captured-concrete"));
 
@@ -907,6 +916,7 @@ mod tests {
 
                         if label == ElementId::from("replaced") {
                             return text_override("from-first")
+                                .debug_selector(|| "from-first".into())
                                 .text_color(initial_color)
                                 .child(div().id("fresh-child").class("icon"))
                                 .class("icon");
@@ -954,8 +964,14 @@ mod tests {
 
                     div()
                         .id("from-second")
+                        .debug_selector(|| "from-second".into())
                         .child(element)
-                        .child(div().id("generated-child").class("icon"))
+                        .child(
+                            div()
+                                .id("generated-child")
+                                .debug_selector(|| "generated-child".into())
+                                .class("icon"),
+                        )
                         .class("icon")
                         .select(Select::this().reflects(crate::Styled), move |element| {
                             record_match(&this, &element.element);
@@ -987,6 +1003,17 @@ mod tests {
             &installed,
             &["from-second", "from-first", "generated-child"],
         );
+        assert_eq!(
+            visual.debug_bounds("from-second").unwrap().size,
+            size(px(40.), px(40.))
+        );
+
+        for label in ["from-first", "generated-child"] {
+            assert_eq!(
+                visual.debug_bounds(label).unwrap().size,
+                size(px(8.), px(8.))
+            );
+        }
     }
 
     #[crate::test]
@@ -1085,6 +1112,130 @@ mod tests {
                 "nested-generated",
             ],
         );
+    }
+
+    #[crate::test]
+    fn nested_deferred_scopes_share_positions_and_callback_state(cx: &mut TestAppContext) {
+        let visited = Rc::new(RefCell::new(Vec::new()));
+        let direct = Rc::new(RefCell::new(Vec::new()));
+        let indexed = Rc::new(RefCell::new(Vec::new()));
+
+        let visited_for_render = visited.clone();
+        let direct_for_render = direct.clone();
+        let indexed_for_render = indexed.clone();
+        let window = cx.add_window(move |_window, _cx| SelectorTestView {
+            render: Box::new(move || {
+                let visited = visited_for_render.clone();
+                let direct = direct_for_render.clone();
+                let late_direct = direct_for_render.clone();
+                let nested_direct = direct_for_render.clone();
+                let indexed = indexed_for_render.clone();
+                let mut match_count = 0;
+
+                let nested = crate::deferred(
+                    crate::container_query(|_size, _window, _cx| {
+                        selector_row("nested-first")
+                            .child(selector_row("nested-second").class("row"))
+                            .class("row")
+                    })
+                    .select(
+                        Select::children().class("row").reflects(crate::Styled),
+                        move |element| {
+                            record_match(&nested_direct, &element.element);
+
+                            element.h(px(16.))
+                        },
+                    ),
+                )
+                .priority(0);
+                let low_priority = crate::deferred(
+                    crate::container_query(move |_size, _window, _cx| {
+                        selector_row("late-low").child(nested).class("row")
+                    })
+                    .select(
+                        Select::children().class("row").reflects(crate::Styled),
+                        move |element| {
+                            record_match(&late_direct, &element.element);
+
+                            element.h(px(12.))
+                        },
+                    ),
+                )
+                .priority(10);
+
+                div()
+                    .size_full()
+                    .child(selector_row("synchronous").class("row"))
+                    .child(
+                        crate::deferred(crate::container_query(|_size, _window, _cx| {
+                            selector_row("late-high").class("row")
+                        }))
+                        .priority(20),
+                    )
+                    .child(low_priority)
+                    .select(
+                        Select::children().class("row").reflects(crate::Styled),
+                        move |element| {
+                            record_match(&direct, &element.element);
+
+                            element.h(px(10.))
+                        },
+                    )
+                    .select(Select::descendants().class("row"), move |element| {
+                        record_match(&visited, &element.element);
+
+                        element
+                    })
+                    .select(
+                        Select::descendants()
+                            .class("row")
+                            .reflects(crate::Styled)
+                            .every(2),
+                        move |element| {
+                            record_match(&indexed, &element.element);
+                            match_count += 1;
+
+                            element.w(px(10. + 10. * match_count as f32))
+                        },
+                    )
+            }),
+        });
+
+        for _redraw in 0..2 {
+            visited.borrow_mut().clear();
+            direct.borrow_mut().clear();
+            indexed.borrow_mut().clear();
+            draw_selector_window(window.into(), cx);
+
+            assert_matches(
+                &visited,
+                &[
+                    "synchronous",
+                    "late-low",
+                    "late-high",
+                    "nested-first",
+                    "nested-second",
+                ],
+            );
+            assert_matches(&direct, &["synchronous", "late-low", "nested-first"]);
+            assert_matches(&indexed, &["synchronous", "late-high", "nested-second"]);
+
+            cx.update_window(window.into(), |_view, window, _cx| {
+                for (label, width, height) in [
+                    ("synchronous", 20., 10.),
+                    ("late-low", 8., 12.),
+                    ("late-high", 30., 8.),
+                    ("nested-first", 8., 16.),
+                    ("nested-second", 40., 8.),
+                ] {
+                    assert_eq!(
+                        window.rendered_frame.debug_bounds[label].size,
+                        size(px(width), px(height))
+                    );
+                }
+            })
+            .unwrap();
+        }
     }
 
     #[crate::test]
@@ -1567,48 +1718,94 @@ mod tests {
     }
 
     #[crate::test]
-    #[allow(unused_variables)]
     fn restores_positions_when_prepaint_retries(cx: &mut TestAppContext) {
         let selected = Rc::new(RefCell::new(Vec::new()));
+        let indexed = Rc::new(RefCell::new(Vec::new()));
         let selected_for_render = selected.clone();
-        let window = cx.add_window(move |window, cx| SelectorTestView {
+        let indexed_for_render = indexed.clone();
+        let window = cx.add_window(move |_window, _cx| SelectorTestView {
             render: Box::new(move || {
                 let selected = selected_for_render.clone();
+                let indexed = indexed_for_render.clone();
 
                 div()
-                    .child(crate::container_query(|size, window, cx| {
-                        let result = window.transact(|window| {
-                            let mut discarded = div().id("discarded").class("row");
-                            discarded.layout_as_root(
-                                size.map(AvailableSpace::Definite),
-                                window,
-                                cx,
-                            );
+                    .size_full()
+                    .child(crate::deferred(crate::container_query(
+                        |bounds, window, cx| {
+                            let origin = window.element_offset();
+                            let result = window.transact(|window| {
+                                let mut discarded = div()
+                                    .child(selector_row("discarded").class("row"))
+                                    .child(crate::deferred(crate::container_query(
+                                        |_size, _window, _cx| {
+                                            selector_row("discarded-late").class("row")
+                                        },
+                                    )))
+                                    .into_any_element();
+                                discarded.prepaint_as_root(origin, bounds.into(), window, cx);
 
-                            Err::<(), ()>(())
-                        });
+                                Err::<(), ()>(())
+                            });
 
-                        assert!(result.is_err());
+                            assert!(result.is_err());
 
-                        div().id("committed").class("row")
-                    }))
+                            div()
+                                .child(selector_row("committed").class("row"))
+                                .child(selector_row("committed-next").class("row"))
+                                .child(crate::deferred(crate::container_query(
+                                    |_size, _window, _cx| {
+                                        selector_row("committed-late").class("row")
+                                    },
+                                )))
+                        },
+                    )))
                     .select(Select::descendants().class("row").nth(0), move |element| {
-                        selected
-                            .borrow_mut()
-                            .push(element.element.element_id().unwrap());
+                        record_match(&selected, &element.element);
 
                         element
                     })
+                    .select(
+                        Select::descendants()
+                            .class("row")
+                            .reflects(crate::Styled)
+                            .every(2),
+                        move |element| {
+                            record_match(&indexed, &element.element);
+
+                            element.w(px(24.))
+                        },
+                    )
             }),
         });
 
         selected.borrow_mut().clear();
+        indexed.borrow_mut().clear();
         draw_selector_window(window.into(), cx);
 
-        assert_eq!(
-            *selected.borrow(),
-            vec![ElementId::from("discarded"), ElementId::from("committed")]
-        );
+        assert_matches(&selected, &["discarded", "committed"]);
+        assert_matches(&indexed, &["discarded", "committed", "committed-late"]);
+
+        cx.update_window(window.into(), |_view, window, _cx| {
+            assert_eq!(window.rendered_frame.deferred_draws.len(), 2);
+            assert!(
+                !window
+                    .rendered_frame
+                    .debug_bounds
+                    .contains_key("discarded-late")
+            );
+
+            for (label, width) in [
+                ("committed", 24.),
+                ("committed-next", 8.),
+                ("committed-late", 24.),
+            ] {
+                assert_eq!(
+                    window.rendered_frame.debug_bounds[label].size.width,
+                    px(width)
+                );
+            }
+        })
+        .unwrap();
     }
 
     struct SelectorView {
