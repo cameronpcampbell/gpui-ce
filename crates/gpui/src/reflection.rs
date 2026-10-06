@@ -43,7 +43,7 @@ pub mod benchmarks;
 #[cfg(test)]
 #[path = "../examples/learn/trait_reflection.rs"]
 #[allow(dead_code)]
-mod component_example;
+pub(crate) mod component_example;
 
 /// Identifies a trait made available to element reflection.
 #[derive(Clone, Copy, Debug)]
@@ -720,7 +720,8 @@ mod tests {
     use crate::reflection::component_example::{CardElement, Draggable, Icon};
     use crate::{
         AppContext, Context, Div, Empty, InteractiveElement, MouseButton, ParentElement, Render,
-        StatefulInteractiveElement, StyleRefinement, Styled, TestApp, div, hsla, point, px, rgb,
+        Select, SelectableElement, StatefulInteractiveElement, StyleRefinement, Styled, TestApp,
+        div, hsla, point, px, rgb,
     };
     use std::{
         cell::{Cell, RefCell},
@@ -1342,50 +1343,27 @@ mod tests {
         })
     }
 
-    fn reflect_component<Traits>(
-        element: AnyElement,
-        _traits: Traits,
-        hovers: Rc<RefCell<Vec<bool>>>,
-        clicks: Rc<Cell<usize>>,
-    ) -> AnyElement
-    where
-        Traits: ReflectedTraits,
-        ReflectedElement<Traits::Group>:
-            Draggable + Styled + ParentElement + StatefulInteractiveElement,
-    {
-        let metadata = element.reflection();
-        let mut reflected = ReflectedElement::<Traits::Group>::new(element);
-        *reflected.drag_payload() = Some("card-data".into());
-
-        let mut element = configure_component(reflected, hovers, clicks).into_any_element();
-
-        assert_eq!(
-            element.downcast_mut::<CardElement>().unwrap().drag_payload,
-            Some("card-data".into())
-        );
-        assert!(std::ptr::eq(metadata, element.reflection()));
-        assert_eq!(metadata.concrete_type(), Some(TypeId::of::<CardElement>()));
-
-        element
-    }
-
     impl Render for ComponentView {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let hovers = self.hovers.clone();
+            let clicks = self.clicks.clone();
+
             let element = if self.use_component {
-                reflect_component(
-                    CardElement::new("card").into_any_element(),
-                    trait_set![
+                CardElement::new("card").class("card").select(
+                    Select::this().class("card").reflects(trait_set![
                         crate::reflection::component_example::Draggable,
                         crate::Styled,
                         crate::ParentElement,
                         crate::StatefulInteractiveElement,
-                    ],
-                    self.hovers.clone(),
-                    self.clicks.clone(),
+                    ]),
+                    move |mut element| {
+                        *element.drag_payload() = Some("card-data".into());
+
+                        configure_component(element, hovers.clone(), clicks.clone())
+                    },
                 )
             } else {
-                configure_component(div().id("card"), self.hovers.clone(), self.clicks.clone())
-                    .into_any_element()
+                configure_component(div().id("card"), hovers, clicks).into_any_element()
             };
 
             div()
@@ -1397,7 +1375,7 @@ mod tests {
     }
 
     #[test]
-    fn component_delegation_preserves_reflected_mutations_state_and_accessibility() {
+    fn component_selectors_preserve_mutations_state_and_accessibility() {
         let mut app = TestApp::new();
         let hovers = Rc::new(RefCell::new(Vec::new()));
         let clicks = Rc::new(Cell::new(0));
@@ -1422,22 +1400,17 @@ mod tests {
 
         let inspect_tree = |window: &Window| {
             let tree = window.a11y_tree().unwrap();
-            let (card_id, card) = tree
-                .nodes
-                .iter()
-                .find(|(_node_id, node)| node.author_id() == Some("card"))
-                .unwrap();
-            let (child_id, _child) = tree
-                .nodes
-                .iter()
-                .find(|(_node_id, node)| node.label() == Some("Child"))
-                .unwrap();
-            let (payload_id, _payload) = tree
-                .nodes
-                .iter()
-                .find(|(_node_id, node)| node.label() == Some("Payload"))
-                .unwrap();
+            let node_by_label = |label: &str| {
+                tree.nodes
+                    .iter()
+                    .find(|(_node_id, node)| node.label() == Some(label))
+                    .unwrap()
+            };
+            let (card_id, card) = node_by_label("Draggable card");
+            let (child_id, _child) = node_by_label("Child");
+            let (payload_id, _payload) = node_by_label("Payload");
 
+            assert_eq!(card.author_id(), Some("card"));
             assert_eq!(card.role(), accesskit::Role::Button);
             assert_eq!(card.label(), Some("Draggable card"));
             assert!(card.children().contains(child_id));

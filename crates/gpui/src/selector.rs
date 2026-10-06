@@ -49,6 +49,14 @@ impl Select<NoReflectedTraits> {
     }
 
     /// Selects direct children of the element on which the selector is installed.
+    ///
+    /// Components and entity views retain a [`crate::ViewElement`] whose child is
+    /// the rendered root. Animation wrappers likewise retain their result as a child.
+    /// `children()` on a wrapper reaches its child; on its parent it reaches the
+    /// wrapper. Use [`Self::descendants`] to cross these boundaries.
+    ///
+    /// Annotations and deferred scheduling add no depth. Actual elements keep
+    /// their declared children.
     pub fn children() -> Self {
         Self::new(SelectScope::Children)
     }
@@ -231,6 +239,11 @@ pub trait SelectableElement: IntoElement + Sized {
     ///
     /// Arrays, vectors, slices, and tuples are supported. Boolean expressions are
     /// only accepted by [`Select::class`].
+    ///
+    /// Classes stay on the converted node. The default component conversion tags
+    /// its [`crate::ViewElement`]; pass a class prop to `render` to tag the rendered
+    /// root. Animation wrappers keep their classes; tag the child before wrapping
+    /// it or inside the animator.
     ///
     /// ```compile_fail
     /// use gpui::{SelectableElement, div, not};
@@ -667,10 +680,12 @@ pub(crate) fn apply_active_selectors(element: &mut AnyElement) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reflection::component_example::{CardElement, Draggable};
     use crate::{
-        AnyWindowHandle, App, AppContext, AvailableSpace, Bounds, Canvas, Context, Div, Element,
-        Empty, Entity, FocusHandle, GlobalElementId, InspectorElementId, InteractiveElement,
-        Interactivity, LayoutId, ListAlignment, ListState, ParentElement, Pixels, Render, Size,
+        Animation, AnimationExt, AnyView, AnyWindowHandle, App, AppContext, AvailableSpace, Bounds,
+        Canvas, Context, Div, Element, Empty, Entity, FocusHandle, GlobalElementId,
+        InspectorElementId, InteractiveElement, Interactivity, LayoutId, ListAlignment, ListState,
+        ParentElement, Pixels, Render, RenderOnce, Size, SpringAnimation, SpringConfig,
         StatefulInteractiveElement, StyleRefinement, Styled, TestAppContext, TextStyleRefinement,
         VisualTestContext, Window, any, canvas, div, list, not, point, px,
         reflection::{
@@ -678,7 +693,7 @@ mod tests {
         },
         rgb, rgb_to_hsla, size, uniform_list,
     };
-    use std::{cell::Cell, panic, rc::Rc};
+    use std::{cell::Cell, panic, rc::Rc, time::Duration};
 
     #[gpui_macros::reflect_trait]
     trait StyledControl: crate::Styled + crate::StatefulInteractiveElement {}
@@ -831,6 +846,17 @@ mod tests {
         }
     }
 
+    #[derive(gpui_macros::IntoElement)]
+    struct SelectorComponent {
+        root: AnyElement,
+    }
+
+    impl RenderOnce for SelectorComponent {
+        fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+            self.root
+        }
+    }
+
     fn draw_selector_window(window: AnyWindowHandle, cx: &mut TestAppContext) {
         cx.update_window(window, |_view, window, cx| {
             window.draw(cx).clear(cx);
@@ -874,6 +900,13 @@ mod tests {
             .size(px(8.))
             .flex_shrink_0()
             .into_element()
+    }
+
+    fn style_component_children(element: impl IntoElement) -> AnyElement {
+        element.select(
+            Select::children().class("root").reflects(crate::Styled),
+            |element| element.w(px(24.)),
+        )
     }
 
     fn layout_selector_row(label: &'static str, window: &mut Window, cx: &mut App) {
@@ -1038,6 +1071,101 @@ mod tests {
             visual.debug_bounds("inner").unwrap().size,
             size(px(12.), px(12.))
         );
+    }
+
+    #[crate::test]
+    fn component_and_animation_classes_preserve_capabilities_and_depth(cx: &mut TestAppContext) {
+        let window = cx.open_window(size(px(100.), px(100.)), |_window, _cx| SelectorTestView {
+            render: Box::new(|| {
+                let component = style_component_children(
+                    SelectorComponent {
+                        root: selector_row("component-root")
+                            .child(
+                                SelectorComponent {
+                                    root: selector_row("nested-root").class("root"),
+                                }
+                                .class("nested-wrapper"),
+                            )
+                            .class("root"),
+                    }
+                    .class("wrapper"),
+                );
+                let animated = selector_row("animated-root")
+                    .class("root")
+                    .with_animation(
+                        "animation",
+                        Animation::new(Duration::from_secs(1)),
+                        |element, _progress| element,
+                    )
+                    .class("wrapper");
+                let spring = selector_row("spring-root")
+                    .into_any_element()
+                    .with_spring(
+                        "spring",
+                        SpringAnimation::new(SpringConfig::new(100., 10., 1.)).to(px(0.)),
+                        |element, _value| element.class("root"),
+                    )
+                    .class("wrapper");
+                let card = style_component_children(
+                    CardElement::new("card")
+                        .size(px(8.))
+                        .child(selector_row("card-child").class("root"))
+                        .class("card"),
+                );
+                let wrappers = [component, animated, spring];
+
+                for element in &wrappers {
+                    assert_eq!(element.classes(), &[SharedString::from("wrapper")]);
+                    assert!(!element.implements_trait(crate::Styled));
+                    assert!(!element.implements_trait(Draggable));
+                }
+
+                div()
+                    .children(wrappers)
+                    .child(card)
+                    .child(selector_row("plain").class("wrapper"))
+                    .select(
+                        Select::children().class("root").reflects(crate::Styled),
+                        |_element| -> AnyElement {
+                            panic!("children skipped a structural wrapper")
+                        },
+                    )
+                    .select(
+                        Select::children()
+                            .class("wrapper")
+                            .reflects(crate::Styled)
+                            .nth(0),
+                        |element| element.w(px(32.)),
+                    )
+                    .select(
+                        Select::descendants().class("root").reflects(crate::Styled),
+                        |element| {
+                            assert_eq!(element.element.classes(), &[SharedString::from("root")]);
+
+                            element.h(px(16.))
+                        },
+                    )
+            }),
+        });
+
+        draw_selector_window(window.into(), cx);
+
+        cx.update_window(window.into(), |_view, window, _cx| {
+            for (label, width, height) in [
+                ("component-root", 24., 16.),
+                ("nested-root", 8., 16.),
+                ("animated-root", 8., 16.),
+                ("spring-root", 8., 16.),
+                ("card-child", 24., 16.),
+                ("plain", 32., 8.),
+            ] {
+                assert_eq!(
+                    window.rendered_frame.debug_bounds[label].size,
+                    size(px(width), px(height))
+                );
+            }
+        })
+        .unwrap();
     }
 
     #[crate::test]
@@ -2150,11 +2278,13 @@ mod tests {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             self.renders.set(self.renders.get() + 1);
 
-            div()
-                .id("cached-row")
+            CardElement::new("cached-row")
                 .size_full()
                 .occlude()
                 .bg(rgb(0x112233))
+                .role(accesskit::Role::Button)
+                .accessibility_id("cached-card")
+                .aria_label("Cached card")
                 .debug_selector(|| "cached-row".into())
                 .class("row")
         }
@@ -2508,29 +2638,79 @@ mod tests {
     #[crate::test]
     fn selectors_visit_cached_view_contents_on_each_frame(cx: &mut TestAppContext) {
         let selected = Rc::new(Cell::new(0));
+        let painted = Rc::new(RefCell::new(Vec::new()));
         let observed = selected.clone();
+        let observed_painted = painted.clone();
         let (window, _child, renders) = cached_selector_window(cx, move |child, _renders| {
             let selected = observed.clone();
+            let painted = observed_painted.clone();
 
-            div().child(cached_selector_element(child)).select(
-                Select::descendants().class("row").nth(0),
-                move |element| {
-                    selected.set(selected.get() + 1);
+            div()
+                .child(AnyView::from(child.clone()).cached(cached_selector_style()))
+                .select(
+                    Select::descendants()
+                        .class("row")
+                        .reflects(trait_set![
+                            crate::reflection::component_example::Draggable,
+                            crate::Styled,
+                            crate::ParentElement,
+                        ])
+                        .nth(0),
+                    move |mut element| {
+                        selected.set(selected.get() + 1);
+                        *element.drag_payload() = Some("cached-payload".into());
 
-                    element
-                },
-            )
+                        let card = element.element.downcast_mut::<CardElement>().unwrap();
+                        assert_eq!(card.drag_payload, Some("cached-payload".into()));
+
+                        let painted = painted.clone();
+
+                        element.child(crate::deferred(crate::container_query(
+                            move |_bounds, _window, _cx| {
+                                selector_canvas("cached-detail", (), painted)
+                            },
+                        )))
+                    },
+                )
         });
 
+        cx.update_window(window, |_view, window, _cx| window.set_a11y_forced(true))
+            .unwrap();
         selected.set(0);
+        renders.set(0);
+        painted.borrow_mut().clear();
+
+        let mut node_ids = Vec::new();
 
         for _redraw in 0..2 {
             draw_selector_window(window, cx);
             assert_cached_selector_size(window, size(px(40.), px(20.)), cx);
+            cx.update_window(window, |_view, window, _cx| {
+                let tree: serde_json::Value =
+                    serde_json::from_str(&window.debug_a11y_tree_json().unwrap()).unwrap();
+                let node = tree["nodes"].as_object().unwrap();
+                let node = node
+                    .values()
+                    .find(|node| node["aria"]["author_id"] == "cached-card")
+                    .unwrap();
+                assert_eq!(node["aria"]["label"], "Cached card");
+                assert_eq!(node["bounds"]["width"].as_f64(), Some(40.));
+                assert_eq!(node["bounds"]["height"].as_f64(), Some(20.));
+                node_ids.push(node["accesskit_id"].clone());
+
+                #[cfg(debug_assertions)]
+                assert_eq!(node["view"], std::any::type_name::<CachedSelectorChild>());
+            })
+            .unwrap();
         }
 
+        assert_eq!(node_ids[0], node_ids[1]);
         assert_eq!(renders.get(), 2);
         assert_eq!(selected.get(), 2);
+        assert_eq!(
+            *painted.borrow(),
+            vec![("cached-detail", size(px(8.), px(8.))); 2]
+        );
     }
 
     #[test]

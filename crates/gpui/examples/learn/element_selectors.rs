@@ -1,23 +1,34 @@
 //! Run with `cargo run -p gpui-ce --example element_selectors`.
+//!
+//! `Button::root_class` tags its rendered root; `.class()` tags its view wrapper.
+//! `descendants()` crosses that boundary. `CardElement` keeps its custom methods
+//! and delegated children on one node.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
 
+#[path = "trait_reflection.rs"]
+#[allow(dead_code)]
+mod component_example;
+
+use component_example::{CardElement, Draggable};
 use example_prelude::init_example;
 use gpui::{
-    AnyElement, App, Bounds, Context, Entity, ParentElement, Render, RenderOnce, Select, Window,
-    WindowBounds, WindowOptions, div, prelude::*, px, reflection::trait_set, rgb, rgb_to_hsla,
-    size,
+    AnyElement, App, Bounds, Context, Entity, ParentElement, Render, RenderOnce, Select,
+    SharedString, Window, WindowBounds, WindowOptions, div, prelude::*, px, reflection::trait_set,
+    rgb, rgb_to_hsla, size,
 };
 
 #[derive(IntoElement)]
 struct Button {
+    root_class: SharedString,
     children: Vec<AnyElement>,
 }
 
 impl Button {
-    fn new() -> Self {
+    fn new(root_class: impl Into<SharedString>) -> Self {
         Self {
+            root_class: root_class.into(),
             children: Vec::new(),
         }
     }
@@ -40,9 +51,9 @@ impl RenderOnce for Button {
             .px_4()
             .py_2()
             .rounded_md()
-            .bg(rgb(0x2563eb))
             .text_color(rgb(0xffffff))
             .children(self.children)
+            .class(self.root_class)
             .select(
                 Select::children()
                     .reflects(trait_set![gpui::Styled, gpui::ParentElement])
@@ -71,10 +82,32 @@ impl Render for ElementSelectorsExample {
             .flex_col()
             .gap_4()
             .child(
-                Button::new()
+                Button::new("button")
                     .child(div().child("★").class(["icon", "accent"]))
-                    .child("Favorite"),
+                    .child("Favorite")
+                    .class("button-component"),
             )
+            .child(CardElement::new("card").class("card").select(
+                Select::this().class("card").reflects(trait_set![
+                    component_example::Draggable,
+                    gpui::Styled,
+                    gpui::ParentElement,
+                    gpui::StatefulInteractiveElement,
+                ]),
+                |mut element| {
+                    *element.drag_payload() = Some("card-data".into());
+
+                    element
+                        .px_4()
+                        .py_2()
+                        .bg(rgb(0x334155))
+                        .text_color(rgb(0xffffff))
+                        .role(accesskit::Role::Button)
+                        .aria_label("Draggable card")
+                        .on_click(|_event, _window, _cx| println!("Card clicked"))
+                        .child("Card with reflected capabilities")
+                },
+            ))
             .child(
                 div()
                     .flex()
@@ -97,6 +130,10 @@ impl Render for ElementSelectorsExample {
                         |element| element.bg(rgb(0x2563eb)).text_color(rgb(0xffffff)),
                     ),
             )
+            .select(
+                Select::descendants().class("button").reflects(gpui::Styled),
+                |element| element.bg(rgb(0x2563eb)),
+            )
     }
 }
 
@@ -107,7 +144,7 @@ fn build_view(window: &mut Window, cx: &mut App) -> Entity<ElementSelectorsExamp
 
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(320.), px(200.)), cx);
+        let bounds = Bounds::centered(None, size(px(360.), px(280.)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
