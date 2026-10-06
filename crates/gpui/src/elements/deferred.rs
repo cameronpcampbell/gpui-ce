@@ -159,7 +159,7 @@ impl DeferredPriorityStackCache {
 mod tests {
     use crate::{
         Context, Entity, Select, StyleRefinement, TestAppContext, Window, anchored, deferred, div,
-        point, prelude::*, px, size,
+        point, prelude::*, px, rgb, size,
     };
     use std::{
         cell::{Cell, RefCell},
@@ -192,6 +192,8 @@ mod tests {
                                             .key_context("NestedMenu")
                                             .debug_selector(|| "NESTED_MENU".into())
                                             .size(px(10.))
+                                            .occlude()
+                                            .bg(rgb(0x112233))
                                             .class("menu"),
                                     ),
                                 )
@@ -214,16 +216,38 @@ mod tests {
 
     struct RootView {
         panel: Entity<PanelView>,
+        captures: Rc<RefCell<Vec<Weak<Cell<usize>>>>>,
     }
 
     impl Render for RootView {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            div().key_context("Root").size_full().child(
-                self.panel
-                    .clone()
-                    .cached(StyleRefinement::default().size_full()),
-            )
+            let capture = Rc::new(Cell::new(0));
+            self.captures.borrow_mut().push(Rc::downgrade(&capture));
+
+            div()
+                .key_context("Root")
+                .size_full()
+                .child(
+                    self.panel
+                        .clone()
+                        .cached(StyleRefinement::default().size_full()),
+                )
+                .select(Select::this(), move |element| {
+                    capture.set(capture.get() + 1);
+
+                    element
+                })
         }
+    }
+
+    fn assert_menu_drawn(window: &Window) {
+        let frame = &window.rendered_frame;
+        assert_eq!(frame.deferred_draws.len(), 2);
+        assert_eq!(
+            frame.hitboxes.last().unwrap().bounds.size,
+            size(px(50.), px(50.))
+        );
+        assert!(!frame.scene.quads.is_empty());
     }
 
     /// Nested deferred ranges must index the retained draw vector so cached replay
@@ -231,41 +255,43 @@ mod tests {
     #[gpui::test]
     fn test_nested_deferred_draws_with_reused_views(cx: &mut TestAppContext) {
         let captures = Rc::new(RefCell::new(Vec::new()));
-        let captures_for_panel = captures.clone();
+        let root_captures = Rc::new(RefCell::new(Vec::new()));
         let window = cx.open_window(size(px(800.), px(600.)), |_, cx| {
             let panel = cx.new(|_| PanelView {
-                captures: captures_for_panel,
+                captures: captures.clone(),
             });
 
-            RootView { panel }
+            RootView {
+                panel,
+                captures: root_captures.clone(),
+            }
         });
         cx.run_until_parked();
 
-        let menu_bounds = window
-            .update(cx, |_, window, _| {
-                window
-                    .rendered_frame
-                    .debug_bounds
-                    .get("NESTED_MENU")
-                    .copied()
-            })
-            .unwrap()
-            .expect("NESTED_MENU debug bounds not found");
-        assert_eq!(menu_bounds.size, size(px(50.), px(50.)));
+        window
+            .update(cx, |_, window, _cx| assert_menu_drawn(window))
+            .unwrap();
         assert_eq!(captures.borrow().len(), 1);
         assert_eq!(captures.borrow()[0].upgrade().unwrap().get(), 1);
+        assert_eq!(root_captures.borrow()[0].upgrade().unwrap().get(), 1);
 
-        // Re-render the root while the panel and both deferred records stay cached.
-        window.update(cx, |_, _, cx| cx.notify()).unwrap();
-        cx.run_until_parked();
-        assert_eq!(captures.borrow().len(), 1);
-        assert!(captures.borrow()[0].upgrade().is_none());
+        // Repeated replay preserves deferred drawing while releasing old callback captures.
+        for _redraw in 0..2 {
+            window.update(cx, |_, _, cx| cx.notify()).unwrap();
+            cx.run_until_parked();
+            assert_eq!(captures.borrow().len(), 1);
+            assert!(captures.borrow()[0].upgrade().is_none());
+            assert!(
+                root_captures
+                    .borrow()
+                    .iter()
+                    .all(|capture| capture.upgrade().is_none())
+            );
 
-        // Reuse the subtree a second time, exercising ranges that were
-        // themselves recorded during a reused frame.
-        window.update(cx, |_, _, cx| cx.notify()).unwrap();
-        cx.run_until_parked();
-        assert_eq!(captures.borrow().len(), 1);
+            window
+                .update(cx, |_, window, _cx| assert_menu_drawn(window))
+                .unwrap();
+        }
 
         // Re-render the panel itself again to prove the popovers still draw.
         window
@@ -278,15 +304,7 @@ mod tests {
         assert_eq!(captures.borrow()[1].upgrade().unwrap().get(), 1);
 
         window
-            .update(cx, |_, window, _| {
-                assert_eq!(window.rendered_frame.deferred_draws.len(), 2);
-                assert!(
-                    window
-                        .rendered_frame
-                        .debug_bounds
-                        .contains_key("NESTED_MENU")
-                );
-            })
+            .update(cx, |_, window, _cx| assert_menu_drawn(window))
             .unwrap();
     }
 }

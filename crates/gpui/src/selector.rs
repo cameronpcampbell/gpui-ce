@@ -205,6 +205,24 @@ impl SelectorMatcher {
             SelectScope::Descendants => depth >= 1,
         }
     }
+
+    fn can_reach_view_contents(&self, depth: usize) -> bool {
+        debug_assert!(depth >= 1);
+
+        match self.scope {
+            SelectScope::This => false,
+            SelectScope::Children => depth == 1,
+            SelectScope::Descendants => true,
+        }
+    }
+
+    fn can_select_future_match(&self, next_match_idx: usize, measuring: bool) -> bool {
+        if measuring && self.has_position() {
+            return false;
+        }
+
+        self.nth.is_none_or(|expected| next_match_idx <= expected)
+    }
 }
 
 /// Adds selector metadata and transformations to elements.
@@ -392,6 +410,23 @@ thread_local! {
 
 pub(crate) fn has_active_selectors() -> bool {
     SELECTOR_CONTEXT.with_borrow(|context| !context.bindings.is_empty())
+}
+
+// Binding depths already describe the rendered root. Shared counters reflect deferred
+// execution and transaction rollback at the time of this query.
+pub(crate) fn selectors_can_affect_view_contents() -> bool {
+    SELECTOR_CONTEXT.with_borrow(|context| {
+        let measuring = context.measurement_depth > 0;
+
+        context.bindings.iter().any(|binding| {
+            let rule = &binding.rule;
+
+            rule.matcher.can_reach_view_contents(binding.depth)
+                && rule
+                    .matcher
+                    .can_select_future_match(rule.next_match_idx.get(), measuring)
+        })
+    })
 }
 
 pub(crate) fn capture_selector_context() -> SelectorContext {
@@ -634,8 +669,8 @@ mod tests {
     use super::*;
     use crate::{
         AnyWindowHandle, App, AppContext, AvailableSpace, Bounds, Context, Div, Element, Empty,
-        FocusHandle, GlobalElementId, InspectorElementId, InteractiveElement, Interactivity,
-        LayoutId, ListAlignment, ListState, ParentElement, Pixels, Render, Size,
+        Entity, FocusHandle, GlobalElementId, InspectorElementId, InteractiveElement,
+        Interactivity, LayoutId, ListAlignment, ListState, ParentElement, Pixels, Render, Size,
         StatefulInteractiveElement, StyleRefinement, Styled, TestAppContext, TextStyleRefinement,
         VisualTestContext, Window, any, canvas, div, list, not, point, px, reflection::trait_set,
         rgb, rgb_to_hsla, size, uniform_list,
@@ -1885,53 +1920,380 @@ mod tests {
             div()
                 .id("cached-row")
                 .size_full()
+                .occlude()
+                .bg(rgb(0x112233))
                 .debug_selector(|| "cached-row".into())
                 .class("row")
         }
     }
 
-    #[crate::test]
-    #[allow(unused_variables)]
-    fn selectors_visit_cached_view_contents_on_each_frame(cx: &mut TestAppContext) {
-        let renders = Rc::new(Cell::new(0));
-        let renders_for_child = renders.clone();
-        let child = cx.new(move |cx| CachedSelectorChild {
-            renders: renders_for_child,
-        });
-        let selected = Rc::new(Cell::new(0));
-        let selected_for_render = selected.clone();
-        let window = cx.add_window(move |window, cx| SelectorTestView {
-            render: Box::new(move || {
-                let selected = selected_for_render.clone();
-                let mut style = StyleRefinement::default();
-                style.size.width = Some(px(40.).into());
-                style.size.height = Some(px(20.).into());
+    fn cached_selector_style() -> StyleRefinement {
+        StyleRefinement::default().w(px(40.)).h(px(20.))
+    }
 
-                div().child(child.clone().cached(style)).select(
-                    Select::descendants().class("row").nth(0),
-                    move |element| {
+    fn cached_selector_element(child: &Entity<CachedSelectorChild>) -> AnyElement {
+        child
+            .clone()
+            .cached(cached_selector_style())
+            .into_any_element()
+    }
+
+    fn cached_selector_window(
+        cx: &mut TestAppContext,
+        render: impl Fn(&Entity<CachedSelectorChild>, &Rc<Cell<usize>>) -> AnyElement + 'static,
+    ) -> (
+        AnyWindowHandle,
+        Entity<CachedSelectorChild>,
+        Rc<Cell<usize>>,
+    ) {
+        let renders = Rc::new(Cell::new(0));
+        let child = cx.new(|_cx| CachedSelectorChild {
+            renders: renders.clone(),
+        });
+
+        let child_for_render = child.clone();
+        let renders_for_render = renders.clone();
+
+        let window = cx
+            .add_window(move |_window, _cx| SelectorTestView {
+                render: Box::new(move || render(&child_for_render, &renders_for_render)),
+            })
+            .into();
+
+        draw_selector_window(window, cx);
+        renders.set(0);
+
+        (window, child, renders)
+    }
+
+    fn measure_cached_selector_child(
+        child: &Entity<CachedSelectorChild>,
+        non_positional: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Size<Pixels> {
+        window
+            .transact(|window| {
+                let measured_size = window.with_layout_measurement(|window| {
+                    let mut measured = cached_selector_element(child);
+                    let measured_size =
+                        measured.layout_as_root(AvailableSpace::min_size(), window, cx);
+
+                    if non_positional {
+                        measured.prepaint(window, cx);
+                        assert_eq!(
+                            window.next_frame.hitboxes.last().unwrap().bounds.size,
+                            size(px(40.), px(12.))
+                        );
+                    }
+
+                    measured_size
+                });
+
+                Err::<(), Size<Pixels>>(measured_size)
+            })
+            .unwrap_err()
+    }
+
+    #[track_caller]
+    fn assert_cached_selector_size(
+        window: AnyWindowHandle,
+        expected: Size<Pixels>,
+        cx: &mut TestAppContext,
+    ) {
+        cx.update_window(window, |_view, window, _cx| {
+            let hitbox = window.rendered_frame.hitboxes.last().unwrap();
+            assert_eq!(hitbox.bounds.size, expected);
+            assert!(!window.rendered_frame.scene.quads.is_empty());
+        })
+        .unwrap();
+    }
+
+    #[crate::test]
+    fn cached_selectors_respect_scope_and_view_depth(cx: &mut TestAppContext) {
+        for (scope, on_view) in [
+            (SelectScope::This, false),
+            (SelectScope::Children, false),
+            (SelectScope::Children, true),
+        ] {
+            let selected = Rc::new(Cell::new(0));
+            let observed = selected.clone();
+            let (window, _child, renders) = cached_selector_window(cx, move |child, _renders| {
+                let selected = observed.clone();
+                let cached = cached_selector_element(child);
+
+                if on_view {
+                    return div()
+                        .child(cached.select(
+                            Select::children().reflects(crate::Styled),
+                            move |element| {
+                                selected.set(selected.get() + 1);
+
+                                element.h(px(12.))
+                            },
+                        ))
+                        .into_any_element();
+                }
+
+                div()
+                    .child(cached)
+                    .select(Select::new(scope), move |element| {
                         selected.set(selected.get() + 1);
 
                         element
+                    })
+            });
+
+            selected.set(0);
+
+            for _redraw in 0..2 {
+                draw_selector_window(window, cx);
+                let height = if on_view { px(12.) } else { px(20.) };
+                assert_cached_selector_size(window, size(px(40.), height), cx);
+            }
+
+            assert_eq!(renders.get(), if on_view { 2 } else { 0 });
+            assert_eq!(selected.get(), 2);
+        }
+    }
+
+    #[crate::test]
+    fn cached_selectors_use_live_positional_exhaustion(cx: &mut TestAppContext) {
+        for (nth, every, earlier_match, deferred_contents, expected_renders, expected_height) in [
+            (Some(0), None, true, false, 0, 20.),
+            (Some(0), Some(2), true, false, 0, 20.),
+            (Some(0), None, false, false, 2, 12.),
+            (Some(1), None, true, false, 2, 12.),
+            (None, Some(2), true, false, 2, 20.),
+            (Some(0), None, true, true, 0, 20.),
+        ] {
+            let selected = Rc::new(RefCell::new(Vec::new()));
+            let observed = selected.clone();
+            let (window, _child, renders) = cached_selector_window(cx, move |child, _renders| {
+                let selected = observed.clone();
+                let mut selector = Select::descendants().class("row").reflects(crate::Styled);
+
+                if let Some(idx) = nth {
+                    selector = selector.nth(idx);
+                }
+
+                if let Some(step) = every {
+                    selector = selector.every(step);
+                }
+
+                let cached = cached_selector_element(child);
+                let first = selector_row("first").class("row");
+                let children = match (earlier_match, deferred_contents) {
+                    (true, true) => vec![
+                        crate::deferred(crate::container_query(move |_size, _window, _cx| cached))
+                            .priority(2)
+                            .into_any_element(),
+                        crate::deferred(crate::container_query(move |_size, _window, _cx| first))
+                            .priority(1)
+                            .into_any_element(),
+                    ],
+                    (true, false) => vec![first, cached],
+                    (false, _) => vec![cached],
+                };
+
+                div()
+                    .size(px(80.))
+                    .children(children)
+                    .select(selector, move |element| {
+                        record_match(&selected, &element.element);
+
+                        element.h(px(12.))
+                    })
+            });
+
+            selected.borrow_mut().clear();
+
+            for _redraw in 0..2 {
+                draw_selector_window(window, cx);
+                assert_cached_selector_size(window, size(px(40.), px(expected_height)), cx);
+            }
+
+            let target = if earlier_match && nth != Some(1) {
+                "first"
+            } else {
+                "cached-row"
+            };
+
+            assert_matches(&selected, &[target, target]);
+            assert_eq!(renders.get(), expected_renders);
+        }
+    }
+
+    #[crate::test]
+    fn cached_selectors_recheck_progress_after_measurements_and_rollbacks(cx: &mut TestAppContext) {
+        for non_positional in [false, true] {
+            let selected = Rc::new(RefCell::new(Vec::new()));
+            let observed = selected.clone();
+            let (window, _child, renders) = cached_selector_window(cx, move |child, renders| {
+                let child = child.clone();
+                let renders = renders.clone();
+                let selected = observed.clone();
+                let mut root = div()
+                    .size(px(80.))
+                    .child(crate::container_query(move |_size, window, cx| {
+                        let available = AvailableSpace::min_size();
+                        let before = renders.get();
+                        let measured_size = window.with_layout_measurement(|window| {
+                            measure_cached_selector_child(&child, non_positional, window, cx)
+                        });
+                        assert_eq!(measured_size, size(px(40.), px(20.)));
+                        // Temporary cached views still render to probe their text direction.
+                        assert_eq!(renders.get() - before, 1);
+
+                        let outer = window.transact(|window| {
+                            let inner = window.transact(|window| {
+                                layout_selector_row("abandoned-first", window, cx);
+                                let before = renders.get();
+                                cached_selector_element(&child)
+                                    .layout_as_root(available, window, cx);
+                                assert_eq!(renders.get() - before, 1);
+
+                                Err::<(), ()>(())
+                            });
+
+                            assert!(inner.is_err());
+                            cached_selector_element(&child).layout_as_root(available, window, cx);
+
+                            Err::<(), ()>(())
+                        });
+
+                        assert!(outer.is_err());
+
+                        cached_selector_element(&child)
+                    }))
+                    .into_any_element();
+
+                if non_positional {
+                    root = root.select(
+                        Select::descendants().class("row").reflects(crate::Styled),
+                        |element| element.h(px(12.)),
+                    );
+                }
+
+                root.select(
+                    Select::descendants()
+                        .class("row")
+                        .reflects(crate::Styled)
+                        .nth(0),
+                    move |element| {
+                        record_match(&selected, &element.element);
+
+                        element.h(px(16.))
                     },
                 )
-            }),
+            });
+
+            selected.borrow_mut().clear();
+            draw_selector_window(window, cx);
+
+            assert_eq!(renders.get(), 4);
+            assert_matches(&selected, &["abandoned-first", "cached-row", "cached-row"]);
+            assert_cached_selector_size(window, size(px(40.), px(16.)), cx);
+        }
+    }
+
+    #[crate::test]
+    fn cached_selectors_preserve_invalidation_and_cache_transitions(cx: &mut TestAppContext) {
+        let settings = Rc::new(Cell::new((None, 40., 0x112233, 80., 0.)));
+        let observed = settings.clone();
+        let (window, child, renders) = cached_selector_window(cx, move |child, _renders| {
+            let (height, width, color, mask_width, inset) = observed.get();
+            let mut root = div()
+                .h(px(60.))
+                .overflow_hidden()
+                .child(child.clone().cached(cached_selector_style().w(px(width))))
+                .select(Select::this().reflects(crate::Styled), move |element| {
+                    element
+                        .w(px(mask_width))
+                        .pl(px(inset))
+                        .text_color(rgb(color))
+                });
+
+            if let Some(height) = height {
+                root = root.select(
+                    Select::descendants()
+                        .class("row")
+                        .id("cached-row")
+                        .reflects(crate::Styled),
+                    move |element| element.h(px(height)),
+                );
+            }
+
+            root
         });
 
-        renders.set(0);
+        for (inputs, expected_renders) in [
+            ((None, 40., 0x112233, 80., 0.), 0),
+            ((Some(12.), 40., 0x112233, 80., 0.), 1),
+            ((Some(16.), 40., 0x112233, 80., 0.), 1),
+            ((None, 40., 0x112233, 80., 0.), 1),
+            ((None, 40., 0x112233, 80., 0.), 0),
+            ((None, 48., 0x112233, 80., 0.), 1),
+            ((None, 48., 0x112233, 80., 0.), 0),
+            ((None, 48., 0x334455, 80., 0.), 1),
+            ((None, 48., 0x334455, 30., 0.), 1),
+            ((None, 48., 0x334455, 30., 3.), 1),
+            ((None, 48., 0x334455, 30., 3.), 0),
+        ] {
+            settings.set(inputs);
+            renders.set(0);
+            draw_selector_window(window, cx);
+
+            let (height, width, _color, mask_width, inset) = inputs;
+            assert_eq!(renders.get(), expected_renders);
+            assert_cached_selector_size(window, size(px(width), px(height.unwrap_or(20.))), cx);
+            cx.update_window(window, |_view, window, _cx| {
+                let hitbox = window.rendered_frame.hitboxes.last().unwrap();
+                assert_eq!(hitbox.bounds.origin.x, px(inset));
+                assert_eq!(hitbox.content_mask.bounds.size.width, px(mask_width));
+            })
+            .unwrap();
+        }
+
+        for refresh in [false, true] {
+            renders.set(0);
+            cx.update_window(window, |_view, window, cx| {
+                if refresh {
+                    window.refresh();
+                } else {
+                    child.update(cx, |_child, cx| cx.notify());
+                }
+            })
+            .unwrap();
+
+            draw_selector_window(window, cx);
+            assert_eq!(renders.get(), 1);
+            assert_cached_selector_size(window, size(px(48.), px(20.)), cx);
+        }
+    }
+
+    #[crate::test]
+    fn selectors_visit_cached_view_contents_on_each_frame(cx: &mut TestAppContext) {
+        let selected = Rc::new(Cell::new(0));
+        let observed = selected.clone();
+        let (window, _child, renders) = cached_selector_window(cx, move |child, _renders| {
+            let selected = observed.clone();
+
+            div().child(cached_selector_element(child)).select(
+                Select::descendants().class("row").nth(0),
+                move |element| {
+                    selected.set(selected.get() + 1);
+
+                    element
+                },
+            )
+        });
+
         selected.set(0);
 
-        for redraw in 0..2 {
-            draw_selector_window(window.into(), cx);
-
-            let bounds = cx
-                .update_window(window.into(), |view, window, cx| {
-                    window.rendered_frame.debug_bounds["cached-row"]
-                })
-                .unwrap();
-
-            assert_eq!(bounds.size.width, px(40.));
-            assert_eq!(bounds.size.height, px(20.));
+        for _redraw in 0..2 {
+            draw_selector_window(window, cx);
+            assert_cached_selector_size(window, size(px(40.), px(20.)), cx);
         }
 
         assert_eq!(renders.get(), 2);
