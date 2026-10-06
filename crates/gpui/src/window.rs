@@ -3994,11 +3994,10 @@ impl Window {
         result
     }
 
-    /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
-    /// of prepaints can be discarded before prepainting again. This is used to support autoscroll
-    /// where we need to prepaint children to detect the autoscroll bounds, then adjust the
-    /// element offset and prepaint again. See [`crate::List`] for an example. This method should only be
-    /// called during the prepaint phase of element drawing.
+    /// Runs retryable work during prepaint, as used for list autoscroll.
+    ///
+    /// On `Err`, restores recorded frame output and selector positions, while changes
+    /// to elements or captured state remain. Panics restore selector positions only.
     pub fn transact<T, U>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, U>) -> Result<T, U> {
         self.invalidator.debug_assert_prepaint();
         let index = self.prepaint_index();
@@ -5256,9 +5255,8 @@ impl Window {
             })
     }
 
-    /// Runs temporary layout without applying or advancing positional selectors.
-    /// Non-positional selectors still apply, and nested measurements share the scope.
-    /// Elements laid out in this scope must be discarded rather than reused for display.
+    /// Runs temporary layout without applying positional selectors.
+    /// Other selectors still apply, and measured elements must be discarded.
     pub fn with_layout_measurement<ResultType>(
         &mut self,
         operation: impl FnOnce(&mut Self) -> ResultType,
@@ -5266,8 +5264,7 @@ impl Window {
         crate::selector::with_selector_measurement(|| operation(self))
     }
 
-    /// Builds, lays out, and discards a temporary element, returning its measured size.
-    /// Construction and layout run inside [`Self::with_layout_measurement`].
+    /// Builds, measures, and discards a temporary element, returning its size.
     pub fn measure_element<ElementType>(
         &mut self,
         available_space: Size<AvailableSpace>,

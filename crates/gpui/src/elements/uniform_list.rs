@@ -54,7 +54,10 @@ where
     }
 }
 
-/// A list element for efficiently laying out and displaying a list of uniform-height elements.
+/// A virtualized list whose rows must all have the same height.
+///
+/// Keep row sizes unchanged in `nth` and `every` selectors to preserve correct spacing
+/// and scrolling.
 #[derive(gpui_macros::Reflect)]
 pub struct UniformList {
     item_count: usize,
