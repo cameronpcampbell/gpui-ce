@@ -76,23 +76,23 @@ pub fn derive_reflect(input: TokenStream) -> TokenStream {
     derive_reflect::derive_reflect(input)
 }
 
-/// Generates a trait descriptor for `AnyElement::implements_trait` and typed erased-element adapters.
-/// Borrowed methods dispatch to concrete overrides or defaults; owned builders and
-/// `#[reflect(wrapper_default)]` methods use the trait body on `ReflectedElement`.
+/// Generates a trait token and callable adapters for erased elements.
+/// Borrowed methods dispatch to the concrete element. Owned builders and
+/// `#[reflect(wrapper_default)]` methods run their trait bodies on `ReflectedElement`.
 ///
-/// Traits must be non-generic, with reflected supertraits except `Sized`, and no associated
-/// types or constants. Forwarded signatures support borrowed receivers, lifetimes, concrete
-/// types, and `impl IntoIterator<Item = ConcreteType>`; other signatures are rejected.
-/// Explicit wrapper defaults require a provided body and a single unconditional setting.
-/// Direct `cfg` and nested configuration-producing `cfg_attr` are preserved.
-/// GPUI style macros are expanded; other item macros must expose their items directly
-/// or generate the whole annotated trait.
+/// Callable traits must be non-generic, with reflected parents except `Sized`, and no
+/// associated types or constants. Forwarded methods support borrowed receivers, lifetimes,
+/// concrete types, and `impl IntoIterator<Item = ConcreteType>`.
+/// Wrapper defaults require a body and one unconditional setting. `cfg` and nested
+/// configuration-producing `cfg_attr` are preserved. GPUI style macros are supported;
+/// other item macros must generate the annotated trait.
 ///
-/// `#[reflect_trait(membership)]` records membership without callable access and permits
-/// associated items, generic methods, and ordinary Rust supertraits.
+/// `#[reflect_trait(membership)]` permits associated items, generic methods, and ordinary
+/// supertraits. These traits can join `trait_set!` without callable access, but cannot be
+/// callable parents.
 ///
-/// Qualify imported supertraits and re-export their generated schema modules when aliasing
-/// traits used in `trait_set!`, such as `__GpuiReflectTraitSchema` as `__GpuiReflectAliasSchema`.
+/// Qualify parents whose schemas are not in scope. Parent aliases need matching schema
+/// aliases, as described in `trait_set!`.
 ///
 /// ```compile_fail
 /// use gpui_macros::reflect_trait;
@@ -101,25 +101,18 @@ pub fn derive_reflect(input: TokenStream) -> TokenStream {
 /// trait Limited {
 ///     const LIMIT: usize = 12;
 /// }
-///
-/// struct Card;
-/// struct Panel;
-///
-/// impl Limited for Card {
-///     const LIMIT: usize = 24;
-/// }
-///
-/// impl Limited for Panel {
-///     const LIMIT: usize = 48;
-/// }
 /// ```
 #[proc_macro_attribute]
 pub fn reflect_trait(args: TokenStream, input: TokenStream) -> TokenStream {
     derive_reflect::reflect_trait(args, input)
 }
 
-/// Creates a reflected trait set from trait paths separated by commas.
-/// All listed traits are required, and a trailing comma is allowed.
+/// Combines reflected traits and their callable parents into a comma-separated set.
+/// Membership-only traits grant no callable access. Repeats and trailing commas are allowed.
+///
+/// Paths need matching schemas. When renaming `Trait` to `Alias`, re-export
+/// `__GpuiReflectTraitSchema` as `__GpuiReflectAliasSchema`. Single-token aliases need no schema.
+/// The compiler checks schema/token bindings and repeated marker identities.
 #[proc_macro]
 pub fn trait_set(input: TokenStream) -> TokenStream {
     trait_set::trait_set(input)

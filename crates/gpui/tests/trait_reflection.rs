@@ -7,7 +7,14 @@ mod tests {
     use crate::component_example::{
         CardElement, Draggable as ComponentDraggable, Icon, set_drag_payload,
     };
-    use gpui::reflection::{Reflect, ReflectionToken};
+    #[cfg(any(reflection_schema, reflection_parent_schema))]
+    pub use gpui::__GpuiReflectStyledSchema as __GpuiReflectWrongAliasSchema;
+    #[cfg(any(reflection_schema, reflection_parent_schema))]
+    use gpui::ParentElement as WrongAlias;
+    use gpui::reflection::{
+        IncludesCallableTrait, IncludesReflectedTrait, Reflect, ReflectedElement, ReflectedTraits,
+        ReflectionToken,
+    };
     use gpui::{
         Animation, AnimationElement, AnimationExt, AnyElement, App, Bounds, Div, Element,
         ElementId, GlobalElementId, InspectorElementId, InteractiveElement, Interactivity,
@@ -46,32 +53,49 @@ mod tests {
     mod other {
         #[gpui::reflection::reflect_trait]
         pub trait Draggable {}
+
+        #[gpui::reflection::reflect_trait]
+        pub trait Styled {}
+
+        #[gpui::reflection::reflect_trait(membership)]
+        #[cfg_attr(all(), cfg_attr(all(), cfg(any())))]
+        trait Unavailable: MissingParent {
+            fn missing<Input>(&self, input: Input) -> MissingType;
+        }
     }
 
+    #[allow(private_bounds)]
     mod inherited {
+        #[gpui::reflection::reflect_trait]
+        trait PrivateParent {}
+
+        #[gpui::reflection::reflect_trait]
+        pub(crate) trait CrateParent: self::PrivateParent {}
+
         #[gpui::reflection::reflect_trait]
         pub trait Control: gpui::StatefulInteractiveElement {}
 
         pub use self::__GpuiReflectControlSchema as __GpuiReflectPublicControlSchema;
         pub use self::Control as PublicControl;
+        pub use self::Control as SingleControl;
+
+        #[gpui::reflection::reflect_trait]
+        pub trait AliasControl: self::PublicControl {}
+
+        #[gpui::reflection::reflect_trait]
+        pub trait SealedControl: self::CrateParent {}
     }
 
-    #[derive(gpui::reflection::Reflect, Default)]
+    #[cfg(reflection_parent_schema)]
+    #[gpui::reflection::reflect_trait]
+    trait WrongParent: WrongAlias {}
+
+    #[derive(gpui::reflection::Reflect, Styled, ParentElement, Default)]
     struct Card {
+        #[style]
         style: StyleRefinement,
+        #[children]
         children: Vec<AnyElement>,
-    }
-
-    impl gpui::Styled for Card {
-        fn style(&mut self) -> &mut StyleRefinement {
-            &mut self.style
-        }
-    }
-
-    impl gpui::ParentElement for Card {
-        fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
-            self.children.extend(elements);
-        }
     }
 
     #[derive(gpui::reflection::Reflect, Default)]
@@ -244,6 +268,18 @@ mod tests {
 
     #[test]
     fn exposes_generic_and_membership_registrations_through_erasure() {
+        fn require_mixed_group<Traits>(
+            traits: Traits,
+        ) -> Vec<gpui::reflection::ReflectionRequirement>
+        where
+            Traits: ReflectedTraits,
+            Traits::Group: IncludesReflectedTrait<__GpuiReflectPaintSource>
+                + IncludesCallableTrait<gpui::__GpuiReflectStyled>,
+            ReflectedElement<Traits::Group>: gpui::Styled,
+        {
+            traits.reflected_requirements().into_iter().collect()
+        }
+
         let mut card = GenericCard::<String, 4> {
             state: "state".into(),
             style: StyleRefinement::default(),
@@ -257,6 +293,22 @@ mod tests {
         assert!(!PaintSource.requires_adapter());
         assert!((PaintSource.reflected_trait().supertraits)().is_empty());
         assert_eq!(metadata.descriptors().len(), 2);
+
+        let requirements = require_mixed_group(gpui::reflection::trait_set![
+            PaintSource,
+            gpui::Styled,
+            PaintSource,
+            gpui::Styled,
+        ]);
+
+        assert_eq!(requirements.len(), 2);
+        assert_eq!(requirements[0], PaintSource.requirement());
+        assert_eq!(requirements[1], gpui::Styled.requirement());
+        assert!(
+            requirements
+                .iter()
+                .all(|requirement| metadata.satisfies(*requirement))
+        );
         assert!(std::ptr::eq(
             metadata,
             <GenericCard<String, 4> as Reflect>::reflection()
@@ -292,7 +344,7 @@ mod tests {
         where
             Traits: gpui::reflection::ReflectedTraits,
             gpui::reflection::ReflectedElement<Traits::Group>:
-                gpui::Element + gpui::Styled + gpui::ParentElement + Draggable,
+                gpui::Element + gpui::Styled + gpui::ParentElement + Draggable + other::Styled,
         {
             drop(traits);
         }
@@ -306,19 +358,46 @@ mod tests {
             drop(traits);
         }
 
+        fn require_alias_and_sealed_traits<Traits>(traits: Traits)
+        where
+            Traits: ReflectedTraits,
+            ReflectedElement<Traits::Group>: inherited::AliasControl + inherited::SealedControl,
+        {
+            assert_eq!(traits.reflected_requirements().len(), 7);
+        }
+
         require_other_draggable::<Control>();
         require_selected_traits(gpui::reflection::trait_set!(
             gpui::Styled,
             gpui::ParentElement,
             crate::tests::Draggable,
+            other::Styled,
         ));
         require_inherited_traits(inherited::Control);
+        require_inherited_traits(inherited::SingleControl);
         require_inherited_traits(gpui::reflection::trait_set!(
             inherited::PublicControl,
             gpui::InteractiveElement,
             gpui::StatefulInteractiveElement,
             inherited::Control,
         ));
+        require_alias_and_sealed_traits(gpui::reflection::trait_set![
+            inherited::AliasControl,
+            inherited::SealedControl,
+        ]);
+
+        assert_eq!(
+            inherited::SingleControl.requirements(),
+            inherited::Control.requirements(),
+        );
+
+        let builtin = gpui::reflection::trait_set![gpui::Styled, gpui::InteractiveElement];
+
+        assert_eq!(builtin.reflected_requirements().len(), 2);
+        assert_ne!(
+            gpui::Styled.reflected_trait(),
+            other::Styled.reflected_trait()
+        );
 
         let card = Card::default().into_any_element();
 
@@ -464,13 +543,44 @@ mod tests {
         }
 
         #[cfg(reflection_method)]
-        let _paint = |element: &gpui::reflection::ReflectedElement<
-            gpui::reflection::ErasedReflectionGroup,
-        >| { PaintSource::paint(element, "input") };
+        fn paint<Group: IncludesReflectedTrait<__GpuiReflectPaintSource>>(
+            element: &ReflectedElement<Group>,
+        ) {
+            PaintSource::paint(element, "input");
+        }
 
         #[cfg(reflection_type)]
         let _brush: Option<
             <gpui::reflection::ReflectedElement<gpui::reflection::ErasedReflectionGroup> as PaintSource>::Brush,
         > = None;
+    }
+
+    #[cfg(any(reflection_schema, reflection_identity, reflection_private))]
+    #[test]
+    fn rejects_invalid_group_proofs() {
+        #[cfg(reflection_schema)]
+        {
+            let _single = gpui::reflection::trait_set![WrongAlias];
+            let _repeated = gpui::reflection::trait_set![gpui::Styled, WrongAlias];
+        }
+
+        #[cfg(reflection_identity)]
+        {
+            gpui::reflection::__collect_reflected_traits! {
+                [items InvalidGroup] [shared_key]
+                [gpui::__GpuiReflectParentElementSchema::Marker] [callable] [any]
+                [] [] [[shared_key [gpui::__GpuiReflectStyledSchema::Marker] callable]] [] []
+            }
+
+            let _group = gpui::reflection::__collect_reflected_traits! {
+                [expression InvalidGroup] [shared_key]
+                [gpui::__GpuiReflectParentElementSchema::Marker] [callable] [any]
+                [] [] [[shared_key [gpui::__GpuiReflectStyledSchema::Marker] callable]] []
+                [gpui::Styled]
+            };
+        }
+
+        #[cfg(reflection_private)]
+        let _parent = inherited::PrivateParent;
     }
 }

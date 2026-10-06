@@ -164,19 +164,7 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
     let collect_name = format_ident!("__GpuiReflect{name}Collect");
     let schema = schema_path(&parse_quote!(#name));
     let schema_name = &schema.segments.last().unwrap().ident;
-    let mut origin = DefaultHasher::new();
-    std::env::var("CARGO_MANIFEST_DIR")
-        .unwrap_or_default()
-        .hash(&mut origin);
-    std::env::var("CARGO_CRATE_NAME")
-        .unwrap_or_default()
-        .hash(&mut origin);
-    let export_name = format_ident!(
-        "__gpui_reflect_schema_{}_{:x}_{}",
-        name,
-        origin.finish(),
-        SCHEMA_IDS.fetch_add(1, Ordering::Relaxed),
-    );
+    let export_name = schema_export_name(name);
     let mut parents = Vec::new();
 
     for bound in &input.supertraits {
@@ -262,6 +250,21 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
             pub use #schema as #import;
         }
     });
+    let parent_checks =
+        parents
+            .iter()
+            .zip(&parent_aliases)
+            .enumerate()
+            .map(|(idx, (parent, alias))| {
+                let check = format_ident!("__GPUI_REFLECTION_PARENT_CHECK_{export_name}_{idx}");
+
+                quote! {
+                    #(#configurations)*
+                    #[allow(non_upper_case_globals)]
+                    const #check: #schema_name::#alias::Marker = #parent;
+                }
+            });
+    let collector = schema_collector(&export_name, &format_ident!("callable"), &parent_aliases);
 
     Ok(quote! {
         #input
@@ -276,6 +279,7 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
         pub struct #methods { #(#fields)* }
 
         #(#parent_import_items)*
+        #(#parent_checks)*
 
         #(#configurations)*
         #[doc(hidden)]
@@ -289,32 +293,14 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
         #(#configurations)*
         #[doc(hidden)]
         #[macro_export]
-        macro_rules! #export_name {
-            (
-                [$mode:ident $($group:tt)*]
-                [$($schema:tt)*]
-                [$($pending:tt)*]
-                [$($members:tt)*]
-                [$($roots:tt)*]
-            ) => {
-                ::gpui::reflection::__collect_reflected_traits! {
-                    [$mode $($group)*]
-                    [#export_name]
-                    [$($schema)*::Marker]
-                    [#([$($schema)*::#parent_aliases])*]
-                    [$($pending)*]
-                    [$($members)*]
-                    [$($roots)*]
-                }
-            };
-        }
+        #collector
 
         #(#configurations)*
         #[doc(hidden)]
         pub use #export_name as #collect_name;
 
         #(#configurations)*
-        #schema_name::collect! { [items pub #group] [#schema_name] [] [] [] }
+        #schema_name::collect! { [items pub #group] [[#schema_name] any] [] [] [] [] }
 
         #(#configurations)*
         impl gpui::reflection::ReflectionToken for #marker {
@@ -332,7 +318,7 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
                 let mut requirements = vec![gpui::reflection::ReflectionToken::requirement(self)];
 
                 #(for requirement in gpui::reflection::ReflectionToken::requirements(
-                    #schema_name::#parent_aliases::Marker::default(),
+                    #parents,
                 ) {
                     if !requirements.contains(&requirement) {
                         requirements.push(requirement);
@@ -350,7 +336,7 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
                     static PARENTS: ::std::sync::LazyLock<Vec<gpui::reflection::ReflectedTrait>>
                         = ::std::sync::LazyLock::new(|| vec![
                             #(gpui::reflection::ReflectionToken::reflected_trait(
-                                #schema_name::#parent_aliases::Marker::default(),
+                                #parents,
                             )),*
                         ]);
 
@@ -386,8 +372,7 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
                     methods: Some(Box::new(#methods { #(#initializers)* })),
                 });
 
-                #(#schema_name::#parent_aliases::Marker::default()
-                    .__register::<Type>(implementations);)*
+                #(#parents.__register::<Type>(implementations);)*
             }
         }
 
@@ -418,8 +403,11 @@ fn expand_membership_trait(input: ItemTrait) -> syn::Result<TokenStream2> {
     let name = &input.ident;
     let visibility = &input.vis;
     let marker = format_ident!("__GpuiReflect{name}");
+    let collect_name = format_ident!("__GpuiReflect{name}Collect");
     let schema = schema_path(&parse_quote!(#name));
     let schema_name = &schema.segments.last().unwrap().ident;
+    let export_name = schema_export_name(name);
+    let collector = schema_collector(&export_name, &format_ident!("membership"), &[]);
     let configurations = configuration_attributes(&input.attrs)?;
 
     Ok(quote! {
@@ -435,7 +423,17 @@ fn expand_membership_trait(input: ItemTrait) -> syn::Result<TokenStream2> {
         #[allow(non_snake_case)]
         pub mod #schema_name {
             pub type Marker = super::#marker;
+            pub use super::#collect_name as collect;
         }
+
+        #(#configurations)*
+        #[doc(hidden)]
+        #[macro_export]
+        #collector
+
+        #(#configurations)*
+        #[doc(hidden)]
+        pub use #export_name as #collect_name;
 
         #(#configurations)*
         impl gpui::reflection::ReflectionToken for #marker {
@@ -473,6 +471,55 @@ fn expand_membership_trait(input: ItemTrait) -> syn::Result<TokenStream2> {
         #[allow(non_upper_case_globals)]
         #visibility const #name: #marker = #marker;
     })
+}
+
+fn schema_export_name(name: &syn::Ident) -> syn::Ident {
+    let mut origin = DefaultHasher::new();
+    std::env::var("CARGO_MANIFEST_DIR")
+        .unwrap_or_default()
+        .hash(&mut origin);
+    std::env::var("CARGO_CRATE_NAME")
+        .unwrap_or_default()
+        .hash(&mut origin);
+
+    format_ident!(
+        "__gpui_reflect_schema_{}_{:x}_{}",
+        name,
+        origin.finish(),
+        SCHEMA_IDS.fetch_add(1, Ordering::Relaxed),
+    )
+}
+
+fn schema_collector(
+    export_name: &syn::Ident,
+    kind: &syn::Ident,
+    parents: &[syn::Ident],
+) -> TokenStream2 {
+    quote! {
+        macro_rules! #export_name {
+            (
+                [$($header:tt)*]
+                [[$($schema:tt)*] $expectation:ident]
+                [$($pending:tt)*]
+                [$($members:tt)*]
+                [$($witnesses:tt)*]
+                [$($roots:tt)*]
+            ) => {
+                ::gpui::reflection::__collect_reflected_traits! {
+                    [$($header)*]
+                    [#export_name]
+                    [$($schema)*::Marker]
+                    [#kind]
+                    [$expectation]
+                    [#([[$($schema)*::#parents] callable])*]
+                    [$($pending)*]
+                    [$($members)*]
+                    [$($witnesses)*]
+                    [$($roots)*]
+                }
+            };
+        }
+    }
 }
 
 pub(crate) fn schema_path(path: &Path) -> Path {

@@ -91,14 +91,14 @@ impl PartialEq for ReflectedTrait {
 
 impl Eq for ReflectedTrait {}
 
-/// A typed descriptor for a trait made available to reflection.
+/// A typed reflected trait descriptor.
 pub trait ReflectionToken: Copy + 'static {
-    /// The reflection group produced when this token is used by itself.
+    /// The group for this token alone.
     type Group: ReflectionGroup;
     /// The erased runtime descriptor for this trait.
     fn reflected_trait(self) -> ReflectedTrait;
 
-    /// Whether matching this token also requires a callable adapter.
+    /// Whether matching requires a callable adapter.
     fn requires_adapter(self) -> bool;
 
     /// Returns the membership and adapter requirements for this token.
@@ -110,7 +110,7 @@ pub trait ReflectionToken: Copy + 'static {
         }
     }
 
-    /// Returns the requirements for this token and its granted callable parents.
+    /// Requirements for this token and its callable parents.
     fn requirements(self) -> Vec<ReflectionRequirement> {
         vec![self.requirement()]
     }
@@ -118,7 +118,7 @@ pub trait ReflectionToken: Copy + 'static {
 
 /// A token whose generated method table permits calls on an erased element.
 pub trait CallableReflectionToken: ReflectionToken {
-    /// The generated method table for implementations of this trait.
+    /// The trait's generated method table.
     type Methods: Any + Send + Sync;
 }
 
@@ -127,18 +127,18 @@ pub trait CallableReflectionToken: ReflectionToken {
 pub struct ReflectionRequirement {
     /// The trait whose membership is required.
     pub descriptor: ReflectedTrait,
-    /// Whether the element must also provide an adapter for this trait.
+    /// Whether a callable adapter is required.
     pub requires_adapter: bool,
     adapter_type: Option<TypeId>,
 }
 
 impl ReflectionRequirement {
-    /// Requires membership without granting callable access.
+    /// Requires membership only.
     pub fn membership(descriptor: ReflectedTrait) -> Self {
         descriptor.requirement()
     }
 
-    /// Requires membership and the method table associated with a callable token.
+    /// Requires membership and the token's exact method table.
     pub fn callable<Token: CallableReflectionToken>(token: Token) -> Self {
         Self {
             descriptor: token.reflected_trait(),
@@ -160,17 +160,17 @@ impl ReflectionToken for ReflectedTrait {
     }
 }
 
-/// The group used when only an erased runtime descriptor is available.
+/// The group for membership-only tokens and erased descriptors.
 #[doc(hidden)]
 pub struct ErasedReflectionGroup;
 
 impl ReflectionGroup for ErasedReflectionGroup {}
 
-/// Marks a type generated to represent a set of reflected traits.
+/// A generated set of reflected traits.
 #[doc(hidden)]
 pub trait ReflectionGroup: 'static {}
 
-/// Proves that a reflected trait is included in a generated reflection group.
+/// Proves group membership for a trait.
 #[doc(hidden)]
 pub trait IncludesReflectedTrait<Token>: ReflectionGroup
 where
@@ -178,14 +178,14 @@ where
 {
 }
 
-/// Proves that a generated group grants callable access to a trait.
+/// Proves callable access to a trait.
 pub trait IncludesCallableTrait<Token>: IncludesReflectedTrait<Token>
 where
     Token: CallableReflectionToken,
 {
 }
 
-/// A value containing the runtime descriptors for a generated reflection group.
+/// Runtime requirements for a generated trait group.
 #[doc(hidden)]
 pub struct ReflectedTraitGroup<Group>
 where
@@ -205,7 +205,7 @@ where
         Self::with_requirements(traits.into_iter().map(ReflectionRequirement::membership))
     }
 
-    /// Creates a group while retaining each token's adapter requirements.
+    /// Creates a group with membership and adapter requirements.
     #[doc(hidden)]
     pub fn with_requirements(
         requirements: impl IntoIterator<Item = ReflectionRequirement>,
@@ -225,10 +225,10 @@ where
     }
 }
 
-/// Converts one or more typed reflection descriptors into a trait set.
+/// Supplies a trait group's runtime requirements.
 #[doc(hidden)]
 pub trait ReflectedTraits {
-    /// The generated type that records membership of every reflected trait.
+    /// The type that records group membership.
     type Group: ReflectionGroup;
 
     /// Returns the erased runtime descriptors in this trait set.
@@ -776,8 +776,11 @@ mod tests {
     #[gpui_macros::reflect_trait]
     trait Composite: branches::Left + branches::Right + crate::Styled + crate::ParentElement {}
 
+    #[gpui_macros::reflect_trait(membership)]
+    trait PaintSource {}
+
     #[derive(gpui_macros::Reflect, Default)]
-    #[reflect(Composite, text::Text, crate::Styled)]
+    #[reflect(Composite, text::Text, crate::Styled, PaintSource)]
     struct Card {
         text: String,
         calls: Rc<Cell<usize>>,
@@ -816,10 +819,15 @@ mod tests {
         fn build_reflection() -> Vec<ReflectedImplementation> {
             let mut implementations = Vec::new();
             Composite.__register::<Self>(&mut implementations);
+            PaintSource.__register::<Self>(&mut implementations);
 
             implementations
         }
     }
+
+    impl PaintSource for Card {}
+
+    impl<State> PaintSource for Panel<State> {}
 
     impl<State> text::Text for Panel<State> {
         fn read<'element>(&'element self, label: &str) -> &'element str {
@@ -978,12 +986,28 @@ mod tests {
         }
     }
 
-    fn transform<Traits>(element: AnyElement, _traits: Traits) -> AnyElement
+    fn admit<Traits>(element: AnyElement, traits: Traits) -> Option<ReflectedElement<Traits::Group>>
+    where
+        Traits: ReflectedTraits,
+    {
+        let requirements = traits.reflected_requirements();
+
+        if !requirements
+            .iter()
+            .all(|requirement| element.reflection().satisfies(*requirement))
+        {
+            return None;
+        }
+
+        Some(ReflectedElement::new(element))
+    }
+
+    fn transform<Traits>(element: AnyElement, traits: Traits) -> AnyElement
     where
         Traits: ReflectedTraits,
         ReflectedElement<Traits::Group>: Composite,
     {
-        let mut element = ReflectedElement::<Traits::Group>::new(element);
+        let mut element = admit(element, traits).unwrap();
         let label = TEXT_LABEL;
 
         assert_eq!(text::Text::read(&element, label), "hello");
@@ -1058,7 +1082,11 @@ mod tests {
                 card().into_any_element()
             };
 
-            let mut element = ReflectedElement::<__GpuiReflectCompositeGroup>::new(original);
+            let mut element = admit(
+                original,
+                trait_set![PaintSource, Composite, text::Text, PaintSource, Composite],
+            )
+            .unwrap();
 
             assert_eq!(text::Text::content(&element), content);
             assert_eq!(text::Text::configured(&element), content);
@@ -1100,7 +1128,7 @@ mod tests {
         );
 
         let traits = Card::reflected_traits();
-        assert_eq!(traits.len(), 6);
+        assert_eq!(traits.len(), 7);
         assert!(traits.contains(&descriptor));
         assert!(traits.contains(&ReflectionToken::reflected_trait(text::Text)));
 
@@ -1118,6 +1146,40 @@ mod tests {
                 .iter()
                 .all(|requirement| requirements.contains(requirement))
         );
+
+        let mixed = trait_set![PaintSource, Composite, text::Text, PaintSource, Composite]
+            .reflected_requirements();
+
+        assert_eq!(mixed.len(), 7);
+        assert_eq!(mixed[0], PaintSource.requirement());
+        assert!(!mixed[0].requires_adapter);
+        assert!(
+            mixed
+                .iter()
+                .all(|requirement| metadata.satisfies(*requirement))
+        );
+        assert_eq!(PaintSource.requirements(), vec![PaintSource.requirement()]);
+
+        for wrong_table in [false, true] {
+            let mut implementations = <Card as Reflect>::build_reflection();
+            let inherited = implementations
+                .iter_mut()
+                .find(|implementation| implementation.descriptor == text::Text.reflected_trait())
+                .unwrap();
+            inherited.methods =
+                wrong_table.then(|| Box::new(123usize) as Box<dyn Any + Send + Sync>);
+
+            let incomplete = ElementReflection::build(TypeId::of::<Card>(), implementations);
+
+            assert!(incomplete.has_adapter(Composite));
+            assert!(incomplete.satisfies(PaintSource.requirement()));
+            assert!(!incomplete.has_adapter(text::Text));
+            assert!(
+                !mixed
+                    .iter()
+                    .all(|requirement| incomplete.satisfies(*requirement))
+            );
+        }
     }
 
     #[test]
