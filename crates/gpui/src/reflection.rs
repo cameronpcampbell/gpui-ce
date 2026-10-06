@@ -37,6 +37,10 @@ use std::{
     sync::LazyLock,
 };
 
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub mod benchmarks;
+
 #[cfg(test)]
 #[path = "../examples/learn/trait_reflection.rs"]
 #[allow(dead_code)]

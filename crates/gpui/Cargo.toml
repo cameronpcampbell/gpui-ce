@@ -187,6 +187,12 @@ ignored = [
 ]
 ignored-paths = ["src/_ownership_and_data_flow.rs"]
 
+[[bench]]
+name = "reflection"
+path = "benches/reflection.rs"
+harness = false
+required-features = ["bench-support"]
+
 # ============================================================================
 # Learn Examples - Educational examples for learning GPUI
 # ============================================================================
