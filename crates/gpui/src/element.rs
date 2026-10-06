@@ -915,10 +915,13 @@ impl AnyElement {
         let selectors = self.attached_selectors();
 
         if selectors.is_empty() && !crate::selector::has_active_selectors() {
-            return crate::selector::with_generation_ancestry(
-                self.selector_generation_ancestry(),
-                || operation(self),
-            );
+            let generated_by = self.selector_generation_ancestry();
+
+            if generated_by.is_empty() && !crate::selector::has_generation_ancestry() {
+                return operation(self);
+            }
+
+            return crate::selector::with_generation_ancestry(generated_by, || operation(self));
         }
 
         crate::selector::with_attached_selectors(&selectors, || {

@@ -194,6 +194,12 @@ path = "benches/reflection.rs"
 harness = false
 required-features = ["bench-support"]
 
+[[bench]]
+name = "selectors"
+path = "benches/selectors.rs"
+harness = false
+required-features = ["bench-support"]
+
 # ============================================================================
 # Learn Examples - Educational examples for learning GPUI
 # ============================================================================

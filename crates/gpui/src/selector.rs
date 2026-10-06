@@ -1,7 +1,10 @@
 use crate::{
     AnyElement, ElementId, IntoElement, IntoItemMatch, IntoListMatch, IntoMatchValues, ItemMatch,
     ListMatch, SharedString,
-    reflection::{ReflectedElement, ReflectedTraits, ReflectionGroup, ReflectionRequirement},
+    reflection::{
+        ElementReflection, ReflectedElement, ReflectedTraits, ReflectionGroup,
+        ReflectionRequirement,
+    },
 };
 use smallvec::SmallVec;
 use std::{
@@ -10,6 +13,11 @@ use std::{
     num::NonZeroUsize,
     rc::Rc,
 };
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[path = "selector/benchmarks.rs"]
+pub mod selector_benchmarks;
 
 /// The reflection group used by selectors without a reflected trait predicate.
 #[doc(hidden)]
@@ -29,10 +37,17 @@ where
 struct SelectorMatcher {
     scope: SelectScope,
     reflected_traits: SmallVec<[ReflectionRequirement; 2]>,
+    reflection_admission: Cell<[Option<ReflectionAdmission>; 2]>,
     element_id: Option<ItemMatch<ElementId>>,
     classes: SmallVec<[ListMatch<SharedString>; 2]>,
     nth: Option<usize>,
     every: Option<NonZeroUsize>,
+}
+
+#[derive(Clone, Copy)]
+struct ReflectionAdmission {
+    metadata: &'static ElementReflection,
+    satisfies: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -71,6 +86,7 @@ impl Select<NoReflectedTraits> {
             matcher: SelectorMatcher {
                 scope,
                 reflected_traits: SmallVec::new(),
+                reflection_admission: Cell::new([None; 2]),
                 element_id: None,
                 classes: SmallVec::new(),
                 nth: None,
@@ -171,12 +187,43 @@ where
 }
 
 impl SelectorMatcher {
-    fn matches_predicates(&self, element: &AnyElement) -> bool {
-        if !self
+    #[inline]
+    fn matches_reflection(&self, metadata: &'static ElementReflection) -> bool {
+        if self.reflected_traits.is_empty() {
+            return true;
+        }
+
+        let cached = self.reflection_admission.get();
+
+        for admission in cached.into_iter().flatten() {
+            if std::ptr::eq(admission.metadata, metadata) {
+                return admission.satisfies;
+            }
+        }
+
+        self.resolve_reflection_admission(metadata)
+    }
+
+    #[cold]
+    fn resolve_reflection_admission(&self, metadata: &'static ElementReflection) -> bool {
+        // Immutable metadata makes admission reusable. Classes and IDs remain per-node checks.
+        let satisfies = self
             .reflected_traits
             .iter()
-            .all(|requirement| element.reflection().satisfies(*requirement))
-        {
+            .all(|requirement| metadata.satisfies(*requirement));
+        self.reflection_admission.set([
+            Some(ReflectionAdmission {
+                metadata,
+                satisfies,
+            }),
+            self.reflection_admission.get()[0],
+        ]);
+
+        satisfies
+    }
+
+    fn matches_predicates(&self, element: &AnyElement) -> bool {
+        if !self.matches_reflection(element.reflection()) {
             return false;
         }
 
@@ -423,6 +470,10 @@ thread_local! {
 
 pub(crate) fn has_active_selectors() -> bool {
     SELECTOR_CONTEXT.with_borrow(|context| !context.bindings.is_empty())
+}
+
+pub(crate) fn has_generation_ancestry() -> bool {
+    SELECTOR_CONTEXT.with_borrow(|context| !context.generated_by.is_empty())
 }
 
 // Binding depths already describe the rendered root. Shared counters reflect deferred
@@ -1423,11 +1474,15 @@ mod tests {
                         .class("row"),
                 )
                 .child(text_override("first").class("row"))
+                .child(text_override("unclassified"))
                 .child(missing_parent)
                 .child(
                     text_override_with_reflection::<MEMBERSHIP_ONLY>("membership-second")
                         .class("row"),
                 )
+                .child(text_override_with_reflection::<MEMBERSHIP_ONLY>(
+                    "membership-hidden",
+                ))
                 .child(text_override("second").class("row"))
                 .child(
                     canvas(

@@ -3375,6 +3375,11 @@ impl Window {
         }
     }
 
+    #[cfg(feature = "bench-support")]
+    pub(crate) fn clear_benchmark_layout(&mut self) {
+        self.layout_engine.as_mut().unwrap().clear();
+    }
+
     /// Returns a snapshot of the current input-latency histograms.
     #[cfg(feature = "profiler")]
     pub fn input_latency_snapshot(&self) -> profiler::InputLatencySnapshot {
