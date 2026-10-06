@@ -1,7 +1,7 @@
 use crate::{
     AnyElement, ElementId, IntoElement, IntoItemMatch, IntoListMatch, IntoMatchValues, ItemMatch,
     ListMatch, SharedString,
-    reflection::{ReflectedElement, ReflectedTrait, ReflectedTraits, ReflectionGroup},
+    reflection::{ReflectedElement, ReflectedTraits, ReflectionGroup, ReflectionRequirement},
 };
 use smallvec::SmallVec;
 use std::{
@@ -28,7 +28,7 @@ where
 
 struct SelectorMatcher {
     scope: SelectScope,
-    reflected_traits: SmallVec<[ReflectedTrait; 2]>,
+    reflected_traits: SmallVec<[ReflectionRequirement; 2]>,
     element_id: Option<ItemMatch<ElementId>>,
     classes: SmallVec<[ListMatch<SharedString>; 2]>,
     nth: Option<usize>,
@@ -72,16 +72,16 @@ impl Select<NoReflectedTraits> {
         }
     }
 
-    /// Requires matching elements to reflect every trait in the given trait set.
-    /// Borrowed callback methods honor concrete defaults and overrides unless marked
-    /// `#[reflect(wrapper_default)]`.
+    /// Requires trait membership and compatible callable tables, including reflected
+    /// parents, before counting positions. Borrowed methods honor concrete implementations
+    /// unless marked `#[reflect(wrapper_default)]`.
     pub fn reflects<Traits>(mut self, reflected_traits: Traits) -> Select<Traits::Group>
     where
         Traits: ReflectedTraits,
     {
         self.matcher
             .reflected_traits
-            .extend(reflected_traits.reflected_traits());
+            .extend(reflected_traits.reflected_requirements());
 
         Select {
             matcher: self.matcher,
@@ -167,7 +167,7 @@ impl SelectorMatcher {
         if !self
             .reflected_traits
             .iter()
-            .all(|reflected_trait| element.implements_trait(*reflected_trait))
+            .all(|requirement| element.reflection().satisfies(*requirement))
         {
             return false;
         }
@@ -668,11 +668,14 @@ pub(crate) fn apply_active_selectors(element: &mut AnyElement) {
 mod tests {
     use super::*;
     use crate::{
-        AnyWindowHandle, App, AppContext, AvailableSpace, Bounds, Context, Div, Element, Empty,
-        Entity, FocusHandle, GlobalElementId, InspectorElementId, InteractiveElement,
+        AnyWindowHandle, App, AppContext, AvailableSpace, Bounds, Canvas, Context, Div, Element,
+        Empty, Entity, FocusHandle, GlobalElementId, InspectorElementId, InteractiveElement,
         Interactivity, LayoutId, ListAlignment, ListState, ParentElement, Pixels, Render, Size,
         StatefulInteractiveElement, StyleRefinement, Styled, TestAppContext, TextStyleRefinement,
-        VisualTestContext, Window, any, canvas, div, list, not, point, px, reflection::trait_set,
+        VisualTestContext, Window, any, canvas, div, list, not, point, px,
+        reflection::{
+            ElementReflection, Reflect, ReflectedImplementation, ReflectionToken, trait_set,
+        },
         rgb, rgb_to_hsla, size, uniform_list,
     };
     use std::{cell::Cell, panic, rc::Rc};
@@ -680,23 +683,50 @@ mod tests {
     #[gpui_macros::reflect_trait]
     trait StyledControl: crate::Styled + crate::StatefulInteractiveElement {}
 
-    #[derive(gpui_macros::Reflect)]
-    #[reflect(StyledControl)]
-    struct TextOverride {
+    const FULL_REFLECTION: usize = 0;
+    const MEMBERSHIP_ONLY: usize = 1;
+    const MISSING_PARENT: usize = 2;
+
+    struct TextOverride<const REGISTRATION: usize = FULL_REFLECTION> {
         inner: Div,
         text: TextStyleRefinement,
     }
 
     fn text_override(label: &'static str) -> TextOverride {
+        text_override_with_reflection(label)
+    }
+
+    fn text_override_with_reflection<const REGISTRATION: usize>(
+        label: &'static str,
+    ) -> TextOverride<REGISTRATION> {
         TextOverride {
             inner: div().id(label).into_element(),
             text: TextStyleRefinement::default(),
         }
     }
 
-    impl StyledControl for TextOverride {}
+    impl<const REGISTRATION: usize> Reflect for TextOverride<REGISTRATION> {
+        fn build_reflection() -> Vec<ReflectedImplementation> {
+            let mut implementations = Vec::new();
+            StyledControl.__register::<Self>(&mut implementations);
+            crate::ParentElement.__register::<Self>(&mut implementations);
 
-    impl Styled for TextOverride {
+            for implementation in &mut implementations {
+                if REGISTRATION == MEMBERSHIP_ONLY
+                    || (REGISTRATION == MISSING_PARENT
+                        && implementation.descriptor == crate::Styled.reflected_trait())
+                {
+                    implementation.methods = None;
+                }
+            }
+
+            implementations
+        }
+    }
+
+    impl<const REGISTRATION: usize> StyledControl for TextOverride<REGISTRATION> {}
+
+    impl<const REGISTRATION: usize> Styled for TextOverride<REGISTRATION> {
         fn style(&mut self) -> &mut StyleRefinement {
             self.inner.style()
         }
@@ -706,21 +736,21 @@ mod tests {
         }
     }
 
-    impl InteractiveElement for TextOverride {
+    impl<const REGISTRATION: usize> InteractiveElement for TextOverride<REGISTRATION> {
         fn interactivity(&mut self) -> &mut Interactivity {
             self.inner.interactivity()
         }
     }
 
-    impl StatefulInteractiveElement for TextOverride {}
+    impl<const REGISTRATION: usize> StatefulInteractiveElement for TextOverride<REGISTRATION> {}
 
-    impl ParentElement for TextOverride {
+    impl<const REGISTRATION: usize> ParentElement for TextOverride<REGISTRATION> {
         fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
             self.inner.extend(elements);
         }
     }
 
-    impl IntoElement for TextOverride {
+    impl<const REGISTRATION: usize> IntoElement for TextOverride<REGISTRATION> {
         type Element = Self;
 
         fn into_element(self) -> Self {
@@ -728,9 +758,13 @@ mod tests {
         }
     }
 
-    impl Element for TextOverride {
+    impl<const REGISTRATION: usize> Element for TextOverride<REGISTRATION> {
         type RequestLayoutState = <Div as Element>::RequestLayoutState;
         type PrepaintState = <Div as Element>::PrepaintState;
+
+        fn reflection(&self) -> &'static ElementReflection {
+            <Self as Reflect>::reflection()
+        }
 
         fn id(&self) -> Option<ElementId> {
             Element::id(&self.inner)
@@ -852,6 +886,20 @@ mod tests {
             selector_row(label).class("row")
         }))
         .into_any_element()
+    }
+
+    fn selector_canvas<State: 'static>(
+        label: &'static str,
+        state: State,
+        painted: Rc<RefCell<Vec<(&'static str, Size<Pixels>)>>>,
+    ) -> Canvas<State> {
+        canvas(
+            move |_bounds, _window, _cx| state,
+            move |bounds, _state, _window, _cx| {
+                painted.borrow_mut().push((label, bounds.size));
+            },
+        )
+        .size(px(8.))
     }
 
     fn layout_nested_transaction_row(
@@ -1134,6 +1182,191 @@ mod tests {
                 size(px(8.), px(8.))
             );
         }
+    }
+
+    #[crate::test]
+    fn generic_and_manual_metadata_survive_selection_and_replacement(cx: &mut TestAppContext) {
+        let painted = Rc::new(RefCell::new(Vec::new()));
+        let styled = Rc::new(Cell::new(0));
+        let rebound = Rc::new(Cell::new(0));
+        let attached = Rc::new(Cell::new(0));
+
+        let initial = styled.clone();
+        let later = rebound.clone();
+        let inherited = attached.clone();
+        let output = painted.clone();
+
+        draw_selector_tree(cx, move || {
+            let replacement_output = output.clone();
+            let replaceable = selector_canvas("original", 7_u32, output.clone())
+                .class(["reflected", "replace"])
+                .select(
+                    Select::this().reflects(crate::Styled),
+                    move |mut element| {
+                        assert!(element.element.downcast_mut::<Canvas<String>>().is_some());
+                        inherited.set(inherited.get() + 1);
+
+                        element.h(px(9.))
+                    },
+                );
+
+            div()
+                .child(selector_canvas("integer", 42_u32, output.clone()).class("reflected"))
+                .child(selector_canvas("string", String::from("state"), output).class("reflected"))
+                .child(replaceable)
+                .child(text_override("manual").class("reflected"))
+                .child(Empty.class("reflected"))
+                .select(
+                    Select::children()
+                        .class("reflected")
+                        .reflects(crate::Styled),
+                    move |element| {
+                        initial.set(initial.get() + 1);
+                        let mut element = element.w(px(20.));
+                        assert_eq!(element.style().size.width, Some(px(20.).into()));
+
+                        let metadata = element.element.reflection();
+                        let replace = element.element.classes().contains(&"replace".into());
+                        let mut erased =
+                            Element::into_any(element.into_element()).class("reflected");
+                        assert!(std::ptr::eq(metadata, erased.reflection()));
+
+                        if !replace {
+                            return erased;
+                        }
+
+                        assert!(erased.downcast_mut::<Canvas<u32>>().is_some());
+                        let replacement = selector_canvas(
+                            "replacement",
+                            String::from("new state"),
+                            replacement_output.clone(),
+                        )
+                        .class("reflected");
+                        assert!(!std::ptr::eq(metadata, replacement.reflection()));
+                        assert!(!replacement.classes().contains(&"replace".into()));
+
+                        replacement
+                    },
+                )
+                .select(
+                    Select::children()
+                        .class("reflected")
+                        .reflects(crate::Styled),
+                    move |element| {
+                        later.set(later.get() + 1);
+
+                        element.w(px(30.))
+                    },
+                )
+        });
+
+        assert_eq!(styled.get(), 4);
+        assert_eq!(rebound.get(), 4);
+        assert_eq!(attached.get(), 1);
+        assert_eq!(
+            *painted.borrow(),
+            vec![
+                ("integer", size(px(30.), px(8.))),
+                ("string", size(px(30.), px(8.))),
+                ("replacement", size(px(30.), px(9.))),
+            ]
+        );
+    }
+
+    #[crate::test]
+    fn callable_admission_precedes_positions_and_checks_inherited_tables(cx: &mut TestAppContext) {
+        let membership = Rc::new(RefCell::new(Vec::new()));
+        let indexed = Rc::new(RefCell::new(Vec::new()));
+        let spaced = Rc::new(RefCell::new(Vec::new()));
+
+        let erased = membership.clone();
+        let nth = indexed.clone();
+        let every = spaced.clone();
+
+        draw_selector_tree(cx, move || {
+            let missing_parent =
+                text_override_with_reflection::<MISSING_PARENT>("missing-parent").class("row");
+            assert!(missing_parent.implements_trait(StyledControl));
+            assert!(!missing_parent.reflection().has_adapter(crate::Styled));
+
+            div()
+                .child(
+                    text_override_with_reflection::<MEMBERSHIP_ONLY>("membership-first")
+                        .class("row"),
+                )
+                .child(text_override("first").class("row"))
+                .child(missing_parent)
+                .child(
+                    text_override_with_reflection::<MEMBERSHIP_ONLY>("membership-second")
+                        .class("row"),
+                )
+                .child(text_override("second").class("row"))
+                .child(
+                    canvas(
+                        |_bounds, _window, _cx| 42_u32,
+                        |_bounds, _state, _window, _cx| {},
+                    )
+                    .class("row"),
+                )
+                .child(Empty.class("row"))
+                .child(text_override("third").class("row"))
+                .select(
+                    Select::children()
+                        .class("row")
+                        .reflects(StyledControl.reflected_trait()),
+                    move |element| {
+                        record_match(&erased, &element.element);
+
+                        element
+                    },
+                )
+                .select(
+                    Select::children()
+                        .class("row")
+                        .reflects(StyledControl)
+                        .nth(1),
+                    move |mut element| {
+                        record_match(&nth, &element.element);
+                        element.style().size.width = Some(px(20.).into());
+                        let concrete = element.element.downcast_mut::<TextOverride>().unwrap();
+                        assert_eq!(concrete.style().size.width, Some(px(20.).into()));
+
+                        element
+                    },
+                )
+                .select(
+                    Select::children()
+                        .class("row")
+                        .reflects(trait_set!(
+                            StyledControl,
+                            crate::ParentElement,
+                            StyledControl
+                        ))
+                        .every(2),
+                    move |mut element| {
+                        record_match(&every, &element.element);
+                        element.text_style().color = Some(rgb_to_hsla(rgb(0x123456)));
+                        let concrete = element.element.downcast_mut::<TextOverride>().unwrap();
+                        assert_eq!(concrete.text.color, Some(rgb_to_hsla(rgb(0x123456))));
+
+                        element
+                    },
+                )
+        });
+
+        assert_matches(
+            &membership,
+            &[
+                "membership-first",
+                "first",
+                "missing-parent",
+                "membership-second",
+                "second",
+                "third",
+            ],
+        );
+        assert_matches(&indexed, &["second"]);
+        assert_matches(&spaced, &["first", "third"]);
     }
 
     #[crate::test]
