@@ -27,14 +27,8 @@ pub fn derive_reflect(input: TokenStream) -> TokenStream {
 }
 
 fn expand_reflect(input: DeriveInput) -> syn::Result<TokenStream2> {
-    if !input.generics.params.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &input.ident,
-            "Reflect currently requires a concrete, non-generic type",
-        ));
-    }
-
     let type_name = &input.ident;
+    let generic = !input.generics.params.is_empty();
     let automatic_traits: [Path; 4] = [
         parse_quote!(gpui::Styled),
         parse_quote!(gpui::InteractiveElement),
@@ -42,16 +36,38 @@ fn expand_reflect(input: DeriveInput) -> syn::Result<TokenStream2> {
         parse_quote!(gpui::ParentElement),
     ];
     let mut explicit_traits = Vec::new();
+    let mut explicit_list = false;
 
     for attribute in &input.attrs {
         if attribute.path().is_ident("reflect") {
+            explicit_list = true;
             explicit_traits.extend(
                 attribute.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?,
             );
         }
     }
 
-    let probes = automatic_traits.iter().map(|trait_path| {
+    if generic && !explicit_list {
+        return Err(syn::Error::new_spanned(
+            type_name,
+            "generic Reflect derives require an explicit #[reflect(...)] list, including builtin traits; use #[reflect()] for an empty registration",
+        ));
+    }
+
+    let mut generics = input.generics.clone();
+
+    if generic {
+        let bounds = generics.make_where_clause();
+        bounds.predicates.push(parse_quote!(Self: 'static));
+        bounds.predicates.extend(
+            explicit_traits
+                .iter()
+                .map(|path| -> syn::WherePredicate { parse_quote!(Self: #path) }),
+        );
+    }
+
+    let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
+    let probes = automatic_traits.iter().filter(|_path| !generic).map(|trait_path| {
         quote! {
             {
                 struct Probe<Type>(::std::marker::PhantomData<Type>);
@@ -70,49 +86,54 @@ fn expand_reflect(input: DeriveInput) -> syn::Result<TokenStream2> {
                     }
                 }
 
-                (&&Probe::<#type_name>(::std::marker::PhantomData)).register(&mut implementations);
+                (&&Probe::<Self>(::std::marker::PhantomData)).register(&mut implementations);
             }
         }
     });
     let explicit = explicit_traits.iter().map(|trait_path| {
-        quote! { #trait_path.__register::<#type_name>(&mut implementations); }
+        quote! { #trait_path.__register::<Self>(&mut implementations); }
+    });
+    let registration = (!generic).then(|| {
+        quote! {
+            gpui::private::inventory::submit! {
+                gpui::reflection::ReflectionRegistration {
+                    type_id: || ::std::any::TypeId::of::<#type_name>(),
+                    reflection: <#type_name as gpui::reflection::Reflect>::reflection,
+                }
+            }
+        }
     });
 
     Ok(quote! {
-        impl gpui::reflection::Reflect for #type_name {
-            fn reflected_traits() -> Vec<gpui::reflection::ReflectedTrait> {
-                gpui::reflection::registered_traits(::std::any::TypeId::of::<Self>()).to_vec()
+        impl #impl_generics gpui::reflection::Reflect for #type_name #type_generics #where_clause {
+            fn build_reflection() -> Vec<gpui::reflection::ReflectedImplementation> {
+                let mut implementations = Vec::new();
+                #(#probes)*
+                #(#explicit)*
+
+                implementations
             }
         }
 
-        gpui::private::inventory::submit! {
-            gpui::reflection::ReflectionRegistration {
-                type_id: || ::std::any::TypeId::of::<#type_name>(),
-                implementations: || {
-                    let mut implementations = Vec::new();
-                    #(#probes)*
-                    #(#explicit)*
-
-                    implementations
-                },
-            }
-        }
+        #registration
     })
 }
 
 pub fn reflect_trait(args: TokenStream, input: TokenStream) -> TokenStream {
-    if !args.is_empty() {
-        return syn::Error::new(
-            Span::call_site(),
-            "reflect_trait takes no arguments; inheritance comes from the trait declaration",
-        )
-        .to_compile_error()
-        .into();
-    }
-
+    let membership = args.to_string() == "membership";
     let input = parse_macro_input!(input as ItemTrait);
+    let expanded = if args.is_empty() {
+        expand_trait(input)
+    } else if membership {
+        expand_membership_trait(input)
+    } else {
+        Err(syn::Error::new(
+            Span::call_site(),
+            "expected #[reflect_trait] or #[reflect_trait(membership)]",
+        ))
+    };
 
-    match expand_trait(input) {
+    match expanded {
         Ok(output) => output.into(),
         Err(error) => error.to_compile_error().into(),
     }
@@ -229,7 +250,7 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
     let implementations = forwarded.iter().map(|method| &method.implementation);
     let parent_members = parents.iter().zip(&parent_aliases).map(|(parent, alias)| {
         quote! {
-            __GpuiReflectionGroup: gpui::reflection::IncludesReflectedTrait<#schema_name::#alias::Marker>,
+            __GpuiReflectionGroup: gpui::reflection::IncludesCallableTrait<#schema_name::#alias::Marker>,
             gpui::reflection::ReflectedElement<__GpuiReflectionGroup>: #parent,
         }
     });
@@ -298,7 +319,28 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
         #(#configurations)*
         impl gpui::reflection::ReflectionToken for #marker {
             type Group = #group;
-            type Methods = #methods;
+
+            fn requires_adapter(self) -> bool {
+                true
+            }
+
+            fn requirement(self) -> gpui::reflection::ReflectionRequirement {
+                gpui::reflection::ReflectionRequirement::callable(self)
+            }
+
+            fn requirements(self) -> Vec<gpui::reflection::ReflectionRequirement> {
+                let mut requirements = vec![gpui::reflection::ReflectionToken::requirement(self)];
+
+                #(for requirement in gpui::reflection::ReflectionToken::requirements(
+                    #schema_name::#parent_aliases::Marker::default(),
+                ) {
+                    if !requirements.contains(&requirement) {
+                        requirements.push(requirement);
+                    }
+                })*
+
+                requirements
+            }
 
             fn reflected_trait(self) -> gpui::reflection::ReflectedTrait {
                 gpui::reflection::ReflectedTrait::new(
@@ -318,6 +360,11 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
         }
 
         #(#configurations)*
+        impl gpui::reflection::CallableReflectionToken for #marker {
+            type Methods = #methods;
+        }
+
+        #(#configurations)*
         impl #marker {
             #[doc(hidden)]
             #[allow(private_bounds)]
@@ -327,13 +374,16 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
             ) {
                 let descriptor = gpui::reflection::ReflectionToken::reflected_trait(self);
 
-                if implementations.iter().any(|implementation| implementation.descriptor == descriptor) {
+                if implementations.iter().any(|implementation| {
+                    implementation.descriptor == descriptor
+                        && implementation.methods.as_deref().is_some_and(|methods| methods.is::<#methods>())
+                }) {
                     return;
                 }
 
                 implementations.push(gpui::reflection::ReflectedImplementation {
                     descriptor,
-                    methods: Box::new(#methods { #(#initializers)* }),
+                    methods: Some(Box::new(#methods { #(#initializers)* })),
                 });
 
                 #(#schema_name::#parent_aliases::Marker::default()
@@ -344,7 +394,7 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
         #(#configurations)*
         impl<__GpuiReflectionGroup> #name for gpui::reflection::ReflectedElement<__GpuiReflectionGroup>
         where
-            __GpuiReflectionGroup: gpui::reflection::IncludesReflectedTrait<#marker>,
+            __GpuiReflectionGroup: gpui::reflection::IncludesCallableTrait<#marker>,
             #(#parent_members)*
         {
             #(#implementations)*
@@ -352,6 +402,74 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
 
         #(#configurations)*
         #[doc = concat!("Descriptor for the ", stringify!(#name), " trait.")]
+        #[allow(non_upper_case_globals)]
+        #visibility const #name: #marker = #marker;
+    })
+}
+
+fn expand_membership_trait(input: ItemTrait) -> syn::Result<TokenStream2> {
+    if !input.generics.params.is_empty() || input.generics.where_clause.is_some() {
+        return Err(syn::Error::new_spanned(
+            &input.ident,
+            "membership reflection requires a non-generic trait without a where clause",
+        ));
+    }
+
+    let name = &input.ident;
+    let visibility = &input.vis;
+    let marker = format_ident!("__GpuiReflect{name}");
+    let schema = schema_path(&parse_quote!(#name));
+    let schema_name = &schema.segments.last().unwrap().ident;
+    let configurations = configuration_attributes(&input.attrs)?;
+
+    Ok(quote! {
+        #input
+
+        #(#configurations)*
+        #[doc(hidden)]
+        #[derive(Clone, Copy, Default)]
+        pub struct #marker;
+
+        #(#configurations)*
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        pub mod #schema_name {
+            pub type Marker = super::#marker;
+        }
+
+        #(#configurations)*
+        impl gpui::reflection::ReflectionToken for #marker {
+            type Group = gpui::reflection::ErasedReflectionGroup;
+
+            fn reflected_trait(self) -> gpui::reflection::ReflectedTrait {
+                gpui::reflection::ReflectedTrait::new(
+                    concat!(module_path!(), "::", stringify!(#name)),
+                    || ::std::any::TypeId::of::<#marker>(),
+                )
+            }
+
+            fn requires_adapter(self) -> bool {
+                false
+            }
+        }
+
+        #(#configurations)*
+        impl #marker {
+            #[doc(hidden)]
+            #[allow(private_bounds)]
+            pub fn __register<Type: #name + 'static>(
+                self,
+                implementations: &mut Vec<gpui::reflection::ReflectedImplementation>,
+            ) {
+                implementations.push(gpui::reflection::ReflectedImplementation {
+                    descriptor: gpui::reflection::ReflectionToken::reflected_trait(self),
+                    methods: None,
+                });
+            }
+        }
+
+        #(#configurations)*
+        #[doc = concat!("Membership descriptor for the ", stringify!(#name), " trait.")]
         #[allow(non_upper_case_globals)]
         #visibility const #name: #marker = #marker;
     })
@@ -747,6 +865,41 @@ impl VisitMut for OutputLifetimes<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_explicit_generic_registration_and_membership_declarations() {
+        for declaration in [
+            "#[reflect(gpui::Styled)] struct Panel<State>(State) where State: Clone;",
+            "#[reflect()] struct Buffer<const COUNT: usize>([u8; COUNT]);",
+            "#[reflect(Marker)] struct Borrowed<'data>(&'data str);",
+        ] {
+            let output = expand_reflect(syn::parse_str(declaration).unwrap()).unwrap();
+
+            syn::parse2::<syn::File>(output).unwrap();
+        }
+
+        let error = expand_reflect(parse_quote! { struct Missing<State>(State); }).unwrap_err();
+
+        assert!(error.to_string().contains("explicit #[reflect(...)] list"));
+
+        let output = expand_membership_trait(parse_quote! {
+            trait PaintSource: std::fmt::Debug + Send {
+                type Brush;
+                const PALETTE_SIZE: usize;
+                fn paint<Input>(&self, input: Input) -> Self::Brush;
+            }
+        })
+        .unwrap();
+
+        syn::parse2::<syn::File>(output).unwrap();
+
+        for declaration in [
+            "trait Generic<State> {}",
+            "trait Conditional where Self: Send {}",
+        ] {
+            assert!(expand_membership_trait(syn::parse_str(declaration).unwrap()).is_err());
+        }
+    }
 
     fn assert_rejected(item: &str, expected: &str) {
         let input = syn::parse_str(&format!("trait Invalid {{ {item} }}")).unwrap();

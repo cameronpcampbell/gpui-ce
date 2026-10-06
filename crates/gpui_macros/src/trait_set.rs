@@ -157,7 +157,11 @@ fn expand_collection(mut collection: Collection) -> TokenStream2 {
         };
     }
 
-    let markers = collection.members.iter().map(|(_key, marker)| marker);
+    let markers = collection
+        .members
+        .iter()
+        .map(|(_key, marker)| marker)
+        .collect::<Vec<_>>();
     let items = quote! {
         #[doc(hidden)]
         #visibility struct #group;
@@ -165,6 +169,8 @@ fn expand_collection(mut collection: Collection) -> TokenStream2 {
         impl ::gpui::reflection::ReflectionGroup for #group {}
 
         #(impl ::gpui::reflection::IncludesReflectedTrait<#markers> for #group {})*
+
+        #(impl ::gpui::reflection::IncludesCallableTrait<#markers> for #group {})*
     };
 
     if mode == "items" {
@@ -176,9 +182,10 @@ fn expand_collection(mut collection: Collection) -> TokenStream2 {
     quote! {{
         #items
 
-        ::gpui::reflection::ReflectedTraitGroup::<#group>::new([
-            #(::gpui::reflection::ReflectionToken::reflected_trait(#roots)),*
-        ])
+        ::gpui::reflection::ReflectedTraitGroup::<#group>::with_requirements(
+            [#(::gpui::reflection::ReflectionToken::requirements(#roots)),*]
+                .into_iter().flatten(),
+        )
     }}
 }
 

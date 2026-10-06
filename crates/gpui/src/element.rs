@@ -57,6 +57,12 @@ pub trait Element: 'static + IntoElement {
     /// provided to [`Element::paint`].
     type PrepaintState: 'static;
 
+    /// Returns concrete reflection metadata. Generic and handwritten providers can
+    /// opt in by returning `<Self as gpui::reflection::Reflect>::reflection()`.
+    fn reflection(&self) -> &'static crate::reflection::ElementReflection {
+        crate::reflection::linked_metadata_for::<Self>()
+    }
+
     /// If this element has a unique identifier, return it here. This is used to track elements across frames, and
     /// will cause a GlobalElementId to be passed to the request_layout, prepaint, and paint methods.
     ///
@@ -735,7 +741,10 @@ where
 }
 
 /// A dynamically typed element that can be used to store any element type.
-pub struct AnyElement(ArenaBox<dyn ElementObject>);
+pub struct AnyElement {
+    element: ArenaBox<dyn ElementObject>,
+    reflection: &'static crate::reflection::ElementReflection,
+}
 
 impl AnyElement {
     pub(crate) fn new<E>(element: E) -> Self
@@ -743,52 +752,60 @@ impl AnyElement {
         E: 'static + Element,
         E::RequestLayoutState: Any,
     {
+        let reflection = Element::reflection(&element);
         let element = with_element_arena(|arena| arena.alloc(|| Drawable::new(element)))
             .map(|element| element as &mut dyn ElementObject);
-        AnyElement(element)
+
+        let element = AnyElement {
+            element,
+            reflection,
+        };
+        reflection.validate_receiver(element.reflected_type_id());
+
+        element
     }
 
     /// Attempt to downcast a reference to the boxed element to a specific type.
     pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
-        self.0.inner_element_mut().downcast_mut::<T>()
+        self.element.inner_element_mut().downcast_mut::<T>()
     }
 
     pub(crate) fn inner_element(&self) -> &dyn Any {
-        self.0.inner_element()
+        self.element.inner_element()
     }
 
     pub(crate) fn inner_element_mut(&mut self) -> &mut dyn Any {
-        self.0.inner_element_mut()
+        self.element.inner_element_mut()
     }
 
     pub(crate) fn reflected_type_id(&self) -> std::any::TypeId {
-        self.0.reflected_type_id()
+        self.element.reflected_type_id()
     }
 
-    /// Returns the traits registered for this element by `#[derive(Reflect)]`.
+    /// Returns the metadata supplied by the concrete element at erasure.
+    pub fn reflection(&self) -> &'static crate::reflection::ElementReflection {
+        self.reflection
+    }
+
+    /// Returns this element's registered trait membership.
     pub fn reflected_traits(&self) -> &'static [crate::reflection::ReflectedTrait] {
-        crate::reflection::traits_for(self.0.reflected_type_id())
+        self.reflection.descriptors()
     }
 
-    /// Returns whether this element implements the given reflected trait.
-    ///
-    /// Reflected trait descriptors can be passed directly, for example
-    /// `element.implements_trait(gpui::Styled)`. A custom trait annotated with
-    /// `#[gpui::reflection::reflect_trait]` has a descriptor with the same name as the trait.
+    /// Checks registered membership and any table required by a typed token.
+    /// `element.implements_trait(gpui::Styled)` requires the styling adapter;
+    /// membership tokens and erased descriptors check membership alone.
     pub fn implements_trait(
         &self,
         reflected_trait: impl crate::reflection::ReflectionToken,
     ) -> bool {
-        crate::reflection::implements_trait(
-            self.0.reflected_type_id(),
-            reflected_trait.reflected_trait(),
-        )
+        self.reflection.implements_trait(reflected_trait)
     }
 
     /// Request the layout ID of the element stored in this `AnyElement`.
     /// Used for laying out child elements in a parent element.
     pub fn request_layout(&mut self, window: &mut Window, cx: &mut App) -> LayoutId {
-        self.0.request_layout(window, cx)
+        self.element.request_layout(window, cx)
     }
 
     /// Prepares the element to be painted by storing its bounds, giving it a chance to draw hitboxes and
@@ -796,7 +813,7 @@ impl AnyElement {
     pub fn prepaint(&mut self, window: &mut Window, cx: &mut App) -> Option<FocusHandle> {
         let focus_assigned = window.next_frame.focus.is_some();
 
-        self.0.prepaint(window, cx);
+        self.element.prepaint(window, cx);
 
         if !focus_assigned && let Some(focus_id) = window.next_frame.focus {
             return FocusHandle::for_id(focus_id, &cx.focus_handles);
@@ -807,7 +824,7 @@ impl AnyElement {
 
     /// Paints the element stored in this `AnyElement`.
     pub fn paint(&mut self, window: &mut Window, cx: &mut App) {
-        self.0.paint(window, cx);
+        self.element.paint(window, cx);
     }
 
     /// Performs layout for this element within the given available space and returns its size.
@@ -817,7 +834,7 @@ impl AnyElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Size<Pixels> {
-        self.0.layout_as_root(available_space, window, cx)
+        self.element.layout_as_root(available_space, window, cx)
     }
 
     /// Prepaints this element at the given absolute origin.
@@ -848,6 +865,10 @@ impl AnyElement {
 impl Element for AnyElement {
     type RequestLayoutState = ();
     type PrepaintState = ();
+
+    fn reflection(&self) -> &'static crate::reflection::ElementReflection {
+        self.reflection
+    }
 
     fn into_any(self) -> AnyElement {
         self

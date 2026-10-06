@@ -1,7 +1,13 @@
 //! Typed trait access to erased elements.
-//! Borrowed methods dispatch to concrete defaults and overrides; owned builders and
+//! Borrowed methods dispatch to concrete implementations; owned builders and
 //! `#[reflect(wrapper_default)]` methods use the trait body on [`ReflectedElement`].
-//! See [`reflect_trait`] for supported signatures and trait restrictions.
+//!
+//! Generic derives list all traits in `#[reflect(...)]`, including builtins, and forward
+//! `Element::reflection` to `<Self as Reflect>::reflection()` with matching trait bounds.
+//! Handwritten providers implement `Reflect::build_reflection` and use the same hook.
+//!
+//! `#[reflect_trait(membership)]` permits associated items and generic methods
+//! without granting callable access.
 
 use crate::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
@@ -11,9 +17,11 @@ use crate::{
 #[doc(hidden)]
 pub use gpui_macros::__collect_reflected_traits;
 pub use gpui_macros::{Reflect, reflect_trait, trait_set};
+use parking_lot::RwLock;
 use smallvec::SmallVec;
 use std::{
     any::{Any, TypeId},
+    cell::RefCell,
     collections::HashMap,
     marker::PhantomData,
     panic,
@@ -66,23 +74,71 @@ impl PartialEq for ReflectedTrait {
 impl Eq for ReflectedTrait {}
 
 /// A typed descriptor for a trait made available to reflection.
-#[doc(hidden)]
 pub trait ReflectionToken: Copy + 'static {
     /// The reflection group produced when this token is used by itself.
     type Group: ReflectionGroup;
-    /// The generated method table for implementations of this trait.
-    type Methods: Any + Send + Sync;
-
     /// The erased runtime descriptor for this trait.
     fn reflected_trait(self) -> ReflectedTrait;
+
+    /// Whether matching this token also requires a callable adapter.
+    fn requires_adapter(self) -> bool;
+
+    /// Returns the membership and adapter requirements for this token.
+    fn requirement(self) -> ReflectionRequirement {
+        ReflectionRequirement {
+            descriptor: self.reflected_trait(),
+            requires_adapter: self.requires_adapter(),
+            adapter_type: None,
+        }
+    }
+
+    /// Returns the requirements for this token and its granted callable parents.
+    fn requirements(self) -> Vec<ReflectionRequirement> {
+        vec![self.requirement()]
+    }
+}
+
+/// A token whose generated method table permits calls on an erased element.
+pub trait CallableReflectionToken: ReflectionToken {
+    /// The generated method table for implementations of this trait.
+    type Methods: Any + Send + Sync;
+}
+
+/// A trait membership check, optionally requiring a compatible callable table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReflectionRequirement {
+    /// The trait whose membership is required.
+    pub descriptor: ReflectedTrait,
+    /// Whether the element must also provide an adapter for this trait.
+    pub requires_adapter: bool,
+    adapter_type: Option<TypeId>,
+}
+
+impl ReflectionRequirement {
+    /// Requires membership without granting callable access.
+    pub fn membership(descriptor: ReflectedTrait) -> Self {
+        descriptor.requirement()
+    }
+
+    /// Requires membership and the method table associated with a callable token.
+    pub fn callable<Token: CallableReflectionToken>(token: Token) -> Self {
+        Self {
+            descriptor: token.reflected_trait(),
+            requires_adapter: true,
+            adapter_type: Some(TypeId::of::<Token::Methods>()),
+        }
+    }
 }
 
 impl ReflectionToken for ReflectedTrait {
     type Group = ErasedReflectionGroup;
-    type Methods = ();
 
     fn reflected_trait(self) -> ReflectedTrait {
         self
+    }
+
+    fn requires_adapter(self) -> bool {
+        false
     }
 }
 
@@ -104,13 +160,20 @@ where
 {
 }
 
+/// Proves that a generated group grants callable access to a trait.
+pub trait IncludesCallableTrait<Token>: IncludesReflectedTrait<Token>
+where
+    Token: CallableReflectionToken,
+{
+}
+
 /// A value containing the runtime descriptors for a generated reflection group.
 #[doc(hidden)]
 pub struct ReflectedTraitGroup<Group>
 where
     Group: ReflectionGroup,
 {
-    traits: SmallVec<[ReflectedTrait; 2]>,
+    requirements: SmallVec<[ReflectionRequirement; 2]>,
     group: PhantomData<fn() -> Group>,
 }
 
@@ -121,21 +184,48 @@ where
     /// Creates a reflected trait group from its runtime descriptors.
     #[doc(hidden)]
     pub fn new(traits: impl IntoIterator<Item = ReflectedTrait>) -> Self {
+        Self::with_requirements(traits.into_iter().map(ReflectionRequirement::membership))
+    }
+
+    /// Creates a group while retaining each token's adapter requirements.
+    #[doc(hidden)]
+    pub fn with_requirements(
+        requirements: impl IntoIterator<Item = ReflectionRequirement>,
+    ) -> Self {
+        let mut registered = SmallVec::new();
+
+        for requirement in requirements {
+            if !registered.contains(&requirement) {
+                registered.push(requirement);
+            }
+        }
+
         Self {
-            traits: traits.into_iter().collect(),
+            requirements: registered,
             group: PhantomData,
         }
     }
 }
 
-/// Converts one or more typed reflection descriptors into a selector trait set.
+/// Converts one or more typed reflection descriptors into a trait set.
 #[doc(hidden)]
 pub trait ReflectedTraits {
     /// The generated type that records membership of every reflected trait.
     type Group: ReflectionGroup;
 
     /// Returns the erased runtime descriptors in this trait set.
-    fn reflected_traits(self) -> SmallVec<[ReflectedTrait; 2]>;
+    fn reflected_traits(self) -> SmallVec<[ReflectedTrait; 2]>
+    where
+        Self: Sized,
+    {
+        self.reflected_requirements()
+            .into_iter()
+            .map(|requirement| requirement.descriptor)
+            .collect()
+    }
+
+    /// Returns each trait's membership and adapter requirements.
+    fn reflected_requirements(self) -> SmallVec<[ReflectionRequirement; 2]>;
 }
 
 impl<Token> ReflectedTraits for Token
@@ -145,8 +235,8 @@ where
 {
     type Group = Token::Group;
 
-    fn reflected_traits(self) -> SmallVec<[ReflectedTrait; 2]> {
-        std::iter::once(self.reflected_trait()).collect()
+    fn reflected_requirements(self) -> SmallVec<[ReflectionRequirement; 2]> {
+        self.requirements().into_iter().collect()
     }
 }
 
@@ -156,8 +246,8 @@ where
 {
     type Group = Group;
 
-    fn reflected_traits(self) -> SmallVec<[ReflectedTrait; 2]> {
-        self.traits
+    fn reflected_requirements(self) -> SmallVec<[ReflectionRequirement; 2]> {
+        self.requirements
     }
 }
 
@@ -192,10 +282,10 @@ where
         token: Token,
     ) -> (&'static Token::Methods, &mut dyn Any)
     where
-        Token: ReflectionToken,
-        Group: IncludesReflectedTrait<Token>,
+        Token: CallableReflectionToken,
+        Group: IncludesCallableTrait<Token>,
     {
-        let methods = methods_for(self.element.reflected_type_id(), token);
+        let methods = self.element.reflection().methods_for(token);
 
         (methods, self.element.inner_element_mut())
     }
@@ -204,10 +294,10 @@ where
     #[doc(hidden)]
     pub fn __reflection_parts<Token>(&self, token: Token) -> (&'static Token::Methods, &dyn Any)
     where
-        Token: ReflectionToken,
-        Group: IncludesReflectedTrait<Token>,
+        Token: CallableReflectionToken,
+        Group: IncludesCallableTrait<Token>,
     {
-        let methods = methods_for(self.element.reflected_type_id(), token);
+        let methods = self.element.reflection().methods_for(token);
 
         (methods, self.element.inner_element())
     }
@@ -219,6 +309,10 @@ where
 {
     type RequestLayoutState = <AnyElement as Element>::RequestLayoutState;
     type PrepaintState = <AnyElement as Element>::PrepaintState;
+
+    fn reflection(&self) -> &'static ElementReflection {
+        self.element.reflection()
+    }
 
     fn into_any(self) -> AnyElement {
         self.element
@@ -306,99 +400,267 @@ where
     }
 }
 
-/// Derived by `#[derive(Reflect)]` to register concrete GPUI trait implementations.
-/// Detects Styled, InteractiveElement, StatefulInteractiveElement, and ParentElement;
-/// use `#[reflect(MyTrait)]` for custom traits marked with [`reflect_trait`].
-pub trait Reflect: 'static {
-    /// Returns the reflected traits implemented by this type.
-    fn reflected_traits() -> Vec<ReflectedTrait>;
+/// Supplies concrete registrations through `build_reflection`.
+/// Handwritten and generic providers must forward [`Element::reflection`] to `Reflect::reflection`.
+pub trait Reflect: Sized + 'static {
+    /// Builds deterministic registrations without retaining element instances or callback state.
+    fn build_reflection() -> Vec<ReflectedImplementation>;
+
+    /// Returns the process-owned metadata for this concrete type.
+    fn reflection() -> &'static ElementReflection {
+        metadata_for::<Self>(Self::build_reflection)
+    }
+
+    /// Returns the reflected traits implemented by this concrete type.
+    fn reflected_traits() -> Vec<ReflectedTrait> {
+        Self::reflection().descriptors().to_vec()
+    }
 }
 
 /// A concrete implementation of a reflected trait.
-#[doc(hidden)]
 pub struct ReflectedImplementation {
     /// The identity and inheritance of the implemented trait.
     pub descriptor: ReflectedTrait,
-    /// Its generated forwarding functions.
-    pub methods: Box<dyn Any + Send + Sync>,
+    /// Generated forwarding functions, or `None` for membership alone.
+    pub methods: Option<Box<dyn Any + Send + Sync>>,
 }
 
-/// A statically linked registration emitted by the reflection derive.
-#[doc(hidden)]
-pub struct ReflectionRegistration {
-    /// Returns the registered concrete type's identity.
-    pub type_id: fn() -> TypeId,
-    /// Returns its reflected implementations, including inherited traits.
-    pub implementations: fn() -> Vec<ReflectedImplementation>,
-}
-
-inventory::collect!(ReflectionRegistration);
-
-struct RegisteredTraits {
+/// Immutable reflection metadata retained by erased elements for process lifetime.
+pub struct ElementReflection {
+    concrete_type: Option<TypeId>,
     descriptors: Vec<ReflectedTrait>,
     methods: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
-static REFLECTIONS: LazyLock<HashMap<TypeId, RegisteredTraits>> = LazyLock::new(|| {
-    let mut registered = HashMap::new();
+impl ElementReflection {
+    fn build(concrete_type: TypeId, implementations: Vec<ReflectedImplementation>) -> Self {
+        let mut reflection = Self {
+            concrete_type: Some(concrete_type),
+            descriptors: Vec::new(),
+            methods: HashMap::new(),
+        };
 
-    for registration in inventory::iter::<ReflectionRegistration> {
-        let entry = registered
-            .entry((registration.type_id)())
-            .or_insert_with(|| RegisteredTraits {
-                descriptors: Vec::new(),
-                methods: HashMap::new(),
-            });
-
-        for implementation in (registration.implementations)() {
+        for implementation in implementations {
             let trait_id = implementation.descriptor.trait_type_id();
 
-            if entry.methods.contains_key(&trait_id) {
+            if !reflection.descriptors.contains(&implementation.descriptor) {
+                reflection.descriptors.push(implementation.descriptor);
+            }
+
+            let Some(methods) = implementation.methods else {
+                continue;
+            };
+
+            if let Some(existing) = reflection.methods.get(&trait_id) {
+                assert_eq!(
+                    existing.as_ref().type_id(),
+                    methods.as_ref().type_id(),
+                    "conflicting method tables for {} on {concrete_type:?}",
+                    implementation.descriptor.name,
+                );
+
                 continue;
             }
 
-            entry.descriptors.push(implementation.descriptor);
-            entry.methods.insert(trait_id, implementation.methods);
+            reflection.methods.insert(trait_id, methods);
         }
+
+        reflection
     }
 
-    registered
+    /// The concrete receiver identity, or `None` for shared unreflected metadata.
+    pub fn concrete_type(&self) -> Option<TypeId> {
+        self.concrete_type
+    }
+
+    /// Returns registered trait membership, including traits without adapters.
+    pub fn descriptors(&self) -> &[ReflectedTrait] {
+        &self.descriptors
+    }
+
+    /// Checks membership and any adapter requirement supplied by a token.
+    pub fn implements_trait<Token: ReflectionToken>(&self, token: Token) -> bool {
+        self.satisfies(token.requirement())
+    }
+
+    /// Checks membership and the required method table before granting callable access.
+    pub fn satisfies(&self, requirement: ReflectionRequirement) -> bool {
+        if !self.descriptors.contains(&requirement.descriptor) {
+            return false;
+        }
+
+        if !requirement.requires_adapter {
+            return true;
+        }
+
+        self.methods
+            .get(&requirement.descriptor.trait_type_id())
+            .is_some_and(|methods| {
+                requirement
+                    .adapter_type
+                    .is_none_or(|expected| methods.as_ref().type_id() == expected)
+            })
+    }
+
+    /// Returns whether the exact generated table for a callable token is available.
+    pub fn has_adapter<Token: CallableReflectionToken>(&self, token: Token) -> bool {
+        self.satisfies(ReflectionRequirement::callable(token))
+    }
+
+    fn methods_for<Token: CallableReflectionToken>(
+        &'static self,
+        token: Token,
+    ) -> &'static Token::Methods {
+        let descriptor = token.reflected_trait();
+
+        self.methods
+            .get(&descriptor.trait_type_id())
+            .and_then(|methods| methods.downcast_ref())
+            .unwrap_or_else(|| {
+                panic!(
+                    "element {:?} has no method table for {}",
+                    self.concrete_type, descriptor.name
+                )
+            })
+    }
+
+    pub(crate) fn validate_receiver(&self, expected: TypeId) {
+        if let Some(actual) = self.concrete_type {
+            assert_eq!(
+                actual, expected,
+                "reflection metadata targets a different concrete receiver"
+            );
+        }
+    }
+}
+
+/// A statically linked metadata factory emitted for a monomorphic derive.
+#[doc(hidden)]
+pub struct ReflectionRegistration {
+    /// Returns the registered concrete type's identity.
+    pub type_id: fn() -> TypeId,
+    /// Initializes that type's metadata on demand.
+    pub reflection: fn() -> &'static ElementReflection,
+}
+
+inventory::collect!(ReflectionRegistration);
+
+type ReflectionFactory = fn() -> &'static ElementReflection;
+
+static LINKED_REFLECTIONS: LazyLock<HashMap<TypeId, ReflectionFactory>> = LazyLock::new(|| {
+    let mut factories = HashMap::new();
+
+    for registration in inventory::iter::<ReflectionRegistration> {
+        let type_id = (registration.type_id)();
+        assert!(
+            factories.insert(type_id, registration.reflection).is_none(),
+            "duplicate reflection factories for {type_id:?}",
+        );
+    }
+
+    factories
 });
 
-/// Returns the generated trait descriptors for a concrete registered type.
+static REFLECTIONS: LazyLock<RwLock<HashMap<TypeId, &'static ElementReflection>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+static EMPTY_REFLECTION: LazyLock<ElementReflection> = LazyLock::new(|| ElementReflection {
+    concrete_type: None,
+    descriptors: Vec::new(),
+    methods: HashMap::new(),
+});
+
+thread_local! {
+    static INITIALIZING: RefCell<Vec<TypeId>> = const { RefCell::new(Vec::new()) };
+}
+
+struct InitializationGuard(TypeId);
+
+impl InitializationGuard {
+    fn enter(type_id: TypeId) -> Self {
+        INITIALIZING.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            assert!(
+                !stack.contains(&type_id),
+                "recursive reflection initialization for {type_id:?}"
+            );
+            stack.push(type_id);
+        });
+
+        Self(type_id)
+    }
+}
+
+impl Drop for InitializationGuard {
+    fn drop(&mut self) {
+        INITIALIZING.with(|stack| {
+            let completed = stack.borrow_mut().pop();
+
+            debug_assert_eq!(completed, Some(self.0));
+        });
+    }
+}
+
+/// Initializes a concrete registration outside the cache lock and retains one immutable winner.
+#[doc(hidden)]
+pub fn metadata_for<Type: 'static>(
+    build: fn() -> Vec<ReflectedImplementation>,
+) -> &'static ElementReflection {
+    let type_id = TypeId::of::<Type>();
+
+    if let Some(reflection) = REFLECTIONS.read().get(&type_id).copied() {
+        return reflection;
+    }
+
+    let _initialization = InitializationGuard::enter(type_id);
+    let candidate = Box::new(ElementReflection::build(type_id, build()));
+    let mut cache = REFLECTIONS.write();
+
+    if let Some(reflection) = cache.get(&type_id).copied() {
+        drop(cache);
+        drop(candidate);
+
+        return reflection;
+    }
+
+    let reflection = Box::leak(candidate);
+    cache.insert(type_id, reflection);
+
+    reflection
+}
+
+/// Resolves linked metadata, or metadata already initialized through a concrete provider.
+/// Ordinary unreflected types share an empty entry and do not populate the demand cache.
+#[doc(hidden)]
+pub fn linked_metadata_for<Type: 'static>() -> &'static ElementReflection {
+    linked_metadata(TypeId::of::<Type>())
+}
+
+fn linked_metadata(type_id: TypeId) -> &'static ElementReflection {
+    if let Some(reflection) = REFLECTIONS.read().get(&type_id).copied() {
+        return reflection;
+    }
+
+    let Some(factory) = LINKED_REFLECTIONS.get(&type_id) else {
+        return &EMPTY_REFLECTION;
+    };
+
+    let reflection = factory();
+    reflection.validate_receiver(type_id);
+    assert_eq!(
+        reflection.concrete_type(),
+        Some(type_id),
+        "linked reflection factory returned empty metadata"
+    );
+
+    reflection
+}
+
+/// Returns descriptors from the same provider used by concrete and erased elements.
+/// Generic registrations become visible after their metadata has been requested.
 #[doc(hidden)]
 pub fn registered_traits(type_id: TypeId) -> &'static [ReflectedTrait] {
-    REFLECTIONS
-        .get(&type_id)
-        .map(|registration| registration.descriptors.as_slice())
-        .unwrap_or(&[])
-}
-
-pub(crate) fn traits_for(type_id: TypeId) -> &'static [ReflectedTrait] {
-    registered_traits(type_id)
-}
-
-pub(crate) fn implements_trait(type_id: TypeId, reflected_trait: ReflectedTrait) -> bool {
-    REFLECTIONS.get(&type_id).is_some_and(|registration| {
-        registration
-            .methods
-            .contains_key(&reflected_trait.trait_type_id())
-    })
-}
-
-fn methods_for<Token: ReflectionToken>(type_id: TypeId, token: Token) -> &'static Token::Methods {
-    let descriptor = token.reflected_trait();
-
-    REFLECTIONS
-        .get(&type_id)
-        .and_then(|registration| registration.methods.get(&descriptor.trait_type_id()))
-        .and_then(|methods| methods.downcast_ref())
-        .unwrap_or_else(|| {
-            panic!(
-                "element {type_id:?} has no method table for {}",
-                descriptor.name,
-            )
-        })
+    linked_metadata(type_id).descriptors()
 }
 
 #[cfg(test)]
@@ -407,7 +669,15 @@ mod tests {
     use crate::{
         Div, Empty, InteractiveElement, ParentElement, StyleRefinement, Styled, div, hsla, rgb,
     };
-    use std::{cell::Cell, rc::Rc};
+    use std::{
+        cell::Cell,
+        rc::Rc,
+        sync::{
+            Barrier,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
+    };
 
     const TEXT_LABEL: &str = "body";
 
@@ -510,14 +780,23 @@ mod tests {
         }
     }
 
-    #[derive(gpui_macros::Reflect, Default)]
-    #[reflect(Composite)]
-    struct Panel {
+    #[derive(Default)]
+    struct Panel<State> {
         card: Card,
         text_style: crate::TextStyleRefinement,
+        state: State,
     }
 
-    impl text::Text for Panel {
+    impl<State: 'static> Reflect for Panel<State> {
+        fn build_reflection() -> Vec<ReflectedImplementation> {
+            let mut implementations = Vec::new();
+            Composite.__register::<Self>(&mut implementations);
+
+            implementations
+        }
+    }
+
+    impl<State> text::Text for Panel<State> {
         fn read<'element>(&'element self, label: &str) -> &'element str {
             text::Text::read(&self.card, label)
         }
@@ -553,13 +832,13 @@ mod tests {
         }
     }
 
-    impl branches::Left for Panel {}
+    impl<State> branches::Left for Panel<State> {}
 
-    impl branches::Right for Panel {}
+    impl<State> branches::Right for Panel<State> {}
 
-    impl Composite for Panel {}
+    impl<State> Composite for Panel<State> {}
 
-    impl Styled for Panel {
+    impl<State> Styled for Panel<State> {
         fn style(&mut self) -> &mut StyleRefinement {
             &mut self.card.style
         }
@@ -569,7 +848,7 @@ mod tests {
         }
     }
 
-    impl ParentElement for Panel {
+    impl<State> ParentElement for Panel<State> {
         fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
             self.card.children.extend(elements);
         }
@@ -601,8 +880,8 @@ mod tests {
     }
 
     macro_rules! element_impl {
-        ($name:ty) => {
-            impl IntoElement for $name {
+        ($name:ty $(, [$($generics:tt)*])? $(, reflection $reflection:expr)?) => {
+            impl $(<$($generics)*>)? IntoElement for $name {
                 type Element = Self;
 
                 fn into_element(self) -> Self {
@@ -610,9 +889,13 @@ mod tests {
                 }
             }
 
-            impl Element for $name {
+            impl $(<$($generics)*>)? Element for $name {
                 type RequestLayoutState = ();
                 type PrepaintState = ();
+
+                $(fn reflection(&self) -> &'static ElementReflection {
+                    $reflection
+                })?
 
                 fn id(&self) -> Option<ElementId> {
                     None
@@ -661,7 +944,7 @@ mod tests {
     }
 
     element_impl!(Card);
-    element_impl!(Panel);
+    element_impl!(Panel<State>, [State: 'static], reflection <Self as Reflect>::reflection());
 
     fn card() -> Card {
         Card {
@@ -742,6 +1025,7 @@ mod tests {
             let original = if overrides {
                 Panel {
                     card: card(),
+                    state: String::from("manual"),
                     ..Default::default()
                 }
                 .into_any_element()
@@ -759,7 +1043,9 @@ mod tests {
 
             let mut element = element.text_color(color).into_any_element();
             let (card, text_color) = if overrides {
-                let panel = element.downcast_mut::<Panel>().unwrap();
+                let panel = element.downcast_mut::<Panel<String>>().unwrap();
+
+                assert_eq!(panel.state, "manual");
 
                 (&panel.card, panel.text_style.color)
             } else {
@@ -792,6 +1078,21 @@ mod tests {
         assert_eq!(traits.len(), 6);
         assert!(traits.contains(&descriptor));
         assert!(traits.contains(&ReflectionToken::reflected_trait(text::Text)));
+
+        let metadata = <Card as Reflect>::reflection();
+        let requirements = Composite.reflected_requirements();
+        let combined = trait_set![Composite, text::Text].reflected_requirements();
+
+        assert_eq!(requirements.len(), 6);
+        assert_eq!(combined.len(), 6);
+        assert!(requirements.iter().all(|requirement| {
+            requirement.requires_adapter && metadata.satisfies(*requirement)
+        }));
+        assert!(
+            combined
+                .iter()
+                .all(|requirement| requirements.contains(requirement))
+        );
     }
 
     #[test]
@@ -805,6 +1106,7 @@ mod tests {
 
         for route in 0..7 {
             let mut element = div().id("original").child(Empty).into_any_element();
+            let metadata = element.reflection();
             let original = element.downcast_mut::<Div>().unwrap() as *mut Div;
             let reflected = reflected(element, crate::InteractiveElement);
             let mut element = match route {
@@ -828,6 +1130,208 @@ mod tests {
             assert_eq!(concrete as *mut Div, original);
             assert_eq!(Element::id(concrete), Some(ElementId::from(expected_id)));
             assert_eq!(element.reflected_type_id(), TypeId::of::<Div>());
+            assert!(std::ptr::eq(metadata, element.reflection()));
         }
+
+        let empty = Empty.into_any_element();
+
+        assert!(empty.reflected_traits().is_empty());
+        assert_eq!(empty.reflection().concrete_type(), None);
+        assert!(std::ptr::eq(
+            empty.reflection(),
+            linked_metadata_for::<()>()
+        ));
+        assert!(!REFLECTIONS.read().contains_key(&TypeId::of::<Empty>()));
+        assert!(!REFLECTIONS.read().contains_key(&TypeId::of::<()>()));
+    }
+
+    fn style_canvas<State: Default + 'static>() -> &'static ElementReflection {
+        let element = crate::canvas(
+            |_bounds, _window, _cx| State::default(),
+            |_bounds, _state, _window, _cx| {},
+        )
+        .into_any_element();
+        let metadata = element.reflection();
+
+        let reflected =
+            ReflectedElement::<<crate::__GpuiReflectStyled as ReflectionToken>::Group>::new(
+                element,
+            );
+        let mut element = reflected.bg(rgb(0x123456)).into_any_element();
+        let concrete = element.downcast_mut::<crate::Canvas<State>>().unwrap();
+
+        assert!(concrete.style().background.is_some());
+        assert_eq!(
+            metadata.concrete_type(),
+            Some(TypeId::of::<crate::Canvas<State>>())
+        );
+        assert!(std::ptr::eq(
+            metadata,
+            element.into_element().into_any().reflection()
+        ));
+
+        metadata
+    }
+
+    #[test]
+    fn generic_metadata_drives_erased_dispatch() {
+        let first = style_canvas::<u32>();
+        let second = style_canvas::<String>();
+
+        assert!(!std::ptr::eq(first, second));
+        assert!(std::ptr::eq(first, style_canvas::<u32>()));
+    }
+
+    #[test]
+    fn provider_publishes_one_owner_and_recovers_from_initialization_failures() {
+        const WORKERS: usize = 8;
+        static BARRIER: LazyLock<Barrier> = LazyLock::new(|| Barrier::new(WORKERS));
+        static BUILDS: AtomicUsize = AtomicUsize::new(0);
+        static DROPS: AtomicUsize = AtomicUsize::new(0);
+        static LINKED_BUILDS: AtomicUsize = AtomicUsize::new(0);
+
+        struct Concurrent;
+        struct TrackedTable;
+        struct Panicking;
+        struct Recursive;
+        struct Nested;
+        struct Conflicting;
+        struct Linked;
+        struct WrongLinked;
+
+        impl Reflect for Linked {
+            fn build_reflection() -> Vec<ReflectedImplementation> {
+                LINKED_BUILDS.fetch_add(1, Ordering::SeqCst);
+
+                Vec::new()
+            }
+        }
+
+        inventory::submit! {
+            ReflectionRegistration {
+                type_id: || TypeId::of::<Linked>(),
+                reflection: <Linked as Reflect>::reflection,
+            }
+        }
+
+        inventory::submit! {
+            ReflectionRegistration {
+                type_id: || TypeId::of::<WrongLinked>(),
+                reflection: <Linked as Reflect>::reflection,
+            }
+        }
+
+        impl Drop for TrackedTable {
+            fn drop(&mut self) {
+                DROPS.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        fn registration<Table: Any + Send + Sync>(
+            methods: Option<Table>,
+        ) -> ReflectedImplementation {
+            ReflectedImplementation {
+                descriptor: crate::Styled.reflected_trait(),
+                methods: methods.map(|methods| Box::new(methods) as Box<dyn Any + Send + Sync>),
+            }
+        }
+
+        fn assert_panics<Result>(action: impl FnOnce() -> Result) {
+            assert!(panic::catch_unwind(panic::AssertUnwindSafe(action)).is_err());
+        }
+
+        fn concurrent() -> Vec<ReflectedImplementation> {
+            BUILDS.fetch_add(1, Ordering::SeqCst);
+            BARRIER.wait();
+
+            vec![registration(Some(TrackedTable))]
+        }
+
+        fn recursive() -> Vec<ReflectedImplementation> {
+            metadata_for::<Nested>(|| {
+                metadata_for::<Recursive>(recursive);
+
+                Vec::new()
+            });
+
+            Vec::new()
+        }
+
+        assert_eq!(LINKED_BUILDS.load(Ordering::SeqCst), 0);
+        assert!(linked_metadata_for::<()>().descriptors().is_empty());
+        assert_eq!(LINKED_BUILDS.load(Ordering::SeqCst), 0);
+        assert!(std::ptr::eq(
+            linked_metadata_for::<Linked>(),
+            <Linked as Reflect>::reflection()
+        ));
+        assert_eq!(LINKED_BUILDS.load(Ordering::SeqCst), 1);
+        assert_panics(linked_metadata_for::<WrongLinked>);
+
+        let descriptor = crate::Styled.reflected_trait();
+        let normalized = ElementReflection::build(
+            TypeId::of::<Concurrent>(),
+            [None, Some(1usize), Some(2), None]
+                .into_iter()
+                .map(registration)
+                .collect(),
+        );
+        let descriptor_only = ElementReflection::build(
+            TypeId::of::<Concurrent>(),
+            vec![registration::<usize>(None)],
+        );
+
+        assert_eq!(normalized.descriptors(), &[descriptor]);
+        assert!(normalized.satisfies(ReflectionRequirement {
+            descriptor,
+            requires_adapter: true,
+            adapter_type: Some(TypeId::of::<usize>()),
+        }));
+
+        let callers = (0..WORKERS)
+            .map(|_idx| thread::spawn(|| metadata_for::<Concurrent>(concurrent)))
+            .collect::<Vec<_>>();
+        let entries = callers
+            .into_iter()
+            .map(|caller| caller.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert!(entries.iter().all(|entry| std::ptr::eq(*entry, entries[0])));
+        assert_eq!(BUILDS.load(Ordering::SeqCst), WORKERS);
+        assert_eq!(DROPS.load(Ordering::SeqCst), WORKERS - 1);
+
+        for metadata in [&normalized, &descriptor_only, entries[0]] {
+            assert!(metadata.implements_trait(descriptor));
+            assert!(metadata.satisfies(descriptor.requirement()));
+            assert!(!metadata.implements_trait(crate::Styled));
+            assert!(!metadata.has_adapter(crate::Styled));
+            assert!(!metadata.satisfies(crate::Styled.requirement()));
+        }
+
+        assert_panics(|| entries[0].validate_receiver(TypeId::of::<Nested>()));
+        assert_panics(|| metadata_for::<Panicking>(|| panic!("factory panic")));
+        assert_panics(|| metadata_for::<Recursive>(recursive));
+        assert_panics(|| {
+            metadata_for::<Conflicting>(|| {
+                vec![
+                    registration(Some(1usize)),
+                    registration(Some(String::new())),
+                ]
+            })
+        });
+
+        for entry in [
+            metadata_for::<Panicking>(Vec::new),
+            metadata_for::<Recursive>(|| {
+                metadata_for::<Nested>(Vec::new);
+
+                Vec::new()
+            }),
+            metadata_for::<Conflicting>(Vec::new),
+        ] {
+            assert!(entry.descriptors().is_empty());
+            assert!(entry.concrete_type().is_some());
+        }
+
+        assert!(INITIALIZING.with(|stack| stack.borrow().is_empty()));
     }
 }

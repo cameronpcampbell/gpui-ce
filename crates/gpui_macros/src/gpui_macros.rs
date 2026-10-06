@@ -64,7 +64,9 @@ pub fn derive_stateful_interactive_element(input: TokenStream) -> TokenStream {
     derive_element_traits::derive_stateful_interactive_element(input)
 }
 
-/// Registers the GPUI traits implemented by a concrete type for runtime lookup.
+/// Builds concrete reflection metadata and detects builtin traits on monomorphic types.
+/// Generic types list traits explicitly in `#[reflect(...)]` and forward
+/// `Element::reflection` to `<Self as Reflect>::reflection()`.
 #[proc_macro_derive(Reflect, attributes(reflect))]
 pub fn derive_reflect(input: TokenStream) -> TokenStream {
     derive_reflect::derive_reflect(input)
@@ -81,6 +83,9 @@ pub fn derive_reflect(input: TokenStream) -> TokenStream {
 /// Direct `cfg` and nested configuration-producing `cfg_attr` are preserved.
 /// GPUI style macros are expanded; other item macros must expose their items directly
 /// or generate the whole annotated trait.
+///
+/// `#[reflect_trait(membership)]` records membership without callable access and permits
+/// associated items, generic methods, and ordinary Rust supertraits.
 ///
 /// Qualify imported supertraits and re-export their generated schema modules when aliasing
 /// traits used in `trait_set!`, such as `__GpuiReflectTraitSchema` as `__GpuiReflectAliasSchema`.
