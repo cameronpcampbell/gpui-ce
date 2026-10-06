@@ -4722,6 +4722,9 @@ where
     }
 }
 
+/// Converts the inner builder without retaining `Stateful` as a runtime element.
+/// The assigned ID and state survive, but reflection describes `E::Element`.
+/// An erased `Div` therefore does not gain `StatefulInteractiveElement` from its ID.
 impl<E: IntoElement> IntoElement for Stateful<E> {
     type Element = E::Element;
 

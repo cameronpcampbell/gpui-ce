@@ -7,9 +7,13 @@ use crate::{
 use crate::{Empty, Window};
 use anyhow::Result;
 use collections::FxHashSet;
+#[cfg(debug_assertions)]
+use parking_lot::Mutex;
 use refineable::Refineable;
 use std::mem;
 use std::{any::TypeId, fmt, ops::Range};
+#[cfg(debug_assertions)]
+use std::{any::type_name, sync::LazyLock};
 
 /// A dynamically-typed view handle that can be downcast to a specific `Entity<V>`.
 ///
@@ -291,6 +295,7 @@ impl<T: Render> Entity<T> {
 
 /// The element type for [`View`] implementations. Wraps a `View` and hooks it
 /// into layout, prepaint, and paint. Constructed via [`ViewElement::new`].
+/// Reflection targets this wrapper, independently of the view and its rendered root.
 #[doc(hidden)]
 pub struct ViewElement<V: View> {
     view: Option<V>,
@@ -302,9 +307,17 @@ pub struct ViewElement<V: View> {
 
 impl<V: View> ViewElement<V> {
     /// Wrap a [`View`] as an element.
+    /// Debug builds warn once per view type when its reflection describes the
+    /// authored component but this wrapper has no reflected traits.
     #[track_caller]
     pub fn new(view: V) -> Self {
+        #[cfg(debug_assertions)]
+        if let Some(diagnostic) = component_reflection_diagnostic::<V>() {
+            log::warn!("{diagnostic}");
+        }
+
         let entity_id = view.entity_id();
+
         ViewElement {
             entity_id,
             cached_style: None,
@@ -327,6 +340,39 @@ impl<V: View> ViewElement<V> {
         self.cached_style = Some(style);
         self
     }
+}
+
+#[cfg(debug_assertions)]
+fn component_reflection_diagnostic<V: View>() -> Option<String> {
+    static REPORTED: LazyLock<Mutex<FxHashSet<TypeId>>> =
+        LazyLock::new(|| Mutex::new(FxHashSet::default()));
+    let type_id = TypeId::of::<V>();
+
+    if REPORTED.lock().contains(&type_id) {
+        return None;
+    }
+
+    let component = crate::reflection::linked_metadata_for::<V>();
+
+    if component.descriptors().is_empty()
+        || !crate::reflection::linked_metadata_for::<ViewElement<V>>()
+            .descriptors()
+            .is_empty()
+    {
+        return None;
+    }
+
+    if !REPORTED.lock().insert(type_id) {
+        return None;
+    }
+
+    Some(format!(
+        "Reflection registered for {} describes that component. This node stores {}; \
+         its rendered root is a separate child. Reflect a concrete Element that \
+         implements the required traits, or use the rendered root's own reflection.",
+        type_name::<V>(),
+        type_name::<ViewElement<V>>(),
+    ))
 }
 
 impl<V: View> IntoElement for ViewElement<V> {
@@ -629,5 +675,90 @@ pub struct EmptyView;
 impl Render for EmptyView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         Empty
+    }
+}
+
+#[cfg(all(test, debug_assertions))]
+mod tests {
+    use super::*;
+    use crate::{div, reflection::Reflect};
+
+    #[gpui_macros::reflect_trait]
+    trait Capability {}
+
+    #[derive(gpui_macros::Reflect)]
+    #[reflect(Capability)]
+    struct LinkedComponent;
+
+    struct ProvidedComponent;
+
+    #[derive(gpui_macros::Reflect)]
+    #[reflect(Capability)]
+    struct ReflectedWrapper;
+
+    struct UnreflectedComponent;
+
+    impl Capability for LinkedComponent {}
+    impl Capability for ProvidedComponent {}
+    impl Capability for ReflectedWrapper {}
+    impl Capability for ViewElement<ReflectedWrapper> {}
+
+    impl Reflect for ProvidedComponent {
+        fn build_reflection() -> Vec<crate::reflection::ReflectedImplementation> {
+            let mut implementations = Vec::new();
+            Capability.__register::<Self>(&mut implementations);
+
+            implementations
+        }
+    }
+
+    impl Reflect for ViewElement<ReflectedWrapper> {
+        fn build_reflection() -> Vec<crate::reflection::ReflectedImplementation> {
+            let mut implementations = Vec::new();
+            Capability.__register::<Self>(&mut implementations);
+
+            implementations
+        }
+    }
+
+    macro_rules! render_components {
+        ($($component:ty),*) => {
+            $(impl RenderOnce for $component {
+                fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+                    div()
+                }
+            })*
+        };
+    }
+
+    render_components!(
+        LinkedComponent,
+        ProvidedComponent,
+        ReflectedWrapper,
+        UnreflectedComponent
+    );
+
+    #[test]
+    fn diagnoses_component_receiver_mismatches_once_through_the_provider() {
+        assert!(component_reflection_diagnostic::<UnreflectedComponent>().is_none());
+        assert!(component_reflection_diagnostic::<ProvidedComponent>().is_none());
+        <ProvidedComponent as Reflect>::reflection();
+        <ViewElement<ReflectedWrapper> as Reflect>::reflection();
+        assert!(component_reflection_diagnostic::<ReflectedWrapper>().is_none());
+
+        let diagnostic = component_reflection_diagnostic::<LinkedComponent>().unwrap();
+
+        assert!(diagnostic.contains(type_name::<LinkedComponent>()));
+        assert!(diagnostic.contains(type_name::<ViewElement<LinkedComponent>>()));
+        assert!(diagnostic.contains("rendered root is a separate child"));
+        assert!(diagnostic.contains("Reflect a concrete Element"));
+        assert!(component_reflection_diagnostic::<LinkedComponent>().is_none());
+
+        let element = ViewElement::new(ProvidedComponent).into_any_element();
+
+        assert!(component_reflection_diagnostic::<ProvidedComponent>().is_none());
+        assert!(<ProvidedComponent as Reflect>::reflection().implements_trait(Capability));
+        assert!(element.reflected_traits().is_empty());
+        assert!(!element.implements_trait(Capability));
     }
 }

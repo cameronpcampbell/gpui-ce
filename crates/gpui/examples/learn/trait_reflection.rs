@@ -1,53 +1,70 @@
 //! Run with `cargo run -p gpui-ce --example trait_reflection`.
+//!
+//! Reflection follows the concrete element that survives conversion. The default
+//! `IntoElement` derive stores a `ViewElement`, independently of its rendered
+//! root. Animation wrappers also keep their own receiver. `Stateful<Div>` converts
+//! to `Div`, preserving its ID and state without granting reflected stateful methods.
+//! `CardElement` uses `#[into_element(self)]` to retain its concrete receiver. Its
+//! trait derives delegate to `Stateful<Div>`, and its nongeneric `Reflect` derive detects
+//! the builtin traits and registers `Draggable` explicitly.
 
 use gpui::{
-    AnyElement, App, Bounds, Element, ElementId, Empty, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, ParentElement, Pixels, StyleRefinement, Styled, Window,
+    A11ySubtreeBuilder, AnyElement, App, Bounds, Div, Element, ElementId, GlobalElementId,
+    InspectorElementId, InteractiveElement, IntoElement, LayoutId, ParentElement, Pixels,
+    RenderOnce, SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div, px,
     reflection::{self, Reflect},
+    rgb,
 };
+use std::panic::Location;
 
 #[reflection::reflect_trait]
-trait Draggable {}
+pub(crate) trait Draggable {
+    fn drag_payload(&mut self) -> &mut Option<SharedString>;
+}
 
-#[derive(Default, Reflect)]
+#[derive(
+    IntoElement, Styled, InteractiveElement, StatefulInteractiveElement, ParentElement, Reflect,
+)]
+#[into_element(self)]
 #[reflect(Draggable)]
-struct Card {
-    style: StyleRefinement,
-    children: Vec<AnyElement>,
+pub(crate) struct CardElement {
+    #[style(delegate)]
+    #[interactivity(delegate)]
+    #[children(delegate)]
+    inner: Stateful<Div>,
+    pub(crate) drag_payload: Option<SharedString>,
 }
 
-impl Styled for Card {
-    fn style(&mut self) -> &mut StyleRefinement {
-        &mut self.style
+impl CardElement {
+    #[track_caller]
+    pub(crate) fn new(element_id: impl Into<ElementId>) -> Self {
+        Self {
+            inner: div().id(element_id),
+            drag_payload: None,
+        }
     }
 }
 
-impl ParentElement for Card {
-    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
-        self.children.extend(elements);
+impl Draggable for CardElement {
+    fn drag_payload(&mut self) -> &mut Option<SharedString> {
+        &mut self.drag_payload
     }
 }
 
-impl Draggable for Card {}
+impl Element for CardElement {
+    type RequestLayoutState = <Stateful<Div> as Element>::RequestLayoutState;
+    type PrepaintState = <Stateful<Div> as Element>::PrepaintState;
 
-impl IntoElement for Card {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
+    fn reflection(&self) -> &'static reflection::ElementReflection {
+        <Self as Reflect>::reflection()
     }
-}
-
-impl Element for Card {
-    type RequestLayoutState = <Empty as Element>::RequestLayoutState;
-    type PrepaintState = <Empty as Element>::PrepaintState;
 
     fn id(&self) -> Option<ElementId> {
-        None
+        Element::id(&self.inner)
     }
 
-    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-        None
+    fn source_location(&self) -> Option<&'static Location<'static>> {
+        Element::source_location(&self.inner)
     }
 
     fn request_layout(
@@ -57,7 +74,7 @@ impl Element for Card {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        <Empty as Element>::request_layout(&mut Empty, global_id, inspector_id, window, cx)
+        Element::request_layout(&mut self.inner, global_id, inspector_id, window, cx)
     }
 
     fn prepaint(
@@ -69,8 +86,8 @@ impl Element for Card {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        <Empty as Element>::prepaint(
-            &mut Empty,
+        Element::prepaint(
+            &mut self.inner,
             global_id,
             inspector_id,
             bounds,
@@ -90,8 +107,8 @@ impl Element for Card {
         window: &mut Window,
         cx: &mut App,
     ) {
-        <Empty as Element>::paint(
-            &mut Empty,
+        Element::paint(
+            &mut self.inner,
             global_id,
             inspector_id,
             bounds,
@@ -99,31 +116,101 @@ impl Element for Card {
             prepaint,
             window,
             cx,
-        )
+        );
+    }
+
+    fn a11y_role(&self) -> Option<accesskit::Role> {
+        Element::a11y_role(&self.inner)
+    }
+
+    fn is_a11y_hidden(&self) -> bool {
+        Element::is_a11y_hidden(&self.inner)
+    }
+
+    fn write_a11y_info(&self, node: &mut accesskit::Node) {
+        Element::write_a11y_info(&self.inner, node);
+    }
+
+    fn a11y_synthetic_children(
+        &mut self,
+        prepaint: &mut Self::PrepaintState,
+        builder: &mut A11ySubtreeBuilder,
+    ) {
+        Element::a11y_synthetic_children(&mut self.inner, prepaint, builder);
     }
 }
 
-fn main() {
-    let card = Card::default().into_any_element();
+#[derive(IntoElement, Reflect, Default)]
+#[reflect(Draggable)]
+pub(crate) struct Icon {
+    drag_payload: Option<SharedString>,
+}
 
-    println!("Card traits:");
+impl Draggable for Icon {
+    fn drag_payload(&mut self) -> &mut Option<SharedString> {
+        &mut self.drag_payload
+    }
+}
+
+impl RenderOnce for Icon {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        div().size(px(24.)).bg(rgb(0x4a90d9))
+    }
+}
+
+pub(crate) fn set_drag_payload(element: &mut AnyElement, payload: impl Into<SharedString>) {
+    assert!(element.implements_trait(Draggable));
+
+    // Invoke the generated table directly; the receiver must be CardElement.
+    let methods = <CardElement as Reflect>::build_reflection()
+        .into_iter()
+        .find_map(|implementation| {
+            implementation
+                .methods?
+                .downcast::<__GpuiReflectDraggableMethods>()
+                .ok()
+        })
+        .expect("Draggable has a callable table");
+    let receiver = element
+        .downcast_mut::<CardElement>()
+        .expect("the table targets CardElement");
+    *(methods.drag_payload)(receiver) = Some(payload.into());
+}
+
+pub(crate) fn main() {
+    let mut card = CardElement::new("card")
+        .w(px(240.))
+        .h(px(80.))
+        .role(accesskit::Role::Button)
+        .aria_label("Draggable card")
+        .child(div().size(px(24.)))
+        .into_any_element();
+    set_drag_payload(&mut card, "card-data");
+
+    println!("CardElement traits:");
 
     for reflected_trait in card.reflected_traits() {
         println!("  {}", reflected_trait.name);
     }
 
-    println!("Styled: {}", card.implements_trait(gpui::Styled));
     println!(
-        "ParentElement: {}",
-        card.implements_trait(gpui::ParentElement)
-    );
-    println!("Draggable: {}", card.implements_trait(Draggable));
-    println!(
-        "InteractiveElement: {}",
-        card.implements_trait(gpui::InteractiveElement)
+        "Payload after reflected mutation: {:?}",
+        card.downcast_mut::<CardElement>().unwrap().drag_payload
     );
 
-    let empty = Empty.into_any_element();
+    let icon = Icon::default().into_any_element();
+    let stateful_div = div().id("ordinary-card").into_any_element();
 
-    println!("Empty Styled: {}", empty.implements_trait(gpui::Styled));
+    println!(
+        "ViewElement<Icon> Draggable: {}",
+        icon.implements_trait(Draggable)
+    );
+    println!(
+        "ViewElement<Icon> Styled: {}",
+        icon.implements_trait(gpui::Styled)
+    );
+    println!(
+        "Div StatefulInteractiveElement: {}",
+        stateful_div.implements_trait(gpui::StatefulInteractiveElement)
+    );
 }

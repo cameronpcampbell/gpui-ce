@@ -35,24 +35,28 @@ pub fn register_action(ident: TokenStream) -> TokenStream {
 
 /// #[derive(IntoElement)] generates an `IntoElement` impl for any `RenderOnce`
 /// type, wrapping it in a `ViewElement` so it can be used as a child.
-#[proc_macro_derive(IntoElement)]
+/// Concrete `Element` types use `#[into_element(self)]` to convert to themselves.
+#[proc_macro_derive(IntoElement, attributes(into_element))]
 pub fn derive_into_element(input: TokenStream) -> TokenStream {
     derive_into_element::derive_into_element(input)
 }
 
 /// Implements `Styled` using the field marked `#[style]`.
+/// Use `#[style(delegate)]` to call that field's `Styled::style` method.
 #[proc_macro_derive(Styled, attributes(style))]
 pub fn derive_styled(input: TokenStream) -> TokenStream {
     derive_element_traits::derive_styled(input)
 }
 
 /// Implements `ParentElement` using the field marked `#[children]`.
+/// Use `#[children(delegate)]` to forward to that field's `ParentElement` implementation.
 #[proc_macro_derive(ParentElement, attributes(children))]
 pub fn derive_parent_element(input: TokenStream) -> TokenStream {
     derive_element_traits::derive_parent_element(input)
 }
 
 /// Implements `InteractiveElement` using the field marked `#[interactivity]`.
+/// Use `#[interactivity(delegate)]` to call that field's `interactivity` method.
 #[proc_macro_derive(InteractiveElement, attributes(interactivity))]
 pub fn derive_interactive_element(input: TokenStream) -> TokenStream {
     derive_element_traits::derive_interactive_element(input)

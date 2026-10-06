@@ -1,11 +1,21 @@
+#[path = "../examples/learn/trait_reflection.rs"]
+#[allow(dead_code)]
+mod component_example;
+
 #[cfg(test)]
 mod tests {
-    use gpui::{
-        AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId,
-        Interactivity, IntoElement, LayoutId, Pixels, StyleRefinement, Window,
+    use crate::component_example::{
+        CardElement, Draggable as ComponentDraggable, Icon, set_drag_payload,
     };
-
     use gpui::reflection::{Reflect, ReflectionToken};
+    use gpui::{
+        Animation, AnimationElement, AnimationExt, AnyElement, App, Bounds, Div, Element,
+        ElementId, GlobalElementId, InspectorElementId, InteractiveElement, Interactivity,
+        IntoElement, LayoutId, ParentElement, Pixels, SpringAnimation, SpringAnimationElement,
+        SpringConfig, StatefulInteractiveElement, StyleRefinement, Styled, ViewElement, Window,
+        div, px,
+    };
+    use std::{any::TypeId, time::Duration};
 
     #[gpui::reflection::reflect_trait]
     trait Draggable {
@@ -345,6 +355,94 @@ mod tests {
         assert_eq!((inherited_methods.drag)(&mut inherited, 3), 3);
 
         assert_eq!((control.distance, inherited.distance), (6, 3));
+    }
+
+    #[test]
+    fn component_and_wrapper_reflection_use_their_concrete_receivers() {
+        let card = CardElement::new("card")
+            .size(px(80.))
+            .role(accesskit::Role::Button)
+            .aria_label("Card")
+            .aria_hidden()
+            .child(div());
+
+        assert_eq!(Element::id(&card), Some("card".into()));
+        assert_eq!(card.a11y_role(), Some(accesskit::Role::Button));
+        assert!(card.is_a11y_hidden());
+        assert_eq!(card.source_location().is_some(), cfg!(debug_assertions));
+
+        let mut node = accesskit::Node::new(accesskit::Role::Button);
+        card.write_a11y_info(&mut node);
+        assert_eq!(node.label(), Some("Card"));
+
+        let mut element = card.into_any_element();
+
+        assert_eq!(
+            element.reflection().concrete_type(),
+            Some(TypeId::of::<CardElement>())
+        );
+
+        for requirement in [
+            gpui::Styled.requirement(),
+            gpui::ParentElement.requirement(),
+            gpui::InteractiveElement.requirement(),
+            gpui::StatefulInteractiveElement.requirement(),
+            ComponentDraggable.requirement(),
+        ] {
+            assert!(element.reflection().satisfies(requirement));
+        }
+
+        set_drag_payload(&mut element, "public-path");
+        assert_eq!(
+            element.downcast_mut::<CardElement>().unwrap().drag_payload,
+            Some("public-path".into())
+        );
+
+        let mut stateful_div = div().id("card").into_any_element();
+
+        assert!(stateful_div.implements_trait(gpui::InteractiveElement));
+        assert!(!stateful_div.implements_trait(gpui::StatefulInteractiveElement));
+        assert_eq!(
+            Element::id(stateful_div.downcast_mut::<Div>().unwrap()),
+            Some("card".into())
+        );
+
+        let mut icon = Icon::default().into_any_element();
+
+        assert!(<Icon as Reflect>::reflection().implements_trait(ComponentDraggable));
+        assert!(icon.downcast_mut::<ViewElement<Icon>>().is_some());
+
+        let mut animation = CardElement::new("card")
+            .with_animation(
+                "animation",
+                Animation::new(Duration::from_secs(1)),
+                |element, _progress| element,
+            )
+            .into_any_element();
+        let mut spring = CardElement::new("card")
+            .with_spring(
+                "spring",
+                SpringAnimation::new(SpringConfig::new(100., 10., 1.)).to(1.),
+                |element, _progress| element,
+            )
+            .into_any_element();
+
+        assert!(
+            animation
+                .downcast_mut::<AnimationElement<CardElement>>()
+                .is_some()
+        );
+        assert!(
+            spring
+                .downcast_mut::<SpringAnimationElement<CardElement>>()
+                .is_some()
+        );
+
+        for wrapper in [icon, animation, spring] {
+            assert!(!wrapper.implements_trait(ComponentDraggable));
+            assert!(!wrapper.implements_trait(gpui::Styled));
+            assert!(!wrapper.implements_trait(gpui::StatefulInteractiveElement));
+        }
     }
 
     #[cfg(any(

@@ -8,6 +8,15 @@
 //!
 //! `#[reflect_trait(membership)]` permits associated items and generic methods
 //! without granting callable access.
+//!
+//! Reflection describes the concrete element stored after conversion. A
+//! `ViewElement<Icon>` does not inherit traits registered for `Icon` or its rendered
+//! root. Animation elements likewise keep their own receiver. `Stateful<E>` is a
+//! builder that converts to `E::Element`, so assigning an ID to a `Div` does not
+//! give the erased `Div` the `StatefulInteractiveElement` trait.
+//! A component can retain custom traits by implementing `Element` on its outer
+//! concrete type and delegating directly to a stored element, as in the
+//! `trait_reflection` example.
 
 use crate::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
@@ -27,6 +36,11 @@ use std::{
     panic,
     sync::LazyLock,
 };
+
+#[cfg(test)]
+#[path = "../examples/learn/trait_reflection.rs"]
+#[allow(dead_code)]
+mod component_example;
 
 /// Identifies a trait made available to element reflection.
 #[derive(Clone, Copy, Debug)]
@@ -402,6 +416,11 @@ where
 
 /// Supplies concrete registrations through `build_reflection`.
 /// Handwritten and generic providers must forward [`Element::reflection`] to `Reflect::reflection`.
+///
+/// Registrations belong to `Self`. Deriving this trait on a [`crate::RenderOnce`]
+/// component does not reflect its [`crate::ViewElement`] wrapper or rendered root.
+/// For callable component traits after erasure, implement and reflect those traits
+/// on the concrete [`Element`] that survives conversion.
 pub trait Reflect: Sized + 'static {
     /// Builds deterministic registrations without retaining element instances or callback state.
     fn build_reflection() -> Vec<ReflectedImplementation>;
@@ -666,11 +685,13 @@ pub fn registered_traits(type_id: TypeId) -> &'static [ReflectedTrait] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reflection::component_example::{CardElement, Draggable, Icon};
     use crate::{
-        Div, Empty, InteractiveElement, ParentElement, StyleRefinement, Styled, div, hsla, rgb,
+        AppContext, Context, Div, Empty, InteractiveElement, MouseButton, ParentElement, Render,
+        StatefulInteractiveElement, StyleRefinement, Styled, TestApp, div, hsla, point, px, rgb,
     };
     use std::{
-        cell::Cell,
+        cell::{Cell, RefCell},
         rc::Rc,
         sync::{
             Barrier,
@@ -1180,6 +1201,182 @@ mod tests {
 
         assert!(!std::ptr::eq(first, second));
         assert!(std::ptr::eq(first, style_canvas::<u32>()));
+    }
+
+    struct ComponentView {
+        use_component: bool,
+        hovers: Rc<RefCell<Vec<bool>>>,
+        clicks: Rc<Cell<usize>>,
+    }
+
+    fn configure_component<Target>(
+        element: Target,
+        hovers: Rc<RefCell<Vec<bool>>>,
+        clicks: Rc<Cell<usize>>,
+    ) -> Target
+    where
+        Target: Styled + ParentElement + StatefulInteractiveElement,
+    {
+        let element = element
+            .w(px(160.))
+            .h(px(80.))
+            .bg(rgb(0x123456))
+            .role(accesskit::Role::Button)
+            .accessibility_id("card")
+            .aria_label("Draggable card")
+            .on_hover(move |hovered, _window, _cx| hovers.borrow_mut().push(*hovered))
+            .on_click(move |_event, _window, _cx| clicks.set(clicks.get() + 1))
+            .child(
+                div()
+                    .id("child")
+                    .size(px(24.))
+                    .role(accesskit::Role::Image)
+                    .aria_label("Child"),
+            );
+
+        StatefulInteractiveElement::a11y_synthetic_children(element, |builder| {
+            let node_id = builder.synthetic_node_id("payload");
+            let mut node = accesskit::Node::new(accesskit::Role::Label);
+            node.set_label("Payload");
+            assert!(builder.push_child(node_id, node));
+        })
+    }
+
+    fn reflect_component<Traits>(
+        element: AnyElement,
+        _traits: Traits,
+        hovers: Rc<RefCell<Vec<bool>>>,
+        clicks: Rc<Cell<usize>>,
+    ) -> AnyElement
+    where
+        Traits: ReflectedTraits,
+        ReflectedElement<Traits::Group>:
+            Draggable + Styled + ParentElement + StatefulInteractiveElement,
+    {
+        let metadata = element.reflection();
+        let mut reflected = ReflectedElement::<Traits::Group>::new(element);
+        *reflected.drag_payload() = Some("card-data".into());
+
+        let mut element = configure_component(reflected, hovers, clicks).into_any_element();
+
+        assert_eq!(
+            element.downcast_mut::<CardElement>().unwrap().drag_payload,
+            Some("card-data".into())
+        );
+        assert!(std::ptr::eq(metadata, element.reflection()));
+        assert_eq!(metadata.concrete_type(), Some(TypeId::of::<CardElement>()));
+
+        element
+    }
+
+    impl Render for ComponentView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let element = if self.use_component {
+                reflect_component(
+                    CardElement::new("card").into_any_element(),
+                    trait_set![
+                        crate::reflection::component_example::Draggable,
+                        crate::Styled,
+                        crate::ParentElement,
+                        crate::StatefulInteractiveElement,
+                    ],
+                    self.hovers.clone(),
+                    self.clicks.clone(),
+                )
+            } else {
+                configure_component(div().id("card"), self.hovers.clone(), self.clicks.clone())
+                    .into_any_element()
+            };
+
+            div()
+                .flex()
+                .flex_col()
+                .child(element)
+                .child(Icon::default())
+        }
+    }
+
+    #[test]
+    fn component_delegation_preserves_reflected_mutations_state_and_accessibility() {
+        let mut app = TestApp::new();
+        let hovers = Rc::new(RefCell::new(Vec::new()));
+        let clicks = Rc::new(Cell::new(0));
+        let mut window = app.open_window({
+            let hovers = hovers.clone();
+            let clicks = clicks.clone();
+
+            move |_window, _cx| ComponentView {
+                use_component: false,
+                hovers,
+                clicks,
+            }
+        });
+        let handle = window.handle().into();
+        app.update(|cx| {
+            cx.update_window(handle, |_view, window, cx| {
+                window.set_a11y_forced(true);
+                window.draw(cx).clear(cx);
+            })
+            .unwrap();
+        });
+
+        let inspect_tree = |window: &Window| {
+            let tree = window.a11y_tree().unwrap();
+            let (card_id, card) = tree
+                .nodes
+                .iter()
+                .find(|(_node_id, node)| node.author_id() == Some("card"))
+                .unwrap();
+            let (child_id, _child) = tree
+                .nodes
+                .iter()
+                .find(|(_node_id, node)| node.label() == Some("Child"))
+                .unwrap();
+            let (payload_id, _payload) = tree
+                .nodes
+                .iter()
+                .find(|(_node_id, node)| node.label() == Some("Payload"))
+                .unwrap();
+
+            assert_eq!(card.role(), accesskit::Role::Button);
+            assert_eq!(card.label(), Some("Draggable card"));
+            assert!(card.children().contains(child_id));
+            assert!(card.children().contains(payload_id));
+            assert_eq!(
+                window.a11y_node_bounds(*card_id).unwrap().size,
+                crate::size(px(160.), px(80.))
+            );
+            assert_eq!(
+                window.a11y_node_bounds(*child_id).unwrap().size,
+                crate::size(px(24.), px(24.))
+            );
+
+            (*card_id, *child_id, *payload_id)
+        };
+        let direct_ids = window.update(|_view, window, _cx| inspect_tree(window));
+
+        window.simulate_mouse_move(point(px(80.), px(40.)));
+        assert_eq!(*hovers.borrow(), [true]);
+
+        for use_component in [true, true, false] {
+            window.update(|view, _window, cx| {
+                view.use_component = use_component;
+                cx.notify();
+            });
+            app.update(|cx| {
+                cx.update_window(handle, |_view, window, cx| {
+                    window.draw(cx).clear(cx);
+                    assert_eq!(inspect_tree(window), direct_ids);
+                })
+                .unwrap();
+            });
+            assert_eq!(*hovers.borrow(), [true]);
+            window.simulate_click(point(px(80.), px(40.)), MouseButton::Left);
+        }
+
+        assert_eq!(clicks.get(), 3);
+        window.simulate_mouse_move(point(px(200.), px(100.)));
+        assert_eq!(*hovers.borrow(), [true, false]);
     }
 
     #[test]
