@@ -2,7 +2,7 @@ use crate::{
     AnyElement, ElementId, ImageStyle, InteractiveElement, Interactivity, IntoElement,
     IntoItemMatch, IntoListMatch, IntoMatchValues, ItemMatch, ListMatch, ParentElement,
     ParentElementTyped, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
-    StyledImage, TextStyleRefinement,
+    StyledImage, TextStyleRefinement, Window,
     reflection::{
         ElementReflection, ReflectedElement, ReflectedTraits, ReflectionGroup,
         ReflectionRequirement,
@@ -400,6 +400,9 @@ pub trait SelectableElement: IntoElement + Sized {
     ///
     /// The callback may run for measurements or retries, so keep results repeatable
     /// and avoid changing application state.
+    /// Elements erased inside a callback keep its generation provenance even when
+    /// retained for later use. The construction scope is synchronous and cannot
+    /// cross an asynchronous suspension.
     fn select<Group, Output>(
         self,
         selector: Select<Group>,
@@ -442,7 +445,7 @@ impl ElementMetadata {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SelectorRuleId(u64);
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct LayoutAttemptId(u64);
 
 struct SelectorVisit {
@@ -547,32 +550,98 @@ struct SelectorBinding {
     depth: usize,
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct SelectorContext {
+#[derive(Clone)]
+struct SelectorContext {
     bindings: SmallVec<[SelectorBinding; 4]>,
     measurement_depth: usize,
     attempt: LayoutAttemptId,
     generated_by: SmallVec<[SelectorRuleId; 2]>,
 }
 
+#[derive(Clone)]
+struct SelectorOwner(Rc<()>);
+
+impl SelectorOwner {
+    fn matches(&self, owner: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &owner.0)
+    }
+}
+
+pub(crate) struct SelectorRuntime {
+    owner: SelectorOwner,
+    context: Rc<RefCell<Option<SelectorContext>>>,
+}
+
+impl SelectorRuntime {
+    pub(crate) fn new() -> Self {
+        Self {
+            owner: SelectorOwner(Rc::new(())),
+            context: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    fn with_context<ResultType>(
+        &self,
+        operation: impl FnOnce(&SelectorContext) -> ResultType,
+    ) -> ResultType {
+        let context = self.context.borrow();
+
+        operation(
+            context
+                .as_ref()
+                .expect("selector traversal requires an active attempt"),
+        )
+    }
+
+    fn with_context_mut<ResultType>(
+        &self,
+        operation: impl FnOnce(&mut SelectorContext) -> ResultType,
+    ) -> ResultType {
+        let mut context = self.context.borrow_mut();
+
+        operation(
+            context
+                .as_mut()
+                .expect("selector traversal requires an active attempt"),
+        )
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SelectorSnapshot {
+    owner: SelectorOwner,
+    context: SelectorContext,
+}
+
+struct ConstructionAncestry {
+    owner: SelectorOwner,
+    generated_by: SmallVec<[SelectorRuleId; 2]>,
+}
+
 thread_local! {
-    static SELECTOR_CONTEXT: RefCell<SelectorContext> = RefCell::new(SelectorContext::default());
+    // Constructors have no window parameter. This bridge carries only synchronous
+    // erasure provenance, including for elements retained after a generating callback.
+    static CONSTRUCTION_ANCESTRY: RefCell<Option<ConstructionAncestry>> = const { RefCell::new(None) };
     static NEXT_SELECTOR_RULE_ID: Cell<u64> = const { Cell::new(1) };
     static NEXT_LAYOUT_ATTEMPT_ID: Cell<u64> = const { Cell::new(1) };
 }
 
-pub(crate) fn has_active_selectors() -> bool {
-    SELECTOR_CONTEXT.with_borrow(|context| !context.bindings.is_empty())
+pub(crate) fn has_active_selectors(window: &Window) -> bool {
+    window
+        .selector_runtime()
+        .with_context(|context| !context.bindings.is_empty())
 }
 
-pub(crate) fn has_generation_ancestry() -> bool {
-    SELECTOR_CONTEXT.with_borrow(|context| !context.generated_by.is_empty())
+pub(crate) fn has_generation_ancestry(window: &Window) -> bool {
+    window
+        .selector_runtime()
+        .with_context(|context| !context.generated_by.is_empty())
 }
 
 // Binding depths already describe the rendered root. Shared counters reflect deferred
 // execution and transaction rollback at the time of this query.
-pub(crate) fn selectors_can_affect_view_contents() -> bool {
-    SELECTOR_CONTEXT.with_borrow(|context| {
+pub(crate) fn selectors_can_affect_view_contents(window: &Window) -> bool {
+    window.selector_runtime().with_context(|context| {
         let measuring = context.measurement_depth > 0;
 
         context.bindings.iter().any(|binding| {
@@ -586,29 +655,93 @@ pub(crate) fn selectors_can_affect_view_contents() -> bool {
     })
 }
 
-pub(crate) fn capture_selector_context() -> SelectorContext {
-    SELECTOR_CONTEXT.with_borrow(Clone::clone)
+fn capture_selector_context(window: &Window) -> SelectorContext {
+    window.selector_runtime().with_context(Clone::clone)
+}
+
+pub(crate) fn capture_selector_snapshot(window: &Window) -> SelectorSnapshot {
+    SelectorSnapshot {
+        owner: window.selector_runtime().owner.clone(),
+        context: capture_selector_context(window),
+    }
+}
+
+pub(crate) struct ConstructionAncestryGuard {
+    previous: Option<Option<ConstructionAncestry>>,
+}
+
+impl ConstructionAncestryGuard {
+    fn enter(owner: SelectorOwner, generated_by: SmallVec<[SelectorRuleId; 2]>) -> Self {
+        let unchanged = CONSTRUCTION_ANCESTRY.with_borrow(|construction| {
+            construction.as_ref().is_some_and(|construction| {
+                construction.owner.matches(&owner) && construction.generated_by == generated_by
+            })
+        });
+
+        if unchanged {
+            return Self { previous: None };
+        }
+
+        let previous = CONSTRUCTION_ANCESTRY.replace(Some(ConstructionAncestry {
+            owner,
+            generated_by,
+        }));
+
+        Self {
+            previous: Some(previous),
+        }
+    }
+}
+
+impl Drop for ConstructionAncestryGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.take() {
+            CONSTRUCTION_ANCESTRY.replace(previous);
+        }
+    }
+}
+
+pub(crate) fn selector_construction_boundary(window: &Window) -> ConstructionAncestryGuard {
+    let runtime = window.selector_runtime();
+    let generated_by = runtime
+        .context
+        .borrow()
+        .as_ref()
+        .map(|context| context.generated_by.clone())
+        .unwrap_or_default();
+
+    ConstructionAncestryGuard::enter(runtime.owner.clone(), generated_by)
 }
 
 pub(crate) struct SelectorContextGuard {
-    previous: SelectorContext,
+    runtime: Rc<RefCell<Option<SelectorContext>>>,
+    previous: Option<SelectorContext>,
+    _construction: ConstructionAncestryGuard,
 }
 
 impl SelectorContextGuard {
-    fn enter(context: SelectorContext) -> Self {
-        let previous = SELECTOR_CONTEXT.replace(context);
+    fn enter(window: &Window, context: SelectorContext) -> Self {
+        let runtime = window.selector_runtime();
+        let construction =
+            ConstructionAncestryGuard::enter(runtime.owner.clone(), context.generated_by.clone());
 
-        Self { previous }
+        let previous = runtime.context.replace(Some(context));
+
+        Self {
+            runtime: runtime.context.clone(),
+            previous,
+            _construction: construction,
+        }
     }
 }
 
 impl Drop for SelectorContextGuard {
     fn drop(&mut self) {
-        SELECTOR_CONTEXT.replace(std::mem::take(&mut self.previous));
+        self.runtime.replace(self.previous.take());
     }
 }
 
-pub(crate) fn begin_selector_layout_attempt() -> SelectorContextGuard {
+pub(crate) fn begin_selector_layout_attempt(window: &Window) -> SelectorContextGuard {
     let attempt = NEXT_LAYOUT_ATTEMPT_ID.with(|next| {
         let attempt = next.get();
         next.set(
@@ -620,39 +753,80 @@ pub(crate) fn begin_selector_layout_attempt() -> SelectorContextGuard {
         LayoutAttemptId(attempt)
     });
 
-    SelectorContextGuard::enter(SelectorContext {
-        attempt,
-        ..SelectorContext::default()
-    })
+    SelectorContextGuard::enter(
+        window,
+        SelectorContext {
+            bindings: SmallVec::new(),
+            measurement_depth: 0,
+            attempt,
+            generated_by: SmallVec::new(),
+        },
+    )
 }
 
-pub(crate) fn with_selector_context<ResultType>(
+pub(crate) fn ensure_selector_layout_attempt(window: &Window) -> Option<SelectorContextGuard> {
+    if window.selector_runtime().context.borrow().is_some() {
+        return None;
+    }
+
+    Some(begin_selector_layout_attempt(window))
+}
+
+fn with_selector_context<ResultType>(
+    window: &mut Window,
     context: SelectorContext,
-    operation: impl FnOnce() -> ResultType,
+    operation: impl FnOnce(&mut Window) -> ResultType,
 ) -> ResultType {
-    let context_guard = SelectorContextGuard::enter(context);
-    let result = operation();
+    let context_guard = SelectorContextGuard::enter(window, context);
+    let result = operation(window);
     drop(context_guard);
 
     result
 }
 
-pub(crate) fn generation_ancestry() -> SmallVec<[SelectorRuleId; 2]> {
-    SELECTOR_CONTEXT.with_borrow(|context| context.generated_by.clone())
+pub(crate) fn with_selector_snapshot<ResultType>(
+    window: &mut Window,
+    snapshot: SelectorSnapshot,
+    operation: impl FnOnce(&mut Window) -> ResultType,
+) -> ResultType {
+    let runtime = window.selector_runtime();
+    assert!(
+        runtime.owner.matches(&snapshot.owner),
+        "selector snapshot belongs to another window"
+    );
+
+    runtime.with_context(|context| {
+        assert!(
+            context.attempt == snapshot.context.attempt,
+            "selector snapshot belongs to an ended attempt"
+        );
+    });
+
+    with_selector_context(window, snapshot.context, operation)
+}
+
+pub(crate) fn construction_ancestry() -> SmallVec<[SelectorRuleId; 2]> {
+    CONSTRUCTION_ANCESTRY.with_borrow(|construction| {
+        construction
+            .as_ref()
+            .map(|construction| construction.generated_by.clone())
+            .unwrap_or_default()
+    })
 }
 
 pub(crate) fn with_generation_ancestry<ResultType>(
+    window: &mut Window,
     generated_by: SmallVec<[SelectorRuleId; 2]>,
-    operation: impl FnOnce() -> ResultType,
+    operation: impl FnOnce(&mut Window) -> ResultType,
 ) -> ResultType {
-    let mut context = capture_selector_context();
+    let mut context = capture_selector_context(window);
     context.generated_by = generated_by;
 
-    with_selector_context(context, operation)
+    with_selector_context(window, context, operation)
 }
 
-fn activate_attached_selectors(selectors: &[PendingSelector]) {
-    SELECTOR_CONTEXT.with_borrow_mut(|context| {
+fn activate_attached_selectors(window: &Window, selectors: &[PendingSelector]) {
+    window.selector_runtime().with_context_mut(|context| {
         for selector in selectors {
             if context
                 .bindings
@@ -671,23 +845,26 @@ fn activate_attached_selectors(selectors: &[PendingSelector]) {
 }
 
 pub(crate) fn with_attached_selectors<ResultType>(
+    window: &mut Window,
     selectors: &[PendingSelector],
-    operation: impl FnOnce() -> ResultType,
+    operation: impl FnOnce(&mut Window) -> ResultType,
 ) -> ResultType {
-    with_selector_context(capture_selector_context(), || {
-        activate_attached_selectors(selectors);
+    with_selector_context(window, capture_selector_context(window), |window| {
+        activate_attached_selectors(window, selectors);
 
-        operation()
+        operation(window)
     })
 }
 
 pub(crate) fn with_selector_measurement<ResultType>(
-    operation: impl FnOnce() -> ResultType,
+    window: &mut Window,
+    operation: impl FnOnce(&mut Window) -> ResultType,
 ) -> ResultType {
-    let mut context = capture_selector_context();
+    let _attempt = ensure_selector_layout_attempt(window);
+    let mut context = capture_selector_context(window);
     context.measurement_depth += 1;
 
-    with_selector_context(context, operation)
+    with_selector_context(window, context, operation)
 }
 
 struct SelectorTransactionGuard {
@@ -695,8 +872,8 @@ struct SelectorTransactionGuard {
 }
 
 impl SelectorTransactionGuard {
-    fn checkpoint() -> Self {
-        let positions = SELECTOR_CONTEXT.with_borrow(|context| {
+    fn checkpoint(window: &Window) -> Self {
+        let positions = window.selector_runtime().with_context(|context| {
             context
                 .bindings
                 .iter()
@@ -724,10 +901,13 @@ impl Drop for SelectorTransactionGuard {
 }
 
 pub(crate) fn with_selector_transaction<Success, Failure>(
-    operation: impl FnOnce() -> Result<Success, Failure>,
+    window: &mut Window,
+    operation: impl FnOnce(&mut Window) -> Result<Success, Failure>,
 ) -> Result<Success, Failure> {
-    let mut guard = SelectorTransactionGuard::checkpoint();
-    let result = operation();
+    let _attempt = ensure_selector_layout_attempt(window);
+    let _construction = selector_construction_boundary(window);
+    let mut guard = SelectorTransactionGuard::checkpoint(window);
+    let result = operation(window);
 
     if result.is_ok() {
         guard.commit();
@@ -739,28 +919,31 @@ pub(crate) fn with_selector_transaction<Success, Failure>(
 }
 
 pub(crate) fn with_deeper_selector_depth<ResultType>(
-    operation: impl FnOnce() -> ResultType,
+    window: &mut Window,
+    operation: impl FnOnce(&mut Window) -> ResultType,
 ) -> ResultType {
-    let mut context = capture_selector_context();
+    let mut context = capture_selector_context(window);
 
     for binding in &mut context.bindings {
         binding.depth += 1;
     }
 
-    with_selector_context(context, operation)
+    with_selector_context(window, context, operation)
 }
 
-pub(crate) fn apply_active_selectors(element: &mut AnyElement) {
+pub(crate) fn apply_active_selectors(window: &mut Window, element: &mut AnyElement) {
     let mut selector_idx = 0;
 
     loop {
-        let Some((binding, measuring, attempt)) = SELECTOR_CONTEXT.with_borrow(|context| {
-            context
-                .bindings
-                .get(selector_idx)
-                .cloned()
-                .map(|binding| (binding, context.measurement_depth > 0, context.attempt))
-        }) else {
+        let Some((binding, measuring, attempt)) =
+            window.selector_runtime().with_context(|context| {
+                context
+                    .bindings
+                    .get(selector_idx)
+                    .cloned()
+                    .map(|binding| (binding, context.measurement_depth > 0, context.attempt))
+            })
+        else {
             break;
         };
 
@@ -803,7 +986,7 @@ pub(crate) fn apply_active_selectors(element: &mut AnyElement) {
         let mut ancestry = selected.selector_generation_ancestry();
         ancestry.push(rule.identity);
 
-        let replacement = with_generation_ancestry(ancestry, || {
+        let replacement = with_generation_ancestry(window, ancestry, |_window| {
             callback
                 .transform
                 .as_mut()
@@ -817,7 +1000,7 @@ pub(crate) fn apply_active_selectors(element: &mut AnyElement) {
 
         element.replace(replacement);
         element.inherit_attached_selectors(attached);
-        activate_attached_selectors(&element.attached_selectors());
+        activate_attached_selectors(window, &element.attached_selectors());
     }
 }
 
@@ -825,6 +1008,7 @@ pub(crate) fn apply_active_selectors(element: &mut AnyElement) {
 mod tests {
     use super::*;
     use crate::reflection::test_fixtures::{self, TestElement, TestValue};
+    use crate::window::DrawPhase;
     use crate::{
         Animation, AnimationExt, AnyView, AnyWindowHandle, App, AppContext, AvailableSpace, Bounds,
         Canvas, Context, Div, Element, Empty, Entity, FocusHandle, GlobalElementId,
@@ -1091,6 +1275,56 @@ mod tests {
         .into_any_element()
     }
 
+    fn construct_window_row(label: &'static str, window: &mut Window, cx: &mut App) -> AnyElement {
+        window.invalidator.set_phase(DrawPhase::Prepaint);
+        let mut probe = selector_row("window-probe")
+            .class("row")
+            .select(
+                Select::this().class("row").reflects(crate::Styled).nth(0),
+                |element| element.w(px(24.)),
+            )
+            .into_any_element();
+        assert_eq!(
+            probe.layout_as_root(AvailableSpace::min_size(), window, cx),
+            size(px(24.), px(8.))
+        );
+        window.invalidator.set_phase(DrawPhase::None);
+
+        selector_row(label).class("row").into_any_element()
+    }
+
+    fn reject_snapshot_and_layout(
+        snapshot: SelectorSnapshot,
+        label: &'static str,
+        selected: Rc<RefCell<Vec<ElementId>>>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        window.invalidator.set_phase(DrawPhase::Prepaint);
+        let _attempt = begin_selector_layout_attempt(window);
+        let selector = PendingSelector::new(
+            Select::this().class("row").nth(0).into_matcher(),
+            Box::new(move |element| {
+                record_match(&selected, &element);
+
+                element
+            }),
+        );
+
+        with_attached_selectors(window, &[selector], |window| {
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                with_selector_snapshot(window, snapshot, |window| {
+                    layout_selector_row("rejected", window, cx);
+                });
+            }));
+            assert!(result.is_err());
+
+            layout_selector_row(label, window, cx);
+        });
+
+        window.invalidator.set_phase(DrawPhase::None);
+    }
+
     fn selector_canvas<State: 'static>(
         label: &'static str,
         state: State,
@@ -1111,17 +1345,16 @@ mod tests {
         window: &mut Window,
         cx: &mut App,
     ) -> Result<(), ()> {
-        with_selector_context(capture_selector_context(), || {
+        with_selector_context(window, capture_selector_context(window), |window| {
             window.transact(|window| {
-                SELECTOR_CONTEXT.with_borrow_mut(|context| context.bindings.reverse());
+                window
+                    .selector_runtime()
+                    .with_context_mut(|context| context.bindings.reverse());
 
                 let mut element = selector_row("inner")
                     .class("row")
                     .select(Select::this().class("row").every(1), move |element| {
                         record_match(&attached, &element.element);
-
-                        // Checkpoints can retain a rule while its callback is leased.
-                        assert!(with_selector_transaction(|| Err::<(), ()>(())).is_err());
 
                         element
                     })
@@ -1129,7 +1362,9 @@ mod tests {
                 element.layout_as_root(AvailableSpace::min_size(), window, cx);
 
                 // Removed bindings still share progress with the enclosing scope.
-                SELECTOR_CONTEXT.with_borrow_mut(|context| context.bindings.clear());
+                window
+                    .selector_runtime()
+                    .with_context_mut(|context| context.bindings.clear());
 
                 if fails {
                     return Err(());
@@ -2134,18 +2369,13 @@ mod tests {
                         }
 
                         // A new attempt cannot make a requested drawable transform again.
-                        with_selector_context(
-                            SelectorContext {
-                                attempt: LayoutAttemptId(u64::MAX),
-                                ..capture_selector_context()
-                            },
-                            || {
-                                assert_eq!(
-                                    retained.layout_as_root(available, window, cx),
-                                    expected_size
-                                );
-                            },
-                        );
+                        {
+                            let _attempt = begin_selector_layout_attempt(window);
+                            assert_eq!(
+                                retained.layout_as_root(available, window, cx),
+                                expected_size
+                            );
+                        }
 
                         div().children((1_usize..5).map(|idx| div().id(("row", idx)).class("row")))
                     }))
@@ -2240,14 +2470,195 @@ mod tests {
                 "surviving",
             ],
         );
-        assert!(!has_active_selectors());
-        assert!(generation_ancestry().is_empty());
+        assert!(construction_ancestry().is_empty());
 
         draw_selector_tree(cx, || {
             div()
                 .child(div().class("row"))
                 .select(Select::descendants().class("row"), |element| element)
         });
+    }
+
+    #[crate::test]
+    fn window_boundaries_isolate_rules_positions_and_construction(cx: &mut TestAppContext) {
+        let other_app = Rc::new(RefCell::new(cx.new_app()));
+        let outer = cx.add_window(|_window, _cx| Empty);
+        let selected = Rc::new(RefCell::new(Vec::new()));
+        let positioned = Rc::new(RefCell::new(Vec::new()));
+        let observed = selected.clone();
+        let indexed = positioned.clone();
+        let callback_app = other_app.clone();
+
+        let mut visual = VisualTestContext::from_window(outer.into(), cx);
+
+        visual.draw(
+            Default::default(),
+            size(px(100.), px(100.)),
+            |_window, _cx| {
+                div()
+                    .child(
+                        selector_row("original")
+                            .class("row")
+                            .child(crate::container_query(|_size, _window, _cx| {
+                                selector_row("original-late").class("row")
+                            })),
+                    )
+                    .child(selector_row("after").class("row"))
+                    .select(Select::descendants().class("row"), move |element| {
+                        record_match(&observed, &element.element);
+
+                        if element.element.element_id() != Some(ElementId::from("original")) {
+                            return element.into_any_element();
+                        }
+
+                        let (other, other_row) = callback_app.borrow_mut().update(|cx| {
+                            let mut retained = None;
+                            let other = cx
+                                .open_window(Default::default(), |window, cx| {
+                                    retained = Some(construct_window_row("other-app", window, cx));
+
+                                    cx.new(|_cx| Empty)
+                                })
+                                .unwrap();
+
+                            (other, retained.unwrap())
+                        });
+                        assert_eq!(other.window_id(), outer.window_id());
+
+                        let generated = selector_row("retained-generated")
+                            .class("row")
+                            .into_any_element();
+
+                        crate::container_query(move |_size, _window, cx| {
+                            let mut retained = None;
+                            let second = cx
+                                .open_window(Default::default(), |window, cx| {
+                                    retained = Some(construct_window_row("new-window", window, cx));
+
+                                    cx.new(|_cx| Empty)
+                                })
+                                .unwrap();
+                            let new_row = retained.unwrap();
+                            let updated_row = cx
+                                .update_window(second.into(), |_view, window, cx| {
+                                    construct_window_row("updated-window", window, cx)
+                                })
+                                .unwrap();
+
+                            div()
+                                .child(element)
+                                .child(other_row)
+                                .child(new_row)
+                                .child(updated_row)
+                                .child(generated)
+                                .child(selector_row("generated-late").class("row"))
+                        })
+                        .into_any_element()
+                    })
+                    .select(Select::descendants().class("row").nth(0), move |element| {
+                        record_match(&indexed, &element.element);
+
+                        element
+                    })
+                    .into_any_element()
+            },
+        );
+
+        assert_matches(
+            &selected,
+            &[
+                "original",
+                "after",
+                "other-app",
+                "new-window",
+                "updated-window",
+                "original-late",
+            ],
+        );
+        assert_matches(&positioned, &["after"]);
+        assert!(construction_ancestry().is_empty());
+        other_app.borrow().quit();
+    }
+
+    #[crate::test]
+    fn snapshots_reject_foreign_windows_and_ended_attempts(cx: &mut TestAppContext) {
+        let outer = cx.add_window(|_window, _cx| Empty);
+        let second = cx.add_window(|_window, _cx| Empty);
+        let mut other_app = cx.new_app();
+        let other = other_app.add_window(|_window, _cx| Empty);
+        assert_eq!(outer.window_id(), other.window_id());
+
+        let selected = Rc::new(RefCell::new(Vec::new()));
+        let receiving = selected.clone();
+        let stale = cx
+            .update_window(outer.into(), |_view, window, cx| {
+                window.invalidator.set_phase(DrawPhase::Prepaint);
+                let _attempt = begin_selector_layout_attempt(window);
+                let selector = PendingSelector::new(
+                    Select::this().class("row").nth(0).into_matcher(),
+                    Box::new(move |element| {
+                        record_match(&receiving, &element);
+
+                        element
+                    }),
+                );
+
+                let snapshot = with_attached_selectors(window, &[selector], |window| {
+                    let snapshot =
+                        window.with_layout_measurement(|window| capture_selector_snapshot(window));
+                    cx.update_window(second.into(), |_view, window, cx| {
+                        reject_snapshot_and_layout(
+                            snapshot.clone(),
+                            "same-app",
+                            selected.clone(),
+                            window,
+                            cx,
+                        );
+                    })
+                    .unwrap();
+                    other_app
+                        .update_window(other.into(), |_view, window, cx| {
+                            reject_snapshot_and_layout(
+                                snapshot.clone(),
+                                "other-app",
+                                selected.clone(),
+                                window,
+                                cx,
+                            );
+                        })
+                        .unwrap();
+
+                    with_selector_snapshot(window, snapshot.clone(), |window| {
+                        layout_selector_row("measured", window, cx);
+                    });
+                    layout_selector_row("outer", window, cx);
+
+                    snapshot
+                });
+
+                window.invalidator.set_phase(DrawPhase::None);
+
+                snapshot
+            })
+            .unwrap();
+
+        cx.update_window(outer.into(), |_view, window, cx| {
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                with_selector_snapshot(window, stale.clone(), |window| {
+                    layout_selector_row("idle-rejected", window, cx);
+                });
+            }));
+            assert!(result.is_err());
+
+            reject_snapshot_and_layout(stale, "fresh-attempt", selected.clone(), window, cx);
+        })
+        .unwrap();
+
+        assert_matches(
+            &selected,
+            &["same-app", "other-app", "outer", "fresh-attempt"],
+        );
+        other_app.quit();
     }
 
     #[crate::test]

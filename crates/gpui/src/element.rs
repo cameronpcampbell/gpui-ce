@@ -770,7 +770,7 @@ impl AnyElement {
         let element = with_element_arena(|arena| arena.alloc(|| Drawable::new(element)))
             .map(|element| element as &mut dyn ElementObject);
 
-        let generated_by = crate::selector::generation_ancestry();
+        let generated_by = crate::selector::construction_ancestry();
         let metadata = if generated_by.is_empty() {
             None
         } else {
@@ -909,29 +909,40 @@ impl AnyElement {
 
     fn with_selector_scope<ResultType>(
         &mut self,
+        window: &mut Window,
         apply_selectors: bool,
-        operation: impl FnOnce(&mut AnyElement) -> ResultType,
+        operation: impl FnOnce(&mut AnyElement, &mut Window) -> ResultType,
     ) -> ResultType {
+        let _attempt = crate::selector::ensure_selector_layout_attempt(window);
+        let _construction = crate::selector::selector_construction_boundary(window);
         let selectors = self.attached_selectors();
 
-        if selectors.is_empty() && !crate::selector::has_active_selectors() {
+        if selectors.is_empty() && !crate::selector::has_active_selectors(window) {
             let generated_by = self.selector_generation_ancestry();
 
-            if generated_by.is_empty() && !crate::selector::has_generation_ancestry() {
-                return operation(self);
+            if generated_by.is_empty() && !crate::selector::has_generation_ancestry(window) {
+                return operation(self, window);
             }
 
-            return crate::selector::with_generation_ancestry(generated_by, || operation(self));
+            return crate::selector::with_generation_ancestry(window, generated_by, |window| {
+                operation(self, window)
+            });
         }
 
-        crate::selector::with_attached_selectors(&selectors, || {
+        crate::selector::with_attached_selectors(window, &selectors, |window| {
             if apply_selectors {
-                crate::selector::apply_active_selectors(self);
+                crate::selector::apply_active_selectors(window, self);
             }
 
-            crate::selector::with_generation_ancestry(self.selector_generation_ancestry(), || {
-                crate::selector::with_deeper_selector_depth(|| operation(self))
-            })
+            crate::selector::with_generation_ancestry(
+                window,
+                self.selector_generation_ancestry(),
+                |window| {
+                    crate::selector::with_deeper_selector_depth(window, |window| {
+                        operation(self, window)
+                    })
+                },
+            )
         })
     }
 
@@ -960,7 +971,7 @@ impl AnyElement {
     pub fn request_layout(&mut self, window: &mut Window, cx: &mut App) -> LayoutId {
         let apply_selectors = self.is_before_layout();
 
-        self.with_selector_scope(apply_selectors, |element| {
+        self.with_selector_scope(window, apply_selectors, |element, window| {
             element.element_object_mut().request_layout(window, cx)
         })
     }
@@ -970,7 +981,7 @@ impl AnyElement {
     pub fn prepaint(&mut self, window: &mut Window, cx: &mut App) -> Option<FocusHandle> {
         let focus_assigned = window.next_frame.focus.is_some();
 
-        self.with_selector_scope(false, |element| {
+        self.with_selector_scope(window, false, |element, window| {
             element.element_object_mut().prepaint(window, cx);
         });
 
@@ -983,7 +994,7 @@ impl AnyElement {
 
     /// Paints the element stored in this `AnyElement`.
     pub fn paint(&mut self, window: &mut Window, cx: &mut App) {
-        self.with_selector_scope(false, |element| {
+        self.with_selector_scope(window, false, |element, window| {
             element.element_object_mut().paint(window, cx);
         });
     }
@@ -997,7 +1008,7 @@ impl AnyElement {
     ) -> Size<Pixels> {
         let apply_selectors = self.is_before_layout();
 
-        self.with_selector_scope(apply_selectors, |element| {
+        self.with_selector_scope(window, apply_selectors, |element, window| {
             element
                 .element_object_mut()
                 .layout_as_root(available_space, window, cx)
@@ -1024,7 +1035,10 @@ impl AnyElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<FocusHandle> {
+        let _attempt = crate::selector::ensure_selector_layout_attempt(window);
+        let _construction = crate::selector::selector_construction_boundary(window);
         self.layout_as_root(available_space, window, cx);
+
         window.with_absolute_element_offset(origin, |window| self.prepaint(window, cx))
     }
 }

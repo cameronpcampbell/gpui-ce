@@ -1344,7 +1344,13 @@ impl App {
             match Window::new(handle.into(), options, cx) {
                 Ok(mut window) => {
                     cx.window_update_stack.push(id);
-                    let root_view = build_root_view(&mut window, cx);
+                    let root_view = {
+                        let _construction =
+                            crate::selector::selector_construction_boundary(&window);
+
+                        build_root_view(&mut window, cx)
+                    };
+
                     cx.window_update_stack.pop();
                     window.root.replace(root_view.into());
                     window.defer(cx, |window: &mut Window, cx| window.appearance_changed(cx));
@@ -1968,7 +1974,12 @@ impl App {
             let root_view = window.root.clone().unwrap();
 
             cx.window_update_stack.push(window.handle.id);
-            let result = update(root_view, &mut window, cx);
+            let result = {
+                let _construction = crate::selector::selector_construction_boundary(&window);
+
+                update(root_view, &mut window, cx)
+            };
+
             fn trail(id: WindowId, window: Box<Window>, cx: &mut App) -> Option<()> {
                 cx.window_update_stack.pop();
 

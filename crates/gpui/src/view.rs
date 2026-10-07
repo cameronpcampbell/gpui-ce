@@ -445,7 +445,7 @@ impl<V: View> Element for ViewElement<V> {
         let entity_id = self.entity_id;
         let request_layout = |window: &mut Window| {
             let caching_disabled = window.is_inspector_picking(cx)
-                || crate::selector::selectors_can_affect_view_contents();
+                || crate::selector::selectors_can_affect_view_contents(window);
 
             if let (Some(entity_id), Some(style)) = (
                 entity_id,

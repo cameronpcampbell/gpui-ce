@@ -1085,7 +1085,7 @@ pub(crate) struct TooltipRequest {
 }
 
 pub(crate) struct DeferredDraw {
-    selector_context: crate::selector::SelectorContext,
+    selector_snapshot: Option<crate::selector::SelectorSnapshot>,
     current_view: EntityId,
     priority: usize,
     parent_node: DispatchNodeId,
@@ -1264,6 +1264,7 @@ pub struct Window {
     rem_size_override_stack: SmallVec<[Pixels; 8]>,
     pub(crate) viewport_size: Size<Pixels>,
     layout_engine: Option<TaffyLayoutEngine>,
+    selector_runtime: crate::selector::SelectorRuntime,
     pub(crate) collecting_inline: bool,
     pub(crate) current_inline_fragments: Option<Arc<[Bounds<Pixels>]>>,
     pub(crate) root: Option<AnyView>,
@@ -2020,6 +2021,7 @@ impl Window {
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
+            selector_runtime: crate::selector::SelectorRuntime::new(),
             collecting_inline: false,
             current_inline_fragments: None,
             root: None,
@@ -2100,6 +2102,10 @@ impl Window {
         value: AnyWindowFocusListener,
     ) -> (Subscription, impl FnOnce() + use<>) {
         self.focus_listeners.insert((), value)
+    }
+
+    pub(crate) fn selector_runtime(&self) -> &crate::selector::SelectorRuntime {
+        &self.selector_runtime
     }
 }
 
@@ -3169,7 +3175,7 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
-        let _selector_scope = crate::selector::begin_selector_layout_attempt();
+        let _selector_scope = crate::selector::begin_selector_layout_attempt(self);
 
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
@@ -3643,7 +3649,7 @@ impl Window {
                     rem_size,
                     absolute_offset,
                     prepaint_range,
-                    selector_context,
+                    selector_snapshot,
                 ) = {
                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                     self.element_id_stack
@@ -3658,7 +3664,7 @@ impl Window {
                         deferred_draw.rem_size,
                         deferred_draw.absolute_offset,
                         deferred_draw.prepaint_range.clone(),
-                        deferred_draw.selector_context.clone(),
+                        deferred_draw.selector_snapshot.clone(),
                     )
                 };
                 self.next_frame.dispatch_tree.set_active_node(parent_node);
@@ -3669,9 +3675,14 @@ impl Window {
                         window.with_rem_size(Some(rem_size), |window| {
                             window.with_absolute_element_offset(absolute_offset, |window| {
                                 crate::DeferredPriorityStackCache::push(priority, cx);
-                                crate::selector::with_selector_context(selector_context, || {
-                                    element.prepaint(window, cx);
-                                });
+                                crate::selector::with_selector_snapshot(
+                                    window,
+                                    selector_snapshot
+                                        .expect("live deferred draw requires a selector snapshot"),
+                                    |window| {
+                                        element.prepaint(window, cx);
+                                    },
+                                );
                                 crate::DeferredPriorityStackCache::pop(cx);
                             });
                         });
@@ -3721,9 +3732,13 @@ impl Window {
                 self.with_rendered_view(deferred_draw.current_view, |window| {
                     window.with_content_mask(content_mask, |window| {
                         window.with_rem_size(Some(deferred_draw.rem_size), |window| {
-                            crate::selector::with_selector_context(
-                                deferred_draw.selector_context.clone(),
-                                || {
+                            crate::selector::with_selector_snapshot(
+                                window,
+                                deferred_draw
+                                    .selector_snapshot
+                                    .clone()
+                                    .expect("live deferred draw requires a selector snapshot"),
+                                |window| {
                                     element.paint(window, cx);
                                 },
                             );
@@ -3794,7 +3809,7 @@ impl Window {
                 [range.start.deferred_draws_index..range.end.deferred_draws_index]
                 .iter()
                 .map(|deferred_draw| DeferredDraw {
-                    selector_context: crate::selector::SelectorContext::default(),
+                    selector_snapshot: None,
                     current_view: deferred_draw.current_view,
                     parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
                     element_id_stack: deferred_draw.element_id_stack.clone(),
@@ -4006,7 +4021,7 @@ impl Window {
     pub fn transact<T, U>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, U>) -> Result<T, U> {
         self.invalidator.debug_assert_prepaint();
         let index = self.prepaint_index();
-        let result = crate::selector::with_selector_transaction(|| f(self));
+        let result = crate::selector::with_selector_transaction(self, f);
 
         if result.is_err() {
             self.next_frame.hitboxes.truncate(index.hitboxes_index);
@@ -4357,7 +4372,7 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
         let parent_node = self.next_frame.dispatch_tree.active_node_id().unwrap();
         self.next_frame.deferred_draws.push(DeferredDraw {
-            selector_context: crate::selector::capture_selector_context(),
+            selector_snapshot: Some(crate::selector::capture_selector_snapshot(self)),
             current_view: self.current_view(),
             parent_node,
             element_id_stack: self.element_id_stack.clone(),
@@ -5266,7 +5281,7 @@ impl Window {
         &mut self,
         operation: impl FnOnce(&mut Self) -> ResultType,
     ) -> ResultType {
-        crate::selector::with_selector_measurement(|| operation(self))
+        crate::selector::with_selector_measurement(self, operation)
     }
 
     /// Builds, measures, and discards a temporary element, returning its size.

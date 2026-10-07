@@ -923,7 +923,7 @@ impl VisualTestContext {
     {
         self.update(|window, cx| {
             let arena_scope = ElementArenaScope::enter(&cx.element_arena);
-            let _selector_scope = crate::selector::begin_selector_layout_attempt();
+            let _selector_scope = crate::selector::begin_selector_layout_attempt(window);
 
             window.invalidator.set_phase(DrawPhase::Prepaint);
             let mut element = Drawable::new(f(window, cx));

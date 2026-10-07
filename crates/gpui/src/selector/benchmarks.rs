@@ -2,8 +2,8 @@
 
 use super::{
     PendingSelector, Select, SelectableElement, SelectorBinding, SelectorContext, SelectorMatcher,
-    SelectorRule, begin_selector_layout_attempt, capture_selector_context, with_attached_selectors,
-    with_deeper_selector_depth,
+    SelectorRule, begin_selector_layout_attempt, capture_selector_snapshot,
+    with_attached_selectors, with_deeper_selector_depth,
 };
 use crate::{
     self as gpui, AnyElement, App, AppContext, AvailableSpace, BenchAppContext, Bounds, Context,
@@ -284,7 +284,7 @@ fn matching(criterion: &mut Criterion, profile: &mut impl FnMut(&str, &mut dyn F
 }
 
 fn layout(root: &mut AnyElement, window: &mut Window, cx: &mut App) {
-    let _attempt = begin_selector_layout_attempt();
+    let _attempt = begin_selector_layout_attempt(window);
     root.layout_as_root(AvailableSpace::min_size(), window, cx);
 }
 
@@ -535,7 +535,11 @@ fn frames(
     group.finish();
 }
 
-fn contexts(criterion: &mut Criterion, profile: &mut impl FnMut(&str, &mut dyn FnMut())) {
+fn contexts(
+    criterion: &mut Criterion,
+    platform: &Rc<dyn Platform>,
+    profile: &mut impl FnMut(&str, &mut dyn FnMut()),
+) {
     let mut group = criterion.benchmark_group("selectors/context");
 
     for rules in [0, 1, 4, 16, 64] {
@@ -548,14 +552,30 @@ fn contexts(criterion: &mut Criterion, profile: &mut impl FnMut(&str, &mut dyn F
             })
             .collect::<Vec<_>>();
 
-        with_attached_selectors(&pending, || {
-            profile(&format!("context/{rules}"), &mut || {
-                with_deeper_selector_depth(|| black_box(capture_selector_context()));
+        group.bench_function(rules.to_string(), |bencher| {
+            let mut cx = BenchAppContext::new(platform.clone(), None, bencher);
+            let mut visual = cx.add_empty_window();
+
+            visual.update(|window, _cx| {
+                let _attempt = begin_selector_layout_attempt(window);
+
+                with_attached_selectors(window, &pending, |window| {
+                    profile(&format!("context/{rules}"), &mut || {
+                        with_deeper_selector_depth(window, |window| {
+                            black_box(capture_selector_snapshot(window))
+                        });
+                    });
+
+                    cx.bench_iter(|_cx| {
+                        with_deeper_selector_depth(window, |window| {
+                            black_box(capture_selector_snapshot(window));
+                        });
+                    });
+                });
             });
-            group.bench_function(rules.to_string(), |bencher| {
-                bencher
-                    .iter(|| with_deeper_selector_depth(|| black_box(capture_selector_context())));
-            });
+
+            drop(visual);
+            cx.teardown();
         });
     }
 
@@ -579,5 +599,5 @@ pub fn run(
     matching(criterion, &mut profile);
     first_layout(criterion, &platform, &mut profile);
     frames(criterion, &platform, &mut profile);
-    contexts(criterion, &mut profile);
+    contexts(criterion, &platform, &mut profile);
 }
