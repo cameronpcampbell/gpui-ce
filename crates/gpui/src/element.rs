@@ -34,7 +34,7 @@
 use crate::{
     A11ySubtreeBuilder, App, ArenaBox, AvailableSpace, Bounds, Context, DispatchNodeId, ElementId,
     FocusHandle, InspectorElementId, LayoutId, Pixels, Point, Size, Style, Window,
-    util::FluentBuilder, window::with_element_arena,
+    selector::SelectorPhase, util::FluentBuilder, window::with_element_arena,
 };
 use derive_more::{Deref, DerefMut};
 use std::{
@@ -921,12 +921,10 @@ impl AnyElement {
     fn with_selector_scope<ResultType>(
         &mut self,
         window: &mut Window,
-        apply_selectors: bool,
+        phase: SelectorPhase,
         operation: impl FnOnce(&mut AnyElement, &mut Window) -> ResultType,
     ) -> ResultType {
-        let _scope = window
-            .selector_context()
-            .enter_element(self, apply_selectors);
+        let _scope = window.selector_context().enter_element(self, phase);
 
         operation(self, window)
     }
@@ -954,9 +952,7 @@ impl AnyElement {
     /// Request the layout ID of the element stored in this `AnyElement`.
     /// Used for laying out child elements in a parent element.
     pub fn request_layout(&mut self, window: &mut Window, cx: &mut App) -> LayoutId {
-        let apply_selectors = self.is_before_layout();
-
-        self.with_selector_scope(window, apply_selectors, |element, window| {
+        self.with_selector_scope(window, SelectorPhase::RequestLayout, |element, window| {
             element.element_object_mut().request_layout(window, cx)
         })
     }
@@ -966,7 +962,7 @@ impl AnyElement {
     pub fn prepaint(&mut self, window: &mut Window, cx: &mut App) -> Option<FocusHandle> {
         let focus_assigned = window.next_frame.focus.is_some();
 
-        self.with_selector_scope(window, false, |element, window| {
+        self.with_selector_scope(window, SelectorPhase::Prepaint, |element, window| {
             element.element_object_mut().prepaint(window, cx);
         });
 
@@ -979,7 +975,7 @@ impl AnyElement {
 
     /// Paints the element stored in this `AnyElement`.
     pub fn paint(&mut self, window: &mut Window, cx: &mut App) {
-        self.with_selector_scope(window, false, |element, window| {
+        self.with_selector_scope(window, SelectorPhase::Paint, |element, window| {
             element.element_object_mut().paint(window, cx);
         });
     }
@@ -991,9 +987,7 @@ impl AnyElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Size<Pixels> {
-        let apply_selectors = self.is_before_layout();
-
-        self.with_selector_scope(window, apply_selectors, |element, window| {
+        self.with_selector_scope(window, SelectorPhase::RequestLayout, |element, window| {
             element
                 .element_object_mut()
                 .layout_as_root(available_space, window, cx)
@@ -1020,7 +1014,7 @@ impl AnyElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<FocusHandle> {
-        let _selector_scope = window.selector_context().ensure_attempt();
+        let _selector_session = window.selector_context().enter_session_if_needed();
         self.layout_as_root(available_space, window, cx);
 
         window.with_absolute_element_offset(origin, |window| self.prepaint(window, cx))

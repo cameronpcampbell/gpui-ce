@@ -11,7 +11,7 @@ use crate::{
 };
 use smallvec::SmallVec;
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, Ref, RefCell, RefMut},
     marker::PhantomData,
     mem,
     num::NonZeroUsize,
@@ -456,19 +456,19 @@ impl PartialEq for SelectorRuleId {
 impl Eq for SelectorRuleId {}
 
 #[derive(Clone, Debug)]
-struct LayoutAttemptId(Rc<()>);
+struct SelectorSessionId(Rc<()>);
 
-impl PartialEq for LayoutAttemptId {
+impl PartialEq for SelectorSessionId {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
     }
 }
 
-impl Eq for LayoutAttemptId {}
+impl Eq for SelectorSessionId {}
 
 struct SelectorVisit {
     rule: SelectorRuleId,
-    attempt: LayoutAttemptId,
+    session: SelectorSessionId,
 }
 
 #[derive(Default)]
@@ -485,8 +485,8 @@ impl SelectorNodeState {
         }
     }
 
-    fn record_visit(&mut self, rule: &SelectorRuleId, attempt: &LayoutAttemptId) -> bool {
-        self.visited.retain(|visit| visit.attempt == *attempt);
+    fn record_visit(&mut self, rule: &SelectorRuleId, session: &SelectorSessionId) -> bool {
+        self.visited.retain(|visit| visit.session == *session);
 
         if self.visited.iter().any(|visit| visit.rule == *rule) {
             return false;
@@ -494,7 +494,7 @@ impl SelectorNodeState {
 
         self.visited.push(SelectorVisit {
             rule: rule.clone(),
-            attempt: attempt.clone(),
+            session: session.clone(),
         });
 
         true
@@ -570,12 +570,21 @@ struct SelectorPosition {
     next_match_idx: Rc<Cell<usize>>,
 }
 
-struct SelectorAttempt {
-    identity: LayoutAttemptId,
+/// Owns visit identity and positional progress for a draw or standalone operation.
+/// A session spans layout, prepaint, paint, deferred work, and retries.
+struct SelectorSession {
+    identity: SelectorSessionId,
     positions: RefCell<SmallVec<[SelectorPosition; 4]>>,
 }
 
-impl SelectorAttempt {
+impl SelectorSession {
+    fn new() -> Self {
+        Self {
+            identity: SelectorSessionId(Rc::new(())),
+            positions: RefCell::new(SmallVec::new()),
+        }
+    }
+
     fn position(&self, rule: &SelectorRuleId) -> Rc<Cell<usize>> {
         let mut positions = self.positions.borrow_mut();
 
@@ -591,27 +600,85 @@ impl SelectorAttempt {
 
         next_match_idx
     }
+
+    fn checkpoint_positions(self: &Rc<Self>) -> SelectorPositionCheckpoint {
+        let positions = self
+            .positions
+            .borrow()
+            .iter()
+            .map(|position| {
+                (
+                    position.next_match_idx.clone(),
+                    position.next_match_idx.get(),
+                )
+            })
+            .collect();
+
+        SelectorPositionCheckpoint {
+            session: self.clone(),
+            positions: Some(positions),
+        }
+    }
 }
 
+/// Holds traversal state restored when a nested selector scope ends.
 #[derive(Clone)]
-struct SelectorFrame {
+struct SelectorScope {
+    session: Rc<SelectorSession>,
     bindings: SmallVec<[SelectorBinding; 4]>,
     measurement_depth: usize,
-    attempt: Rc<SelectorAttempt>,
     generated_by: SmallVec<[SelectorRuleId; 2]>,
 }
 
-impl SelectorFrame {
+impl SelectorScope {
     fn new() -> Self {
         Self {
+            session: Rc::new(SelectorSession::new()),
             bindings: SmallVec::new(),
             measurement_depth: 0,
-            attempt: Rc::new(SelectorAttempt {
-                identity: LayoutAttemptId(Rc::new(())),
-                positions: RefCell::new(SmallVec::new()),
-            }),
             generated_by: SmallVec::new(),
         }
+    }
+
+    fn activate_selectors(&mut self, selectors: &[PendingSelector]) {
+        for selector in selectors {
+            if self
+                .bindings
+                .iter()
+                .any(|binding| binding.rule.identity == selector.0.identity)
+            {
+                continue;
+            }
+
+            let position = selector
+                .0
+                .matcher
+                .has_position()
+                .then(|| self.session.position(&selector.0.identity));
+            self.bindings.push(SelectorBinding {
+                rule: selector.0.clone(),
+                depth: 0,
+                position,
+            });
+        }
+    }
+
+    fn advance_depth(&mut self) {
+        for binding in &mut self.bindings {
+            binding.depth += 1;
+        }
+    }
+
+    fn can_affect_view_contents(&self) -> bool {
+        let measuring = self.measurement_depth > 0;
+
+        self.bindings.iter().any(|binding| {
+            binding.rule.matcher.can_reach_view_contents(binding.depth)
+                && binding
+                    .rule
+                    .matcher
+                    .can_select_future_match(binding.next_match_idx(), measuring)
+        })
     }
 }
 
@@ -624,14 +691,15 @@ impl SelectorOwner {
     }
 }
 
+/// Coordinates selector scopes for one window.
 pub(crate) struct SelectorContext {
     owner: SelectorOwner,
-    active: Rc<RefCell<Option<SelectorFrame>>>,
+    active: Rc<RefCell<Option<SelectorScope>>>,
 }
 
 #[derive(Clone)]
 pub(crate) struct SelectorContextHandle {
-    active: Rc<RefCell<Option<SelectorFrame>>>,
+    active: Rc<RefCell<Option<SelectorScope>>>,
 }
 
 impl SelectorContextHandle {
@@ -639,17 +707,26 @@ impl SelectorContextHandle {
         self.active
             .borrow()
             .as_ref()
-            .map(|frame| frame.generated_by.clone())
+            .map(|scope| scope.generated_by.clone())
             .unwrap_or_default()
     }
 }
 
+/// Captures traversal state while sharing its session's live position counters.
 #[derive(Clone)]
-pub(crate) struct SelectorSnapshot {
+pub(crate) struct CapturedSelectorScope {
     owner: SelectorOwner,
-    frame: SelectorFrame,
+    scope: SelectorScope,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectorPhase {
+    RequestLayout,
+    Prepaint,
+    Paint,
+}
+
+#[must_use = "the construction binding lasts until this guard is dropped"]
 pub(crate) struct SelectorConstructionGuard {
     // Restore the arena selected on entry, even after allocation routing changes.
     slot: Option<Rc<RefCell<Option<SelectorContextHandle>>>>,
@@ -664,10 +741,21 @@ impl Drop for SelectorConstructionGuard {
     }
 }
 
+#[must_use = "the selector scope lasts until this guard is dropped"]
 pub(crate) struct SelectorScopeGuard {
-    active: Option<Rc<RefCell<Option<SelectorFrame>>>>,
-    previous: Option<SelectorFrame>,
+    active: Option<Rc<RefCell<Option<SelectorScope>>>>,
+    previous: Option<SelectorScope>,
     _construction: SelectorConstructionGuard,
+}
+
+impl SelectorScopeGuard {
+    fn unchanged(construction: SelectorConstructionGuard) -> Self {
+        Self {
+            active: None,
+            previous: None,
+            _construction: construction,
+        }
+    }
 }
 
 impl Drop for SelectorScopeGuard {
@@ -678,8 +766,9 @@ impl Drop for SelectorScopeGuard {
     }
 }
 
+#[must_use = "the generation ancestry lasts until this guard is dropped"]
 struct SelectorGenerationGuard {
-    active: Rc<RefCell<Option<SelectorFrame>>>,
+    active: Rc<RefCell<Option<SelectorScope>>>,
     previous: SmallVec<[SelectorRuleId; 2]>,
     _construction: SelectorConstructionGuard,
 }
@@ -687,25 +776,28 @@ struct SelectorGenerationGuard {
 impl Drop for SelectorGenerationGuard {
     fn drop(&mut self) {
         let mut active = self.active.borrow_mut();
-        let frame = active
+        let scope = active
             .as_mut()
-            .expect("selector generation requires an active attempt");
-        frame.generated_by = mem::take(&mut self.previous);
+            .expect("selector generation requires an active session");
+        scope.generated_by = mem::take(&mut self.previous);
     }
 }
 
-pub(crate) struct SelectorTransactionGuard {
-    attempt: Rc<SelectorAttempt>,
+/// Restores positional progress on drop unless committed, including on unwind.
+#[must_use = "selector positions roll back unless this checkpoint is committed"]
+pub(crate) struct SelectorPositionCheckpoint {
+    session: Rc<SelectorSession>,
     positions: Option<SmallVec<[(Rc<Cell<usize>>, usize); 4]>>,
 }
 
-impl SelectorTransactionGuard {
-    pub(crate) fn commit(&mut self) {
+impl SelectorPositionCheckpoint {
+    /// Keeps position changes made since this checkpoint.
+    pub(crate) fn commit(mut self) {
         self.positions.take();
     }
 }
 
-impl Drop for SelectorTransactionGuard {
+impl Drop for SelectorPositionCheckpoint {
     fn drop(&mut self) {
         let Some(positions) = self.positions.take() else {
             return;
@@ -717,8 +809,8 @@ impl Drop for SelectorTransactionGuard {
             position.set(idx);
         }
 
-        // Keep cells registered during the transaction for retained snapshots and bindings.
-        for position in self.attempt.positions.borrow().iter().skip(previous_count) {
+        // Keep newly registered cells for retained scopes and bindings.
+        for position in self.session.positions.borrow().iter().skip(previous_count) {
             position.next_match_idx.set(0);
         }
     }
@@ -732,47 +824,7 @@ impl SelectorContext {
         }
     }
 
-    fn with_frame<ResultType>(
-        &self,
-        operation: impl FnOnce(&SelectorFrame) -> ResultType,
-    ) -> ResultType {
-        let active = self.active.borrow();
-
-        operation(
-            active
-                .as_ref()
-                .expect("selector traversal requires an active attempt"),
-        )
-    }
-
-    fn with_frame_mut<ResultType>(
-        &self,
-        operation: impl FnOnce(&mut SelectorFrame) -> ResultType,
-    ) -> ResultType {
-        let mut active = self.active.borrow_mut();
-
-        operation(
-            active
-                .as_mut()
-                .expect("selector traversal requires an active attempt"),
-        )
-    }
-
-    fn capture_frame(&self) -> SelectorFrame {
-        self.with_frame(Clone::clone)
-    }
-
-    fn enter_frame(&self, frame: SelectorFrame) -> SelectorScopeGuard {
-        let construction = self.bind_construction();
-        let previous = self.active.replace(Some(frame));
-
-        SelectorScopeGuard {
-            active: Some(self.active.clone()),
-            previous,
-            _construction: construction,
-        }
-    }
-
+    /// Binds element construction to this window for the guard's lifetime.
     pub(crate) fn bind_construction(&self) -> SelectorConstructionGuard {
         let slot = with_element_arena(|arena| arena.selector_context.clone());
         let unchanged = slot
@@ -797,99 +849,124 @@ impl SelectorContext {
         }
     }
 
-    pub(crate) fn begin_attempt(&self) -> SelectorScopeGuard {
-        self.enter_frame(SelectorFrame::new())
+    /// Enters a fresh session, restoring the previous scope when the guard is dropped.
+    pub(crate) fn enter_session(&self) -> SelectorScopeGuard {
+        self.enter_scope(SelectorScope::new())
     }
 
-    pub(crate) fn ensure_attempt(&self) -> SelectorScopeGuard {
+    /// Reuses the active session or enters a fresh one for the guard's lifetime.
+    pub(crate) fn enter_session_if_needed(&self) -> SelectorScopeGuard {
         if self.active.borrow().is_some() {
-            return SelectorScopeGuard {
-                active: None,
-                previous: None,
-                _construction: self.bind_construction(),
-            };
+            return SelectorScopeGuard::unchanged(self.bind_construction());
         }
 
-        self.begin_attempt()
-    }
-
-    fn activate_attached(&self, selectors: &[PendingSelector]) {
-        self.with_frame_mut(|frame| {
-            for selector in selectors {
-                if frame
-                    .bindings
-                    .iter()
-                    .any(|binding| binding.rule.identity == selector.0.identity)
-                {
-                    continue;
-                }
-
-                let position = selector
-                    .0
-                    .matcher
-                    .has_position()
-                    .then(|| frame.attempt.position(&selector.0.identity));
-                frame.bindings.push(SelectorBinding {
-                    rule: selector.0.clone(),
-                    depth: 0,
-                    position,
-                });
-            }
-        });
+        self.enter_session()
     }
 
     pub(crate) fn enter_element(
         &self,
         element: &mut AnyElement,
-        apply_selectors: bool,
+        phase: SelectorPhase,
     ) -> SelectorScopeGuard {
         let selectors = element.attached_selectors();
         let unchanged = selectors.is_empty()
-            && self.active.borrow().as_ref().is_some_and(|frame| {
-                frame.bindings.is_empty()
-                    && frame.generated_by == element.selector_generation_ancestry()
+            && self.active.borrow().as_ref().is_some_and(|scope| {
+                scope.bindings.is_empty()
+                    && scope.generated_by == element.selector_generation_ancestry()
             });
 
         if unchanged {
-            return SelectorScopeGuard {
-                active: None,
-                previous: None,
-                _construction: self.bind_construction(),
-            };
+            return SelectorScopeGuard::unchanged(self.bind_construction());
         }
 
-        let frame = self
+        let scope = self
             .active
             .borrow()
             .clone()
-            .unwrap_or_else(SelectorFrame::new);
-        let guard = self.enter_frame(frame);
-        self.activate_attached(&selectors);
+            .unwrap_or_else(SelectorScope::new);
+        let guard = self.enter_scope(scope);
+        self.borrow_scope_mut().activate_selectors(&selectors);
 
-        if apply_selectors {
+        if phase == SelectorPhase::RequestLayout && element.is_before_layout() {
             self.apply(element);
         }
 
-        self.with_frame_mut(|frame| {
-            frame.generated_by = element.selector_generation_ancestry();
-
-            for binding in &mut frame.bindings {
-                binding.depth += 1;
-            }
-        });
+        // Apply selectors at the element's depth before advancing to its children.
+        let mut scope = self.borrow_scope_mut();
+        scope.generated_by = element.selector_generation_ancestry();
+        scope.advance_depth();
 
         guard
     }
 
     pub(crate) fn enter_measurement(&self) -> SelectorScopeGuard {
-        let mut frame = self
+        let mut scope = self
             .active
             .borrow()
             .clone()
-            .unwrap_or_else(SelectorFrame::new);
-        frame.measurement_depth += 1;
+            .unwrap_or_else(SelectorScope::new);
+        scope.measurement_depth += 1;
 
-        self.enter_frame(frame)
+        self.enter_scope(scope)
+    }
+
+    pub(crate) fn capture_scope(&self) -> CapturedSelectorScope {
+        CapturedSelectorScope {
+            owner: self.owner.clone(),
+            scope: self.borrow_scope().clone(),
+        }
+    }
+
+    /// Enters a captured scope from this window's currently active session.
+    pub(crate) fn enter_captured_scope(
+        &self,
+        captured: CapturedSelectorScope,
+    ) -> SelectorScopeGuard {
+        assert!(
+            self.owner.matches(&captured.owner),
+            "captured selector scope belongs to another window"
+        );
+        assert!(
+            self.borrow_scope().session.identity == captured.scope.session.identity,
+            "captured selector scope belongs to another session"
+        );
+
+        self.enter_scope(captured.scope)
+    }
+
+    pub(crate) fn checkpoint_positions(&self) -> SelectorPositionCheckpoint {
+        self.borrow_scope().session.checkpoint_positions()
+    }
+
+    pub(crate) fn can_affect_view_contents(&self) -> bool {
+        self.borrow_scope().can_affect_view_contents()
+    }
+
+    fn borrow_scope(&self) -> Ref<'_, SelectorScope> {
+        Ref::map(self.active.borrow(), |active| {
+            active
+                .as_ref()
+                .expect("selector traversal requires an active session")
+        })
+    }
+
+    fn borrow_scope_mut(&self) -> RefMut<'_, SelectorScope> {
+        RefMut::map(self.active.borrow_mut(), |active| {
+            active
+                .as_mut()
+                .expect("selector traversal requires an active session")
+        })
+    }
+
+    fn enter_scope(&self, scope: SelectorScope) -> SelectorScopeGuard {
+        let construction = self.bind_construction();
+        let previous = self.active.replace(Some(scope));
+
+        SelectorScopeGuard {
+            active: Some(self.active.clone()),
+            previous,
+            _construction: construction,
+        }
     }
 
     fn enter_generation(
@@ -897,8 +974,7 @@ impl SelectorContext {
         generated_by: SmallVec<[SelectorRuleId; 2]>,
     ) -> SelectorGenerationGuard {
         let construction = self.bind_construction();
-        let previous =
-            self.with_frame_mut(|frame| mem::replace(&mut frame.generated_by, generated_by));
+        let previous = mem::replace(&mut self.borrow_scope_mut().generated_by, generated_by);
 
         SelectorGenerationGuard {
             active: self.active.clone(),
@@ -909,92 +985,38 @@ impl SelectorContext {
 
     #[cfg(any(test, feature = "bench-support"))]
     fn enter_attached(&self, selectors: &[PendingSelector]) -> SelectorScopeGuard {
-        let guard = self.enter_frame(self.capture_frame());
-        self.activate_attached(selectors);
+        let scope = self.borrow_scope().clone();
+        let guard = self.enter_scope(scope);
+        self.borrow_scope_mut().activate_selectors(selectors);
 
         guard
     }
 
     #[cfg(feature = "bench-support")]
     fn enter_children(&self) -> SelectorScopeGuard {
-        let mut frame = self.capture_frame();
+        let mut scope = self.borrow_scope().clone();
+        scope.advance_depth();
 
-        for binding in &mut frame.bindings {
-            binding.depth += 1;
-        }
-
-        self.enter_frame(frame)
-    }
-
-    pub(crate) fn snapshot(&self) -> SelectorSnapshot {
-        SelectorSnapshot {
-            owner: self.owner.clone(),
-            frame: self.capture_frame(),
-        }
-    }
-
-    pub(crate) fn restore_snapshot(&self, snapshot: SelectorSnapshot) -> SelectorScopeGuard {
-        assert!(
-            self.owner.matches(&snapshot.owner),
-            "selector snapshot belongs to another window"
-        );
-        self.with_frame(|frame| {
-            assert!(
-                frame.attempt.identity == snapshot.frame.attempt.identity,
-                "selector snapshot belongs to an ended attempt"
-            );
-        });
-
-        self.enter_frame(snapshot.frame)
-    }
-
-    pub(crate) fn checkpoint(&self) -> SelectorTransactionGuard {
-        let attempt = self.with_frame(|frame| frame.attempt.clone());
-        let positions = attempt
-            .positions
-            .borrow()
-            .iter()
-            .map(|position| {
-                (
-                    position.next_match_idx.clone(),
-                    position.next_match_idx.get(),
-                )
-            })
-            .collect();
-
-        SelectorTransactionGuard {
-            attempt,
-            positions: Some(positions),
-        }
-    }
-
-    pub(crate) fn can_affect_view_contents(&self) -> bool {
-        self.with_frame(|frame| {
-            let measuring = frame.measurement_depth > 0;
-
-            frame.bindings.iter().any(|binding| {
-                binding.rule.matcher.can_reach_view_contents(binding.depth)
-                    && binding
-                        .rule
-                        .matcher
-                        .can_select_future_match(binding.next_match_idx(), measuring)
-            })
-        })
+        self.enter_scope(scope)
     }
 
     fn apply(&self, element: &mut AnyElement) {
         let mut selector_idx = 0;
 
         loop {
-            let Some((binding, measuring, attempt)) = self.with_frame(|frame| {
-                frame.bindings.get(selector_idx).cloned().map(|binding| {
+            let candidate = {
+                let scope = self.borrow_scope();
+
+                scope.bindings.get(selector_idx).cloned().map(|binding| {
                     (
                         binding,
-                        frame.measurement_depth > 0,
-                        frame.attempt.identity.clone(),
+                        scope.measurement_depth > 0,
+                        scope.session.identity.clone(),
                     )
                 })
-            }) else {
+            };
+
+            let Some((binding, measuring, session)) = candidate else {
                 break;
             };
 
@@ -1013,7 +1035,7 @@ impl SelectorContext {
 
             if !element
                 .selector_node_state_mut()
-                .record_visit(&rule.identity, &attempt)
+                .record_visit(&rule.identity, &session)
                 || !rule.matcher.matches_predicates(element)
             {
                 continue;
@@ -1053,7 +1075,8 @@ impl SelectorContext {
 
             element.replace(replacement);
             element.inherit_attached_selectors(attached);
-            self.activate_attached(&element.attached_selectors());
+            self.borrow_scope_mut()
+                .activate_selectors(&element.attached_selectors());
         }
     }
 }
@@ -1347,15 +1370,15 @@ mod tests {
         selector_row(label).class("row").into_any_element()
     }
 
-    fn reject_snapshot_and_layout(
-        snapshot: SelectorSnapshot,
+    fn reject_scope_and_layout(
+        captured: CapturedSelectorScope,
         label: &'static str,
         selected: Rc<RefCell<Vec<ElementId>>>,
         window: &mut Window,
         cx: &mut App,
     ) {
         window.invalidator.set_phase(DrawPhase::Prepaint);
-        let _attempt = window.selector_context().begin_attempt();
+        let _session = window.selector_context().enter_session();
         let selector = PendingSelector::new(
             Select::this().class("row").nth(0).into_matcher(),
             Box::new(move |element| {
@@ -1368,7 +1391,7 @@ mod tests {
         {
             let _attached = window.selector_context().enter_attached(&[selector]);
             let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                let _snapshot = window.selector_context().restore_snapshot(snapshot);
+                let _captured_scope = window.selector_context().enter_captured_scope(captured);
 
                 layout_selector_row("rejected", window, cx);
             }));
@@ -1403,12 +1426,14 @@ mod tests {
     ) -> Result<(), ()> {
         let _scope = window
             .selector_context()
-            .enter_frame(window.selector_context().capture_frame());
+            .enter_captured_scope(window.selector_context().capture_scope());
 
         window.transact(|window| {
             window
                 .selector_context()
-                .with_frame_mut(|frame| frame.bindings.reverse());
+                .borrow_scope_mut()
+                .bindings
+                .reverse();
 
             let mut element = selector_row("inner")
                 .class("row")
@@ -1423,7 +1448,9 @@ mod tests {
             // Removed bindings still share progress with the enclosing scope.
             window
                 .selector_context()
-                .with_frame_mut(|frame| frame.bindings.clear());
+                .borrow_scope_mut()
+                .bindings
+                .clear();
 
             if fails {
                 return Err(());
@@ -1576,9 +1603,9 @@ mod tests {
             let metadata = original.reflection();
             let concrete = original.downcast_mut::<Div>().unwrap() as *mut Div;
             let rule = original.attached_selectors()[0].identity();
-            let attempt = LayoutAttemptId(Rc::new(()));
+            let session = SelectorSessionId(Rc::new(()));
             let state = original.selector_node_state_mut();
-            state.record_visit(&rule, &attempt);
+            state.record_visit(&rule, &session);
             state.generated_by.push(rule.clone());
 
             let reflected = ReflectedElement::<
@@ -1640,7 +1667,7 @@ mod tests {
             let state = element.selector_node_state_mut();
             assert_eq!(state.visited.len(), 1);
             assert_eq!(state.visited[0].rule, rule);
-            assert_eq!(state.visited[0].attempt, attempt);
+            assert_eq!(state.visited[0].session, session);
             assert!(state.generated_by.as_slice() == [rule]);
         }
     }
@@ -2440,9 +2467,9 @@ mod tests {
                             );
                         }
 
-                        // A new attempt cannot make a requested drawable transform again.
+                        // A new session cannot make a requested drawable transform again.
                         {
-                            let _attempt = window.selector_context().begin_attempt();
+                            let _session = window.selector_context().enter_session();
                             assert_eq!(
                                 retained.layout_as_root(available, window, cx),
                                 expected_size
@@ -2694,7 +2721,7 @@ mod tests {
             window.invalidator.set_phase(DrawPhase::Prepaint);
 
             {
-                let _attempt = window.selector_context().begin_attempt();
+                let _session = window.selector_context().enter_session();
                 let _attached = window.selector_context().enter_attached(&selectors);
 
                 layout_selector_row("seed", window, cx);
@@ -2711,7 +2738,7 @@ mod tests {
             let mut retained = retained.borrow_mut().take().unwrap();
 
             {
-                let _attempt = window.selector_context().begin_attempt();
+                let _session = window.selector_context().enter_session();
                 let _attached = window.selector_context().enter_attached(&selectors);
 
                 retained.layout_as_root(AvailableSpace::min_size(), window, cx);
@@ -2727,7 +2754,7 @@ mod tests {
     }
 
     #[crate::test]
-    fn shared_rules_keep_positions_per_window_and_attempt(cx: &mut TestAppContext) {
+    fn shared_rules_keep_positions_per_window_and_session(cx: &mut TestAppContext) {
         let outer = cx.add_window(|_window, _cx| Empty);
         let second = cx.add_window(|_window, _cx| Empty);
         let selected = Rc::new(RefCell::new(Vec::new()));
@@ -2744,7 +2771,7 @@ mod tests {
         for _redraw in 0..2 {
             cx.update_window(outer.into(), |_view, window, cx| {
                 window.invalidator.set_phase(DrawPhase::Prepaint);
-                let _attempt = window.selector_context().begin_attempt();
+                let _session = window.selector_context().enter_session();
 
                 {
                     let _attached = window
@@ -2756,7 +2783,7 @@ mod tests {
 
                 cx.update_window(second.into(), |_view, window, cx| {
                     window.invalidator.set_phase(DrawPhase::Prepaint);
-                    let _attempt = window.selector_context().begin_attempt();
+                    let _session = window.selector_context().enter_session();
                     let _attached = window
                         .selector_context()
                         .enter_attached(std::slice::from_ref(&shared));
@@ -2808,7 +2835,7 @@ mod tests {
 
         cx.update_window(outer.into(), |_view, window, cx| {
             window.invalidator.set_phase(DrawPhase::Prepaint);
-            let _attempt = window.selector_context().begin_attempt();
+            let _session = window.selector_context().enter_session();
             let mut retained = None;
             let result = window.transact(|window| {
                 let _attached = window
@@ -2816,7 +2843,7 @@ mod tests {
                     .enter_attached(std::slice::from_ref(&selector));
 
                 layout_selector_row("attempted", window, cx);
-                retained = Some(window.selector_context().snapshot());
+                retained = Some(window.selector_context().capture_scope());
 
                 Err::<(), ()>(())
             });
@@ -2824,9 +2851,9 @@ mod tests {
             assert!(result.is_err());
 
             {
-                let _snapshot = window
+                let _captured_scope = window
                     .selector_context()
-                    .restore_snapshot(retained.unwrap());
+                    .enter_captured_scope(retained.unwrap());
 
                 layout_selector_row("committed", window, cx);
             }
@@ -2847,7 +2874,7 @@ mod tests {
     }
 
     #[crate::test]
-    fn snapshots_reject_foreign_windows_and_ended_attempts(cx: &mut TestAppContext) {
+    fn captured_scopes_reject_foreign_windows_and_inactive_sessions(cx: &mut TestAppContext) {
         let outer = cx.add_window(|_window, _cx| Empty);
         let second = cx.add_window(|_window, _cx| Empty);
         let mut other_app = cx.new_app();
@@ -2859,7 +2886,7 @@ mod tests {
         let stale = cx
             .update_window(outer.into(), |_view, window, cx| {
                 window.invalidator.set_phase(DrawPhase::Prepaint);
-                let _attempt = window.selector_context().begin_attempt();
+                let _session = window.selector_context().enter_session();
                 let selector = PendingSelector::new(
                     Select::this().class("row").nth(0).into_matcher(),
                     Box::new(move |element| {
@@ -2869,13 +2896,14 @@ mod tests {
                     }),
                 );
 
-                let snapshot = {
+                let captured = {
                     let _attached = window.selector_context().enter_attached(&[selector]);
-                    let snapshot = window
-                        .with_layout_measurement(|window| window.selector_context().snapshot());
+                    let captured = window.with_layout_measurement(|window| {
+                        window.selector_context().capture_scope()
+                    });
                     cx.update_window(second.into(), |_view, window, cx| {
-                        reject_snapshot_and_layout(
-                            snapshot.clone(),
+                        reject_scope_and_layout(
+                            captured.clone(),
                             "same-app",
                             selected.clone(),
                             window,
@@ -2885,8 +2913,8 @@ mod tests {
                     .unwrap();
                     other_app
                         .update_window(other.into(), |_view, window, cx| {
-                            reject_snapshot_and_layout(
-                                snapshot.clone(),
+                            reject_scope_and_layout(
+                                captured.clone(),
                                 "other-app",
                                 selected.clone(),
                                 window,
@@ -2896,39 +2924,53 @@ mod tests {
                         .unwrap();
 
                     {
-                        let _snapshot =
-                            window.selector_context().restore_snapshot(snapshot.clone());
+                        let _nested_session = window.selector_context().enter_session();
+                        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                            let _captured_scope = window
+                                .selector_context()
+                                .enter_captured_scope(captured.clone());
+                        }));
+
+                        assert!(result.is_err());
+                    }
+
+                    {
+                        let _captured_scope = window
+                            .selector_context()
+                            .enter_captured_scope(captured.clone());
 
                         layout_selector_row("measured", window, cx);
                     }
 
                     layout_selector_row("outer", window, cx);
 
-                    snapshot
+                    captured
                 };
 
                 window.invalidator.set_phase(DrawPhase::None);
 
-                snapshot
+                captured
             })
             .unwrap();
 
         cx.update_window(outer.into(), |_view, window, cx| {
             let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                let _snapshot = window.selector_context().restore_snapshot(stale.clone());
+                let _captured_scope = window
+                    .selector_context()
+                    .enter_captured_scope(stale.clone());
 
                 layout_selector_row("idle-rejected", window, cx);
             }));
 
             assert!(result.is_err());
 
-            reject_snapshot_and_layout(stale, "fresh-attempt", selected.clone(), window, cx);
+            reject_scope_and_layout(stale, "fresh-session", selected.clone(), window, cx);
         })
         .unwrap();
 
         assert_matches(
             &selected,
-            &["same-app", "other-app", "outer", "fresh-attempt"],
+            &["same-app", "other-app", "outer", "fresh-session"],
         );
         other_app.quit();
     }

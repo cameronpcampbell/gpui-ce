@@ -1085,7 +1085,7 @@ pub(crate) struct TooltipRequest {
 }
 
 pub(crate) struct DeferredDraw {
-    selector_snapshot: Option<crate::selector::SelectorSnapshot>,
+    captured_selector_scope: Option<crate::selector::CapturedSelectorScope>,
     current_view: EntityId,
     priority: usize,
     parent_node: DispatchNodeId,
@@ -3177,7 +3177,7 @@ impl Window {
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
         // Select the app's allocation arena before binding this window's selector context.
         let arena_scope = ElementArenaScope::enter(&cx.element_arena);
-        let _selector_scope = self.selector_context().begin_attempt();
+        let _selector_session = self.selector_context().enter_session();
 
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
@@ -3647,7 +3647,7 @@ impl Window {
                     rem_size,
                     absolute_offset,
                     prepaint_range,
-                    selector_snapshot,
+                    captured_selector_scope,
                 ) = {
                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                     self.element_id_stack
@@ -3662,7 +3662,7 @@ impl Window {
                         deferred_draw.rem_size,
                         deferred_draw.absolute_offset,
                         deferred_draw.prepaint_range.clone(),
-                        deferred_draw.selector_snapshot.clone(),
+                        deferred_draw.captured_selector_scope.clone(),
                     )
                 };
                 self.next_frame.dispatch_tree.set_active_node(parent_node);
@@ -3673,10 +3673,11 @@ impl Window {
                         window.with_rem_size(Some(rem_size), |window| {
                             window.with_absolute_element_offset(absolute_offset, |window| {
                                 crate::DeferredPriorityStackCache::push(priority, cx);
-                                let _selector_scope = window.selector_context().restore_snapshot(
-                                    selector_snapshot
-                                        .expect("live deferred draw requires a selector snapshot"),
-                                );
+                                let _selector_scope = window
+                                    .selector_context()
+                                    .enter_captured_scope(captured_selector_scope.expect(
+                                        "live deferred draw requires a captured selector scope",
+                                    ));
 
                                 element.prepaint(window, cx);
                                 drop(_selector_scope);
@@ -3729,11 +3730,10 @@ impl Window {
                 self.with_rendered_view(deferred_draw.current_view, |window| {
                     window.with_content_mask(content_mask, |window| {
                         window.with_rem_size(Some(deferred_draw.rem_size), |window| {
-                            let _selector_scope = window.selector_context().restore_snapshot(
-                                deferred_draw
-                                    .selector_snapshot
-                                    .clone()
-                                    .expect("live deferred draw requires a selector snapshot"),
+                            let _selector_scope = window.selector_context().enter_captured_scope(
+                                deferred_draw.captured_selector_scope.clone().expect(
+                                    "live deferred draw requires a captured selector scope",
+                                ),
                             );
 
                             element.paint(window, cx);
@@ -3804,7 +3804,7 @@ impl Window {
                 [range.start.deferred_draws_index..range.end.deferred_draws_index]
                 .iter()
                 .map(|deferred_draw| DeferredDraw {
-                    selector_snapshot: None,
+                    captured_selector_scope: None,
                     current_view: deferred_draw.current_view,
                     parent_node: reused_subtree.refresh_node_id(deferred_draw.parent_node),
                     element_id_stack: deferred_draw.element_id_stack.clone(),
@@ -4016,15 +4016,15 @@ impl Window {
     pub fn transact<T, U>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, U>) -> Result<T, U> {
         self.invalidator.debug_assert_prepaint();
         let index = self.prepaint_index();
-        let _selector_scope = self.selector_context().ensure_attempt();
-        let mut selector_checkpoint = self.selector_context().checkpoint();
+        let _selector_session = self.selector_context().enter_session_if_needed();
+        let selector_positions = self.selector_context().checkpoint_positions();
         let result = f(self);
 
         if result.is_ok() {
-            selector_checkpoint.commit();
+            selector_positions.commit();
+        } else {
+            drop(selector_positions);
         }
-
-        drop(selector_checkpoint);
 
         if result.is_err() {
             self.next_frame.hitboxes.truncate(index.hitboxes_index);
@@ -4375,7 +4375,7 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
         let parent_node = self.next_frame.dispatch_tree.active_node_id().unwrap();
         self.next_frame.deferred_draws.push(DeferredDraw {
-            selector_snapshot: Some(self.selector_context().snapshot()),
+            captured_selector_scope: Some(self.selector_context().capture_scope()),
             current_view: self.current_view(),
             parent_node,
             element_id_stack: self.element_id_stack.clone(),

@@ -1,8 +1,8 @@
 //! CPU selector workloads. Fixture counts are checked outside measured intervals.
 
 use super::{
-    PendingSelector, Select, SelectableElement, SelectorBinding, SelectorContext, SelectorFrame,
-    SelectorMatcher, SelectorRule,
+    PendingSelector, Select, SelectableElement, SelectorBinding, SelectorContext, SelectorMatcher,
+    SelectorRule, SelectorScope,
 };
 use crate::{
     self as gpui, AnyElement, App, AppContext, AvailableSpace, BenchAppContext, Bounds, Context,
@@ -283,7 +283,7 @@ fn matching(criterion: &mut Criterion, profile: &mut impl FnMut(&str, &mut dyn F
 }
 
 fn layout(root: &mut AnyElement, window: &mut Window, cx: &mut App) {
-    let _attempt = window.selector_context().begin_attempt();
+    let _session = window.selector_context().enter_session();
 
     root.layout_as_root(AvailableSpace::min_size(), window, cx);
 }
@@ -557,19 +557,19 @@ fn contexts(
             let context = SelectorContext::new();
 
             {
-                let _attempt = context.begin_attempt();
+                let _session = context.enter_session();
                 let _attached = context.enter_attached(&pending);
 
                 profile(&format!("context/{rules}"), &mut || {
                     let _children = context.enter_children();
 
-                    black_box(context.snapshot());
+                    black_box(context.capture_scope());
                 });
 
                 cx.bench_iter(|_cx| {
                     let _children = context.enter_children();
 
-                    black_box(context.snapshot());
+                    black_box(context.capture_scope());
                 });
             }
 
@@ -587,13 +587,13 @@ pub fn run(
     mut profile: impl FnMut(&str, &mut dyn FnMut()),
 ) {
     eprintln!(
-        "bytes: AnyElement={} matcher={} rule={} binding={} context={} frame={}",
+        "bytes: AnyElement={} matcher={} rule={} binding={} context={} scope={}",
         size_of::<AnyElement>(),
         size_of::<SelectorMatcher>(),
         size_of::<SelectorRule>(),
         size_of::<SelectorBinding>(),
         size_of::<SelectorContext>(),
-        size_of::<SelectorFrame>(),
+        size_of::<SelectorScope>(),
     );
     matching(criterion, &mut profile);
     first_layout(criterion, &platform, &mut profile);
