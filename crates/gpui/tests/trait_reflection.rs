@@ -226,6 +226,10 @@ mod tests {
     trait CallablePaintSource: PaintSource {}
 
     #[derive(gpui::reflection::Reflect, Debug)]
+    #[expect(
+        clippy::duplicated_attributes,
+        reason = "Duplicate traits exercise reflection registration deduplication."
+    )]
     #[reflect(gpui::Styled, PaintSource, PaintSource)]
     struct GenericCard<State, const COUNT: usize>
     where

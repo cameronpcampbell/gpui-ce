@@ -712,7 +712,7 @@ fn validate_forwarded_signature(signature: &Signature) -> syn::Result<ForwardedS
             unreachable!()
         };
         let argument_name = format_ident!("argument_{idx}");
-        argument.pat = Box::new(parse_quote!(#argument_name));
+        *argument.pat = parse_quote!(#argument_name);
         argument_names.push(argument_name.clone());
 
         if let Type::ImplTrait(iterator) = argument.ty.as_ref() {

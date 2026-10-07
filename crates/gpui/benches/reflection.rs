@@ -3,11 +3,14 @@
 
 use criterion::Criterion;
 use gpui::reflection::benchmarks;
+use smol::{
+    block_on,
+    process::{Command, Output},
+};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
     env,
-    process::Command,
     time::Instant,
 };
 
@@ -72,16 +75,14 @@ fn profile(operation: &mut dyn FnMut()) -> Allocations {
     ALLOCATIONS.with(|counter| counter.replace(None).unwrap())
 }
 
+fn command_output(command: &mut Command) -> Output {
+    block_on(command.output()).unwrap()
+}
+
 fn configuration() {
-    let revision = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .unwrap();
-    let status = Command::new("git")
-        .args(["status", "--porcelain"])
-        .output()
-        .unwrap();
-    let rustc = Command::new("rustc").arg("-V").output().unwrap();
+    let revision = command_output(Command::new("git").args(["rev-parse", "HEAD"]));
+    let status = command_output(Command::new("git").args(["status", "--porcelain"]));
+    let rustc = command_output(Command::new("rustc").arg("-V"));
 
     eprintln!(
         "revision={} dirty={}; {}",
@@ -132,10 +133,7 @@ fn cold_metadata(allocations: bool) {
             } else {
                 "--cold-sample"
             };
-            let output = Command::new(&executable)
-                .args([command, kind])
-                .output()
-                .unwrap();
+            let output = command_output(Command::new(&executable).args([command, kind]));
 
             assert!(
                 output.status.success(),
