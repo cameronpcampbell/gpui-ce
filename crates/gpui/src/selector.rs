@@ -767,19 +767,15 @@ impl Drop for SelectorScopeGuard {
 }
 
 #[must_use = "the generation ancestry lasts until this guard is dropped"]
-struct SelectorGenerationGuard {
-    active: Rc<RefCell<Option<SelectorScope>>>,
+struct SelectorGenerationGuard<'a> {
+    context: &'a SelectorContext,
     previous: SmallVec<[SelectorRuleId; 2]>,
     _construction: SelectorConstructionGuard,
 }
 
-impl Drop for SelectorGenerationGuard {
+impl Drop for SelectorGenerationGuard<'_> {
     fn drop(&mut self) {
-        let mut active = self.active.borrow_mut();
-        let scope = active
-            .as_mut()
-            .expect("selector generation requires an active session");
-        scope.generated_by = mem::take(&mut self.previous);
+        self.context.borrow_scope_mut().generated_by = mem::take(&mut self.previous);
     }
 }
 
@@ -972,12 +968,12 @@ impl SelectorContext {
     fn enter_generation(
         &self,
         generated_by: SmallVec<[SelectorRuleId; 2]>,
-    ) -> SelectorGenerationGuard {
+    ) -> SelectorGenerationGuard<'_> {
         let construction = self.bind_construction();
         let previous = mem::replace(&mut self.borrow_scope_mut().generated_by, generated_by);
 
         SelectorGenerationGuard {
-            active: self.active.clone(),
+            context: self,
             previous,
             _construction: construction,
         }
