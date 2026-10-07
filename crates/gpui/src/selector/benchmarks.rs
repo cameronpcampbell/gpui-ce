@@ -147,6 +147,7 @@ fn node(counts: &Rc<Counts>) -> AnyElement {
         counts: counts.clone(),
     }
     .class("row")
+    .into_any_element()
 }
 
 fn rows(nodes: usize, counts: &Rc<Counts>) -> AnyElement {
@@ -172,7 +173,6 @@ fn attach(mut root: AnyElement, work: Work, rules: usize, counts: &Rc<Counts>) -
         .class(if work == Work::Miss { "missing" } else { "row" });
 
         root = match work {
-            Work::None => root,
             Work::Identity => root.select(selector.reflects(Styled), move |element| {
                 counts.callbacks.set(counts.callbacks.get() + 1);
 
@@ -200,7 +200,8 @@ fn attach(mut root: AnyElement, work: Work, rules: usize, counts: &Rc<Counts>) -
                     element.text_xl().text_color(rgb(0x112233))
                 })
             }
-        };
+        }
+        .into_any_element();
     }
 
     root
@@ -210,7 +211,7 @@ fn predicates(nodes: usize, mixed: bool, counts: &Rc<Counts>) -> Vec<AnyElement>
     (0..nodes)
         .map(|idx| {
             if mixed && idx.is_multiple_of(2) {
-                return Empty.class("row");
+                return Empty.class("row").into_any_element();
             }
 
             node(counts)

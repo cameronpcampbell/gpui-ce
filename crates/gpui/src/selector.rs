@@ -1,6 +1,8 @@
 use crate::{
-    AnyElement, ElementId, IntoElement, IntoItemMatch, IntoListMatch, IntoMatchValues, ItemMatch,
-    ListMatch, SharedString,
+    AnyElement, ElementId, ImageStyle, InteractiveElement, Interactivity, IntoElement,
+    IntoItemMatch, IntoListMatch, IntoMatchValues, ItemMatch, ListMatch, ParentElement,
+    ParentElementTyped, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
+    StyledImage, TextStyleRefinement,
     reflection::{
         ElementReflection, ReflectedElement, ReflectedTraits, ReflectionGroup,
         ReflectionRequirement,
@@ -280,28 +282,118 @@ impl SelectorMatcher {
     }
 }
 
-/// Adds selector metadata and transformations to elements.
+/// An element builder with a pending class list or selector.
+///
+/// Preserves [`trait@Styled`], [`trait@ParentElement`], [`ParentElementTyped`],
+/// [`StyledImage`], [`trait@InteractiveElement`], and [`trait@StatefulInteractiveElement`]
+/// when the builder supports them.
+/// Conversion attaches annotations to the same node and preserves its reflection.
+/// Borrowed methods delegate; consuming trait methods use their defaults.
+/// Call inherent or unsupported custom builder methods before annotating.
+pub struct Annotated<ElementType> {
+    element: ElementType,
+    annotation: Annotation,
+}
+
+enum Annotation {
+    Classes(SmallVec<[SharedString; 2]>),
+    Selector(PendingSelector),
+}
+
+impl<ElementType: IntoElement> IntoElement for Annotated<ElementType> {
+    type Element = AnyElement;
+
+    fn into_element(self) -> Self::Element {
+        let mut element = self.element.into_any_element();
+
+        match self.annotation {
+            Annotation::Classes(classes) => element.classes_mut().extend(classes),
+            Annotation::Selector(selector) => element.add_selector(selector),
+        }
+
+        element
+    }
+}
+
+impl<ElementType: Styled> Styled for Annotated<ElementType> {
+    fn style(&mut self) -> &mut StyleRefinement {
+        self.element.style()
+    }
+
+    fn text_style(&mut self) -> &mut TextStyleRefinement {
+        self.element.text_style()
+    }
+}
+
+impl<ElementType: ParentElement> ParentElement for Annotated<ElementType> {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.element.extend(elements);
+    }
+}
+
+impl<ElementType: ParentElementTyped> ParentElementTyped for Annotated<ElementType> {
+    type Child = ElementType::Child;
+
+    fn extend(&mut self, elements: impl IntoIterator<Item = Self::Child>) {
+        self.element.extend(elements);
+    }
+}
+
+impl<ElementType: InteractiveElement> InteractiveElement for Annotated<ElementType> {
+    fn interactivity(&mut self) -> &mut Interactivity {
+        self.element.interactivity()
+    }
+}
+
+impl<ElementType: StatefulInteractiveElement> StatefulInteractiveElement
+    for Annotated<ElementType>
+{
+}
+
+impl<ElementType: StyledImage> StyledImage for Annotated<ElementType> {
+    fn image_style(&mut self) -> &mut ImageStyle {
+        self.element.image_style()
+    }
+}
+
+/// Adds classes and selectors while preserving common builder traits.
+///
+/// Use [`IntoElement::into_any_element`] where an [`AnyElement`] is required.
+///
+/// ```
+/// use gpui::{Select, div, prelude::*, rgb};
+///
+/// let icon = div().class("icon").bg(rgb(0x123456)).child(div());
+/// let container = div()
+///     .select(Select::children().class("icon").reflects(gpui::Styled),
+///         |element| element.text_xl())
+///     .bg(rgb(0x202020))
+///     .child(icon)
+///     .into_any_element();
+/// ```
 pub trait SelectableElement: IntoElement + Sized {
     /// Tags this element with one class or a collection of positive class names.
     ///
     /// Arrays, vectors, slices, and tuples are supported. Boolean expressions are
     /// only accepted by [`Select::class`].
     ///
-    /// Classes stay on the converted node. The default component conversion tags
-    /// its [`crate::ViewElement`]; pass a class prop to `render` to tag the rendered
-    /// root. Animation wrappers keep their classes; tag the child before wrapping
-    /// it or inside the animator.
+    /// Classes stay on the converted node. Default component conversion tags its
+    /// [`crate::ViewElement`]; use a class prop in `render` to tag the root.
+    /// Tag animated children before wrapping them or inside the animator.
     ///
     /// ```compile_fail
     /// use gpui::{SelectableElement, div, not};
     ///
     /// let element = div().class(not("apple"));
     /// ```
-    fn class<Kind>(self, class: impl IntoMatchValues<SharedString, Kind>) -> AnyElement {
-        let mut element = self.into_any_element();
-        class.extend_match_values(element.classes_mut());
+    fn class<Kind>(self, class: impl IntoMatchValues<SharedString, Kind>) -> Annotated<Self> {
+        let mut classes = SmallVec::new();
+        class.extend_match_values(&mut classes);
 
-        element
+        Annotated {
+            element: self,
+            annotation: Annotation::Classes(classes),
+        }
     }
 
     /// Transforms matching elements before layout.
@@ -312,19 +404,20 @@ pub trait SelectableElement: IntoElement + Sized {
         self,
         selector: Select<Group>,
         mut transform: impl FnMut(ReflectedElement<Group>) -> Output + 'static,
-    ) -> AnyElement
+    ) -> Annotated<Self>
     where
         Group: ReflectionGroup,
         Output: IntoElement + 'static,
     {
-        let mut element = self.into_any_element();
         let transform = move |element| transform(ReflectedElement::new(element)).into_any_element();
-        element.add_selector(PendingSelector::new(
-            selector.into_matcher(),
-            Box::new(transform),
-        ));
 
-        element
+        Annotated {
+            element: self,
+            annotation: Annotation::Selector(PendingSelector::new(
+                selector.into_matcher(),
+                Box::new(transform),
+            )),
+        }
     }
 }
 
@@ -731,7 +824,7 @@ pub(crate) fn apply_active_selectors(element: &mut AnyElement) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reflection::component_example::{CardElement, Draggable};
+    use crate::reflection::test_fixtures::{self, TestElement, TestValue};
     use crate::{
         Animation, AnimationExt, AnyView, AnyWindowHandle, App, AppContext, AvailableSpace, Bounds,
         Canvas, Context, Div, Element, Empty, Entity, FocusHandle, GlobalElementId,
@@ -748,6 +841,9 @@ mod tests {
 
     #[gpui_macros::reflect_trait]
     trait StyledControl: crate::Styled + crate::StatefulInteractiveElement {}
+
+    #[gpui_macros::reflect_trait(membership)]
+    trait Tagged {}
 
     const FULL_REFLECTION: usize = 0;
     const MEMBERSHIP_ONLY: usize = 1;
@@ -776,6 +872,7 @@ mod tests {
             let mut implementations = Vec::new();
             StyledControl.__register::<Self>(&mut implementations);
             crate::ParentElement.__register::<Self>(&mut implementations);
+            Tagged.__register::<Self>(&mut implementations);
 
             for implementation in &mut implementations {
                 if REGISTRATION == MEMBERSHIP_ONLY
@@ -791,6 +888,8 @@ mod tests {
     }
 
     impl<const REGISTRATION: usize> StyledControl for TextOverride<REGISTRATION> {}
+
+    impl<const REGISTRATION: usize> Tagged for TextOverride<REGISTRATION> {}
 
     impl<const REGISTRATION: usize> Styled for TextOverride<REGISTRATION> {
         fn style(&mut self) -> &mut StyleRefinement {
@@ -886,13 +985,12 @@ mod tests {
         }
     }
 
-    struct SelectorTestView {
-        render: Box<dyn Fn() -> AnyElement>,
+    struct SelectorTestView<Builder> {
+        render: Box<dyn Fn() -> Builder>,
     }
 
-    impl Render for SelectorTestView {
-        #[allow(unused_variables)]
-        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    impl<Builder: IntoElement + 'static> Render for SelectorTestView<Builder> {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             (self.render)()
         }
     }
@@ -905,6 +1003,25 @@ mod tests {
     impl RenderOnce for SelectorComponent {
         fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
             self.root
+        }
+    }
+
+    struct TypedContainer(Div);
+
+    impl ParentElementTyped for TypedContainer {
+        type Child = Div;
+
+        fn extend(&mut self, elements: impl IntoIterator<Item = Self::Child>) {
+            self.0
+                .extend(elements.into_iter().map(IntoElement::into_any_element));
+        }
+    }
+
+    impl IntoElement for TypedContainer {
+        type Element = Div;
+
+        fn into_element(self) -> Self::Element {
+            self.0
         }
     }
 
@@ -921,15 +1038,15 @@ mod tests {
         matches.push(element.element_id().unwrap());
     }
 
-    fn draw_selector_tree(
+    fn draw_selector_tree<Builder: IntoElement>(
         cx: &mut TestAppContext,
-        build: impl FnOnce() -> AnyElement,
+        build: impl FnOnce() -> Builder,
     ) -> &mut VisualTestContext {
         let visual = cx.add_empty_window();
         visual.draw(
             Default::default(),
             size(px(100.), px(100.)),
-            |_window, _cx| build(),
+            |_window, _cx| build().into_any_element(),
         );
 
         visual
@@ -954,14 +1071,16 @@ mod tests {
     }
 
     fn style_component_children(element: impl IntoElement) -> AnyElement {
-        element.select(
-            Select::children().class("root").reflects(crate::Styled),
-            |element| element.w(px(24.)),
-        )
+        element
+            .select(
+                Select::children().class("root").reflects(crate::Styled),
+                |element| element.w(px(24.)),
+            )
+            .into_any_element()
     }
 
     fn layout_selector_row(label: &'static str, window: &mut Window, cx: &mut App) {
-        let mut element = selector_row(label).class("row");
+        let mut element = selector_row(label).class("row").into_any_element();
         element.layout_as_root(AvailableSpace::min_size(), window, cx);
     }
 
@@ -996,17 +1115,17 @@ mod tests {
             window.transact(|window| {
                 SELECTOR_CONTEXT.with_borrow_mut(|context| context.bindings.reverse());
 
-                let mut element = selector_row("inner").class("row").select(
-                    Select::this().class("row").every(1),
-                    move |element| {
+                let mut element = selector_row("inner")
+                    .class("row")
+                    .select(Select::this().class("row").every(1), move |element| {
                         record_match(&attached, &element.element);
 
                         // Checkpoints can retain a rule while its callback is leased.
                         assert!(with_selector_transaction(|| Err::<(), ()>(())).is_err());
 
                         element
-                    },
-                );
+                    })
+                    .into_any_element();
                 element.layout_as_root(AvailableSpace::min_size(), window, cx);
 
                 // Removed bindings still share progress with the enclosing scope.
@@ -1041,10 +1160,182 @@ mod tests {
         }
 
         if idx == 5 {
-            return row.track_focus(focus_handle).class("row");
+            return row
+                .track_focus(focus_handle)
+                .class("row")
+                .into_any_element();
         }
 
-        row.class("row")
+        row.class("row").into_any_element()
+    }
+
+    #[crate::test]
+    fn annotations_preserve_builder_mutations_and_rendered_paths(cx: &mut TestAppContext) {
+        let selected = Rc::new(RefCell::new(Vec::new()));
+        let observed = selected.clone();
+        let color = rgb_to_hsla(rgb(0x123456));
+
+        let mut overridden = text_override("overridden")
+            .class("text")
+            .text_color(color)
+            .select(Select::this().reflects(crate::Styled), |element| element)
+            .text_xl()
+            .into_element();
+        let concrete = overridden.downcast_mut::<TextOverride>().unwrap();
+
+        assert_eq!(concrete.text.color, Some(color));
+        assert!(concrete.text.font_size.is_some());
+        assert!(concrete.style().text.color.is_none());
+
+        let path_child = |label: &'static str| {
+            canvas(
+                move |_bounds, window, _cx| {
+                    assert_eq!(
+                        window.element_id_stack.as_slice(),
+                        &[ElementId::from("container"), ElementId::from(label)],
+                    );
+                },
+                |_bounds, _state, _window, _cx| {},
+            )
+            .size(px(1.))
+        };
+
+        let visual = draw_selector_tree(cx, move || {
+            let class_first = div()
+                .class(["icon", "icon"])
+                .size(px(8.))
+                .id("class-first")
+                .on_click(|_event, _window, _cx| {})
+                .class("extra")
+                .child(path_child("class-first"));
+            let id_first = div()
+                .id("id-first")
+                .class("icon")
+                .on_click(|_event, _window, _cx| {})
+                .size(px(8.))
+                .child(path_child("id-first"));
+
+            let container = div()
+                .class("container")
+                .select(
+                    Select::children().class("icon").reflects(trait_set![
+                        crate::Styled,
+                        crate::InteractiveElement,
+                        crate::ParentElement,
+                    ]),
+                    move |mut element| {
+                        record_match(&observed, &element.element);
+                        assert_eq!(element.style().size.width, Some(px(8.).into()));
+                        assert_eq!(element.interactivity().click_listeners.len(), 1);
+                        let label = element.element.element_id().unwrap().to_string();
+
+                        element
+                            .class("selected")
+                            .size(px(24.))
+                            .debug_selector(move || label)
+                            .child(selector_row("added-child"))
+                    },
+                )
+                .bg(color)
+                .id("container")
+                .child(class_first)
+                .child(id_first)
+                .child(
+                    TypedContainer(div())
+                        .class("typed")
+                        .child(selector_row("typed-child"))
+                        .children([selector_row("typed-sibling")]),
+                )
+                .select(
+                    Select::descendants()
+                        .class("selected")
+                        .reflects(crate::Styled),
+                    |element| element.h(px(16.)),
+                );
+
+            div().child(container)
+        });
+
+        assert_matches(&selected, &["class-first", "id-first"]);
+
+        for (label, width, height) in [
+            ("class-first", 24., 16.),
+            ("id-first", 24., 16.),
+            ("typed-child", 8., 8.),
+            ("typed-sibling", 8., 8.),
+            ("added-child", 8., 8.),
+        ] {
+            assert_eq!(
+                visual.debug_bounds(label).unwrap().size,
+                size(px(width), px(height))
+            );
+        }
+    }
+
+    #[test]
+    fn annotated_conversion_preserves_existing_nodes_and_annotation_order() {
+        for route_idx in 0..8 {
+            let mut original = div()
+                .id("original")
+                .class("first")
+                .select(Select::this(), |element| element)
+                .into_any_element();
+            let metadata = original.reflection();
+            let concrete = original.downcast_mut::<Div>().unwrap() as *mut Div;
+            let rule = original.attached_selectors()[0].identity();
+            let state = original.selector_node_state_mut();
+            state.record_visit(rule, LayoutAttemptId(42));
+            state.generated_by.push(rule);
+
+            let reflected = ReflectedElement::<
+                <crate::__GpuiReflectInteractiveElement as ReflectionToken>::Group,
+            >::new(original);
+            let annotated = reflected
+                .class(["second", "first"])
+                .select(Select::this(), |element| element)
+                .id("renamed")
+                .class("third")
+                .select(Select::this(), |element| element);
+            let mut element = match route_idx {
+                0 => annotated.into_any_element(),
+                1 => annotated.into_element(),
+                2 => annotated.into_element().into_any(),
+                3 => annotated.into_any_element().into_any(),
+                4 => annotated.into_element().class("last").into_any_element(),
+                5 => annotated
+                    .into_any_element()
+                    .class("last")
+                    .into_element()
+                    .into_any(),
+                6 => annotated.id("renamed").into_any_element(),
+                _route => annotated.id("renamed").into_element().into_any(),
+            };
+
+            assert_eq!(element.downcast_mut::<Div>().unwrap() as *mut Div, concrete);
+            assert!(std::ptr::eq(metadata, element.reflection()));
+            assert_eq!(element.element_id(), Some(ElementId::from("renamed")));
+
+            let mut classes = ["first", "second", "first", "third"]
+                .map(SharedString::from)
+                .to_vec();
+
+            if (4..6).contains(&route_idx) {
+                classes.push("last".into());
+            }
+
+            assert_eq!(element.classes(), classes);
+            let selectors = element.attached_selectors();
+            assert_eq!(selectors.len(), 3);
+            assert_eq!(selectors[0].identity().0, rule.0);
+            assert!(selectors[0].identity().0 < selectors[1].identity().0);
+            assert!(selectors[1].identity().0 < selectors[2].identity().0);
+
+            let state = element.selector_node_state_mut();
+            assert_eq!(state.visited.len(), 1);
+            assert_eq!(state.visited[0].rule.0, rule.0);
+            assert_eq!(state.visited[0].attempt.0, 42);
+            assert!(state.generated_by.as_slice() == [rule]);
+        }
     }
 
     #[crate::test]
@@ -1133,11 +1424,14 @@ mod tests {
                         root: selector_row("component-root")
                             .child(
                                 SelectorComponent {
-                                    root: selector_row("nested-root").class("root"),
+                                    root: selector_row("nested-root")
+                                        .class("root")
+                                        .into_any_element(),
                                 }
                                 .class("nested-wrapper"),
                             )
-                            .class("root"),
+                            .class("root")
+                            .into_any_element(),
                     }
                     .class("wrapper"),
                 );
@@ -1146,29 +1440,34 @@ mod tests {
                     .with_animation(
                         "animation",
                         Animation::new(Duration::from_secs(1)),
-                        |element, _progress| element,
+                        |element, _progress| element.w(px(12.)),
                     )
-                    .class("wrapper");
+                    .class("wrapper")
+                    .child(selector_row("animation-child").class("root"));
                 let spring = selector_row("spring-root")
                     .into_any_element()
                     .with_spring(
                         "spring",
                         SpringAnimation::new(SpringConfig::new(100., 10., 1.)).to(px(0.)),
-                        |element, _value| element.class("root"),
+                        |element, _value| element.class("root").into_any_element(),
                     )
                     .class("wrapper");
                 let card = style_component_children(
-                    CardElement::new("card")
+                    TestElement::new("card")
                         .size(px(8.))
                         .child(selector_row("card-child").class("root"))
                         .class("card"),
                 );
-                let wrappers = [component, animated, spring];
+                let wrappers = [
+                    component,
+                    animated.into_any_element(),
+                    spring.into_any_element(),
+                ];
 
                 for element in &wrappers {
                     assert_eq!(element.classes(), &[SharedString::from("wrapper")]);
                     assert!(!element.implements_trait(crate::Styled));
-                    assert!(!element.implements_trait(Draggable));
+                    assert!(!element.implements_trait(TestValue));
                 }
 
                 div()
@@ -1205,7 +1504,8 @@ mod tests {
             for (label, width, height) in [
                 ("component-root", 24., 16.),
                 ("nested-root", 8., 16.),
-                ("animated-root", 8., 16.),
+                ("animated-root", 12., 16.),
+                ("animation-child", 8., 16.),
                 ("spring-root", 8., 16.),
                 ("card-child", 24., 16.),
                 ("plain", 32., 8.),
@@ -1235,7 +1535,7 @@ mod tests {
         let new_rules = installed.clone();
 
         let visual = draw_selector_tree(cx, move || {
-            let mut prebuilt = Some(div().id("prebuilt").class("icon"));
+            let mut prebuilt = Some(div().id("prebuilt").class("icon").into_any_element());
             let mut concrete = Some(div().id("captured-concrete"));
 
             div()
@@ -1266,7 +1566,8 @@ mod tests {
                                 .debug_selector(|| "from-first".into())
                                 .text_color(initial_color)
                                 .child(div().id("fresh-child").class("icon"))
-                                .class("icon");
+                                .class("icon")
+                                .into_any_element();
                         }
 
                         if label == ElementId::from("mutated") {
@@ -1330,6 +1631,7 @@ mod tests {
 
                             element.size(px(8.))
                         })
+                        .into_any_element()
                 })
         });
 
@@ -1406,8 +1708,9 @@ mod tests {
 
                         let metadata = element.element.reflection();
                         let replace = element.element.classes().contains(&"replace".into());
-                        let mut erased =
-                            Element::into_any(element.into_element()).class("reflected");
+                        let mut erased = Element::into_any(element.into_element())
+                            .class("reflected")
+                            .into_any_element();
                         assert!(std::ptr::eq(metadata, erased.reflection()));
 
                         if !replace {
@@ -1420,7 +1723,8 @@ mod tests {
                             String::from("new state"),
                             replacement_output.clone(),
                         )
-                        .class("reflected");
+                        .class("reflected")
+                        .into_any_element();
                         assert!(!std::ptr::eq(metadata, replacement.reflection()));
                         assert!(!replacement.classes().contains(&"replace".into()));
 
@@ -1463,8 +1767,9 @@ mod tests {
         let every = spaced.clone();
 
         draw_selector_tree(cx, move || {
-            let missing_parent =
-                text_override_with_reflection::<MISSING_PARENT>("missing-parent").class("row");
+            let missing_parent = text_override_with_reflection::<MISSING_PARENT>("missing-parent")
+                .class("row")
+                .into_any_element();
             assert!(missing_parent.implements_trait(StyledControl));
             assert!(!missing_parent.reflection().has_adapter(crate::Styled));
 
@@ -1506,13 +1811,16 @@ mod tests {
                 .select(
                     Select::children()
                         .class("row")
-                        .reflects(StyledControl)
+                        .reflects(trait_set![Tagged, StyledControl, Tagged])
                         .nth(1),
                     move |mut element| {
                         record_match(&nth, &element.element);
                         element.style().size.width = Some(px(20.).into());
                         let concrete = element.element.downcast_mut::<TextOverride>().unwrap();
                         assert_eq!(concrete.style().size.width, Some(px(20.).into()));
+
+                        let mut element = element.class("composed").text_color(rgb(0x654321));
+                        assert_eq!(element.text_style().color, Some(rgb_to_hsla(rgb(0x654321))));
 
                         element
                     },
@@ -1795,7 +2103,11 @@ mod tests {
             draw_selector_tree(cx, move || {
                 div()
                     .child(crate::container_query(move |_size, window, cx| {
-                        let mut retained = div().id(("row", 0_usize)).size(px(5.)).class("row");
+                        let mut retained = div()
+                            .id(("row", 0_usize))
+                            .size(px(5.))
+                            .class("row")
+                            .into_any_element();
                         let available = AvailableSpace::min_size();
                         let expected_size = size(retained_size, retained_size);
                         let result = window.transact(|window| {
@@ -1878,7 +2190,7 @@ mod tests {
                 .child(crate::container_query(move |_size, window, cx| {
                     let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                         window.with_layout_measurement(|window| {
-                            let mut doomed = div().id("panic").class("row");
+                            let mut doomed = div().id("panic").class("row").into_any_element();
                             doomed.layout_as_root(AvailableSpace::min_size(), window, cx);
                         });
                     }));
@@ -2009,13 +2321,15 @@ mod tests {
 
                 for (label, selector) in selectors {
                     let selected = selected_for_render.clone();
-                    root = root.select(selector, move |element| {
-                        selected
-                            .borrow_mut()
-                            .push((label, element.element.element_id().unwrap()));
+                    root = root
+                        .select(selector, move |element| {
+                            selected
+                                .borrow_mut()
+                                .push((label, element.element.element_id().unwrap()));
 
-                        element
-                    });
+                            element
+                        })
+                        .into_any_element();
                 }
 
                 root
@@ -2072,7 +2386,11 @@ mod tests {
                     )
                     .child(
                         list(state.clone(), |idx, window, cx| {
-                            div().id(("list-row", idx)).h(px(8.)).class("row")
+                            div()
+                                .id(("list-row", idx))
+                                .h(px(8.))
+                                .class("row")
+                                .into_any_element()
                         })
                         .h(px(60.))
                         .w_full(),
@@ -2238,7 +2556,11 @@ mod tests {
         let expected_size = size(px(48.), px(24.));
 
         let measure_nested_row = move |window: &mut Window, cx: &mut App| {
-            let mut element = div().id("nested-measurement").size(px(8.)).class("row");
+            let mut element = div()
+                .id("nested-measurement")
+                .size(px(8.))
+                .class("row")
+                .into_any_element();
 
             element.layout_as_root(available_space, window, cx)
         };
@@ -2246,7 +2568,11 @@ mod tests {
         let build_measured_row = move |window: &mut Window, cx: &mut App| {
             let nested_size =
                 window.with_layout_measurement(|window| measure_nested_row(window, cx));
-            let mut element = div().id("during-construction").size(px(8.)).class("row");
+            let mut element = div()
+                .id("during-construction")
+                .size(px(8.))
+                .class("row")
+                .into_any_element();
             let constructed_size = element.layout_as_root(available_space, window, cx);
 
             assert_eq!([nested_size, constructed_size], [expected_size; 2]);
@@ -2312,6 +2638,7 @@ mod tests {
                             element
                         },
                     )
+                    .into_any_element()
             },
         );
 
@@ -2329,11 +2656,10 @@ mod tests {
     }
 
     impl Render for CachedSelectorChild {
-        #[allow(unused_variables)]
-        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             self.renders.set(self.renders.get() + 1);
 
-            CardElement::new("cached-row")
+            TestElement::new("cached-row")
                 .size_full()
                 .occlude()
                 .bg(rgb(0x112233))
@@ -2356,9 +2682,9 @@ mod tests {
             .into_any_element()
     }
 
-    fn cached_selector_window(
+    fn cached_selector_window<Builder: IntoElement + 'static>(
         cx: &mut TestAppContext,
-        render: impl Fn(&Entity<CachedSelectorChild>, &Rc<Cell<usize>>) -> AnyElement + 'static,
+        render: impl Fn(&Entity<CachedSelectorChild>, &Rc<Cell<usize>>) -> Builder + 'static,
     ) -> (
         AnyWindowHandle,
         Entity<CachedSelectorChild>,
@@ -2460,6 +2786,7 @@ mod tests {
 
                         element
                     })
+                    .into_any_element()
             });
 
             selected.set(0);
@@ -2500,7 +2827,7 @@ mod tests {
                 }
 
                 let cached = cached_selector_element(child);
-                let first = selector_row("first").class("row");
+                let first = selector_row("first").class("row").into_any_element();
                 let children = match (earlier_match, deferred_contents) {
                     (true, true) => vec![
                         crate::deferred(crate::container_query(move |_size, _window, _cx| cached))
@@ -2587,10 +2914,12 @@ mod tests {
                     .into_any_element();
 
                 if non_positional {
-                    root = root.select(
-                        Select::descendants().class("row").reflects(crate::Styled),
-                        |element| element.h(px(12.)),
-                    );
+                    root = root
+                        .select(
+                            Select::descendants().class("row").reflects(crate::Styled),
+                            |element| element.h(px(12.)),
+                        )
+                        .into_any_element();
                 }
 
                 root.select(
@@ -2630,16 +2959,19 @@ mod tests {
                         .w(px(mask_width))
                         .pl(px(inset))
                         .text_color(rgb(color))
-                });
+                })
+                .into_any_element();
 
             if let Some(height) = height {
-                root = root.select(
-                    Select::descendants()
-                        .class("row")
-                        .id("cached-row")
-                        .reflects(crate::Styled),
-                    move |element| element.h(px(height)),
-                );
+                root = root
+                    .select(
+                        Select::descendants()
+                            .class("row")
+                            .id("cached-row")
+                            .reflects(crate::Styled),
+                        move |element| element.h(px(height)),
+                    )
+                    .into_any_element();
             }
 
             root
@@ -2706,17 +3038,17 @@ mod tests {
                     Select::descendants()
                         .class("row")
                         .reflects(trait_set![
-                            crate::reflection::component_example::Draggable,
+                            test_fixtures::TestValue,
                             crate::Styled,
                             crate::ParentElement,
                         ])
                         .nth(0),
                     move |mut element| {
                         selected.set(selected.get() + 1);
-                        *element.drag_payload() = Some("cached-payload".into());
+                        *element.value() = 42;
 
-                        let card = element.element.downcast_mut::<CardElement>().unwrap();
-                        assert_eq!(card.drag_payload, Some("cached-payload".into()));
+                        let card = element.element.downcast_mut::<TestElement>().unwrap();
+                        assert_eq!(card.value, 42);
 
                         let painted = painted.clone();
 

@@ -1,8 +1,8 @@
 //! Run with `cargo run -p gpui-ce --example element_selectors`.
 //!
 //! `Button::root_class` tags its rendered root; `.class()` tags its view wrapper.
-//! `descendants()` crosses that boundary. `CardElement` keeps its custom methods
-//! and delegated children on one node.
+//! Use `descendants()` to cross component and animation boundaries. Annotations
+//! preserve common builder traits; call inherent or custom consuming methods first.
 
 #[path = "../shared/prelude.rs"]
 mod example_prelude;
@@ -44,6 +44,7 @@ impl RenderOnce for Button {
     #[allow(unused_variables)]
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         div()
+            .class(self.root_class)
             .id("favorite-button")
             .flex()
             .items_center()
@@ -53,7 +54,6 @@ impl RenderOnce for Button {
             .rounded_md()
             .text_color(rgb(0xffffff))
             .children(self.children)
-            .class(self.root_class)
             .select(
                 Select::children()
                     .reflects(trait_set![gpui::Styled, gpui::ParentElement])
@@ -83,12 +83,13 @@ impl Render for ElementSelectorsExample {
             .gap_4()
             .child(
                 Button::new("button")
-                    .child(div().child("★").class(["icon", "accent"]))
-                    .child("Favorite")
-                    .class("button-component"),
+                    .class("button-component")
+                    .child(div().class(["icon", "accent"]).child("★"))
+                    .child("Favorite"),
             )
             .child(CardElement::new("card").class("card").select(
                 Select::this().class("card").reflects(trait_set![
+                    component_example::CardRole,
                     component_example::Draggable,
                     gpui::Styled,
                     gpui::ParentElement,
@@ -128,7 +129,8 @@ impl Render for ElementSelectorsExample {
                             .id(not(("badge", 4_usize)))
                             .every(2),
                         |element| element.bg(rgb(0x2563eb)).text_color(rgb(0xffffff)),
-                    ),
+                    )
+                    .bg(rgb(0x202020)),
             )
             .select(
                 Select::descendants().class("button").reflects(gpui::Styled),

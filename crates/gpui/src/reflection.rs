@@ -40,11 +40,6 @@ use std::{
 #[doc(hidden)]
 pub mod benchmarks;
 
-#[cfg(test)]
-#[path = "../examples/learn/trait_reflection.rs"]
-#[allow(dead_code)]
-pub(crate) mod component_example;
-
 /// Identifies a trait made available to element reflection.
 #[derive(Clone, Copy, Debug)]
 pub struct ReflectedTrait {
@@ -715,9 +710,12 @@ pub fn registered_traits(type_id: TypeId) -> &'static [ReflectedTrait] {
 }
 
 #[cfg(test)]
+pub(crate) mod test_fixtures;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reflection::component_example::{CardElement, Draggable, Icon};
+    use crate::reflection::test_fixtures::{self, TestComponent, TestElement, TestValue};
     use crate::{
         AppContext, Context, Div, Empty, InteractiveElement, MouseButton, ParentElement, Render,
         Select, SelectableElement, StatefulInteractiveElement, StyleRefinement, Styled, TestApp,
@@ -1324,7 +1322,7 @@ mod tests {
             .bg(rgb(0x123456))
             .role(accesskit::Role::Button)
             .accessibility_id("card")
-            .aria_label("Draggable card")
+            .aria_label("Test element")
             .on_hover(move |hovered, _window, _cx| hovers.borrow_mut().push(*hovered))
             .on_click(move |_event, _window, _cx| clicks.set(clicks.get() + 1))
             .child(
@@ -1349,19 +1347,24 @@ mod tests {
             let clicks = self.clicks.clone();
 
             let element = if self.use_component {
-                CardElement::new("card").class("card").select(
-                    Select::this().class("card").reflects(trait_set![
-                        crate::reflection::component_example::Draggable,
-                        crate::Styled,
-                        crate::ParentElement,
-                        crate::StatefulInteractiveElement,
-                    ]),
-                    move |mut element| {
-                        *element.drag_payload() = Some("card-data".into());
+                TestElement::new("card")
+                    .class("card")
+                    .select(
+                        Select::this().class("card").reflects(trait_set![
+                            test_fixtures::TestValue,
+                            crate::Styled,
+                            crate::ParentElement,
+                            crate::StatefulInteractiveElement,
+                        ]),
+                        move |mut element| {
+                            *element.value() = 41;
+                            test_fixtures::set_value(&mut element.element, 42);
+                            assert_eq!(*element.value(), 42);
 
-                        configure_component(element, hovers.clone(), clicks.clone())
-                    },
-                )
+                            configure_component(element, hovers.clone(), clicks.clone())
+                        },
+                    )
+                    .into_any_element()
             } else {
                 configure_component(div().id("card"), hovers, clicks).into_any_element()
             };
@@ -1370,7 +1373,7 @@ mod tests {
                 .flex()
                 .flex_col()
                 .child(element)
-                .child(Icon::default())
+                .child(TestComponent::default())
         }
     }
 
@@ -1406,13 +1409,13 @@ mod tests {
                     .find(|(_node_id, node)| node.label() == Some(label))
                     .unwrap()
             };
-            let (card_id, card) = node_by_label("Draggable card");
+            let (card_id, card) = node_by_label("Test element");
             let (child_id, _child) = node_by_label("Child");
             let (payload_id, _payload) = node_by_label("Payload");
 
             assert_eq!(card.author_id(), Some("card"));
             assert_eq!(card.role(), accesskit::Role::Button);
-            assert_eq!(card.label(), Some("Draggable card"));
+            assert_eq!(card.label(), Some("Test element"));
             assert!(card.children().contains(child_id));
             assert!(card.children().contains(payload_id));
             assert_eq!(
