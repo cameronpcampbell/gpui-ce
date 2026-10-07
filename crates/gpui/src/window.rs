@@ -1264,7 +1264,7 @@ pub struct Window {
     rem_size_override_stack: SmallVec<[Pixels; 8]>,
     pub(crate) viewport_size: Size<Pixels>,
     layout_engine: Option<TaffyLayoutEngine>,
-    selector_runtime: crate::selector::SelectorRuntime,
+    selector_context: crate::selector::SelectorContext,
     pub(crate) collecting_inline: bool,
     pub(crate) current_inline_fragments: Option<Arc<[Bounds<Pixels>]>>,
     pub(crate) root: Option<AnyView>,
@@ -2021,7 +2021,7 @@ impl Window {
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
-            selector_runtime: crate::selector::SelectorRuntime::new(),
+            selector_context: crate::selector::SelectorContext::new(),
             collecting_inline: false,
             current_inline_fragments: None,
             root: None,
@@ -2104,8 +2104,8 @@ impl Window {
         self.focus_listeners.insert((), value)
     }
 
-    pub(crate) fn selector_runtime(&self) -> &crate::selector::SelectorRuntime {
-        &self.selector_runtime
+    pub(crate) fn selector_context(&self) -> &crate::selector::SelectorContext {
+        &self.selector_context
     }
 }
 
@@ -3175,7 +3175,9 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
-        let _selector_scope = crate::selector::begin_selector_layout_attempt(self);
+        // Select the app's allocation arena before binding this window's selector context.
+        let arena_scope = ElementArenaScope::enter(&cx.element_arena);
+        let _selector_scope = self.selector_context().begin_attempt();
 
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
@@ -3183,10 +3185,6 @@ impl Window {
         let frame_dirty = self.invalidator.take_frame_dirty();
         #[cfg(feature = "profiler")]
         self.window_profiler.begin_draw();
-
-        // Set up the per-App arena for element allocation during this draw.
-        // This ensures that multiple test Apps have isolated arenas.
-        let arena_scope = ElementArenaScope::enter(&cx.element_arena);
 
         self.invalidate_entities();
         cx.entities.clear_accessed();
@@ -3675,14 +3673,13 @@ impl Window {
                         window.with_rem_size(Some(rem_size), |window| {
                             window.with_absolute_element_offset(absolute_offset, |window| {
                                 crate::DeferredPriorityStackCache::push(priority, cx);
-                                crate::selector::with_selector_snapshot(
-                                    window,
+                                let _selector_scope = window.selector_context().restore_snapshot(
                                     selector_snapshot
                                         .expect("live deferred draw requires a selector snapshot"),
-                                    |window| {
-                                        element.prepaint(window, cx);
-                                    },
                                 );
+
+                                element.prepaint(window, cx);
+                                drop(_selector_scope);
                                 crate::DeferredPriorityStackCache::pop(cx);
                             });
                         });
@@ -3732,16 +3729,14 @@ impl Window {
                 self.with_rendered_view(deferred_draw.current_view, |window| {
                     window.with_content_mask(content_mask, |window| {
                         window.with_rem_size(Some(deferred_draw.rem_size), |window| {
-                            crate::selector::with_selector_snapshot(
-                                window,
+                            let _selector_scope = window.selector_context().restore_snapshot(
                                 deferred_draw
                                     .selector_snapshot
                                     .clone()
                                     .expect("live deferred draw requires a selector snapshot"),
-                                |window| {
-                                    element.paint(window, cx);
-                                },
                             );
+
+                            element.paint(window, cx);
                         });
                     })
                 })
@@ -4021,7 +4016,15 @@ impl Window {
     pub fn transact<T, U>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, U>) -> Result<T, U> {
         self.invalidator.debug_assert_prepaint();
         let index = self.prepaint_index();
-        let result = crate::selector::with_selector_transaction(self, f);
+        let _selector_scope = self.selector_context().ensure_attempt();
+        let mut selector_checkpoint = self.selector_context().checkpoint();
+        let result = f(self);
+
+        if result.is_ok() {
+            selector_checkpoint.commit();
+        }
+
+        drop(selector_checkpoint);
 
         if result.is_err() {
             self.next_frame.hitboxes.truncate(index.hitboxes_index);
@@ -4372,7 +4375,7 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
         let parent_node = self.next_frame.dispatch_tree.active_node_id().unwrap();
         self.next_frame.deferred_draws.push(DeferredDraw {
-            selector_snapshot: Some(crate::selector::capture_selector_snapshot(self)),
+            selector_snapshot: Some(self.selector_context().snapshot()),
             current_view: self.current_view(),
             parent_node,
             element_id_stack: self.element_id_stack.clone(),
@@ -5281,7 +5284,9 @@ impl Window {
         &mut self,
         operation: impl FnOnce(&mut Self) -> ResultType,
     ) -> ResultType {
-        crate::selector::with_selector_measurement(self, operation)
+        let _selector_scope = self.selector_context().enter_measurement();
+
+        operation(self)
     }
 
     /// Builds, measures, and discards a temporary element, returning its size.

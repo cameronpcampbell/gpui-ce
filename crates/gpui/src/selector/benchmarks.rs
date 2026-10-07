@@ -1,9 +1,8 @@
 //! CPU selector workloads. Fixture counts are checked outside measured intervals.
 
 use super::{
-    PendingSelector, Select, SelectableElement, SelectorBinding, SelectorContext, SelectorMatcher,
-    SelectorRule, begin_selector_layout_attempt, capture_selector_snapshot,
-    with_attached_selectors, with_deeper_selector_depth,
+    PendingSelector, Select, SelectableElement, SelectorBinding, SelectorContext, SelectorFrame,
+    SelectorMatcher, SelectorRule,
 };
 use crate::{
     self as gpui, AnyElement, App, AppContext, AvailableSpace, BenchAppContext, Bounds, Context,
@@ -284,7 +283,8 @@ fn matching(criterion: &mut Criterion, profile: &mut impl FnMut(&str, &mut dyn F
 }
 
 fn layout(root: &mut AnyElement, window: &mut Window, cx: &mut App) {
-    let _attempt = begin_selector_layout_attempt(window);
+    let _attempt = window.selector_context().begin_attempt();
+
     root.layout_as_root(AvailableSpace::min_size(), window, cx);
 }
 
@@ -554,27 +554,25 @@ fn contexts(
 
         group.bench_function(rules.to_string(), |bencher| {
             let mut cx = BenchAppContext::new(platform.clone(), None, bencher);
-            let mut visual = cx.add_empty_window();
+            let context = SelectorContext::new();
 
-            visual.update(|window, _cx| {
-                let _attempt = begin_selector_layout_attempt(window);
+            {
+                let _attempt = context.begin_attempt();
+                let _attached = context.enter_attached(&pending);
 
-                with_attached_selectors(window, &pending, |window| {
-                    profile(&format!("context/{rules}"), &mut || {
-                        with_deeper_selector_depth(window, |window| {
-                            black_box(capture_selector_snapshot(window))
-                        });
-                    });
+                profile(&format!("context/{rules}"), &mut || {
+                    let _children = context.enter_children();
 
-                    cx.bench_iter(|_cx| {
-                        with_deeper_selector_depth(window, |window| {
-                            black_box(capture_selector_snapshot(window));
-                        });
-                    });
+                    black_box(context.snapshot());
                 });
-            });
 
-            drop(visual);
+                cx.bench_iter(|_cx| {
+                    let _children = context.enter_children();
+
+                    black_box(context.snapshot());
+                });
+            }
+
             cx.teardown();
         });
     }
@@ -589,12 +587,13 @@ pub fn run(
     mut profile: impl FnMut(&str, &mut dyn FnMut()),
 ) {
     eprintln!(
-        "bytes: AnyElement={} matcher={} rule={} binding={} context={}",
+        "bytes: AnyElement={} matcher={} rule={} binding={} context={} frame={}",
         size_of::<AnyElement>(),
         size_of::<SelectorMatcher>(),
         size_of::<SelectorRule>(),
         size_of::<SelectorBinding>(),
         size_of::<SelectorContext>(),
+        size_of::<SelectorFrame>(),
     );
     matching(criterion, &mut profile);
     first_layout(criterion, &platform, &mut profile);

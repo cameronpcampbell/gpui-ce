@@ -767,10 +767,21 @@ impl AnyElement {
         E::RequestLayoutState: Any,
     {
         let reflection = Element::reflection(&element);
-        let element = with_element_arena(|arena| arena.alloc(|| Drawable::new(element)))
-            .map(|element| element as &mut dyn ElementObject);
+        let (element, generated_by) = with_element_arena(|arena| {
+            let generated_by = arena
+                .selector_context
+                .borrow()
+                .clone()
+                .map(|context| context.generation_ancestry())
+                .unwrap_or_default();
 
-        let generated_by = crate::selector::construction_ancestry();
+            let element = arena.alloc(|| Drawable::new(element));
+
+            (element, generated_by)
+        });
+
+        let element = element.map(|element| element as &mut dyn ElementObject);
+
         let metadata = if generated_by.is_empty() {
             None
         } else {
@@ -913,37 +924,11 @@ impl AnyElement {
         apply_selectors: bool,
         operation: impl FnOnce(&mut AnyElement, &mut Window) -> ResultType,
     ) -> ResultType {
-        let _attempt = crate::selector::ensure_selector_layout_attempt(window);
-        let _construction = crate::selector::selector_construction_boundary(window);
-        let selectors = self.attached_selectors();
+        let _scope = window
+            .selector_context()
+            .enter_element(self, apply_selectors);
 
-        if selectors.is_empty() && !crate::selector::has_active_selectors(window) {
-            let generated_by = self.selector_generation_ancestry();
-
-            if generated_by.is_empty() && !crate::selector::has_generation_ancestry(window) {
-                return operation(self, window);
-            }
-
-            return crate::selector::with_generation_ancestry(window, generated_by, |window| {
-                operation(self, window)
-            });
-        }
-
-        crate::selector::with_attached_selectors(window, &selectors, |window| {
-            if apply_selectors {
-                crate::selector::apply_active_selectors(window, self);
-            }
-
-            crate::selector::with_generation_ancestry(
-                window,
-                self.selector_generation_ancestry(),
-                |window| {
-                    crate::selector::with_deeper_selector_depth(window, |window| {
-                        operation(self, window)
-                    })
-                },
-            )
-        })
+        operation(self, window)
     }
 
     /// Returns the metadata supplied by the concrete element at erasure.
@@ -1035,8 +1020,7 @@ impl AnyElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<FocusHandle> {
-        let _attempt = crate::selector::ensure_selector_layout_attempt(window);
-        let _construction = crate::selector::selector_construction_boundary(window);
+        let _selector_scope = window.selector_context().ensure_attempt();
         self.layout_as_root(available_space, window, cx);
 
         window.with_absolute_element_offset(origin, |window| self.prepaint(window, cx))
