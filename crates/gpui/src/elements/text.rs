@@ -1,3 +1,4 @@
+use crate::reflection::{ElementReflection, Reflect, ReflectedImplementation};
 use crate::{
     ActiveTooltip, AnyView, App, AppContext, Bounds, DispatchPhase, Element, ElementId,
     GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
@@ -64,7 +65,7 @@ use unicode_segmentation::UnicodeSegmentation;
 /// However, when a [`text`] invocation's argument *does* change, you should
 /// consider whether this change should be reported as a node "updating its
 /// contents", or an old node being destroyed and a new node being created.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, gpui_macros::Reflect)]
 pub struct Text {
     id: Option<ElementId>,
     text: SharedString,
@@ -252,9 +253,19 @@ impl Element for Text {
     }
 }
 
+impl Reflect for &'static str {
+    fn build_reflection() -> Vec<ReflectedImplementation> {
+        Vec::new()
+    }
+}
+
 impl Element for &'static str {
     type RequestLayoutState = TextLayout;
     type PrepaintState = ();
+
+    fn reflection(&self) -> &'static ElementReflection {
+        <Self as Reflect>::reflection()
+    }
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -326,9 +337,19 @@ impl IntoElement for Cow<'static, str> {
     }
 }
 
+impl Reflect for SharedString {
+    fn build_reflection() -> Vec<ReflectedImplementation> {
+        Vec::new()
+    }
+}
+
 impl Element for SharedString {
     type RequestLayoutState = TextLayout;
     type PrepaintState = ();
+
+    fn reflection(&self) -> &'static ElementReflection {
+        <Self as Reflect>::reflection()
+    }
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -389,6 +410,7 @@ impl IntoElement for SharedString {
 /// Callers are responsible for setting the correct style for each run.
 /// For text with a uniform style, you can usually avoid calling this constructor
 /// and just pass text directly.
+#[derive(gpui_macros::Reflect)]
 pub struct StyledText {
     text: SharedString,
     runs: Option<Vec<TextRun>>,
@@ -1684,6 +1706,7 @@ mod truncation_tests {
 }
 
 /// A text element that can be interacted with.
+#[derive(gpui_macros::Reflect)]
 pub struct InteractiveText {
     element_id: ElementId,
     text: StyledText,

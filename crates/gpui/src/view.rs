@@ -20,7 +20,7 @@ use std::{any::type_name, sync::LazyLock};
 /// This is the type-erased counterpart to [`ViewElement`]: it holds an entity plus
 /// a function pointer to its render, and is itself a [`View`], so embedding it as an
 /// element goes through the same [`ViewElement`] machinery as any other view.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, gpui_macros::Reflect)]
 pub struct AnyView {
     entity: AnyEntity,
     render: fn(&AnyView, &mut Window, &mut App) -> AnyElement,
@@ -297,6 +297,8 @@ impl<T: Render> Entity<T> {
 /// into layout, prepaint, and paint. Constructed via [`ViewElement::new`].
 /// Reflection targets this wrapper, independently of the view and its rendered root.
 #[doc(hidden)]
+#[derive(gpui_macros::Reflect)]
+#[reflect()]
 pub struct ViewElement<V: View> {
     view: Option<V>,
     entity_id: Option<EntityId>,
@@ -416,6 +418,10 @@ struct ViewElementCacheKey {
 impl<V: View> Element for ViewElement<V> {
     type RequestLayoutState = ViewElementRequestLayoutState;
     type PrepaintState = Option<AnyElement>;
+
+    fn reflection(&self) -> &'static crate::reflection::ElementReflection {
+        <Self as crate::reflection::Reflect>::reflection()
+    }
 
     fn id(&self) -> Option<ElementId> {
         self.entity_id.map(ElementId::View)
@@ -670,6 +676,7 @@ impl<V: View> Element for ViewElement<V> {
 }
 
 /// A view that renders nothing
+#[derive(gpui_macros::Reflect)]
 pub struct EmptyView;
 
 impl Render for EmptyView {
@@ -692,27 +699,12 @@ mod tests {
 
     struct ProvidedComponent;
 
-    #[derive(gpui_macros::Reflect)]
-    #[reflect(Capability)]
-    struct ReflectedWrapper;
-
     struct UnreflectedComponent;
 
     impl Capability for LinkedComponent {}
     impl Capability for ProvidedComponent {}
-    impl Capability for ReflectedWrapper {}
-    impl Capability for ViewElement<ReflectedWrapper> {}
 
     impl Reflect for ProvidedComponent {
-        fn build_reflection() -> Vec<crate::reflection::ReflectedImplementation> {
-            let mut implementations = Vec::new();
-            Capability.__register::<Self>(&mut implementations);
-
-            implementations
-        }
-    }
-
-    impl Reflect for ViewElement<ReflectedWrapper> {
         fn build_reflection() -> Vec<crate::reflection::ReflectedImplementation> {
             let mut implementations = Vec::new();
             Capability.__register::<Self>(&mut implementations);
@@ -731,20 +723,13 @@ mod tests {
         };
     }
 
-    render_components!(
-        LinkedComponent,
-        ProvidedComponent,
-        ReflectedWrapper,
-        UnreflectedComponent
-    );
+    render_components!(LinkedComponent, ProvidedComponent, UnreflectedComponent);
 
     #[test]
     fn diagnoses_component_receiver_mismatches_once_through_the_provider() {
         assert!(component_reflection_diagnostic::<UnreflectedComponent>().is_none());
         assert!(component_reflection_diagnostic::<ProvidedComponent>().is_none());
         <ProvidedComponent as Reflect>::reflection();
-        <ViewElement<ReflectedWrapper> as Reflect>::reflection();
-        assert!(component_reflection_diagnostic::<ReflectedWrapper>().is_none());
 
         let diagnostic = component_reflection_diagnostic::<LinkedComponent>().unwrap();
 

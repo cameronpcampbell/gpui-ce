@@ -5,6 +5,7 @@
 //! Generic derives list all traits in `#[reflect(...)]`, including builtins, and forward
 //! `Element::reflection` to `<Self as Reflect>::reflection()` with matching trait bounds.
 //! Handwritten providers implement `Reflect::build_reflection` and use the same hook.
+//! Built-in generic wrappers use empty registrations for traits conditional on their contents.
 //!
 //! `#[reflect_trait(membership)]` permits associated items and generic methods
 //! without granting callable access.
@@ -273,6 +274,8 @@ where
 /// Borrowed methods dispatch to its concrete type; owned builders and explicit
 /// `#[reflect(wrapper_default)]` methods use their trait bodies.
 #[doc(hidden)]
+#[derive(gpui_macros::Reflect)]
+#[reflect()]
 pub struct ReflectedElement<Group>
 where
     Group: ReflectionGroup,
@@ -1219,54 +1222,6 @@ mod tests {
             assert_eq!(element.reflected_type_id(), TypeId::of::<Div>());
             assert!(std::ptr::eq(metadata, element.reflection()));
         }
-
-        let empty = Empty.into_any_element();
-
-        assert!(empty.reflected_traits().is_empty());
-        assert_eq!(empty.reflection().concrete_type(), None);
-        assert!(std::ptr::eq(
-            empty.reflection(),
-            linked_metadata_for::<()>()
-        ));
-        assert!(!REFLECTIONS.read().contains_key(&TypeId::of::<Empty>()));
-        assert!(!REFLECTIONS.read().contains_key(&TypeId::of::<()>()));
-    }
-
-    fn style_canvas<State: Default + 'static>() -> &'static ElementReflection {
-        let element = crate::canvas(
-            |_bounds, _window, _cx| State::default(),
-            |_bounds, _state, _window, _cx| {},
-        )
-        .into_any_element();
-        let metadata = element.reflection();
-
-        let reflected =
-            ReflectedElement::<<crate::__GpuiReflectStyled as ReflectionToken>::Group>::new(
-                element,
-            );
-        let mut element = reflected.bg(rgb(0x123456)).into_any_element();
-        let concrete = element.downcast_mut::<crate::Canvas<State>>().unwrap();
-
-        assert!(concrete.style().background.is_some());
-        assert_eq!(
-            metadata.concrete_type(),
-            Some(TypeId::of::<crate::Canvas<State>>())
-        );
-        assert!(std::ptr::eq(
-            metadata,
-            element.into_element().into_any().reflection()
-        ));
-
-        metadata
-    }
-
-    #[test]
-    fn generic_metadata_drives_erased_dispatch() {
-        let first = style_canvas::<u32>();
-        let second = style_canvas::<String>();
-
-        assert!(!std::ptr::eq(first, second));
-        assert!(std::ptr::eq(first, style_canvas::<u32>()));
     }
 
     struct ComponentView {

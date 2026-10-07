@@ -4614,6 +4614,8 @@ impl GroupHitboxes {
 }
 
 /// A wrapper around an element that can store state, produced after assigning an ElementId.
+#[derive(gpui_macros::Reflect)]
+#[reflect()]
 pub struct Stateful<E> {
     pub(crate) element: E,
 }
@@ -4644,6 +4646,10 @@ where
 {
     type RequestLayoutState = E::RequestLayoutState;
     type PrepaintState = E::PrepaintState;
+
+    fn reflection(&self) -> &'static crate::reflection::ElementReflection {
+        <Self as crate::reflection::Reflect>::reflection()
+    }
 
     fn into_any(self) -> AnyElement {
         self.element.into_any()

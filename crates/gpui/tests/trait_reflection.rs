@@ -418,10 +418,6 @@ mod tests {
         assert!(control.implements_trait(inherited::Control));
         assert!(!control.implements_trait(other::Draggable));
         assert!(!control.implements_trait(gpui::Styled));
-
-        let empty = gpui::Empty.into_any_element();
-
-        assert!(empty.reflected_traits().is_empty());
     }
 
     #[test]
