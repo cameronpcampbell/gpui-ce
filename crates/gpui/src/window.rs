@@ -1264,7 +1264,7 @@ pub struct Window {
     rem_size_override_stack: SmallVec<[Pixels; 8]>,
     pub(crate) viewport_size: Size<Pixels>,
     layout_engine: Option<TaffyLayoutEngine>,
-    selector_context: crate::selectors::SelectorContext,
+    selector_runtime: crate::selectors::SelectorRuntime,
     pub(crate) collecting_inline: bool,
     pub(crate) current_inline_fragments: Option<Arc<[Bounds<Pixels>]>>,
     pub(crate) root: Option<AnyView>,
@@ -2021,7 +2021,7 @@ impl Window {
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
-            selector_context: crate::selectors::SelectorContext::new(),
+            selector_runtime: crate::selectors::SelectorRuntime::new(),
             collecting_inline: false,
             current_inline_fragments: None,
             root: None,
@@ -2104,8 +2104,8 @@ impl Window {
         self.focus_listeners.insert((), value)
     }
 
-    pub(crate) fn selector_context(&self) -> &crate::selectors::SelectorContext {
-        &self.selector_context
+    pub(crate) fn selector_runtime(&self) -> &crate::selectors::SelectorRuntime {
+        &self.selector_runtime
     }
 }
 
@@ -3175,9 +3175,9 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
-        // Select the app's allocation arena before binding this window's selector context.
+        // Select the app's allocation arena before binding this window's selector runtime.
         let arena_scope = ElementArenaScope::enter(&cx.element_arena);
-        let _selector_session = self.selector_context().enter_session();
+        let _selector_session = self.selector_runtime().enter_session();
 
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
@@ -3674,7 +3674,7 @@ impl Window {
                             window.with_absolute_element_offset(absolute_offset, |window| {
                                 crate::DeferredPriorityStackCache::push(priority, cx);
                                 let _selector_scope = window
-                                    .selector_context()
+                                    .selector_runtime()
                                     .enter_captured_scope(captured_selector_scope.expect(
                                         "live deferred draw requires a captured selector scope",
                                     ));
@@ -3730,7 +3730,7 @@ impl Window {
                 self.with_rendered_view(deferred_draw.current_view, |window| {
                     window.with_content_mask(content_mask, |window| {
                         window.with_rem_size(Some(deferred_draw.rem_size), |window| {
-                            let _selector_scope = window.selector_context().enter_captured_scope(
+                            let _selector_scope = window.selector_runtime().enter_captured_scope(
                                 deferred_draw.captured_selector_scope.clone().expect(
                                     "live deferred draw requires a captured selector scope",
                                 ),
@@ -4016,8 +4016,8 @@ impl Window {
     pub fn transact<T, U>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, U>) -> Result<T, U> {
         self.invalidator.debug_assert_prepaint();
         let index = self.prepaint_index();
-        let _selector_session = self.selector_context().enter_session_if_needed();
-        let selector_positions = self.selector_context().checkpoint_positions();
+        let _selector_session = self.selector_runtime().enter_session_if_needed();
+        let selector_positions = self.selector_runtime().checkpoint_positions();
         let result = f(self);
 
         if result.is_ok() {
@@ -4375,7 +4375,7 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
         let parent_node = self.next_frame.dispatch_tree.active_node_id().unwrap();
         self.next_frame.deferred_draws.push(DeferredDraw {
-            captured_selector_scope: Some(self.selector_context().capture_scope()),
+            captured_selector_scope: Some(self.selector_runtime().capture_scope()),
             current_view: self.current_view(),
             parent_node,
             element_id_stack: self.element_id_stack.clone(),
@@ -5284,7 +5284,7 @@ impl Window {
         &mut self,
         operation: impl FnOnce(&mut Self) -> ResultType,
     ) -> ResultType {
-        let _selector_scope = self.selector_context().enter_measurement();
+        let _selector_scope = self.selector_runtime().enter_measurement();
 
         operation(self)
     }

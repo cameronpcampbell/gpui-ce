@@ -1345,7 +1345,7 @@ impl App {
                 Ok(mut window) => {
                     cx.window_update_stack.push(id);
                     let root_view = {
-                        let _construction = window.selector_context().bind_construction();
+                        let _construction = window.selector_runtime().bind_construction();
 
                         build_root_view(&mut window, cx)
                     };
@@ -1974,7 +1974,7 @@ impl App {
 
             cx.window_update_stack.push(window.handle.id);
             let result = {
-                let _construction = window.selector_context().bind_construction();
+                let _construction = window.selector_runtime().bind_construction();
 
                 update(root_view, &mut window, cx)
             };

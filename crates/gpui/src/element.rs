@@ -769,10 +769,10 @@ impl AnyElement {
         let reflection = Element::reflection(&element);
         let (element, generated_by) = with_element_arena(|arena| {
             let generated_by = arena
-                .selector_context
+                .selector_runtime
                 .borrow()
                 .clone()
-                .map(|context| context.generation_ancestry())
+                .map(|runtime| runtime.generation_ancestry())
                 .unwrap_or_default();
 
             let element = arena.alloc(|| Drawable::new(element));
@@ -786,7 +786,8 @@ impl AnyElement {
             None
         } else {
             let mut metadata = crate::selectors::ElementMetadata::new();
-            metadata.node_state = Some(crate::selectors::SelectorNodeState::generated(generated_by));
+            metadata.node_state =
+                Some(crate::selectors::SelectorNodeState::generated(generated_by));
 
             Some(Box::new(metadata))
         };
@@ -924,7 +925,7 @@ impl AnyElement {
         phase: SelectorPhase,
         operation: impl FnOnce(&mut AnyElement, &mut Window) -> ResultType,
     ) -> ResultType {
-        let _scope = window.selector_context().enter_element(self, phase);
+        let _scope = window.selector_runtime().enter_element(self, phase);
 
         operation(self, window)
     }
@@ -1014,7 +1015,7 @@ impl AnyElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<FocusHandle> {
-        let _selector_session = window.selector_context().enter_session_if_needed();
+        let _selector_session = window.selector_runtime().enter_session_if_needed();
         self.layout_as_root(available_space, window, cx);
 
         window.with_absolute_element_offset(origin, |window| self.prepaint(window, cx))

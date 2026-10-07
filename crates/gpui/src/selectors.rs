@@ -692,17 +692,17 @@ impl SelectorOwner {
 }
 
 /// Coordinates selector scopes for one window.
-pub(crate) struct SelectorContext {
+pub(crate) struct SelectorRuntime {
     owner: SelectorOwner,
     active: Rc<RefCell<Option<SelectorScope>>>,
 }
 
 #[derive(Clone)]
-pub(crate) struct SelectorContextHandle {
+pub(crate) struct SelectorRuntimeHandle {
     active: Rc<RefCell<Option<SelectorScope>>>,
 }
 
-impl SelectorContextHandle {
+impl SelectorRuntimeHandle {
     pub(crate) fn generation_ancestry(&self) -> SmallVec<[SelectorRuleId; 2]> {
         self.active
             .borrow()
@@ -729,8 +729,8 @@ pub(crate) enum SelectorPhase {
 #[must_use = "the construction binding lasts until this guard is dropped"]
 pub(crate) struct SelectorConstructionGuard {
     // Restore the arena selected on entry, even after allocation routing changes.
-    slot: Option<Rc<RefCell<Option<SelectorContextHandle>>>>,
-    previous: Option<SelectorContextHandle>,
+    slot: Option<Rc<RefCell<Option<SelectorRuntimeHandle>>>>,
+    previous: Option<SelectorRuntimeHandle>,
 }
 
 impl Drop for SelectorConstructionGuard {
@@ -768,14 +768,14 @@ impl Drop for SelectorScopeGuard {
 
 #[must_use = "the generation ancestry lasts until this guard is dropped"]
 struct SelectorGenerationGuard<'a> {
-    context: &'a SelectorContext,
+    runtime: &'a SelectorRuntime,
     previous: SmallVec<[SelectorRuleId; 2]>,
     _construction: SelectorConstructionGuard,
 }
 
 impl Drop for SelectorGenerationGuard<'_> {
     fn drop(&mut self) {
-        self.context.borrow_scope_mut().generated_by = mem::take(&mut self.previous);
+        self.runtime.borrow_scope_mut().generated_by = mem::take(&mut self.previous);
     }
 }
 
@@ -812,7 +812,7 @@ impl Drop for SelectorPositionCheckpoint {
     }
 }
 
-impl SelectorContext {
+impl SelectorRuntime {
     pub(crate) fn new() -> Self {
         Self {
             owner: SelectorOwner(Rc::new(())),
@@ -822,11 +822,11 @@ impl SelectorContext {
 
     /// Binds element construction to this window for the guard's lifetime.
     pub(crate) fn bind_construction(&self) -> SelectorConstructionGuard {
-        let slot = with_element_arena(|arena| arena.selector_context.clone());
+        let slot = with_element_arena(|arena| arena.selector_runtime.clone());
         let unchanged = slot
             .borrow()
             .as_ref()
-            .is_some_and(|context| Rc::ptr_eq(&context.active, &self.active));
+            .is_some_and(|runtime| Rc::ptr_eq(&runtime.active, &self.active));
 
         if unchanged {
             return SelectorConstructionGuard {
@@ -835,7 +835,7 @@ impl SelectorContext {
             };
         }
 
-        let previous = slot.replace(Some(SelectorContextHandle {
+        let previous = slot.replace(Some(SelectorRuntimeHandle {
             active: self.active.clone(),
         }));
 
@@ -973,7 +973,7 @@ impl SelectorContext {
         let previous = mem::replace(&mut self.borrow_scope_mut().generated_by, generated_by);
 
         SelectorGenerationGuard {
-            context: self,
+            runtime: self,
             previous,
             _construction: construction,
         }
@@ -1374,7 +1374,7 @@ mod tests {
         cx: &mut App,
     ) {
         window.invalidator.set_phase(DrawPhase::Prepaint);
-        let _session = window.selector_context().enter_session();
+        let _session = window.selector_runtime().enter_session();
         let selector = PendingSelector::new(
             Select::this().class("row").nth(0).into_matcher(),
             Box::new(move |element| {
@@ -1385,9 +1385,9 @@ mod tests {
         );
 
         {
-            let _attached = window.selector_context().enter_attached(&[selector]);
+            let _attached = window.selector_runtime().enter_attached(&[selector]);
             let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                let _captured_scope = window.selector_context().enter_captured_scope(captured);
+                let _captured_scope = window.selector_runtime().enter_captured_scope(captured);
 
                 layout_selector_row("rejected", window, cx);
             }));
@@ -1421,12 +1421,12 @@ mod tests {
         cx: &mut App,
     ) -> Result<(), ()> {
         let _scope = window
-            .selector_context()
-            .enter_captured_scope(window.selector_context().capture_scope());
+            .selector_runtime()
+            .enter_captured_scope(window.selector_runtime().capture_scope());
 
         window.transact(|window| {
             window
-                .selector_context()
+                .selector_runtime()
                 .borrow_scope_mut()
                 .bindings
                 .reverse();
@@ -1443,7 +1443,7 @@ mod tests {
 
             // Removed bindings still share progress with the enclosing scope.
             window
-                .selector_context()
+                .selector_runtime()
                 .borrow_scope_mut()
                 .bindings
                 .clear();
@@ -2465,7 +2465,7 @@ mod tests {
 
                         // A new session cannot make a requested drawable transform again.
                         {
-                            let _session = window.selector_context().enter_session();
+                            let _session = window.selector_runtime().enter_session();
                             assert_eq!(
                                 retained.layout_as_root(available, window, cx),
                                 expected_size
@@ -2717,8 +2717,8 @@ mod tests {
             window.invalidator.set_phase(DrawPhase::Prepaint);
 
             {
-                let _session = window.selector_context().enter_session();
-                let _attached = window.selector_context().enter_attached(&selectors);
+                let _session = window.selector_runtime().enter_session();
+                let _attached = window.selector_runtime().enter_attached(&selectors);
 
                 layout_selector_row("seed", window, cx);
                 let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
@@ -2734,8 +2734,8 @@ mod tests {
             let mut retained = retained.borrow_mut().take().unwrap();
 
             {
-                let _session = window.selector_context().enter_session();
-                let _attached = window.selector_context().enter_attached(&selectors);
+                let _session = window.selector_runtime().enter_session();
+                let _attached = window.selector_runtime().enter_attached(&selectors);
 
                 retained.layout_as_root(AvailableSpace::min_size(), window, cx);
                 outside.layout_as_root(AvailableSpace::min_size(), window, cx);
@@ -2767,11 +2767,11 @@ mod tests {
         for _redraw in 0..2 {
             cx.update_window(outer.into(), |_view, window, cx| {
                 window.invalidator.set_phase(DrawPhase::Prepaint);
-                let _session = window.selector_context().enter_session();
+                let _session = window.selector_runtime().enter_session();
 
                 {
                     let _attached = window
-                        .selector_context()
+                        .selector_runtime()
                         .enter_attached(std::slice::from_ref(&shared));
 
                     layout_selector_row("outer-first", window, cx);
@@ -2779,9 +2779,9 @@ mod tests {
 
                 cx.update_window(second.into(), |_view, window, cx| {
                     window.invalidator.set_phase(DrawPhase::Prepaint);
-                    let _session = window.selector_context().enter_session();
+                    let _session = window.selector_runtime().enter_session();
                     let _attached = window
-                        .selector_context()
+                        .selector_runtime()
                         .enter_attached(std::slice::from_ref(&shared));
 
                     layout_selector_row("second-first", window, cx);
@@ -2792,7 +2792,7 @@ mod tests {
 
                 {
                     let _attached = window
-                        .selector_context()
+                        .selector_runtime()
                         .enter_attached(std::slice::from_ref(&shared));
 
                     layout_selector_row("outer-selected", window, cx);
@@ -2831,15 +2831,15 @@ mod tests {
 
         cx.update_window(outer.into(), |_view, window, cx| {
             window.invalidator.set_phase(DrawPhase::Prepaint);
-            let _session = window.selector_context().enter_session();
+            let _session = window.selector_runtime().enter_session();
             let mut retained = None;
             let result = window.transact(|window| {
                 let _attached = window
-                    .selector_context()
+                    .selector_runtime()
                     .enter_attached(std::slice::from_ref(&selector));
 
                 layout_selector_row("attempted", window, cx);
-                retained = Some(window.selector_context().capture_scope());
+                retained = Some(window.selector_runtime().capture_scope());
 
                 Err::<(), ()>(())
             });
@@ -2848,7 +2848,7 @@ mod tests {
 
             {
                 let _captured_scope = window
-                    .selector_context()
+                    .selector_runtime()
                     .enter_captured_scope(retained.unwrap());
 
                 layout_selector_row("committed", window, cx);
@@ -2856,7 +2856,7 @@ mod tests {
 
             {
                 let _attached = window
-                    .selector_context()
+                    .selector_runtime()
                     .enter_attached(std::slice::from_ref(&selector));
 
                 layout_selector_row("exhausted", window, cx);
@@ -2882,7 +2882,7 @@ mod tests {
         let stale = cx
             .update_window(outer.into(), |_view, window, cx| {
                 window.invalidator.set_phase(DrawPhase::Prepaint);
-                let _session = window.selector_context().enter_session();
+                let _session = window.selector_runtime().enter_session();
                 let selector = PendingSelector::new(
                     Select::this().class("row").nth(0).into_matcher(),
                     Box::new(move |element| {
@@ -2893,9 +2893,9 @@ mod tests {
                 );
 
                 let captured = {
-                    let _attached = window.selector_context().enter_attached(&[selector]);
+                    let _attached = window.selector_runtime().enter_attached(&[selector]);
                     let captured = window.with_layout_measurement(|window| {
-                        window.selector_context().capture_scope()
+                        window.selector_runtime().capture_scope()
                     });
                     cx.update_window(second.into(), |_view, window, cx| {
                         reject_scope_and_layout(
@@ -2920,10 +2920,10 @@ mod tests {
                         .unwrap();
 
                     {
-                        let _nested_session = window.selector_context().enter_session();
+                        let _nested_session = window.selector_runtime().enter_session();
                         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                             let _captured_scope = window
-                                .selector_context()
+                                .selector_runtime()
                                 .enter_captured_scope(captured.clone());
                         }));
 
@@ -2932,7 +2932,7 @@ mod tests {
 
                     {
                         let _captured_scope = window
-                            .selector_context()
+                            .selector_runtime()
                             .enter_captured_scope(captured.clone());
 
                         layout_selector_row("measured", window, cx);
@@ -2952,7 +2952,7 @@ mod tests {
         cx.update_window(outer.into(), |_view, window, cx| {
             let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                 let _captured_scope = window
-                    .selector_context()
+                    .selector_runtime()
                     .enter_captured_scope(stale.clone());
 
                 layout_selector_row("idle-rejected", window, cx);

@@ -1,8 +1,8 @@
 //! CPU selector workloads. Fixture counts are checked outside measured intervals.
 
 use super::{
-    PendingSelector, Select, SelectableElement, SelectorBinding, SelectorContext, SelectorMatcher,
-    SelectorRule, SelectorScope,
+    PendingSelector, Select, SelectableElement, SelectorBinding, SelectorMatcher, SelectorRule,
+    SelectorRuntime, SelectorScope,
 };
 use crate::{
     self as gpui, AnyElement, App, AppContext, AvailableSpace, BenchAppContext, Bounds, Context,
@@ -283,7 +283,7 @@ fn matching(criterion: &mut Criterion, profile: &mut impl FnMut(&str, &mut dyn F
 }
 
 fn layout(root: &mut AnyElement, window: &mut Window, cx: &mut App) {
-    let _session = window.selector_context().enter_session();
+    let _session = window.selector_runtime().enter_session();
 
     root.layout_as_root(AvailableSpace::min_size(), window, cx);
 }
@@ -535,12 +535,12 @@ fn frames(
     group.finish();
 }
 
-fn contexts(
+fn runtimes(
     criterion: &mut Criterion,
     platform: &Rc<dyn Platform>,
     profile: &mut impl FnMut(&str, &mut dyn FnMut()),
 ) {
-    let mut group = criterion.benchmark_group("selectors/context");
+    let mut group = criterion.benchmark_group("selectors/runtime");
 
     for rules in [0, 1, 4, 16, 64] {
         let pending = (0..rules)
@@ -554,22 +554,22 @@ fn contexts(
 
         group.bench_function(rules.to_string(), |bencher| {
             let mut cx = BenchAppContext::new(platform.clone(), None, bencher);
-            let context = SelectorContext::new();
+            let runtime = SelectorRuntime::new();
 
             {
-                let _session = context.enter_session();
-                let _attached = context.enter_attached(&pending);
+                let _session = runtime.enter_session();
+                let _attached = runtime.enter_attached(&pending);
 
-                profile(&format!("context/{rules}"), &mut || {
-                    let _children = context.enter_children();
+                profile(&format!("runtime/{rules}"), &mut || {
+                    let _children = runtime.enter_children();
 
-                    black_box(context.capture_scope());
+                    black_box(runtime.capture_scope());
                 });
 
                 cx.bench_iter(|_cx| {
-                    let _children = context.enter_children();
+                    let _children = runtime.enter_children();
 
-                    black_box(context.capture_scope());
+                    black_box(runtime.capture_scope());
                 });
             }
 
@@ -580,23 +580,23 @@ fn contexts(
     group.finish();
 }
 
-/// Runs matching, first-layout, context-copy, and CPU frame benchmarks.
+/// Runs matching, first-layout, scope-copy, and CPU frame benchmarks.
 pub fn run(
     criterion: &mut Criterion,
     platform: Rc<dyn Platform>,
     mut profile: impl FnMut(&str, &mut dyn FnMut()),
 ) {
     eprintln!(
-        "bytes: AnyElement={} matcher={} rule={} binding={} context={} scope={}",
+        "bytes: AnyElement={} matcher={} rule={} binding={} runtime={} scope={}",
         size_of::<AnyElement>(),
         size_of::<SelectorMatcher>(),
         size_of::<SelectorRule>(),
         size_of::<SelectorBinding>(),
-        size_of::<SelectorContext>(),
+        size_of::<SelectorRuntime>(),
         size_of::<SelectorScope>(),
     );
     matching(criterion, &mut profile);
     first_layout(criterion, &platform, &mut profile);
     frames(criterion, &platform, &mut profile);
-    contexts(criterion, &platform, &mut profile);
+    runtimes(criterion, &platform, &mut profile);
 }
