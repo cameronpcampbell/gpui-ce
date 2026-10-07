@@ -3,12 +3,15 @@
 
 use criterion::Criterion;
 use gpui::{bench_platform, selector_benchmarks};
+use smol::{
+    block_on,
+    process::{Command, Output},
+};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
     collections::HashSet,
     env,
-    process::Command,
     time::Duration,
 };
 
@@ -65,16 +68,15 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
+fn command_output(command: &mut Command) -> Output {
+    block_on(command.output()).unwrap()
+}
+
 fn main() {
-    let revision = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .unwrap();
-    let status = Command::new("git")
-        .args(["status", "--porcelain"])
-        .output()
-        .unwrap();
-    let rustc = Command::new("rustc").arg("-V").output().unwrap();
+    let revision = command_output(Command::new("git").args(["rev-parse", "HEAD"]));
+    let status = command_output(Command::new("git").args(["status", "--porcelain"]));
+    let rustc = command_output(Command::new("rustc").arg("-V"));
+
     eprintln!(
         "revision={} dirty={}; {}; target={}-{}; backend=CPU TestPlatform; GPU=none; debug_assertions={}; font-kit={}; wayland={}; x11={}; windows-manifest={}",
         String::from_utf8_lossy(&revision.stdout).trim(),
