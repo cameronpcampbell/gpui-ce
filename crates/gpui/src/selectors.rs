@@ -20,7 +20,7 @@ use std::{
 
 #[cfg(feature = "bench-support")]
 #[doc(hidden)]
-#[path = "selector/benchmarks.rs"]
+#[path = "selectors/benchmarks.rs"]
 pub mod selector_benchmarks;
 
 /// The reflection group used by selectors without a reflected trait predicate.

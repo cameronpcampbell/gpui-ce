@@ -34,7 +34,7 @@
 use crate::{
     A11ySubtreeBuilder, App, ArenaBox, AvailableSpace, Bounds, Context, DispatchNodeId, ElementId,
     FocusHandle, InspectorElementId, LayoutId, Pixels, Point, Size, Style, Window,
-    selector::SelectorPhase, util::FluentBuilder, window::with_element_arena,
+    selectors::SelectorPhase, util::FluentBuilder, window::with_element_arena,
 };
 use derive_more::{Deref, DerefMut};
 use std::{
@@ -757,7 +757,7 @@ where
 pub struct AnyElement {
     element: Option<ArenaBox<dyn ElementObject>>,
     reflection: &'static crate::reflection::ElementReflection,
-    metadata: Option<Box<crate::selector::ElementMetadata>>,
+    metadata: Option<Box<crate::selectors::ElementMetadata>>,
 }
 
 impl AnyElement {
@@ -785,8 +785,8 @@ impl AnyElement {
         let metadata = if generated_by.is_empty() {
             None
         } else {
-            let mut metadata = crate::selector::ElementMetadata::new();
-            metadata.node_state = Some(crate::selector::SelectorNodeState::generated(generated_by));
+            let mut metadata = crate::selectors::ElementMetadata::new();
+            metadata.node_state = Some(crate::selectors::SelectorNodeState::generated(generated_by));
 
             Some(Box::new(metadata))
         };
@@ -835,11 +835,11 @@ impl AnyElement {
         &mut self.metadata_mut().classes
     }
 
-    pub(crate) fn add_selector(&mut self, selector: crate::selector::PendingSelector) {
+    pub(crate) fn add_selector(&mut self, selector: crate::selectors::PendingSelector) {
         self.metadata_mut().selectors.push(selector);
     }
 
-    pub(crate) fn selector_node_state_mut(&mut self) -> &mut crate::selector::SelectorNodeState {
+    pub(crate) fn selector_node_state_mut(&mut self) -> &mut crate::selectors::SelectorNodeState {
         self.metadata_mut()
             .node_state
             .get_or_insert_with(Default::default)
@@ -847,7 +847,7 @@ impl AnyElement {
 
     pub(crate) fn selector_generation_ancestry(
         &self,
-    ) -> smallvec::SmallVec<[crate::selector::SelectorRuleId; 2]> {
+    ) -> smallvec::SmallVec<[crate::selectors::SelectorRuleId; 2]> {
         self.metadata
             .as_ref()
             .and_then(|metadata| metadata.node_state.as_ref())
@@ -859,9 +859,9 @@ impl AnyElement {
         self.element_object().is_before_layout()
     }
 
-    fn metadata_mut(&mut self) -> &mut crate::selector::ElementMetadata {
+    fn metadata_mut(&mut self) -> &mut crate::selectors::ElementMetadata {
         self.metadata
-            .get_or_insert_with(|| Box::new(crate::selector::ElementMetadata::new()))
+            .get_or_insert_with(|| Box::new(crate::selectors::ElementMetadata::new()))
     }
 
     fn element_object(&self) -> &dyn ElementObject {
@@ -888,7 +888,7 @@ impl AnyElement {
         *self = element;
     }
 
-    pub(crate) fn attached_selectors(&self) -> Vec<crate::selector::PendingSelector> {
+    pub(crate) fn attached_selectors(&self) -> Vec<crate::selectors::PendingSelector> {
         self.metadata
             .as_ref()
             .map(|metadata| metadata.selectors.clone())
@@ -898,7 +898,7 @@ impl AnyElement {
     // Keep shared rule handles on both preserved inputs and their replacement roots.
     pub(crate) fn inherit_attached_selectors(
         &mut self,
-        mut selectors: Vec<crate::selector::PendingSelector>,
+        mut selectors: Vec<crate::selectors::PendingSelector>,
     ) {
         if let Some(metadata) = self.metadata.as_mut() {
             for selector in &metadata.selectors {

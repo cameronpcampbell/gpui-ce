@@ -52,7 +52,7 @@ pub mod profiler;
 pub mod queue;
 pub mod reflection;
 mod scene;
-mod selector;
+mod selectors;
 mod shared_uri;
 mod spring;
 mod style;
@@ -118,7 +118,7 @@ pub use gpui_macros::{
     AppContext, InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement,
     Styled, VisualContext, bench, property_test, register_action, test,
 };
-pub use selector::*;
+pub use selectors::*;
 pub use spring::*;
 
 /// Defines a Criterion benchmark group for benchmarks annotated with [`gpui::bench`].

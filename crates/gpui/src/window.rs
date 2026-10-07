@@ -1085,7 +1085,7 @@ pub(crate) struct TooltipRequest {
 }
 
 pub(crate) struct DeferredDraw {
-    captured_selector_scope: Option<crate::selector::CapturedSelectorScope>,
+    captured_selector_scope: Option<crate::selectors::CapturedSelectorScope>,
     current_view: EntityId,
     priority: usize,
     parent_node: DispatchNodeId,
@@ -1264,7 +1264,7 @@ pub struct Window {
     rem_size_override_stack: SmallVec<[Pixels; 8]>,
     pub(crate) viewport_size: Size<Pixels>,
     layout_engine: Option<TaffyLayoutEngine>,
-    selector_context: crate::selector::SelectorContext,
+    selector_context: crate::selectors::SelectorContext,
     pub(crate) collecting_inline: bool,
     pub(crate) current_inline_fragments: Option<Arc<[Bounds<Pixels>]>>,
     pub(crate) root: Option<AnyView>,
@@ -2021,7 +2021,7 @@ impl Window {
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
-            selector_context: crate::selector::SelectorContext::new(),
+            selector_context: crate::selectors::SelectorContext::new(),
             collecting_inline: false,
             current_inline_fragments: None,
             root: None,
@@ -2104,7 +2104,7 @@ impl Window {
         self.focus_listeners.insert((), value)
     }
 
-    pub(crate) fn selector_context(&self) -> &crate::selector::SelectorContext {
+    pub(crate) fn selector_context(&self) -> &crate::selectors::SelectorContext {
         &self.selector_context
     }
 }
