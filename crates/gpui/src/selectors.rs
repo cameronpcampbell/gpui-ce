@@ -4041,8 +4041,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(this_count.get(), 1);
-        assert_eq!(children_count.get(), 2);
-        assert_eq!(descendants_count.get(), 4);
+        // The styled container query is a child, and its rendered div is a descendant.
+        assert_eq!(children_count.get(), 3);
+        assert_eq!(descendants_count.get(), 5);
         assert_eq!(filtered_count.get(), 1);
     }
 }
