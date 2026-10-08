@@ -24,8 +24,6 @@ use crate::{
     LayoutId, Pixels, Window,
 };
 
-#[doc(hidden)]
-pub use gpui_macros::__collect_reflected_traits;
 pub use gpui_macros::{Reflect, reflect_trait, trait_set};
 use parking_lot::RwLock;
 use smallvec::SmallVec;

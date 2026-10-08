@@ -12,8 +12,8 @@ mod tests {
     #[cfg(any(reflection_schema, reflection_parent_schema))]
     use gpui::ParentElement as WrongAlias;
     use gpui::reflection::{
-        IncludesCallableTrait, IncludesReflectedTrait, Reflect, ReflectedElement, ReflectedTraits,
-        ReflectionToken,
+        CallableReflectionToken, IncludesCallableTrait, IncludesReflectedTrait, Reflect,
+        ReflectedElement, ReflectedTraits, ReflectionToken,
     };
     use gpui::{
         Animation, AnimationElement, AnimationExt, AnyElement, App, Bounds, Div, Element,
@@ -355,6 +355,13 @@ mod tests {
 
         fn require_other_draggable<Type: other::Draggable>() {}
 
+        fn require_callable_group<Group, Token>(_group: Group, _token: Token)
+        where
+            Token: CallableReflectionToken,
+            Group: IncludesCallableTrait<Token>,
+        {
+        }
+
         fn require_selected_traits<Traits>(traits: Traits)
         where
             Traits: gpui::reflection::ReflectedTraits,
@@ -382,6 +389,11 @@ mod tests {
         }
 
         require_other_draggable::<Control>();
+        require_callable_group(__GpuiReflectDraggableGroup, Draggable);
+        require_callable_group(
+            inherited::__GpuiReflectControlGroup,
+            gpui::InteractiveElement,
+        );
         require_selected_traits(gpui::reflection::trait_set!(
             gpui::Styled,
             gpui::ParentElement,
@@ -577,18 +589,15 @@ mod tests {
 
         #[cfg(reflection_identity)]
         {
-            gpui::reflection::__collect_reflected_traits! {
-                [items InvalidGroup] [shared_key]
-                [gpui::__GpuiReflectParentElementSchema::Marker] [callable] [any]
-                [] [] [[shared_key [gpui::__GpuiReflectStyledSchema::Marker] callable]] [] []
+            fn require_other_styled<Traits>(traits: Traits)
+            where
+                Traits: ReflectedTraits,
+                Traits::Group: IncludesCallableTrait<other::__GpuiReflectStyled>,
+            {
+                drop(traits);
             }
 
-            let _group = gpui::reflection::__collect_reflected_traits! {
-                [expression InvalidGroup] [shared_key]
-                [gpui::__GpuiReflectParentElementSchema::Marker] [callable] [any]
-                [] [] [[shared_key [gpui::__GpuiReflectStyledSchema::Marker] callable]] []
-                [gpui::Styled]
-            };
+            require_other_styled(gpui::reflection::trait_set![gpui::Styled]);
         }
 
         #[cfg(reflection_private)]

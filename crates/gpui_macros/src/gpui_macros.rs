@@ -112,16 +112,10 @@ pub fn reflect_trait(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Paths need matching schemas. When renaming `Trait` to `Alias`, re-export
 /// `__GpuiReflectTraitSchema` as `__GpuiReflectAliasSchema`. Single-token aliases need no schema.
-/// The compiler checks schema/token bindings and repeated marker identities.
+/// The compiler checks schema/token bindings and inherited trait capabilities.
 #[proc_macro]
 pub fn trait_set(input: TokenStream) -> TokenStream {
     trait_set::trait_set(input)
-}
-
-#[doc(hidden)]
-#[proc_macro]
-pub fn __collect_reflected_traits(input: TokenStream) -> TokenStream {
-    trait_set::collect_traits(input)
 }
 
 #[proc_macro_derive(Render)]

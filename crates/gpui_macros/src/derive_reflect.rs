@@ -1,12 +1,10 @@
-use crate::trait_items::{UnknownMacros, configuration_attributes, normalize_trait_items};
+use crate::{
+    trait_items::{UnknownMacros, configuration_attributes, normalize_trait_items},
+    trait_set::capability_group,
+};
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
-use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
-    sync::atomic::{AtomicUsize, Ordering},
-};
 use syn::{
     DeriveInput, FnArg, GenericArgument, GenericParam, ItemTrait, Lifetime, LifetimeParam, Meta,
     Path, PathArguments, ReturnType, Signature, Token, TraitBoundModifier, TraitItem, TraitItemFn,
@@ -14,8 +12,6 @@ use syn::{
     punctuated::Punctuated,
     visit_mut::{self, VisitMut},
 };
-
-static SCHEMA_IDS: AtomicUsize = AtomicUsize::new(0);
 
 pub fn derive_reflect(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -161,10 +157,8 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
     let marker = format_ident!("__GpuiReflect{name}");
     let group = format_ident!("__GpuiReflect{name}Group");
     let methods = format_ident!("__GpuiReflect{name}Methods");
-    let collect_name = format_ident!("__GpuiReflect{name}Collect");
     let schema = schema_path(&parse_quote!(#name));
     let schema_name = &schema.segments.last().unwrap().ident;
-    let export_name = schema_export_name(name);
     let mut parents = Vec::new();
 
     for bound in &input.supertraits {
@@ -256,7 +250,7 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
             .zip(&parent_aliases)
             .enumerate()
             .map(|(idx, (parent, alias))| {
-                let check = format_ident!("__GPUI_REFLECTION_PARENT_CHECK_{export_name}_{idx}");
+                let check = format_ident!("__GPUI_REFLECTION_PARENT_CHECK_{name}_{idx}");
 
                 quote! {
                     #(#configurations)*
@@ -264,7 +258,12 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
                     const #check: #schema_name::#alias::Marker = #parent;
                 }
             });
-    let collector = schema_collector(&export_name, &format_ident!("callable"), &parent_aliases);
+    let group_items = capability_group(
+        &group,
+        &parse_quote!(pub),
+        &parse_quote!(#schema_name::Capabilities),
+        &configurations,
+    );
 
     let requirements = (!parents.is_empty()).then(|| {
         quote! {
@@ -336,22 +335,18 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
         #[doc(hidden)]
         #[allow(non_snake_case)]
         pub mod #schema_name {
-            pub type Marker = super::#marker;
+            pub use self::Capabilities as CallableCapabilities;
             #(pub use super::#parent_imports as #parent_aliases;)*
-            pub use super::#collect_name as collect;
+
+            pub type Marker = super::#marker;
+
+            pub trait Capabilities:
+                gpui::reflection::IncludesCallableTrait<Marker>
+                #(+ #parent_aliases::CallableCapabilities)*
+            {}
         }
 
-        #(#configurations)*
-        #[doc(hidden)]
-        #[macro_export]
-        #collector
-
-        #(#configurations)*
-        #[doc(hidden)]
-        pub use #export_name as #collect_name;
-
-        #(#configurations)*
-        #schema_name::collect! { [items pub #group] [[#schema_name] any] [] [] [] [] }
+        #group_items
 
         #(#configurations)*
         impl gpui::reflection::ReflectionToken for #marker {
@@ -419,11 +414,8 @@ fn expand_membership_trait(input: ItemTrait) -> syn::Result<TokenStream2> {
     let name = &input.ident;
     let visibility = &input.vis;
     let marker = format_ident!("__GpuiReflect{name}");
-    let collect_name = format_ident!("__GpuiReflect{name}Collect");
     let schema = schema_path(&parse_quote!(#name));
     let schema_name = &schema.segments.last().unwrap().ident;
-    let export_name = schema_export_name(name);
-    let collector = schema_collector(&export_name, &format_ident!("membership"), &[]);
     let configurations = configuration_attributes(&input.attrs)?;
 
     Ok(quote! {
@@ -439,17 +431,9 @@ fn expand_membership_trait(input: ItemTrait) -> syn::Result<TokenStream2> {
         #[allow(non_snake_case)]
         pub mod #schema_name {
             pub type Marker = super::#marker;
-            pub use super::#collect_name as collect;
+
+            pub trait Capabilities: gpui::reflection::IncludesReflectedTrait<Marker> {}
         }
-
-        #(#configurations)*
-        #[doc(hidden)]
-        #[macro_export]
-        #collector
-
-        #(#configurations)*
-        #[doc(hidden)]
-        pub use #export_name as #collect_name;
 
         #(#configurations)*
         impl gpui::reflection::ReflectionToken for #marker {
@@ -487,49 +471,6 @@ fn expand_membership_trait(input: ItemTrait) -> syn::Result<TokenStream2> {
         #[allow(non_upper_case_globals)]
         #visibility const #name: #marker = #marker;
     })
-}
-
-fn schema_export_name(name: &syn::Ident) -> syn::Ident {
-    let mut origin = DefaultHasher::new();
-    std::env::var("CARGO_MANIFEST_DIR")
-        .unwrap_or_default()
-        .hash(&mut origin);
-    std::env::var("CARGO_CRATE_NAME")
-        .unwrap_or_default()
-        .hash(&mut origin);
-
-    format_ident!(
-        "__gpui_reflect_schema_{}_{:x}_{}",
-        name,
-        origin.finish(),
-        SCHEMA_IDS.fetch_add(1, Ordering::Relaxed),
-    )
-}
-
-fn schema_collector(
-    export_name: &syn::Ident,
-    kind: &syn::Ident,
-    parents: &[syn::Ident],
-) -> TokenStream2 {
-    quote! {
-        macro_rules! #export_name {
-            (
-                [$($header:tt)*]
-                [[$($schema:tt)*] $expectation:ident]
-                $($state:tt)*
-            ) => {
-                ::gpui::reflection::__collect_reflected_traits! {
-                    [$($header)*]
-                    [#export_name]
-                    [$($schema)*::Marker]
-                    [#kind]
-                    [$expectation]
-                    [#([[$($schema)*::#parents] callable])*]
-                    $($state)*
-                }
-            };
-        }
-    }
 }
 
 pub(crate) fn schema_path(path: &Path) -> Path {
