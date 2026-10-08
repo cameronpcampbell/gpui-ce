@@ -4,10 +4,8 @@
 use crate::{
     self as gpui, AnyElement, App, ArenaBox, Bounds, Div, Drawable, Element, ElementId, Empty,
     GlobalElementId, InspectorElementId, IntoElement, LayoutId, ParentElement, Pixels,
-    StyleRefinement, Styled, Window, canvas, div, hsla,
-    reflection::{
-        ElementReflection, ReflectedElement, ReflectedTraits, linked_metadata, linked_metadata_for,
-    },
+    StyleRefinement, Styled, Window, div, hsla,
+    reflection::{ElementReflection, ReflectedElement, ReflectedTraits, linked_metadata},
     window::with_element_arena,
 };
 use criterion::{BatchSize, Criterion};
@@ -261,27 +259,6 @@ fn warm_up() {
     reset_arena();
 }
 
-/// Initializes one metadata provider without warming the benchmark fixtures.
-pub fn cold_metadata(kind: &str) {
-    match kind {
-        "linked" => {
-            black_box(linked_metadata_for::<Probe>());
-        }
-        "generic" => {
-            let element = canvas(
-                |_bounds, _window, _cx| 0usize,
-                |_bounds, _state, _window, _cx| {},
-            );
-
-            black_box(Element::reflection(&element));
-        }
-        "empty" => {
-            black_box(linked_metadata_for::<Empty>());
-        }
-        _kind => panic!("unknown cold metadata workload {kind}"),
-    }
-}
-
 /// Runs warm reflection measurements without a window, renderer, or selector APIs.
 pub fn run(criterion: &mut Criterion) {
     warm_up();
@@ -360,54 +337,5 @@ pub fn run(criterion: &mut Criterion) {
     }
 
     group.finish();
-    reset_arena();
-}
-
-/// Calls the profiling callback once per warm workload.
-pub fn profile_allocations(mut profile: impl FnMut(&str, &mut dyn FnMut())) {
-    warm_up();
-    let traits = gpui_macros::trait_set![crate::Styled, crate::ParentElement];
-
-    for kind in ["div", "empty", "mixed"] {
-        for retain_metadata in [false, true] {
-            reset_arena();
-            let path = if retain_metadata {
-                "retained"
-            } else {
-                "drawable_only"
-            };
-
-            profile(&format!("erasure/{kind}/{path}"), &mut || {
-                erase_nodes(kind, retain_metadata)
-            });
-        }
-    }
-
-    reset_arena();
-    let mut element = probe();
-
-    for registry in [true, false] {
-        let path = if registry { "registry" } else { "retained" };
-
-        profile(&format!("membership/{path}"), &mut || {
-            membership(&element, "callable", registry)
-        });
-        profile(&format!("dispatch/style/{path}"), &mut || {
-            style_access(&mut element, registry)
-        });
-        profile(&format!("dispatch/override/{path}"), &mut || {
-            reading(&element, registry)
-        });
-    }
-
-    for kind in ["accessor", "styled", "styled_parent"] {
-        reset_arena();
-        let mut element = Some(probe());
-
-        profile(&format!("fluent/{kind}"), &mut || {
-            fluent(element.take().unwrap(), kind, &traits)
-        });
-    }
-
     reset_arena();
 }

@@ -202,15 +202,9 @@ pub(crate) fn main() {
     let stateful_div = div().id("ordinary-card").into_any_element();
 
     println!(
-        "ViewElement<Icon> Draggable: {}",
-        icon.implements_trait(Draggable)
-    );
-    println!(
-        "ViewElement<Icon> Styled: {}",
-        icon.implements_trait(gpui::Styled)
-    );
-    println!(
-        "Div StatefulInteractiveElement: {}",
+        "ViewElement<Icon>: Draggable={}, Styled={}\nDiv: StatefulInteractiveElement={}",
+        icon.implements_trait(Draggable),
+        icon.implements_trait(gpui::Styled),
         stateful_div.implements_trait(gpui::StatefulInteractiveElement)
     );
 }

@@ -5,7 +5,7 @@
 //! Generic derives list all traits in `#[reflect(...)]`, including builtins, and forward
 //! `Element::reflection` to `<Self as Reflect>::reflection()` with matching trait bounds.
 //! Handwritten providers implement `Reflect::build_reflection` and use the same hook.
-//! Built-in generic wrappers use empty registrations for traits conditional on their contents.
+//! Unregistered elements use shared empty metadata.
 //!
 //! `#[reflect_trait(membership)]` permits associated items and generic methods
 //! without granting callable access.
@@ -44,6 +44,11 @@ pub mod benchmarks;
 #[path = "../examples/learn/trait_reflection.rs"]
 #[allow(dead_code)]
 mod component_example;
+
+#[cfg(test)]
+#[macro_use]
+#[path = "reflection/element_test_support.rs"]
+mod element_test_support;
 
 /// Identifies a trait made available to element reflection.
 #[derive(Clone, Copy, Debug)]
@@ -717,6 +722,7 @@ pub fn registered_traits(type_id: TypeId) -> &'static [ReflectedTrait] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate as gpui;
     use crate::reflection::component_example::{CardElement, Draggable, Icon};
     use crate::{
         AppContext, Context, Div, Empty, InteractiveElement, MouseButton, ParentElement, Render,
@@ -938,70 +944,6 @@ mod tests {
         fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
             self.children.extend(elements);
         }
-    }
-
-    macro_rules! element_impl {
-        ($name:ty $(, [$($generics:tt)*])? $(, reflection $reflection:expr)?) => {
-            impl $(<$($generics)*>)? IntoElement for $name {
-                type Element = Self;
-
-                fn into_element(self) -> Self {
-                    self
-                }
-            }
-
-            impl $(<$($generics)*>)? Element for $name {
-                type RequestLayoutState = ();
-                type PrepaintState = ();
-
-                $(fn reflection(&self) -> &'static ElementReflection {
-                    $reflection
-                })?
-
-                fn id(&self) -> Option<ElementId> {
-                    None
-                }
-
-                fn source_location(&self) -> Option<&'static panic::Location<'static>> {
-                    None
-                }
-
-                fn request_layout(
-                    &mut self,
-                    _id: Option<&GlobalElementId>,
-                    _inspector_id: Option<&InspectorElementId>,
-                    _window: &mut Window,
-                    _cx: &mut App,
-                ) -> (LayoutId, ()) {
-                    unreachable!()
-                }
-
-                fn prepaint(
-                    &mut self,
-                    _id: Option<&GlobalElementId>,
-                    _inspector_id: Option<&InspectorElementId>,
-                    _bounds: Bounds<Pixels>,
-                    _request_layout: &mut (),
-                    _window: &mut Window,
-                    _cx: &mut App,
-                ) {
-                    unreachable!()
-                }
-
-                fn paint(
-                    &mut self,
-                    _id: Option<&GlobalElementId>,
-                    _inspector_id: Option<&InspectorElementId>,
-                    _bounds: Bounds<Pixels>,
-                    _request_layout: &mut (),
-                    _prepaint: &mut (),
-                    _window: &mut Window,
-                    _cx: &mut App,
-                ) {
-                    unreachable!()
-                }
-            }
-        };
     }
 
     element_impl!(Card);
