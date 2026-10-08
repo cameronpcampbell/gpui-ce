@@ -1,4 +1,3 @@
-use crate::reflection::{ElementReflection, Reflect, ReflectedImplementation};
 use crate::{
     ActiveTooltip, AnyView, App, AppContext, Bounds, DispatchPhase, Element, ElementId,
     GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
@@ -253,19 +252,9 @@ impl Element for Text {
     }
 }
 
-impl Reflect for &'static str {
-    fn build_reflection() -> Vec<ReflectedImplementation> {
-        Vec::new()
-    }
-}
-
 impl Element for &'static str {
     type RequestLayoutState = TextLayout;
     type PrepaintState = ();
-
-    fn reflection(&self) -> &'static ElementReflection {
-        <Self as Reflect>::reflection()
-    }
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -337,19 +326,9 @@ impl IntoElement for Cow<'static, str> {
     }
 }
 
-impl Reflect for SharedString {
-    fn build_reflection() -> Vec<ReflectedImplementation> {
-        Vec::new()
-    }
-}
-
 impl Element for SharedString {
     type RequestLayoutState = TextLayout;
     type PrepaintState = ();
-
-    fn reflection(&self) -> &'static ElementReflection {
-        <Self as Reflect>::reflection()
-    }
 
     fn id(&self) -> Option<ElementId> {
         None

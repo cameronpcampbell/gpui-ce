@@ -3,6 +3,11 @@
 mod test_fixtures;
 
 #[cfg(test)]
+#[macro_use]
+#[path = "../src/reflection/element_test_support.rs"]
+mod element_test_support;
+
+#[cfg(test)]
 mod tests {
     use crate::test_fixtures::{self, TestComponent, TestElement, TestValue};
     #[cfg(any(reflection_schema, reflection_parent_schema))]
@@ -14,11 +19,10 @@ mod tests {
         ReflectedElement, ReflectedTraits, ReflectionToken,
     };
     use gpui::{
-        Animation, AnimationElement, AnimationExt, AnyElement, App, Bounds, Div, Element,
-        ElementId, GlobalElementId, InspectorElementId, InteractiveElement, Interactivity,
-        IntoElement, LayoutId, ParentElement, Pixels, Select, SelectableElement, SpringAnimation,
-        SpringAnimationElement, SpringConfig, StatefulInteractiveElement, StyleRefinement, Styled,
-        ViewElement, Window, div, px,
+        Animation, AnimationElement, AnimationExt, AnyElement, Div, Element, InteractiveElement,
+        Interactivity, IntoElement, ParentElement, Select, SelectableElement, SharedString,
+        SpringAnimation, SpringAnimationElement, SpringConfig, StatefulInteractiveElement,
+        StyleRefinement, Styled, ViewElement, div, px,
     };
     use std::{any::TypeId, time::Duration};
 
@@ -142,70 +146,6 @@ mod tests {
     impl inherited::Control for Control {}
 
     impl other::Counter for Control {}
-
-    macro_rules! element_impl {
-        ($name:ty $(, [$($generics:tt)*])? $(, reflection $reflection:expr)?) => {
-            impl $(<$($generics)*>)? IntoElement for $name {
-                type Element = Self;
-
-                fn into_element(self) -> Self::Element {
-                    self
-                }
-            }
-
-            impl $(<$($generics)*>)? Element for $name {
-                type RequestLayoutState = ();
-                type PrepaintState = ();
-
-                $(fn reflection(&self) -> &'static gpui::reflection::ElementReflection {
-                    $reflection
-                })?
-
-                fn id(&self) -> Option<ElementId> {
-                    None
-                }
-
-                fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-                    None
-                }
-
-                fn request_layout(
-                    &mut self,
-                    _global_id: Option<&GlobalElementId>,
-                    _inspector_id: Option<&InspectorElementId>,
-                    _window: &mut Window,
-                    _cx: &mut App,
-                ) -> (LayoutId, Self::RequestLayoutState) {
-                    unreachable!()
-                }
-
-                fn prepaint(
-                    &mut self,
-                    _global_id: Option<&GlobalElementId>,
-                    _inspector_id: Option<&InspectorElementId>,
-                    _bounds: Bounds<Pixels>,
-                    _request_layout_state: &mut Self::RequestLayoutState,
-                    _window: &mut Window,
-                    _cx: &mut App,
-                ) -> Self::PrepaintState {
-                    unreachable!()
-                }
-
-                fn paint(
-                    &mut self,
-                    _global_id: Option<&GlobalElementId>,
-                    _inspector_id: Option<&InspectorElementId>,
-                    _bounds: Bounds<Pixels>,
-                    _request_layout_state: &mut Self::RequestLayoutState,
-                    _prepaint_state: &mut Self::PrepaintState,
-                    _window: &mut Window,
-                    _cx: &mut App,
-                ) {
-                    unreachable!()
-                }
-            }
-        };
-    }
 
     element_impl!(Card);
 
@@ -468,6 +408,14 @@ mod tests {
 
     #[test]
     fn component_and_wrapper_reflection_use_their_concrete_receivers() {
+        fn unreflected<Type: Element>(element: Type) -> AnyElement {
+            let mut element = element.into_any();
+
+            assert!(element.downcast_mut::<Type>().is_some());
+
+            element
+        }
+
         let card = TestElement::new("card")
             .size(px(80.))
             .role(accesskit::Role::Button)
@@ -550,10 +498,18 @@ mod tests {
                 .is_some()
         );
 
-        for wrapper in [component, animation, spring] {
-            assert!(!wrapper.implements_trait(TestValue));
-            assert!(!wrapper.implements_trait(gpui::Styled));
-            assert!(!wrapper.implements_trait(gpui::StatefulInteractiveElement));
+        for element in [
+            component,
+            animation,
+            spring,
+            unreflected("text"),
+            unreflected(SharedString::from("text")),
+        ] {
+            assert_eq!(element.reflection().concrete_type(), None);
+            assert!(element.reflected_traits().is_empty());
+            assert!(!element.implements_trait(TestValue));
+            assert!(!element.implements_trait(gpui::Styled));
+            assert!(!element.implements_trait(gpui::StatefulInteractiveElement));
         }
     }
 

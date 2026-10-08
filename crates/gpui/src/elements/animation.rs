@@ -148,8 +148,6 @@ impl<E: IntoElement + 'static> AnimationExt for E {}
 
 /// A GPUI element that applies an animation to another element.
 /// Reflection targets this wrapper, independently of the animated result.
-#[derive(gpui_macros::Reflect)]
-#[reflect()]
 pub struct AnimationElement<E> {
     id: ElementId,
     element: Option<E>,
@@ -159,8 +157,6 @@ pub struct AnimationElement<E> {
 
 /// A GPUI element driven by a stateful spring.
 /// Reflection targets this wrapper, independently of the animated result.
-#[derive(gpui_macros::Reflect)]
-#[reflect()]
 pub struct SpringAnimationElement<E> {
     id: ElementId,
     element: Option<E>,
@@ -245,10 +241,6 @@ struct SpringElementState {
 impl<E: IntoElement + 'static> Element for SpringAnimationElement<E> {
     type RequestLayoutState = AnyElement;
     type PrepaintState = ();
-
-    fn reflection(&self) -> &'static crate::reflection::ElementReflection {
-        <Self as crate::reflection::Reflect>::reflection()
-    }
 
     fn id(&self) -> Option<ElementId> {
         Some(self.id.clone())
@@ -383,10 +375,6 @@ impl<E: IntoElement + 'static> Element for SpringAnimationElement<E> {
 impl<E: IntoElement + 'static> Element for AnimationElement<E> {
     type RequestLayoutState = AnyElement;
     type PrepaintState = ();
-
-    fn reflection(&self) -> &'static crate::reflection::ElementReflection {
-        <Self as crate::reflection::Reflect>::reflection()
-    }
 
     fn id(&self) -> Option<ElementId> {
         Some(self.id.clone())
