@@ -1,4 +1,4 @@
-use gpui::{BackdropFilter, ScaledPixels};
+use gpui::{BackdropFilter, Bounds, Corners, ScaledPixels, point, size};
 use gpui_render::shaders::interface as shader_interface;
 use gpui_render::{
     blur::{
@@ -71,7 +71,17 @@ impl WgpuRenderer {
         target: &wgpu::TextureView,
         parameters: FilterCompositeParameters,
     ) {
+        if parameters.blur_radius <= 0.0
+            && matches!(parameters.clip, FilterCompositeClip::RoundedBounds)
+        {
+            return;
+        }
+
+        let full_size = [self.target.width() as f32, self.target.height() as f32];
+
         let Some(kernel) = BlurKernel::for_radius(parameters.blur_radius) else {
+            self.composite_texture(encoder, source, target, parameters, full_size);
+
             return;
         };
         let full_width = self.target.width();
@@ -130,11 +140,24 @@ impl WgpuRenderer {
             scissor,
         );
 
+        self.composite_texture(encoder, &horizontal_target, target, parameters, blur_size);
+    }
+
+    fn composite_texture(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        parameters: FilterCompositeParameters,
+        source_size: [f32; 2],
+    ) {
         let clips_to_bounds = matches!(parameters.clip, FilterCompositeClip::RoundedBounds);
         let composite_bounds = if clips_to_bounds {
             parameters.bounds
         } else {
-            parameters.bounds.dilate(ScaledPixels(dilation))
+            parameters.bounds.dilate(ScaledPixels(
+                GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS * parameters.blur_radius,
+            ))
         };
         let uniforms = BlurUniforms::composite(
             composite_bounds,
@@ -143,10 +166,10 @@ impl WgpuRenderer {
             parameters.corner_smoothing,
             parameters.opacity,
             parameters.clip,
-            blur_size,
-            [full_width as f32, full_height as f32],
+            source_size,
+            [self.target.width() as f32, self.target.height() as f32],
         );
-        let (bind_group, uniform_offset) = self.make_blur_bind_group(uniforms, &horizontal_target);
+        let (bind_group, uniform_offset) = self.make_blur_bind_group(uniforms, source);
         let resources = self.resources();
         let pipeline = if uniforms.corner_smoothing > 0.0 {
             &resources.pipelines.smoothed_blur_composite
@@ -169,16 +192,61 @@ impl WgpuRenderer {
         pass.draw(0..pipeline.fixed_vertex_count(), 0..1);
     }
 
+    pub(super) fn snapshot_backdrop<'a>(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        sources: impl Iterator<Item = &'a wgpu::TextureView>,
+    ) -> wgpu::TextureView {
+        let target = self
+            .resources()
+            .backdrop_snapshot_view
+            .as_ref()
+            .expect("backdrop snapshot was prepared")
+            .clone();
+        let full_size = [self.target.width() as f32, self.target.height() as f32];
+        let bounds = Bounds::new(
+            point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size(ScaledPixels(full_size[0]), ScaledPixels(full_size[1])),
+        );
+        drop(begin_color_render_pass(
+            encoder,
+            "clear_backdrop_snapshot",
+            &target,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        ));
+
+        for source in sources {
+            self.composite_texture(
+                encoder,
+                source,
+                &target,
+                FilterCompositeParameters {
+                    bounds,
+                    content_mask: bounds,
+                    corner_radii: Corners::default(),
+                    corner_smoothing: 0.0,
+                    blur_radius: 0.0,
+                    opacity: 1.0,
+                    clip: FilterCompositeClip::ContentShape,
+                },
+                full_size,
+            );
+        }
+
+        target
+    }
+
     pub(super) fn draw_backdrop_filter(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         filter: &BackdropFilter,
-        scene_color_view: &wgpu::TextureView,
+        source: &wgpu::TextureView,
+        target: &wgpu::TextureView,
     ) {
         self.blur_and_composite(
             encoder,
-            scene_color_view,
-            scene_color_view,
+            source,
+            target,
             FilterCompositeParameters {
                 bounds: filter.bounds,
                 content_mask: filter.content_mask.bounds,

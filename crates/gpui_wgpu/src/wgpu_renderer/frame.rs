@@ -95,7 +95,11 @@ impl PreparedTargets {
             renderer.ensure_path_textures();
         }
         if requirements.uses_offscreen_target {
-            renderer.ensure_filter_textures(requirements.isolated_target_count);
+            renderer.ensure_filter_textures(
+                requirements.isolated_target_count,
+                requirements.uses_blur_target,
+                requirements.uses_backdrop_snapshot,
+            );
         }
         write_shader_globals(renderer);
 
@@ -239,6 +243,8 @@ pub(super) struct FrameRequirements {
     isolated_target_count: usize,
     uses_path_target: bool,
     uses_offscreen_target: bool,
+    uses_blur_target: bool,
+    uses_backdrop_snapshot: bool,
 }
 
 impl FrameRequirements {
@@ -303,12 +309,20 @@ impl FrameRequirements {
             uniforms: FrameUniformRequirements {
                 filter_count: FILTER_UNIFORMS_PER_COMPOSITE
                     * (planned.backdrop_filter_count + planned.isolated_filter_count) as u64
-                    + u64::from(planned.uses_offscreen_target),
+                    + u64::from(planned.uses_offscreen_target)
+                    + if planned.isolated_target_count > 0 {
+                        (planned.backdrop_filter_count * (planned.isolated_target_count + 1)) as u64
+                    } else {
+                        0
+                    },
                 surface_count: planned.surface_count as u64,
             },
             isolated_target_count: planned.isolated_target_count,
             uses_path_target: planned.uses_path_target,
             uses_offscreen_target: planned.uses_offscreen_target,
+            uses_blur_target: planned.uses_blur_target,
+            uses_backdrop_snapshot: planned.backdrop_filter_count > 0
+                && planned.isolated_target_count > 0,
         }
     }
 }
@@ -421,9 +435,17 @@ impl<'a> FrameEncoder<'a> {
                 RenderCommand::Batch(PrimitiveBatch::BackdropFilters(range)) => {
                     drop(pass);
                     for filter in &self.scene.backdrop_filters[range.clone()] {
+                        let snapshot = self.targets.inherits_backdrop().then(|| {
+                            self.renderer.snapshot_backdrop(
+                                &mut self.encoder,
+                                self.targets.backdrop_layers(),
+                            )
+                        });
+                        let source = snapshot.as_ref().unwrap_or_else(|| self.targets.current());
                         self.renderer.draw_backdrop_filter(
                             &mut self.encoder,
                             filter,
+                            source,
                             self.targets.current(),
                         );
                     }
@@ -446,13 +468,18 @@ impl<'a> FrameEncoder<'a> {
                     &mut pass,
                 )?,
                 RenderCommand::BeginFilter {
+                    boundary_index,
                     target: FilterRenderTarget::Isolated(index),
-                    ..
                 } => {
                     drop(pass);
                     let target =
                         self.renderer.resources().filter_group_views[index.as_usize()].clone();
-                    self.targets.enter(target);
+                    self.targets.enter(
+                        target,
+                        self.scene.filter_boundaries[*boundary_index]
+                            .filters
+                            .is_empty(),
+                    );
                     pass = begin_scene_render_pass(
                         self.renderer,
                         &mut self.encoder,
@@ -525,7 +552,7 @@ fn begin_scene_render_pass<'a>(
 
 struct TargetStack {
     current: wgpu::TextureView,
-    parents: smallvec::SmallVec<[wgpu::TextureView; MAX_FILTER_GROUP_DEPTH]>,
+    parents: smallvec::SmallVec<[(wgpu::TextureView, bool); MAX_FILTER_GROUP_DEPTH]>,
 }
 
 impl TargetStack {
@@ -540,9 +567,28 @@ impl TargetStack {
         &self.current
     }
 
-    fn enter(&mut self, next: wgpu::TextureView) {
-        self.parents
-            .push(std::mem::replace(&mut self.current, next));
+    fn enter(&mut self, next: wgpu::TextureView, inherits_backdrop: bool) {
+        self.parents.push((
+            std::mem::replace(&mut self.current, next),
+            inherits_backdrop,
+        ));
+    }
+
+    fn inherits_backdrop(&self) -> bool {
+        self.parents.last().is_some_and(|(_, inherits)| *inherits)
+    }
+
+    fn backdrop_layers(&self) -> impl Iterator<Item = &wgpu::TextureView> {
+        let start = self
+            .parents
+            .iter()
+            .rposition(|(_, inherits)| !inherits)
+            .map_or(0, |idx| idx + 1);
+
+        self.parents[start..]
+            .iter()
+            .map(|(target, _)| target)
+            .chain(std::iter::once(&self.current))
     }
 
     fn exit(&mut self) -> (wgpu::TextureView, &wgpu::TextureView) {
@@ -550,7 +596,7 @@ impl TargetStack {
             .parents
             .pop()
             .expect("render plan ended an isolated filter without beginning one");
-        let filtered = std::mem::replace(&mut self.current, parent);
+        let filtered = std::mem::replace(&mut self.current, parent.0);
         (filtered, &self.current)
     }
 

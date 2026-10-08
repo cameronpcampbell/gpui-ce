@@ -437,15 +437,21 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
-    fn desktop_blending_preserves_native_alpha_accumulation() {
+    fn desktop_blending_preserves_source_over_alpha() {
         let straight = pipelines::desktop_scene_blend_state(wgpu::CompositeAlphaMode::Opaque);
         assert_eq!(straight.color.src_factor, wgpu::BlendFactor::SrcAlpha);
-        assert_eq!(straight.alpha.dst_factor, wgpu::BlendFactor::One);
+        assert_eq!(
+            straight.alpha.dst_factor,
+            wgpu::BlendFactor::OneMinusSrcAlpha
+        );
 
         let premultiplied =
             pipelines::desktop_scene_blend_state(wgpu::CompositeAlphaMode::PreMultiplied);
         assert_eq!(premultiplied.color.src_factor, wgpu::BlendFactor::One);
-        assert_eq!(premultiplied.alpha.dst_factor, wgpu::BlendFactor::One);
+        assert_eq!(
+            premultiplied.alpha.dst_factor,
+            wgpu::BlendFactor::OneMinusSrcAlpha
+        );
     }
 
     #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
@@ -867,6 +873,310 @@ mod tests {
         );
 
         renderer.render_to_image(&scene)?;
+        Ok(())
+    }
+
+    #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+    fn opacity_test_bounds(left: f32, top: f32, width: f32, height: f32) -> Bounds<ScaledPixels> {
+        Bounds::new(
+            gpui::point(ScaledPixels(left), ScaledPixels(top)),
+            gpui::size(ScaledPixels(width), ScaledPixels(height)),
+        )
+    }
+
+    #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+    fn opacity_test_quad(
+        bounds: Bounds<ScaledPixels>,
+        mask: Bounds<ScaledPixels>,
+        color: gpui::Hsla,
+    ) -> Quad {
+        Quad {
+            bounds,
+            content_mask: gpui::ContentMask {
+                bounds: mask,
+                ..Default::default()
+            },
+            background: gpui::solid_background(color),
+            ..Default::default()
+        }
+    }
+
+    #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+    fn opacity_test_group(
+        scene: &mut Scene,
+        bounds: Bounds<ScaledPixels>,
+        opacity: f32,
+        paint: impl FnOnce(&mut Scene),
+    ) {
+        let boundary = gpui::FilterBoundary {
+            order: 0,
+            bounds,
+            content_mask: gpui::ContentMask {
+                bounds,
+                ..Default::default()
+            },
+            corner_radii: gpui::Corners::default(),
+            corner_smoothing: 0.0,
+            filters: smallvec::SmallVec::new(),
+            opacity,
+            is_start: true,
+        };
+        scene.insert_primitive(boundary.clone());
+        paint(scene);
+        scene.insert_primitive(gpui::FilterBoundary {
+            is_start: false,
+            ..boundary
+        });
+    }
+
+    #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+    fn opacity_test_renderers() -> anyhow::Result<Vec<Box<dyn gpui::PlatformHeadlessRenderer>>> {
+        let mut renderers: Vec<Box<dyn gpui::PlatformHeadlessRenderer>> =
+            vec![Box::new(WgpuHeadlessRenderer::new()?)];
+
+        if let Some(native) = gpui_platform::current_headless_renderer() {
+            renderers.push(native);
+        }
+
+        Ok(renderers)
+    }
+
+    #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+    #[test]
+    fn opacity_groups_preserve_overlap_alpha_and_deep_nesting() -> anyhow::Result<()> {
+        let bounds = opacity_test_bounds(0.0, 0.0, 16.0, 8.0);
+        let target_size = gpui::size(DevicePixels(16), DevicePixels(8));
+        let mut slider = Scene::default();
+        slider.insert_primitive(BackdropFilter {
+            bounds,
+            content_mask: gpui::ContentMask {
+                bounds,
+                ..Default::default()
+            },
+            opacity: 1.0,
+            ..Default::default()
+        });
+        opacity_test_group(&mut slider, bounds, 0.5, |scene| {
+            scene.insert_primitive(opacity_test_quad(
+                opacity_test_bounds(0.0, 3.0, 8.0, 2.0),
+                bounds,
+                gpui::red(),
+            ));
+            scene.insert_primitive(opacity_test_quad(
+                opacity_test_bounds(4.0, 1.0, 4.0, 6.0),
+                bounds,
+                gpui::white(),
+            ));
+        });
+        slider.finish();
+
+        let mut translucent = Scene::default();
+        translucent.insert_primitive(opacity_test_quad(
+            bounds,
+            bounds,
+            gpui::hsla(1.0 / 3.0, 1.0, 0.5, 1.0),
+        ));
+        opacity_test_group(&mut translucent, bounds, 0.5, |scene| {
+            scene.insert_primitive(opacity_test_quad(
+                bounds,
+                bounds,
+                gpui::hsla(0.0, 1.0, 0.5, 0.5),
+            ));
+            scene.insert_primitive(opacity_test_quad(
+                bounds,
+                bounds,
+                gpui::hsla(2.0 / 3.0, 1.0, 0.5, 0.5),
+            ));
+        });
+        translucent.finish();
+
+        let mut nested = Scene::default();
+        opacity_test_group(&mut nested, bounds, 0.5, |scene| {
+            scene.insert_primitive(opacity_test_quad(bounds, bounds, gpui::red()));
+            opacity_test_group(scene, bounds, 0.5, |scene| {
+                scene.insert_primitive(opacity_test_quad(
+                    bounds,
+                    bounds,
+                    gpui::hsla(2.0 / 3.0, 1.0, 0.5, 1.0),
+                ));
+                opacity_test_group(scene, bounds, 0.5, |scene| {
+                    scene.insert_primitive(opacity_test_quad(bounds, bounds, gpui::white()));
+                });
+            });
+        });
+        nested.insert_primitive(opacity_test_quad(
+            opacity_test_bounds(12.0, 0.0, 4.0, 8.0),
+            bounds,
+            gpui::hsla(1.0 / 3.0, 1.0, 0.5, 1.0),
+        ));
+        nested.finish();
+        assert_eq!(nested.render_plan().requirements().isolated_target_count, 3);
+
+        for (renderer_idx, renderer) in opacity_test_renderers()?.iter_mut().enumerate() {
+            for (scene, samples) in [
+                (
+                    &slider,
+                    vec![
+                        (6, 4, [128, 128, 128, 255]),
+                        (1, 4, [128, 0, 0, 255]),
+                        (6, 1, [128, 128, 128, 255]),
+                        (8, 4, [0, 0, 0, 255]),
+                    ],
+                ),
+                (&translucent, vec![(6, 4, [32, 159, 64, 255])]),
+                (
+                    &nested,
+                    vec![(6, 4, [96, 32, 64, 255]), (14, 4, [0, 255, 0, 255])],
+                ),
+            ] {
+                let image = renderer.render_scene_to_image(scene, target_size)?;
+
+                for (x, y, expected) in samples {
+                    let actual = image.get_pixel(x, y).0;
+                    assert!(
+                        actual
+                            .iter()
+                            .zip(expected)
+                            .all(|(actual, expected)| actual.abs_diff(expected) <= 2),
+                        "renderer {renderer_idx}, pixel ({x}, {y}): {actual:?}, expected {expected:?}"
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+    #[test]
+    fn opacity_groups_preserve_blur_and_inherited_backdrops() -> anyhow::Result<()> {
+        let bounds = opacity_test_bounds(0.0, 0.0, 16.0, 8.0);
+        let target_size = gpui::size(DevicePixels(16), DevicePixels(8));
+        let backdrop = || BackdropFilter {
+            bounds,
+            content_mask: gpui::ContentMask {
+                bounds,
+                ..Default::default()
+            },
+            filters: smallvec::smallvec![gpui::ScaledFilter::Blur(ScaledPixels(2.0))],
+            opacity: 1.0,
+            ..Default::default()
+        };
+        let paint_background = |scene: &mut Scene| {
+            scene.insert_primitive(opacity_test_quad(bounds, bounds, gpui::red()));
+            scene.insert_primitive(opacity_test_quad(
+                opacity_test_bounds(8.0, 0.0, 8.0, 8.0),
+                bounds,
+                gpui::hsla(2.0 / 3.0, 1.0, 0.5, 1.0),
+            ));
+        };
+        let paint_local = |scene: &mut Scene| {
+            scene.insert_primitive(opacity_test_quad(
+                opacity_test_bounds(6.0, 0.0, 4.0, 8.0),
+                bounds,
+                gpui::hsla(1.0 / 3.0, 1.0, 0.5, 1.0),
+            ));
+        };
+        let paint_blur = |scene: &mut Scene| {
+            let boundary = gpui::FilterBoundary {
+                order: 0,
+                bounds,
+                content_mask: gpui::ContentMask {
+                    bounds,
+                    ..Default::default()
+                },
+                corner_radii: gpui::Corners::default(),
+                corner_smoothing: 0.0,
+                filters: smallvec::smallvec![gpui::ScaledFilter::Blur(ScaledPixels(2.0))],
+                opacity: 1.0,
+                is_start: true,
+            };
+            scene.insert_primitive(boundary.clone());
+            scene.insert_primitive(opacity_test_quad(
+                opacity_test_bounds(6.0, 2.0, 4.0, 4.0),
+                bounds,
+                gpui::white(),
+            ));
+            scene.insert_primitive(gpui::FilterBoundary {
+                is_start: false,
+                ..boundary
+            });
+        };
+
+        let mut original = Scene::default();
+        paint_background(&mut original);
+        original.finish();
+        let mut reference = Scene::default();
+        paint_background(&mut reference);
+        reference.insert_primitive(backdrop());
+        reference.finish();
+        let mut nested = Scene::default();
+        paint_background(&mut nested);
+        opacity_test_group(&mut nested, bounds, 0.5, |scene| {
+            opacity_test_group(scene, bounds, 0.5, |scene| {
+                scene.insert_primitive(backdrop())
+            });
+        });
+        nested.finish();
+        let mut local_reference = Scene::default();
+        paint_background(&mut local_reference);
+        paint_local(&mut local_reference);
+        local_reference.insert_primitive(backdrop());
+        local_reference.finish();
+        let mut local = Scene::default();
+        paint_background(&mut local);
+        opacity_test_group(&mut local, bounds, 0.5, |scene| {
+            paint_local(scene);
+            scene.insert_primitive(backdrop());
+        });
+        local.finish();
+        let mut blur_reference = Scene::default();
+        paint_blur(&mut blur_reference);
+        blur_reference.finish();
+        let mut blurred = Scene::default();
+        opacity_test_group(&mut blurred, bounds, 0.5, paint_blur);
+        blurred.finish();
+
+        for (renderer_idx, renderer) in opacity_test_renderers()?.iter_mut().enumerate() {
+            let background = renderer.render_scene_to_image(&original, target_size)?;
+            let reference_image = renderer.render_scene_to_image(&reference, target_size)?;
+            let local_reference_image =
+                renderer.render_scene_to_image(&local_reference, target_size)?;
+            let blur_reference_image =
+                renderer.render_scene_to_image(&blur_reference, target_size)?;
+
+            for (scene, reference_image, opacity, with_background) in [
+                (&nested, &reference_image, 0.25, true),
+                (&local, &local_reference_image, 0.5, true),
+                (&blurred, &blur_reference_image, 0.5, false),
+            ] {
+                let actual = renderer.render_scene_to_image(scene, target_size)?;
+
+                for (pixel_idx, ((actual, reference), background)) in actual
+                    .pixels()
+                    .zip(reference_image.pixels())
+                    .zip(background.pixels())
+                    .enumerate()
+                {
+                    for channel_idx in 0..3 {
+                        let original = if with_background {
+                            background[channel_idx] as f32
+                        } else {
+                            0.0
+                        };
+                        let expected = (reference[channel_idx] as f32 * opacity
+                            + original * (1.0 - opacity))
+                            .round() as u8;
+                        assert!(
+                            actual[channel_idx].abs_diff(expected) <= 3,
+                            "renderer {renderer_idx}, pixel {pixel_idx}, channel {channel_idx}: {}, expected {expected}",
+                            actual[channel_idx]
+                        );
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }
