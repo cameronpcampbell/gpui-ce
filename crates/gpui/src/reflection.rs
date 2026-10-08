@@ -451,6 +451,33 @@ pub struct ReflectedImplementation {
     pub methods: Option<Box<dyn Any + Send + Sync>>,
 }
 
+/// Registers a callable table once and reports whether it was inserted.
+#[doc(hidden)]
+pub fn __register_callable<Token: CallableReflectionToken>(
+    token: Token,
+    implementations: &mut Vec<ReflectedImplementation>,
+    build_methods: impl FnOnce() -> Token::Methods,
+) -> bool {
+    let descriptor = token.reflected_trait();
+
+    if implementations.iter().any(|implementation| {
+        implementation.descriptor == descriptor
+            && implementation
+                .methods
+                .as_deref()
+                .is_some_and(|methods| methods.is::<Token::Methods>())
+    }) {
+        return false;
+    }
+
+    implementations.push(ReflectedImplementation {
+        descriptor,
+        methods: Some(Box::new(build_methods())),
+    });
+
+    true
+}
+
 /// Immutable reflection metadata retained by erased elements for process lifetime.
 pub struct ElementReflection {
     concrete_type: Option<TypeId>,
@@ -1112,6 +1139,60 @@ mod tests {
 
             assert_eq!(card.text, format!("{revised} suffix"));
             assert_eq!(text_color, Some(color));
+        }
+    }
+
+    #[test]
+    fn registers_callable_tables_lazily_by_descriptor_and_type() {
+        let descriptor = branches::Right.reflected_trait();
+
+        for existing in [
+            None,
+            Some(ReflectedImplementation {
+                descriptor,
+                methods: None,
+            }),
+            Some(ReflectedImplementation {
+                descriptor,
+                methods: Some(Box::new(123usize)),
+            }),
+            Some(ReflectedImplementation {
+                descriptor: text::Text.reflected_trait(),
+                methods: Some(Box::new(branches::__GpuiReflectRightMethods {})),
+            }),
+        ] {
+            let mut implementations = existing.into_iter().collect::<Vec<_>>();
+            let initial_count = implementations.len();
+            let calls = Cell::new(0);
+            let build_methods = || {
+                calls.set(calls.get() + 1);
+
+                branches::__GpuiReflectRightMethods {}
+            };
+
+            assert!(__register_callable(
+                branches::Right,
+                &mut implementations,
+                build_methods,
+            ));
+            assert!(!__register_callable(
+                branches::Right,
+                &mut implementations,
+                build_methods,
+            ));
+            assert_eq!(calls.get(), 1);
+            assert_eq!(implementations.len(), initial_count + 1);
+
+            let inserted = implementations.last().unwrap();
+
+            assert_eq!(inserted.descriptor, descriptor);
+            assert!(
+                inserted
+                    .methods
+                    .as_deref()
+                    .unwrap()
+                    .is::<branches::__GpuiReflectRightMethods>()
+            );
         }
     }
 

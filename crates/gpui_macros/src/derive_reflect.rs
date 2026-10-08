@@ -266,6 +266,57 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
             });
     let collector = schema_collector(&export_name, &format_ident!("callable"), &parent_aliases);
 
+    let requirements = (!parents.is_empty()).then(|| {
+        quote! {
+            fn requirements(self) -> Vec<gpui::reflection::ReflectionRequirement> {
+                let mut requirements = vec![gpui::reflection::ReflectionToken::requirement(self)];
+
+                #(for requirement in gpui::reflection::ReflectionToken::requirements(
+                    #parents,
+                ) {
+                    if !requirements.contains(&requirement) {
+                        requirements.push(requirement);
+                    }
+                })*
+
+                requirements
+            }
+        }
+    });
+    let supertraits = (!parents.is_empty()).then(|| {
+        quote! {
+            .with_supertraits(|| {
+                static PARENTS: ::std::sync::LazyLock<Vec<gpui::reflection::ReflectedTrait>>
+                    = ::std::sync::LazyLock::new(|| vec![
+                        #(gpui::reflection::ReflectionToken::reflected_trait(
+                            #parents,
+                        )),*
+                    ]);
+
+                &PARENTS
+            })
+        }
+    });
+
+    let register = quote! {
+        gpui::reflection::__register_callable(
+            self,
+            implementations,
+            || #methods { #(#initializers)* },
+        )
+    };
+    let registration = if parents.is_empty() {
+        quote! { #register; }
+    } else {
+        quote! {
+            if !#register {
+                return;
+            }
+
+            #(#parents.__register::<Type>(implementations);)*
+        }
+    };
+
     Ok(quote! {
         #input
 
@@ -314,34 +365,13 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
                 gpui::reflection::ReflectionRequirement::callable(self)
             }
 
-            fn requirements(self) -> Vec<gpui::reflection::ReflectionRequirement> {
-                let mut requirements = vec![gpui::reflection::ReflectionToken::requirement(self)];
-
-                #(for requirement in gpui::reflection::ReflectionToken::requirements(
-                    #parents,
-                ) {
-                    if !requirements.contains(&requirement) {
-                        requirements.push(requirement);
-                    }
-                })*
-
-                requirements
-            }
+            #requirements
 
             fn reflected_trait(self) -> gpui::reflection::ReflectedTrait {
                 gpui::reflection::ReflectedTrait::new(
                     concat!(module_path!(), "::", stringify!(#name)),
                     || ::std::any::TypeId::of::<#marker>(),
-                ).with_supertraits(|| {
-                    static PARENTS: ::std::sync::LazyLock<Vec<gpui::reflection::ReflectedTrait>>
-                        = ::std::sync::LazyLock::new(|| vec![
-                            #(gpui::reflection::ReflectionToken::reflected_trait(
-                                #parents,
-                            )),*
-                        ]);
-
-                    &PARENTS
-                })
+                ) #supertraits
             }
         }
 
@@ -358,21 +388,7 @@ fn expand_trait(mut input: ItemTrait) -> syn::Result<TokenStream2> {
                 self,
                 implementations: &mut Vec<gpui::reflection::ReflectedImplementation>,
             ) {
-                let descriptor = gpui::reflection::ReflectionToken::reflected_trait(self);
-
-                if implementations.iter().any(|implementation| {
-                    implementation.descriptor == descriptor
-                        && implementation.methods.as_deref().is_some_and(|methods| methods.is::<#methods>())
-                }) {
-                    return;
-                }
-
-                implementations.push(gpui::reflection::ReflectedImplementation {
-                    descriptor,
-                    methods: Some(Box::new(#methods { #(#initializers)* })),
-                });
-
-                #(#parents.__register::<Type>(implementations);)*
+                #registration
             }
         }
 
@@ -500,10 +516,7 @@ fn schema_collector(
             (
                 [$($header:tt)*]
                 [[$($schema:tt)*] $expectation:ident]
-                [$($pending:tt)*]
-                [$($members:tt)*]
-                [$($witnesses:tt)*]
-                [$($roots:tt)*]
+                $($state:tt)*
             ) => {
                 ::gpui::reflection::__collect_reflected_traits! {
                     [$($header)*]
@@ -512,10 +525,7 @@ fn schema_collector(
                     [#kind]
                     [$expectation]
                     [#([[$($schema)*::#parents] callable])*]
-                    [$($pending)*]
-                    [$($members)*]
-                    [$($witnesses)*]
-                    [$($roots)*]
+                    $($state)*
                 }
             };
         }

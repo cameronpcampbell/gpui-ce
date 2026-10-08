@@ -55,7 +55,7 @@ mod tests {
         pub trait Draggable {}
 
         #[gpui::reflection::reflect_trait]
-        pub trait Styled {}
+        pub trait Styled: Sized {}
 
         #[gpui::reflection::reflect_trait(membership)]
         #[cfg_attr(all(), cfg_attr(all(), cfg(any())))]
@@ -343,7 +343,18 @@ mod tests {
 
     #[test]
     fn reflects_traits() {
+        for (requirements, requirement) in [
+            (Draggable.requirements(), Draggable.requirement()),
+            (other::Draggable.requirements(), other::Draggable.requirement()),
+            (other::Styled.requirements(), other::Styled.requirement()),
+        ] {
+            assert_eq!(requirements, vec![requirement]);
+            assert!(requirement.requires_adapter);
+            assert!((requirement.descriptor.supertraits)().is_empty());
+        }
+
         fn require_other_draggable<Type: other::Draggable>() {}
+
         fn require_selected_traits<Traits>(traits: Traits)
         where
             Traits: gpui::reflection::ReflectedTraits,
