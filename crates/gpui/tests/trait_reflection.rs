@@ -345,7 +345,10 @@ mod tests {
     fn reflects_traits() {
         for (requirements, requirement) in [
             (Draggable.requirements(), Draggable.requirement()),
-            (other::Draggable.requirements(), other::Draggable.requirement()),
+            (
+                other::Draggable.requirements(),
+                other::Draggable.requirement(),
+            ),
             (other::Styled.requirements(), other::Styled.requirement()),
         ] {
             assert_eq!(requirements, vec![requirement]);
