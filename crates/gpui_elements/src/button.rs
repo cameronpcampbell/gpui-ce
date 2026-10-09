@@ -6,7 +6,7 @@ use gpui::{
     StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder,
 };
 
-pub type BaseButtonClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+pub type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
 /// An unstyled button that owns activation, focus, and accessibility behavior.
 ///
@@ -22,7 +22,7 @@ pub struct BaseButton {
     focusable_when_disabled: bool,
     #[children]
     children: Vec<AnyElement>,
-    on_click: Option<BaseButtonClickHandler>,
+    on_click: Option<ClickHandler>,
     aria_label: Option<SharedString>,
 }
 
