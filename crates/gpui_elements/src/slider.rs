@@ -489,54 +489,33 @@ impl SliderModel {
         value: f32,
     ) -> Point<Length> {
         let fraction = self.fraction(value);
+        let (horizontal_fraction, vertical_fraction) = match self.orientation {
+            Axis::Horizontal => (fraction, 0.5),
+            Axis::Vertical => (0.5, 1. - fraction),
+        };
+        let unmeasured = control_size == Size::default() || thumb_size == Size::default();
 
-        if control_size == Size::default() || thumb_size == Size::default() {
-            return match self.orientation {
-                Axis::Horizontal => Point {
-                    x: relative(fraction).into(),
-                    y: relative(0.5).into(),
-                },
-                Axis::Vertical => Point {
-                    x: relative(0.5).into(),
-                    y: relative(1. - fraction).into(),
-                },
+        let offset = |axis: Axis, fraction: f32| -> Length {
+            if unmeasured {
+                return relative(fraction).into();
+            }
+
+            let (control_length, thumb_length) = match axis {
+                Axis::Horizontal => (control_size.width, thumb_size.width),
+                Axis::Vertical => (control_size.height, thumb_size.height),
             };
-        }
+            let alignment = if axis == self.orientation {
+                self.alignment
+            } else {
+                ThumbAlignment::Center
+            };
 
-        let horizontal_fraction = if self.orientation == Axis::Horizontal {
-            fraction
-        } else {
-            0.5
+            Self::aligned_offset(control_length, thumb_length, fraction, alignment).into()
         };
-        let vertical_fraction = if self.orientation == Axis::Vertical {
-            1. - fraction
-        } else {
-            0.5
-        };
-        let x = Self::aligned_offset(
-            control_size.width,
-            thumb_size.width,
-            horizontal_fraction,
-            if self.orientation == Axis::Horizontal {
-                self.alignment
-            } else {
-                ThumbAlignment::Center
-            },
-        );
-        let y = Self::aligned_offset(
-            control_size.height,
-            thumb_size.height,
-            vertical_fraction,
-            if self.orientation == Axis::Vertical {
-                self.alignment
-            } else {
-                ThumbAlignment::Center
-            },
-        );
 
         Point {
-            x: x.into(),
-            y: y.into(),
+            x: offset(Axis::Horizontal, horizontal_fraction),
+            y: offset(Axis::Vertical, vertical_fraction),
         }
     }
 
@@ -586,71 +565,43 @@ impl ThumbCollisionBehavior {
         target: f32,
         model: SliderModel,
     ) -> (SliderValue, usize) {
-        match self {
-            Self::Clamp => Self::resolve_clamp(values, thumb_idx, target, model),
-            Self::Push => Self::resolve_push(values, thumb_idx, target, model),
-            Self::Swap => Self::resolve_swap(values, thumb_idx, target, model),
-        }
-    }
-
-    fn resolve_clamp(
-        values: &SliderValue,
-        thumb_idx: usize,
-        target: f32,
-        model: SliderModel,
-    ) -> (SliderValue, usize) {
-        let mut next = values.clone();
-        let (minimum, maximum) = model.effective_bounds(values, thumb_idx);
-        next.0[thumb_idx] = target.clamp(minimum, maximum);
-
-        (next, thumb_idx)
-    }
-
-    fn resolve_push(
-        values: &SliderValue,
-        thumb_idx: usize,
-        target: f32,
-        model: SliderModel,
-    ) -> (SliderValue, usize) {
-        let mut next = values.clone();
-        let room_before = model.minimum_spacing * thumb_idx as f32;
-        let room_after = model.minimum_spacing * (values.len() - thumb_idx - 1) as f32;
-        next.0[thumb_idx] = target.clamp(model.minimum + room_before, model.maximum - room_after);
-
-        for current_idx in (0..thumb_idx).rev() {
-            let maximum = next.0[current_idx + 1] - model.minimum_spacing;
-            next.0[current_idx] = next.0[current_idx].min(maximum);
-        }
-
-        for current_idx in thumb_idx + 1..next.len() {
-            let minimum = next.0[current_idx - 1] + model.minimum_spacing;
-            next.0[current_idx] = next.0[current_idx].max(minimum);
-        }
-
-        (next, thumb_idx)
-    }
-
-    fn resolve_swap(
-        values: &SliderValue,
-        thumb_idx: usize,
-        target: f32,
-        model: SliderModel,
-    ) -> (SliderValue, usize) {
         let mut next = values.clone();
         let mut active_idx = thumb_idx;
 
-        while active_idx > 0 && target < next.0[active_idx - 1] {
-            next.0.swap(active_idx, active_idx - 1);
-            active_idx -= 1;
-        }
+        match self {
+            Self::Push => {
+                let room_before = model.minimum_spacing * thumb_idx as f32;
+                let room_after = model.minimum_spacing * (values.len() - thumb_idx - 1) as f32;
+                next.0[thumb_idx] =
+                    target.clamp(model.minimum + room_before, model.maximum - room_after);
 
-        while active_idx + 1 < next.len() && target > next.0[active_idx + 1] {
-            next.0.swap(active_idx, active_idx + 1);
-            active_idx += 1;
-        }
+                for current_idx in (0..thumb_idx).rev() {
+                    let maximum = next.0[current_idx + 1] - model.minimum_spacing;
+                    next.0[current_idx] = next.0[current_idx].min(maximum);
+                }
 
-        let (minimum, maximum) = model.effective_bounds(&next, active_idx);
-        next.0[active_idx] = target.clamp(minimum, maximum);
+                for current_idx in thumb_idx + 1..next.len() {
+                    let minimum = next.0[current_idx - 1] + model.minimum_spacing;
+                    next.0[current_idx] = next.0[current_idx].max(minimum);
+                }
+            }
+            Self::Clamp | Self::Swap => {
+                if self == Self::Swap {
+                    while active_idx > 0 && target < next.0[active_idx - 1] {
+                        next.0.swap(active_idx, active_idx - 1);
+                        active_idx -= 1;
+                    }
+
+                    while active_idx + 1 < next.len() && target > next.0[active_idx + 1] {
+                        next.0.swap(active_idx, active_idx + 1);
+                        active_idx += 1;
+                    }
+                }
+
+                let (minimum, maximum) = model.effective_bounds(&next, active_idx);
+                next.0[active_idx] = target.clamp(minimum, maximum);
+            }
+        }
 
         (next, active_idx)
     }
@@ -848,7 +799,7 @@ impl BaseSliderControl {
             .refine_style(&self.style)
             .child(track.element)
             .children(self.children)
-            .child(context.interaction.measure_control());
+            .child(context.interaction.measure_bounds(None));
 
         if context.interactive {
             return context
@@ -1110,7 +1061,7 @@ impl BaseSliderThumb {
             .top(position.y)
             .refine_style(&self.style)
             .children(self.children)
-            .child(interaction.measure_thumb(thumb_idx))
+            .child(interaction.measure_bounds(Some(thumb_idx)))
             .when(context.interactive, |this| {
                 this.track_focus(&focus_handle)
                     .on_key_down(move |event, window, cx| {
@@ -1210,14 +1161,9 @@ impl SliderInteraction {
             on_value_committed,
         };
 
+        let current = interaction.state.read(cx);
         let value_count_changed =
-            interaction
-                .state
-                .read(cx)
-                .active_thumb_index
-                .is_some_and(|_thumb_idx| {
-                    interaction.state.read(cx).pressed_values.len() != values.len()
-                });
+            current.active_thumb_index.is_some() && current.pressed_values.len() != values.len();
 
         if !interactive || value_count_changed {
             interaction.cancel(cx);
@@ -1235,12 +1181,7 @@ impl SliderInteraction {
     }
 
     fn thumb_size(&self, thumb_idx: usize, cx: &App) -> Size<Pixels> {
-        self.state
-            .read(cx)
-            .thumb_bounds
-            .get(thumb_idx)
-            .map(|bounds| bounds.size)
-            .unwrap_or_default()
+        self.state.read(cx).thumb_size(thumb_idx)
     }
 
     fn cancel(&self, cx: &mut App) {
@@ -1251,42 +1192,28 @@ impl SliderInteraction {
         self.state.update(cx, |state, _cx| state.cancel());
     }
 
-    fn measure_control(&self) -> impl IntoElement {
+    fn measure_bounds(&self, thumb_idx: Option<usize>) -> impl IntoElement {
         let state = self.state.clone();
 
         canvas(
             |bounds, _window, _cx| bounds,
             move |_bounds, measured, _window, cx| {
                 state.update(cx, |state, cx| {
-                    if state.control_bounds == measured {
+                    let bounds = if let Some(thumb_idx) = thumb_idx {
+                        if state.thumb_bounds.len() <= thumb_idx {
+                            state.thumb_bounds.resize(thumb_idx + 1, Bounds::default());
+                        }
+
+                        &mut state.thumb_bounds[thumb_idx]
+                    } else {
+                        &mut state.control_bounds
+                    };
+
+                    if *bounds == measured {
                         return;
                     }
 
-                    state.control_bounds = measured;
-                    cx.notify();
-                });
-            },
-        )
-        .absolute()
-        .inset_0()
-    }
-
-    fn measure_thumb(&self, thumb_idx: usize) -> impl IntoElement {
-        let state = self.state.clone();
-
-        canvas(
-            |bounds, _window, _cx| bounds,
-            move |_bounds, measured, _window, cx| {
-                state.update(cx, |state, cx| {
-                    if state.thumb_bounds.len() <= thumb_idx {
-                        state.thumb_bounds.resize(thumb_idx + 1, Bounds::default());
-                    }
-
-                    if state.thumb_bounds[thumb_idx] == measured {
-                        return;
-                    }
-
-                    state.thumb_bounds[thumb_idx] = measured;
+                    *bounds = measured;
                     cx.notify();
                 });
             },
@@ -1305,23 +1232,13 @@ impl SliderInteraction {
     where
         Element: ParentElement + StatefulInteractiveElement,
     {
-        let state_on_down = self.state.clone();
-        let state_on_move = self.state.clone();
-        let state_on_up = self.state.clone();
-        let on_down = self.on_value_change.clone();
-        let on_move = self.on_value_change.clone();
-        let on_up = self.on_value_change.clone();
-        let on_committed = self.on_value_committed.clone();
+        let down_interaction = self.clone();
+        let up_interaction = self.clone();
         let touch_interaction = self.clone();
         let touch_values = values.clone();
 
         control
-            .child(Self::track_mouse(
-                state_on_move,
-                on_move,
-                model,
-                focus_handles.clone(),
-            ))
+            .child(self.track_mouse(model, focus_handles.clone()))
             .on_mouse_down_all(move |event, phase, hitbox, window, cx| {
                 if phase != DispatchPhase::Bubble
                     || event.button != MouseButton::Left
@@ -1331,7 +1248,7 @@ impl SliderInteraction {
                 }
 
                 cx.stop_propagation();
-                let change = state_on_down.update(cx, |state, cx| {
+                let change = down_interaction.state.update(cx, |state, cx| {
                     state.control_bounds = hitbox.bounds;
                     let thumb_idx = state.closest_thumb(event.position, &values, model);
                     let pressed_thumb = state
@@ -1355,26 +1272,21 @@ impl SliderInteraction {
                     state.update_from_pointer(event.position, SliderChangeReason::TrackPress, model)
                 });
 
-                focus_handles[change
-                    .as_ref()
-                    .map(|change| change.active_thumb_index)
-                    .unwrap_or_else(|| state_on_down.read(cx).active_thumb_index.unwrap())]
-                .focus(window, cx);
+                let thumb_idx = down_interaction.state.read(cx).active_thumb_index.unwrap();
+                focus_handles[thumb_idx].focus(window, cx);
 
-                if let (Some(handler), Some(change)) = (&on_down, change) {
-                    handler(&change, window, cx);
-                }
+                down_interaction.emit(change.as_ref(), None, window, cx);
             })
             .on_mouse_up_all(move |event, phase, _hitbox, window, cx| {
                 if phase != DispatchPhase::Capture
                     || event.button != MouseButton::Left
-                    || state_on_up.read(cx).active_thumb_index.is_none()
+                    || up_interaction.state.read(cx).active_thumb_index.is_none()
                 {
                     return;
                 }
 
                 cx.stop_propagation();
-                let (live, committed) = state_on_up.update(cx, |state, cx| {
+                let (live, committed) = up_interaction.state.update(cx, |state, cx| {
                     let live =
                         state.update_from_pointer(event.position, SliderChangeReason::Drag, model);
                     let committed = state.finish();
@@ -1383,13 +1295,7 @@ impl SliderInteraction {
                     (live, committed)
                 });
 
-                if let (Some(handler), Some(change)) = (&on_up, live) {
-                    handler(&change, window, cx);
-                }
-
-                if let (Some(handler), Some(change)) = (&on_committed, committed) {
-                    handler(&change, window, cx);
-                }
+                up_interaction.emit(live.as_ref(), committed.as_ref(), window, cx);
             })
             .on_click(move |event, window, cx| {
                 let ClickEvent::Touch(touch) = event else {
@@ -1408,28 +1314,28 @@ impl SliderInteraction {
     }
 
     fn track_mouse(
-        state: Entity<SliderInteractionState>,
-        on_value_change: Option<OnValueChange>,
+        &self,
         model: SliderModel,
         focus_handles: SmallVec<[FocusHandle; 2]>,
     ) -> impl IntoElement {
+        let interaction = self.clone();
+
         canvas(
             |_bounds, _window, _cx| (),
             move |_bounds, _prepaint, window, _cx| {
-                let state = state.clone();
-                let on_value_change = on_value_change.clone();
+                let interaction = interaction.clone();
                 let focus_handles = focus_handles.clone();
 
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                     if phase != DispatchPhase::Capture
                         || !event.dragging()
-                        || state.read(cx).active_thumb_index.is_none()
+                        || interaction.state.read(cx).active_thumb_index.is_none()
                     {
                         return;
                     }
 
-                    let previous_idx = state.read(cx).active_thumb_index;
-                    let change = state.update(cx, |state, cx| {
+                    let previous_idx = interaction.state.read(cx).active_thumb_index;
+                    let change = interaction.state.update(cx, |state, cx| {
                         let change = state.update_from_pointer(
                             event.position,
                             SliderChangeReason::Drag,
@@ -1442,7 +1348,7 @@ impl SliderInteraction {
 
                         change
                     });
-                    let active_idx = state.read(cx).active_thumb_index;
+                    let active_idx = interaction.state.read(cx).active_thumb_index;
 
                     if active_idx != previous_idx
                         && let Some(active_idx) = active_idx
@@ -1450,9 +1356,7 @@ impl SliderInteraction {
                         focus_handles[active_idx].focus(window, cx);
                     }
 
-                    if let (Some(handler), Some(change)) = (&on_value_change, change) {
-                        handler(&change, window, cx);
-                    }
+                    interaction.emit(change.as_ref(), None, window, cx);
                 });
             },
         )
@@ -1488,17 +1392,7 @@ impl SliderInteraction {
             )
         });
 
-        let Some(change) = change else {
-            return;
-        };
-
-        if let Some(handler) = &self.on_value_change {
-            handler(&change, window, cx);
-        }
-
-        if let Some(handler) = &self.on_value_committed {
-            handler(&change, window, cx);
-        }
+        self.emit(change.as_ref(), change.as_ref(), window, cx);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1522,16 +1416,25 @@ impl SliderInteraction {
 
         let (value, active_thumb_index) =
             ThumbCollisionBehavior::Clamp.resolve(values, thumb_idx, target, model);
-        let Some(change) = SliderChange::between(values, value, active_thumb_index, reason) else {
-            return;
-        };
+        let change = SliderChange::between(values, value, active_thumb_index, reason);
 
-        if let Some(handler) = &self.on_value_change {
-            handler(&change, window, cx);
-        }
+        self.emit(change.as_ref(), change.as_ref(), window, cx);
+    }
 
-        if let Some(handler) = &self.on_value_committed {
-            handler(&change, window, cx);
+    fn emit(
+        &self,
+        live: Option<&SliderChange>,
+        committed: Option<&SliderChange>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        for (handler, change) in [
+            (&self.on_value_change, live),
+            (&self.on_value_committed, committed),
+        ] {
+            if let (Some(handler), Some(change)) = (handler, change) {
+                handler(change, window, cx);
+            }
         }
     }
 }
@@ -1544,7 +1447,6 @@ struct SliderInteractionState {
     pressed_values: SmallVec<[f32; 2]>,
     preview_values: Option<SliderValue>,
     pointer_offset: Pixels,
-    changed: bool,
     last_reason: Option<SliderChangeReason>,
 }
 
@@ -1554,7 +1456,6 @@ impl SliderInteractionState {
         self.pressed_values = values.0.clone();
         self.preview_values = Some(values);
         self.pointer_offset = pointer_offset;
-        self.changed = false;
         self.last_reason = None;
     }
 
@@ -1563,14 +1464,13 @@ impl SliderInteractionState {
         self.pressed_values.clear();
         self.preview_values = None;
         self.pointer_offset = px(0.);
-        self.changed = false;
         self.last_reason = None;
     }
 
     fn finish(&mut self) -> Option<SliderChange> {
         let active_thumb_index = self.active_thumb_index?;
-        let value = self.preview_values.clone()?;
-        let changed = self.changed;
+        let value = self.preview_values.take()?;
+        let changed = value.as_slice() != self.pressed_values.as_slice();
         let reason = self.last_reason;
 
         self.cancel();
@@ -1607,10 +1507,6 @@ impl SliderInteractionState {
 
         self.active_thumb_index = Some(active_thumb_index);
         self.preview_values = Some(change.value.clone());
-        self.changed = self
-            .preview_values
-            .as_ref()
-            .is_some_and(|values| values.as_slice() != self.pressed_values.as_slice());
         self.last_reason = Some(reason);
 
         Some(change)
@@ -1703,8 +1599,8 @@ mod tests {
     use gpui::{
         AppContext, Axis, Bounds, Context, Div, Element as _, Entity, InteractiveElement,
         IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, ParentElement,
-        Render, StatefulInteractiveElement, Styled, TestAppContext, VisualTestContext, Window,
-        accesskit, canvas, div, point, prelude::FluentBuilder, px, size,
+        Render, Size, StatefulInteractiveElement, Styled, TestAppContext, VisualTestContext,
+        Window, accesskit, canvas, div, point, prelude::FluentBuilder, px, relative, size,
     };
 
     const SLIDER: &str = "base-slider";
@@ -1718,6 +1614,7 @@ mod tests {
     const ROOT_CHILD: &str = "slider-under-test-root-child";
     const TRACK_MARK: &str = "slider-under-test-track-mark";
 
+    #[derive(Clone)]
     struct SliderHarness {
         values: SliderValue,
         disabled: bool,
@@ -1758,7 +1655,7 @@ mod tests {
                         BaseSliderThumb::new(("slider-thumb", thumb_idx))
                             .aria_label(label)
                             .size(px(20.))
-                            .debug_selector(move || selector.clone()),
+                            .debug_selector(move || selector),
                     )
                 },
             );
@@ -1890,25 +1787,8 @@ mod tests {
         cx.simulate_event(KeyUpEvent { keystroke });
     }
 
-    fn changes(
-        view: &Entity<SliderHarness>,
-        cx: &VisualTestContext,
-    ) -> (
-        SliderValue,
-        Vec<SliderChange>,
-        Vec<SliderChange>,
-        usize,
-        usize,
-    ) {
-        cx.read_entity(view, |view, _cx| {
-            (
-                view.values.clone(),
-                view.live.clone(),
-                view.committed.clone(),
-                view.parent_key_downs,
-                view.parent_clicks,
-            )
-        })
+    fn snapshot(view: &Entity<SliderHarness>, cx: &VisualTestContext) -> SliderHarness {
+        cx.read_entity(view, |view, _cx| view.clone())
     }
 
     #[test]
@@ -1940,6 +1820,18 @@ mod tests {
         assert_eq!(fraction_model.fraction(-5.), 0.);
         assert_eq!(fraction_model.fraction(15.), 0.5);
         assert_eq!(fraction_model.fraction(25.), 1.);
+        assert_eq!(SliderModel::minimum_spacing(0., 10., 4., 2, 3), 5.);
+
+        for (values, expected) in [([120., -5.], [0., 100.]), ([78., 22.], [22., 78.])] {
+            let model = model(Axis::Horizontal, ThumbCollisionBehavior::Push, 0.);
+
+            assert_eq!(
+                model
+                    .normalized_values(&SliderValue::from(values))
+                    .as_slice(),
+                &expected
+            );
+        }
 
         let control = Bounds {
             origin: point(px(10.), px(20.)),
@@ -1947,24 +1839,18 @@ mod tests {
         };
         let thumb_size = size(px(20.), px(20.));
 
-        assert_eq!(
-            model(Axis::Horizontal, ThumbCollisionBehavior::Clamp, 0.).value_at_pointer(
-                point(px(60.), px(70.)),
-                control,
-                px(0.),
-                thumb_size,
-            ),
-            50.
-        );
-        assert_eq!(
-            model(Axis::Vertical, ThumbCollisionBehavior::Clamp, 0.).value_at_pointer(
-                point(px(60.), px(45.)),
-                control,
-                px(0.),
-                thumb_size,
-            ),
-            75.
-        );
+        for (orientation, pointer, expected) in [
+            (Axis::Horizontal, point(px(60.), px(70.)), 50.),
+            (Axis::Vertical, point(px(60.), px(45.)), 75.),
+        ] {
+            let model = model(orientation, ThumbCollisionBehavior::Clamp, 0.);
+
+            assert_eq!(
+                model.value_at_pointer(pointer, control, px(0.), thumb_size),
+                expected,
+                "{orientation:?}"
+            );
+        }
 
         assert_eq!(
             SliderModel::aligned_offset(px(100.), px(20.), 0., ThumbAlignment::Center,),
@@ -1974,67 +1860,45 @@ mod tests {
             SliderModel::aligned_offset(px(100.), px(20.), 1., ThumbAlignment::Edge,),
             px(80.)
         );
+
+        for (orientation, x, y) in [(Axis::Horizontal, 0.25, 0.5), (Axis::Vertical, 0.5, 0.75)] {
+            let model = model(orientation, ThumbCollisionBehavior::Clamp, 0.);
+            let expected = point(relative(x).into(), relative(y).into());
+
+            for (control_size, thumb_size) in [
+                (Size::default(), thumb_size),
+                (control.size, Size::default()),
+            ] {
+                assert_eq!(
+                    model.thumb_position(control_size, thumb_size, 25.),
+                    expected,
+                    "{orientation:?}"
+                );
+            }
+        }
     }
 
     #[test]
     fn range_collision_behaviors_preserve_valid_values() {
         let values = SliderValue::from([20., 50., 80.]);
         let cases = [
-            (
-                ThumbCollisionBehavior::Clamp,
-                1,
-                100.,
-                SliderValue::from([20., 70., 80.]),
-                1,
-            ),
-            (
-                ThumbCollisionBehavior::Push,
-                1,
-                95.,
-                SliderValue::from([20., 90., 100.]),
-                1,
-            ),
-            (
-                ThumbCollisionBehavior::Push,
-                1,
-                5.,
-                SliderValue::from([0., 10., 80.]),
-                1,
-            ),
-            (
-                ThumbCollisionBehavior::Swap,
-                0,
-                55.,
-                SliderValue::from([50., 60., 80.]),
-                1,
-            ),
-            (
-                ThumbCollisionBehavior::Swap,
-                2,
-                45.,
-                SliderValue::from([20., 40., 50.]),
-                1,
-            ),
+            (ThumbCollisionBehavior::Clamp, 1, 100., [20., 70., 80.], 1),
+            (ThumbCollisionBehavior::Push, 1, 95., [20., 90., 100.], 1),
+            (ThumbCollisionBehavior::Push, 1, 5., [0., 10., 80.], 1),
+            (ThumbCollisionBehavior::Swap, 0, 55., [50., 60., 80.], 1),
+            (ThumbCollisionBehavior::Swap, 2, 45., [20., 40., 50.], 1),
         ];
 
         for (behavior, thumb_idx, target, expected, expected_idx) in cases {
             let model = model(Axis::Horizontal, behavior, 10.);
             let (actual, active_idx) = behavior.resolve(&values, thumb_idx, target, model);
 
-            assert_eq!(actual, expected);
-            assert_eq!(active_idx, expected_idx);
-            assert!(
-                actual
-                    .as_slice()
-                    .windows(2)
-                    .all(|pair| pair[1] - pair[0] >= 10.)
+            assert_eq!(
+                actual.as_slice(),
+                &expected,
+                "{behavior:?}, thumb {thumb_idx}"
             );
-            assert!(
-                actual
-                    .as_slice()
-                    .iter()
-                    .all(|value| (0. ..=100.).contains(value))
-            );
+            assert_eq!(active_idx, expected_idx, "{behavior:?}, thumb {thumb_idx}");
         }
 
         let push_model = model(Axis::Horizontal, ThumbCollisionBehavior::Push, 10.);
@@ -2047,7 +1911,6 @@ mod tests {
 
         assert_eq!(pushed, SliderValue::from([70., 80., 90.]));
         assert_eq!(restored, SliderValue::from([20., 80., 90.]));
-        assert_eq!(SliderModel::minimum_spacing(0., 10., 4., 2, 3), 5.);
     }
 
     #[gpui::test]
@@ -2060,20 +1923,20 @@ mod tests {
 
         cx.simulate_mouse_down(press, MouseButton::Left, Modifiers::none());
 
-        let state = changes(&view, cx);
-        assert_eq!(state.0, SliderValue::from([25., 65.]));
-        assert_eq!(state.1.len(), 1);
-        assert_eq!(state.1[0].reason, SliderChangeReason::TrackPress);
-        assert_eq!(state.1[0].active_thumb_index, 1);
+        let state = snapshot(&view, cx);
+        assert_eq!(state.values, SliderValue::from([25., 65.]));
+        assert_eq!(state.live.len(), 1);
+        assert_eq!(state.live[0].reason, SliderChangeReason::TrackPress);
+        assert_eq!(state.live[0].active_thumb_index, 1);
 
         cx.simulate_mouse_move(drag, MouseButton::Left, Modifiers::none());
         cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::none());
 
-        let state = changes(&view, cx);
-        assert_eq!(state.0, SliderValue::from([25., 100.]));
+        let state = snapshot(&view, cx);
+        assert_eq!(state.values, SliderValue::from([25., 100.]));
         assert_eq!(
             state
-                .1
+                .live
                 .iter()
                 .map(|change| change.reason)
                 .collect::<Vec<_>>(),
@@ -2083,25 +1946,32 @@ mod tests {
                 SliderChangeReason::Drag,
             ]
         );
-        assert_eq!(state.2.len(), 1);
-        assert_eq!(state.2[0].value, SliderValue::from([25., 100.]));
-        assert_eq!(state.2[0].reason, SliderChangeReason::Drag);
-        assert_eq!(state.4, 0);
+        assert_eq!(state.committed.len(), 1);
+        assert_eq!(state.committed[0].value, SliderValue::from([25., 100.]));
+        assert_eq!(state.committed[0].reason, SliderChangeReason::Drag);
+        assert_eq!(state.parent_clicks, 0);
 
         let thumb = bounds(cx, FIRST_THUMB);
         let unchanged = point(thumb.right() - px(1.), thumb.center().y);
-        cx.simulate_mouse_down(unchanged, MouseButton::Left, Modifiers::none());
-        cx.simulate_mouse_move(unchanged, MouseButton::Left, Modifiers::none());
-        cx.simulate_mouse_up(unchanged, MouseButton::Left, Modifiers::none());
 
-        let unchanged_state = changes(&view, cx);
-        assert_eq!(unchanged_state.1.len(), 3);
-        assert_eq!(unchanged_state.2.len(), 1);
+        for (drag, live_count) in [
+            (unchanged, 3),
+            (point(control.left() + px(80.), control.center().y), 5),
+        ] {
+            cx.simulate_mouse_down(unchanged, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_move(drag, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_move(unchanged, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_up(unchanged, MouseButton::Left, Modifiers::none());
 
-        let touch_live = Arc::new(Mutex::new(Vec::new()));
-        let touch_committed = Arc::new(Mutex::new(Vec::new()));
-        let captured_live = touch_live.clone();
-        let captured_committed = touch_committed.clone();
+            let state = snapshot(&view, cx);
+            assert_eq!(state.values, SliderValue::from([25., 100.]));
+            assert_eq!(state.live.len(), live_count);
+            assert_eq!(state.committed.len(), 1);
+        }
+
+        let touch_events = Arc::new(Mutex::new(Vec::new()));
+        let captured_live = touch_events.clone();
+        let captured_committed = touch_events.clone();
         cx.update(|window, cx| {
             let state = cx.new(|_cx| SliderInteractionState {
                 control_bounds: control,
@@ -2110,10 +1980,13 @@ mod tests {
             let interaction = SliderInteraction {
                 state,
                 on_value_change: Some(Rc::new(move |change, _window, _cx| {
-                    captured_live.lock().unwrap().push(change.clone());
+                    captured_live.lock().unwrap().push(("live", change.clone()));
                 })),
                 on_value_committed: Some(Rc::new(move |change, _window, _cx| {
-                    captured_committed.lock().unwrap().push(change.clone());
+                    captured_committed
+                        .lock()
+                        .unwrap()
+                        .push(("committed", change.clone()));
                 })),
             };
 
@@ -2126,13 +1999,16 @@ mod tests {
             );
         });
 
-        let touch_live = touch_live.lock().unwrap();
-        let touch_committed = touch_committed.lock().unwrap();
-        assert_eq!(touch_live.len(), 1);
-        assert_eq!(touch_committed.as_slice(), touch_live.as_slice());
-        assert_eq!(touch_live[0].value, SliderValue::from([25., 50.]));
-        assert_eq!(touch_live[0].active_thumb_index, 1);
-        assert_eq!(touch_live[0].reason, SliderChangeReason::TrackPress);
+        let expected = SliderChange {
+            value: SliderValue::from([25., 50.]),
+            active_thumb_index: 1,
+            reason: SliderChangeReason::TrackPress,
+        };
+
+        assert_eq!(
+            touch_events.lock().unwrap().as_slice(),
+            &[("live", expected.clone()), ("committed", expected)]
+        );
     }
 
     #[gpui::test]
@@ -2147,28 +2023,19 @@ mod tests {
             activate_key(cx, key);
         }
 
-        let state = changes(&view, cx);
-        let first_values = state
-            .1
-            .iter()
-            .map(|change| change.value.as_slice()[0])
+        let state = snapshot(&view, cx);
+        let expected = [25., 45., 65., 45., 0., 70.]
+            .into_iter()
+            .map(|value| SliderChange {
+                value: SliderValue::from([value, 80.]),
+                active_thumb_index: 0,
+                reason: SliderChangeReason::Keyboard,
+            })
             .collect::<Vec<_>>();
 
-        assert_eq!(first_values, vec![25., 45., 65., 45., 0., 70.]);
-        assert!(
-            state
-                .1
-                .iter()
-                .all(|change| change.value.as_slice()[1] == 80.)
-        );
-        assert!(
-            state
-                .1
-                .iter()
-                .all(|change| change.reason == SliderChangeReason::Keyboard)
-        );
-        assert_eq!(state.2, state.1);
-        assert_eq!(state.3, 0);
+        assert_eq!(state.live, expected);
+        assert_eq!(state.committed, state.live);
+        assert_eq!(state.parent_key_downs, 0);
     }
 
     #[gpui::test]
@@ -2185,66 +2052,53 @@ mod tests {
         assert_eq!(bounds(cx, FIRST_THUMB).center().x, proposed.x);
         cx.simulate_mouse_up(proposed, MouseButton::Left, Modifiers::none());
 
-        let rejected = changes(&view, cx);
-        assert_eq!(rejected.0, SliderValue::from(25.));
+        let rejected = snapshot(&view, cx);
+        assert_eq!(rejected.values, SliderValue::from(25.));
         assert_eq!(bounds(cx, FIRST_THUMB).center().x, control.left() + px(50.));
 
-        view.update(cx, |view, cx| {
-            view.accept_changes = true;
-            view.live.clear();
-            view.committed.clear();
-            cx.notify();
-        });
+        for (disabled, has_handler, value_count, drag_offset, release_offset) in [
+            (true, true, 1, 100., 220.),
+            (false, false, 1, 120., 120.),
+            (false, true, 2, 140., 140.),
+        ] {
+            view.update(cx, |view, cx| {
+                view.accept_changes = true;
+                view.disabled = false;
+                view.has_handler = true;
+                view.values = SliderValue::from(25.);
+                view.live.clear();
+                view.committed.clear();
+                cx.notify();
+            });
 
-        let thumb = bounds(cx, FIRST_THUMB);
-        cx.simulate_mouse_down(thumb.center(), MouseButton::Left, Modifiers::none());
-        cx.simulate_mouse_move(
-            point(control.left() + px(100.), control.center().y),
-            MouseButton::Left,
-            Modifiers::none(),
-        );
+            let thumb = bounds(cx, FIRST_THUMB);
+            let drag = point(control.left() + px(drag_offset), control.center().y);
+            let release = point(control.left() + px(release_offset), control.center().y);
 
-        view.update(cx, |view, cx| {
-            view.disabled = true;
-            cx.notify();
-        });
+            cx.simulate_mouse_down(thumb.center(), MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_move(drag, MouseButton::Left, Modifiers::none());
 
-        cx.simulate_mouse_up(
-            point(control.right() + px(20.), control.center().y),
-            MouseButton::Left,
-            Modifiers::none(),
-        );
-        assert!(changes(&view, cx).2.is_empty());
+            view.update(cx, |view, cx| {
+                view.disabled = disabled;
+                view.has_handler = has_handler;
 
-        view.update(cx, |view, cx| {
-            view.disabled = false;
-            view.has_handler = true;
-            view.live.clear();
-            cx.notify();
-        });
+                if value_count == 2 {
+                    view.values = SliderValue::from([25., 75.]);
+                }
 
-        let thumb = bounds(cx, FIRST_THUMB);
-        cx.simulate_mouse_down(thumb.center(), MouseButton::Left, Modifiers::none());
-        cx.simulate_mouse_move(
-            point(control.left() + px(120.), control.center().y),
-            MouseButton::Left,
-            Modifiers::none(),
-        );
+                cx.notify();
+            });
 
-        view.update(cx, |view, cx| {
-            view.has_handler = false;
-            cx.notify();
-        });
-
-        cx.simulate_mouse_up(
-            point(control.left() + px(120.), control.center().y),
-            MouseButton::Left,
-            Modifiers::none(),
-        );
-        assert!(changes(&view, cx).2.is_empty());
+            cx.simulate_mouse_up(release, MouseButton::Left, Modifiers::none());
+            assert!(
+                snapshot(&view, cx).committed.is_empty(),
+                "disabled={disabled}, has_handler={has_handler}, value_count={value_count}"
+            );
+        }
 
         view.update(cx, |view, cx| {
             view.has_handler = true;
+            view.values = SliderValue::from(25.);
             cx.notify();
         });
 
@@ -2256,12 +2110,12 @@ mod tests {
         cx.simulate_mouse_down(restored_press, MouseButton::Left, Modifiers::none());
         cx.simulate_mouse_up(restored_press, MouseButton::Left, Modifiers::none());
 
-        assert_eq!(changes(&view, cx).2.len(), 1);
+        assert_eq!(snapshot(&view, cx).committed.len(), 1);
     }
 
     #[gpui::test]
     fn anatomy_and_accessibility_reflect_runtime_state(cx: &mut TestAppContext) {
-        type Captured = Arc<Mutex<Option<(accesskit::Node, accesskit::Node)>>>;
+        type Captured = Arc<Mutex<Option<[accesskit::Node; 2]>>>;
 
         struct AccessibilityProbe {
             captured: Captured,
@@ -2279,68 +2133,51 @@ mod tests {
                     move |_bounds, window, cx| {
                         let values = SliderValue::from([25., 75.]);
                         let model = SliderModel {
-                            minimum: 0.,
-                            maximum: 100.,
-                            step: 5.,
-                            large_step: 20.,
-                            minimum_spacing: 10.,
-                            orientation: Axis::Vertical,
                             alignment: ThumbAlignment::Edge,
-                            collision_behavior: ThumbCollisionBehavior::Push,
+                            ..model(Axis::Vertical, ThumbCollisionBehavior::Push, 10.)
                         };
-                        let enabled_interaction = SliderInteraction::new(
-                            &"enabled-slider".into(),
-                            values.clone(),
-                            true,
-                            Some(Rc::new(|_change, _window, _cx| {})),
-                            None,
-                            window,
-                            cx,
-                        );
-                        let enabled_context = SliderRenderContext {
-                            values: values.clone(),
-                            model,
-                            interaction: enabled_interaction,
-                            interactive: true,
-                            label: Some("Price range".into()),
-                            value_text_formatter: None,
-                        };
-                        let mut enabled = accesskit::Node::new(accesskit::Role::Slider);
-                        BaseSliderThumb::new("enabled-thumb")
-                            .value_text_formatter(|value| format!("{value} percent"))
-                            .render(&enabled_context, 0, window, cx)
-                            .0
-                            .downcast_mut::<Div>()
-                            .expect("slider thumb should render a div")
-                            .write_a11y_info(&mut enabled);
+                        let nodes = [(0, true), (1, false)].map(|(thumb_idx, interactive)| {
+                            let interaction = SliderInteraction::new(
+                                &("probe-slider", thumb_idx).into(),
+                                values.clone(),
+                                interactive,
+                                if interactive {
+                                    Some(Rc::new(|_change, _window, _cx| {}))
+                                } else {
+                                    None
+                                },
+                                None,
+                                window,
+                                cx,
+                            );
+                            let context = SliderRenderContext {
+                                values: values.clone(),
+                                model,
+                                interaction,
+                                interactive,
+                                label: Some("Price range".into()),
+                                value_text_formatter: None,
+                            };
+                            let thumb = BaseSliderThumb::new(("probe-thumb", thumb_idx));
+                            let thumb = if interactive {
+                                thumb.value_text_formatter(|value| format!("{value} percent"))
+                            } else {
+                                thumb.aria_label("Maximum price")
+                            };
 
-                        let disabled_interaction = SliderInteraction::new(
-                            &"disabled-slider".into(),
-                            values.clone(),
-                            false,
-                            None,
-                            None,
-                            window,
-                            cx,
-                        );
-                        let disabled_context = SliderRenderContext {
-                            values: values.clone(),
-                            model,
-                            interaction: disabled_interaction,
-                            interactive: false,
-                            label: Some("Price range".into()),
-                            value_text_formatter: None,
-                        };
-                        let mut disabled = accesskit::Node::new(accesskit::Role::Slider);
-                        BaseSliderThumb::new("disabled-thumb")
-                            .aria_label("Maximum price")
-                            .render(&disabled_context, 1, window, cx)
-                            .0
-                            .downcast_mut::<Div>()
-                            .expect("slider thumb should render a div")
-                            .write_a11y_info(&mut disabled);
+                            let mut node = accesskit::Node::new(accesskit::Role::Slider);
 
-                        *captured.lock().unwrap() = Some((enabled, disabled));
+                            thumb
+                                .render(&context, thumb_idx, window, cx)
+                                .0
+                                .downcast_mut::<Div>()
+                                .expect("slider thumb should render a div")
+                                .write_a11y_info(&mut node);
+
+                            node
+                        });
+
+                        *captured.lock().unwrap() = Some(nodes);
                     },
                     |_bounds, _prepaint, _window, _cx| {},
                 )
@@ -2379,7 +2216,7 @@ mod tests {
 
         probe_cx.update(|window, cx| window.draw(cx).clear(cx));
 
-        let (enabled, disabled) = result.lock().unwrap().take().unwrap();
+        let [enabled, disabled] = result.lock().unwrap().take().unwrap();
         assert_eq!(enabled.role(), accesskit::Role::Slider);
         assert_eq!(enabled.label(), Some("Price range"));
         assert_eq!(enabled.numeric_value(), Some(25.));
@@ -2405,11 +2242,5 @@ mod tests {
         assert!(!disabled.supports_action(accesskit::Action::Decrement));
         assert!(!disabled.supports_action(accesskit::Action::SetValue));
         assert!(!disabled.supports_action(accesskit::Action::Focus));
-
-        assert_eq!(
-            model(Axis::Horizontal, ThumbCollisionBehavior::Push, 0.)
-                .normalized_values(&SliderValue::from([120., -5.])),
-            SliderValue::from([0., 100.])
-        );
     }
 }
