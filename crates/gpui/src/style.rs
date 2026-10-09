@@ -392,7 +392,7 @@ pub struct Style {
     /// The mouse cursor style shown when the mouse pointer is over an element.
     pub mouse_cursor: Option<CursorStyle>,
 
-    /// The opacity of this element
+    /// Opacity applied to this element and its children after compositing them as a group.
     pub opacity: Option<f32>,
 
     /// The grid columns of this element
@@ -975,6 +975,18 @@ impl Style {
 
     /// Paints the background of an element styled with this style.
     pub fn paint(
+        &self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+        continuation: impl FnOnce(&mut Window, &mut App),
+    ) {
+        window.with_element_opacity(self.opacity, |window| {
+            self.paint_contents(bounds, window, cx, continuation);
+        });
+    }
+
+    fn paint_contents(
         &self,
         bounds: Bounds<Pixels>,
         window: &mut Window,
