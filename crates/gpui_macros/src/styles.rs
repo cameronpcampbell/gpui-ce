@@ -979,12 +979,6 @@ struct CornerStyleSuffix {
     doc_string_suffix: &'static str,
 }
 
-struct CornerSmoothingStyleSuffix {
-    suffix: &'static str,
-    amount_tokens: TokenStream2,
-    doc_string: &'static str,
-}
-
 struct BorderStylePrefix {
     prefix: &'static str,
     fields: Vec<TokenStream2>,
@@ -1092,17 +1086,37 @@ fn generate_methods() -> Vec<TokenStream2> {
 }
 
 fn generate_corner_smoothing_methods(visibility: Visibility) -> Vec<TokenStream2> {
-    corner_smoothing_suffixes()
+    let presets = [
+        ("0", 0.0f32),
+        ("0p1", 0.1),
+        ("0p2", 0.2),
+        ("0p3", 0.3),
+        ("0p4", 0.4),
+        ("0p5", 0.5),
+        ("0p6", 0.6),
+        ("0p7", 0.7),
+        ("0p8", 0.8),
+        ("0p9", 0.9),
+        ("1", 1.0),
+    ];
+
+    presets
         .into_iter()
-        .map(|suffix| {
-            let method_name = format_ident!("rounded_smoothing_{}", suffix.suffix);
-            let amount_tokens = suffix.amount_tokens;
-            let doc_string = suffix.doc_string;
+        .map(|(suffix, amount)| {
+            let method_name = format_ident!("rounded_smoothing_{suffix}");
+            let doc_string = match suffix {
+                "0" => {
+                    "Keeps circular corners by setting rounded corner smoothing to `0.0`.".into()
+                }
+                "1" => "Requests maximum rounded corner smoothing by setting it to `1.0`.".into(),
+                _ => format!("Sets rounded corner smoothing to `{amount:.1}`."),
+            };
 
             quote! {
                 #[doc = #doc_string]
                 #visibility fn #method_name(mut self) -> Self {
-                    self.style().corner_smoothing = Some(#amount_tokens);
+                    self.style().corner_smoothing = Some(#amount);
+
                     self
                 }
             }
@@ -1761,66 +1775,6 @@ fn corner_suffixes() -> Vec<CornerStyleSuffix> {
             suffix: "full",
             radius_tokens: quote! {  px(9999.) },
             doc_string_suffix: "9999px",
-        },
-    ]
-}
-
-fn corner_smoothing_suffixes() -> Vec<CornerSmoothingStyleSuffix> {
-    vec![
-        CornerSmoothingStyleSuffix {
-            suffix: "0",
-            amount_tokens: quote! { 0.0 },
-            doc_string: "Keeps circular corners by setting rounded corner smoothing to `0.0`.",
-        },
-        CornerSmoothingStyleSuffix {
-            suffix: "0p1",
-            amount_tokens: quote! { 0.1 },
-            doc_string: "Sets rounded corner smoothing to `0.1`.",
-        },
-        CornerSmoothingStyleSuffix {
-            suffix: "0p2",
-            amount_tokens: quote! { 0.2 },
-            doc_string: "Sets rounded corner smoothing to `0.2`.",
-        },
-        CornerSmoothingStyleSuffix {
-            suffix: "0p3",
-            amount_tokens: quote! { 0.3 },
-            doc_string: "Sets rounded corner smoothing to `0.3`.",
-        },
-        CornerSmoothingStyleSuffix {
-            suffix: "0p4",
-            amount_tokens: quote! { 0.4 },
-            doc_string: "Sets rounded corner smoothing to `0.4`.",
-        },
-        CornerSmoothingStyleSuffix {
-            suffix: "0p5",
-            amount_tokens: quote! { 0.5 },
-            doc_string: "Sets rounded corner smoothing to `0.5`.",
-        },
-        CornerSmoothingStyleSuffix {
-            suffix: "0p6",
-            amount_tokens: quote! { 0.6 },
-            doc_string: "Sets rounded corner smoothing to `0.6`.",
-        },
-        CornerSmoothingStyleSuffix {
-            suffix: "0p7",
-            amount_tokens: quote! { 0.7 },
-            doc_string: "Sets rounded corner smoothing to `0.7`.",
-        },
-        CornerSmoothingStyleSuffix {
-            suffix: "0p8",
-            amount_tokens: quote! { 0.8 },
-            doc_string: "Sets rounded corner smoothing to `0.8`.",
-        },
-        CornerSmoothingStyleSuffix {
-            suffix: "0p9",
-            amount_tokens: quote! { 0.9 },
-            doc_string: "Sets rounded corner smoothing to `0.9`.",
-        },
-        CornerSmoothingStyleSuffix {
-            suffix: "1",
-            amount_tokens: quote! { 1.0 },
-            doc_string: "Requests maximum rounded corner smoothing by setting it to `1.0`.",
         },
     ]
 }
