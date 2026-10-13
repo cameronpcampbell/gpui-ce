@@ -77,11 +77,11 @@ fn styled_switch(element_id: &'static str) -> BaseSwitch {
         .border_2()
         .border_color(rgb(0x111827))
         .focus_style(|style| style.border_color(rgb(0x93c5fd)))
+        .disabled_style(|style| style.opacity(0.4))
         .with_state(|base, checked, disabled| {
             base.bg(rgb(if checked { 0x2563eb } else { 0x4b5563 }))
                 .when(checked, |base| base.justify_end())
                 .when(!disabled, |base| base.cursor_pointer())
-                .when(disabled, |base| base.opacity(0.4))
                 .child(
                     BaseSwitchThumb::new("thumb")
                         .size(px(24.))
