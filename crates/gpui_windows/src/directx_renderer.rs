@@ -2802,11 +2802,13 @@ mod tests {
     use crate::directx_devices::DirectXDevices;
     use anyhow::Result;
     use gpui::{
-        AtlasKey, AtlasTile, BorderStyle, Bounds, ContentMask, Corners, DevicePixels, Edges,
-        ImageId, MonochromeSprite, PlatformAtlas, Point, PolychromeSprite, PrimitiveBatch, Quad,
-        RenderCommand, RenderImageParams, RenderSvgParams, ScaledPixels, Scene, ShaderBool, Size,
-        WindowBackgroundAppearance, hsla, rgb, rgb_to_hsla, solid_background,
+        AtlasKey, AtlasTile, BackdropFilter, BorderStyle, Bounds, ContentMask, Corners,
+        DevicePixels, Edges, FilterBoundary, ImageId, MonochromeSprite, PlatformAtlas, Point,
+        PolychromeSprite, PrimitiveBatch, Quad, RenderCommand, RenderImageParams, RenderSvgParams,
+        ScaledFilter, ScaledPixels, Scene, ShaderBool, Size, WindowBackgroundAppearance, hsla, rgb,
+        rgb_to_hsla, solid_background, white,
     };
+    use smallvec::{SmallVec, smallvec};
     use std::borrow::Cow;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -2913,6 +2915,33 @@ mod tests {
             })
             .expect("atlas insert must succeed")
             .expect("atlas insert must produce a tile")
+    }
+
+    fn opacity_group(
+        scene: &mut Scene,
+        bounds: Bounds<ScaledPixels>,
+        opacity: f32,
+        paint: impl FnOnce(&mut Scene),
+    ) {
+        let boundary = FilterBoundary {
+            order: 0,
+            bounds,
+            content_mask: ContentMask {
+                bounds,
+                ..Default::default()
+            },
+            corner_radii: Corners::default(),
+            corner_smoothing: 0.0,
+            filters: SmallVec::new(),
+            opacity,
+            is_start: true,
+        };
+        scene.insert_primitive(boundary.clone());
+        paint(scene);
+        scene.insert_primitive(FilterBoundary {
+            is_start: false,
+            ..boundary
+        });
     }
 
     #[test]
@@ -3040,6 +3069,84 @@ mod tests {
         expect("polychrome sprite", 55, 65, [255, 0, 0]);
         expect("second quad batch", 85, 85, [0, 0, 255]);
         expect("background", 190, 20, [255, 255, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn filter_targets_are_allocated_on_demand_and_reset_on_resize() -> Result<()> {
+        let window = HiddenWindow::new()?;
+        let devices = DirectXDevices::new()?;
+        let mut renderer = DirectXRenderer::new(window.0, &devices, true)?;
+        renderer.resize(Size {
+            width: DevicePixels(16),
+            height: DevicePixels(8),
+        })?;
+
+        let allocations = |renderer: &DirectXRenderer| {
+            renderer
+                .resources
+                .as_ref()
+                .unwrap()
+                .blur
+                .as_ref()
+                .map(|blur| {
+                    (
+                        blur.groups.len(),
+                        blur.scratch.is_some(),
+                        blur.snapshot.is_some(),
+                    )
+                })
+        };
+        let bounds = scaled(0.0, 0.0, 16.0, 8.0);
+        let mut ordinary = Scene::default();
+        ordinary.insert_primitive(Quad {
+            bounds,
+            content_mask: full_mask(),
+            background: solid_background(white()),
+            ..Default::default()
+        });
+        ordinary.finish();
+        renderer.render(&ordinary, WindowBackgroundAppearance::Opaque)?;
+        assert_eq!(allocations(&renderer), None);
+
+        let mut nested = Scene::default();
+        opacity_group(&mut nested, bounds, 0.5, |scene| {
+            opacity_group(scene, bounds, 0.5, |scene| {
+                opacity_group(scene, bounds, 0.5, |scene| {
+                    scene.insert_primitive(ordinary.quads[0]);
+                });
+            });
+        });
+        nested.finish();
+        renderer.render(&nested, WindowBackgroundAppearance::Opaque)?;
+        assert_eq!(allocations(&renderer), Some((3, false, false)));
+
+        let mut filtered = Scene::default();
+        opacity_group(&mut filtered, bounds, 0.5, |scene| {
+            scene.insert_primitive(BackdropFilter {
+                bounds,
+                content_mask: ContentMask {
+                    bounds,
+                    ..Default::default()
+                },
+                filters: smallvec![ScaledFilter::Blur(ScaledPixels(2.0))],
+                opacity: 1.0,
+                ..Default::default()
+            });
+        });
+        filtered.finish();
+        renderer.render(&filtered, WindowBackgroundAppearance::Opaque)?;
+        assert_eq!(allocations(&renderer), Some((3, true, true)));
+
+        renderer.resize(Size {
+            width: DevicePixels(20),
+            height: DevicePixels(10),
+        })?;
+        assert_eq!(allocations(&renderer), None);
+
+        renderer.render(&ordinary, WindowBackgroundAppearance::Opaque)?;
+        assert_eq!(allocations(&renderer), None);
+
         Ok(())
     }
 }

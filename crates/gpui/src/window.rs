@@ -9518,17 +9518,20 @@ mod tests {
 
     struct CachedOpacityChild {
         renders: Rc<Cell<usize>>,
+        paints: Rc<Cell<usize>>,
     }
 
     impl Render for CachedOpacityChild {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             self.renders.set(self.renders.get() + 1);
+            let paints = self.paints.clone();
 
-            div().size_full().bg(crate::red()).child(
+            div().size(px(20.0)).bg(crate::red()).child(
                 canvas(
                     |_, _, _| (),
-                    |bounds, _, window, _| {
-                        window.paint_quad(crate::fill(bounds, crate::red()));
+                    move |bounds, _, window, _| {
+                        paints.set(paints.get() + 1);
+                        window.paint_quad(crate::fill(bounds, crate::blue()));
                     },
                 )
                 .size_full()
@@ -9540,33 +9543,84 @@ mod tests {
     struct CachedOpacityParent {
         opacity: Option<f32>,
         child: Entity<CachedOpacityChild>,
+        cached: bool,
     }
 
     impl Render for CachedOpacityParent {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let mut child_style = div().size(px(20.0));
+            let child = if self.cached {
+                self.child
+                    .clone()
+                    .cached(child_style.style().clone())
+                    .into_any_element()
+            } else {
+                self.child.clone().into_any_element()
+            };
 
             div()
                 .size(px(40.0))
                 .when_some(self.opacity, |parent, opacity| parent.opacity(opacity))
-                .child(self.child.clone().cached(child_style.style().clone()))
+                .child(child)
         }
     }
 
     #[test]
     fn parent_opacity_changes_replay_cached_canvas_groups() {
         let renders = Rc::new(Cell::new(0));
+        let paints = Rc::new(Cell::new(0));
         let mut app = TestApp::new();
         let mut test_window = app.open_window(|_, cx| CachedOpacityParent {
             opacity: None,
+            cached: true,
             child: cx.new(|_| CachedOpacityChild {
                 renders: renders.clone(),
+                paints: paints.clone(),
             }),
         });
         test_window.draw();
         let initial_renders = renders.get();
+        let initial_paints = paints.get();
+        assert!(initial_renders > 0);
+        assert!(initial_paints > 0);
+
+        let scene_snapshot = |scene: &Scene| {
+            (
+                scene.render_commands().to_vec(),
+                scene
+                    .quads
+                    .iter()
+                    .map(|quad| (quad.order, quad.bounds, quad.content_mask, quad.background))
+                    .collect::<Vec<_>>(),
+                scene
+                    .filter_boundaries
+                    .iter()
+                    .map(|boundary| {
+                        (
+                            boundary.bounds,
+                            boundary.content_mask,
+                            boundary.opacity,
+                            boundary.is_start,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        };
 
         for opacity in [Some(0.5), Some(0.25), Some(1.0), Some(0.0), None] {
+            let mut fresh_app = TestApp::new();
+            let mut fresh_window = fresh_app.open_window(|_, cx| CachedOpacityParent {
+                opacity,
+                cached: false,
+                child: cx.new(|_| CachedOpacityChild {
+                    renders: Rc::new(Cell::new(0)),
+                    paints: Rc::new(Cell::new(0)),
+                }),
+            });
+            fresh_window.draw();
+            let fresh_scene =
+                fresh_window.update(|_, window, _| scene_snapshot(&window.rendered_frame.scene));
+
             test_window.update(|view, _, cx| {
                 view.opacity = opacity;
                 cx.notify();
@@ -9574,36 +9628,10 @@ mod tests {
             test_window.draw();
             test_window.update(|_, window, _| {
                 let scene = &window.rendered_frame.scene;
-                let expected = match opacity {
-                    Some(value) if value < 1.0 => vec![value, 0.5, 0.5, value],
-                    _ => vec![0.5, 0.5],
-                };
-                assert_eq!(
-                    scene
-                        .filter_boundaries
-                        .iter()
-                        .map(|boundary| boundary.opacity)
-                        .collect::<Vec<_>>(),
-                    expected,
-                );
-                assert_eq!(scene.quads.len(), 2);
-                assert!(
-                    scene
-                        .quads
-                        .iter()
-                        .all(|quad| quad.background == crate::solid_background(crate::red()))
-                );
-
-                let viewport =
-                    window.cover_bounds(Bounds::new(Point::default(), window.viewport_size()));
-                assert!(
-                    scene
-                        .filter_boundaries
-                        .iter()
-                        .all(|boundary| boundary.bounds == viewport)
-                );
+                assert_eq!(scene_snapshot(scene), fresh_scene, "opacity {opacity:?}");
             });
             assert_eq!(renders.get(), initial_renders);
+            assert_eq!(paints.get(), initial_paints);
         }
     }
 }

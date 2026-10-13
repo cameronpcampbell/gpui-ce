@@ -952,7 +952,7 @@ mod tests {
                 ("local backdrop", 1, true, false),
                 ("content blur", 1, false, true),
             ] {
-                let paint = |scene: &mut Scene| {
+                let paint = |scene: &mut Scene, blur_enabled: bool| {
                     if with_local_quad {
                         scene.insert_primitive(test_quad(
                             test_bounds(6.0, 0.0, 4.0, 8.0),
@@ -962,40 +962,71 @@ mod tests {
                     }
 
                     if content_blur {
-                        test_group(scene, bounds, 1.0, blur.clone(), |scene| {
+                        let filters = if blur_enabled {
+                            blur.clone()
+                        } else {
+                            smallvec![]
+                        };
+                        test_group(scene, bounds, 1.0, filters, |scene| {
                             scene.insert_primitive(test_quad(
                                 test_bounds(6.0, 2.0, 4.0, 4.0),
                                 bounds,
                                 white(),
                             ));
                         });
-                    } else {
+                    } else if blur_enabled {
                         scene.insert_primitive(backdrop.clone());
                     }
                 };
 
                 let mut reference = Scene::default();
                 let mut grouped = Scene::default();
+                let mut unfiltered = Scene::default();
 
                 if !content_blur {
                     paint_background(&mut reference);
                     paint_background(&mut grouped);
+                    paint_background(&mut unfiltered);
                 }
 
-                paint(&mut reference);
+                paint(&mut reference, true);
+                paint(&mut unfiltered, false);
                 test_group(&mut grouped, bounds, 0.5, smallvec![], |scene| {
                     if depth == 2 {
-                        test_group(scene, bounds, 0.5, smallvec![], paint);
+                        test_group(scene, bounds, 0.5, smallvec![], |scene| paint(scene, true));
                     } else {
-                        paint(scene);
+                        paint(scene, true);
                     }
                 });
 
                 reference.finish();
                 grouped.finish();
+                unfiltered.finish();
+
                 let reference = renderer.render_scene_to_image(&reference, target_size)?;
                 let actual = renderer.render_scene_to_image(&grouped, target_size)?;
+                let unfiltered = renderer.render_scene_to_image(&unfiltered, target_size)?;
                 let opacity = 0.5_f32.powi(depth);
+
+                assert!(
+                    reference
+                        .pixels()
+                        .zip(unfiltered.pixels())
+                        .any(|(blurred, plain)| {
+                            (0..3).any(|channel_idx| {
+                                blurred[channel_idx].abs_diff(plain[channel_idx]) > 8
+                            })
+                        }),
+                    "renderer {renderer_idx}, {name}: blur must visibly change the unfiltered scene"
+                );
+
+                if content_blur {
+                    let falloff = reference.get_pixel(5, 4).0;
+                    assert!(
+                        falloff[0] > 8 && falloff[1] > 8 && falloff[2] > 8,
+                        "renderer {renderer_idx}: content blur must spread outside the white quad: {falloff:?}"
+                    );
+                }
 
                 for (pixel_idx, ((actual, reference), background)) in actual
                     .pixels()

@@ -1632,32 +1632,49 @@ mod tests {
 
     #[test]
     fn filter_requirements_distinguish_opacity_from_blur() {
-        for with_blur in [false, true] {
+        for (name, group, content_blur, backdrop_blur) in [
+            ("ordinary quad", false, false, false),
+            ("opacity", true, false, false),
+            ("content blur", true, true, false),
+            ("backdrop blur", false, false, true),
+            ("backdrop inside opacity", true, false, true),
+        ] {
             let mut scene = Scene::default();
             let mut start = boundary(true);
 
-            if with_blur {
-                scene.insert_primitive(backdrop());
-            } else {
+            if !content_blur {
                 start.filters.clear();
                 start.opacity = 0.5;
             }
 
-            scene.insert_primitive(start.clone());
+            if group {
+                scene.insert_primitive(start.clone());
+            }
+
+            if backdrop_blur {
+                scene.insert_primitive(backdrop());
+            }
+
             scene.insert_primitive(quad());
-            scene.insert_primitive(FilterBoundary {
-                is_start: false,
-                ..start
-            });
+
+            if group {
+                scene.insert_primitive(FilterBoundary {
+                    is_start: false,
+                    ..start
+                });
+            }
+
             scene.finish();
 
             let requirements = scene.render_plan().requirements();
-            assert_eq!(requirements.backdrop_filter_count, usize::from(with_blur));
-            assert_eq!(requirements.isolated_filter_count, 1);
-            assert_eq!(requirements.isolated_target_count, 1);
-            assert_eq!(requirements.instance_batch_count, 1);
-            assert!(requirements.uses_offscreen_target);
-            assert_eq!(requirements.uses_blur_target, with_blur);
+            assert_eq!(
+                (
+                    requirements.uses_offscreen_target,
+                    requirements.uses_blur_target
+                ),
+                (group || backdrop_blur, content_blur || backdrop_blur),
+                "{name}"
+            );
         }
     }
 }
