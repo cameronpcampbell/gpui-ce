@@ -1016,7 +1016,7 @@ pub trait InteractiveElement: Sized {
     }
 
     /// Apply the given style to this element when the mouse hovers over it
-    fn hover(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
+    fn hover_style(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self {
         debug_assert!(
             self.interactivity().hover_style.is_none(),
             "hover style already set"
@@ -1026,7 +1026,7 @@ pub trait InteractiveElement: Sized {
     }
 
     /// Apply the given style to this element when the mouse hovers over a group member
-    fn group_hover(
+    fn group_hover_style(
         mut self,
         group_name: impl Into<SharedString>,
         f: impl FnOnce(StyleRefinement) -> StyleRefinement,
@@ -1430,7 +1430,7 @@ pub trait InteractiveElement: Sized {
     }
 
     /// Apply the given style when the given data type is dragged over this element's group
-    fn group_drag_over<S: 'static>(
+    fn group_drag_over_style<S: 'static>(
         mut self,
         group_name: impl Into<SharedString>,
         f: impl FnOnce(StyleRefinement) -> StyleRefinement,
@@ -1505,7 +1505,7 @@ pub trait InteractiveElement: Sized {
 
     /// Set the given styles to be applied when this element, specifically, is focused.
     /// Requires that the element is focusable. Elements can be made focusable using [`InteractiveElement::track_focus`].
-    fn focus(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
+    fn focus_style(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
     where
         Self: Sized,
     {
@@ -1515,7 +1515,7 @@ pub trait InteractiveElement: Sized {
 
     /// Set the given styles to be applied when this element is inside another element that is focused.
     /// Requires that the element is focusable. Elements can be made focusable using [`InteractiveElement::track_focus`].
-    fn in_focus(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
+    fn in_focus_style(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
     where
         Self: Sized,
     {
@@ -1527,7 +1527,7 @@ pub trait InteractiveElement: Sized {
     /// This is similar to CSS's `:focus-visible` pseudo-class - it only applies when the element
     /// is focused AND the user is navigating via keyboard (not mouse clicks).
     /// Requires that the element is focusable. Elements can be made focusable using [`InteractiveElement::track_focus`].
-    fn focus_visible(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
+    fn focus_visible_style(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
     where
         Self: Sized,
     {
@@ -1845,7 +1845,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     }
 
     /// Set the given styles to be applied when this element is active.
-    fn active(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
+    fn active_style(mut self, f: impl FnOnce(StyleRefinement) -> StyleRefinement) -> Self
     where
         Self: Sized,
     {
@@ -1854,7 +1854,7 @@ pub trait StatefulInteractiveElement: InteractiveElement {
     }
 
     /// Set the given styles to be applied when this element's group is active.
-    fn group_active(
+    fn group_active_style(
         mut self,
         group_name: impl Into<SharedString>,
         f: impl FnOnce(StyleRefinement) -> StyleRefinement,
@@ -5391,7 +5391,7 @@ mod tests {
                             .absolute()
                             .size_full()
                             .invisible()
-                            .group_hover("hover-group", |style| style.visible())
+                            .group_hover_style("hover-group", |style| style.visible())
                             .child(canvas(
                                 |_, _, _| {},
                                 move |_, _, _, _| {
@@ -5406,7 +5406,7 @@ mod tests {
                             .top_0()
                             .left_0()
                             .size(px(10.))
-                            .group_hover("hover-group", |style| style.size(px(20.)))
+                            .group_hover_style("hover-group", |style| style.size(px(20.)))
                             .child(
                                 canvas(
                                     move |bounds, _, _| stateful_width.set(bounds.size.width),

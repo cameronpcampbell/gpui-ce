@@ -76,7 +76,7 @@ fn styled_switch(element_id: &'static str) -> BaseSwitch {
         .rounded_full()
         .border_2()
         .border_color(rgb(0x111827))
-        .focus(|style| style.border_color(rgb(0x93c5fd)))
+        .focus_style(|style| style.border_color(rgb(0x93c5fd)))
         .with_state(|base, checked, disabled| {
             base.bg(rgb(if checked { 0x2563eb } else { 0x4b5563 }))
                 .when(checked, |base| base.justify_end())
