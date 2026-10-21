@@ -35,6 +35,7 @@ use std::{
 };
 
 /// Checks that removing a tile frees its space while another tile keeps the texture alive.
+#[track_caller]
 pub fn assert_atlas_reuses_removed_space(atlas: &dyn PlatformAtlas) {
     let image_key = |image_id| {
         AtlasKey::Image(RenderImageParams {
