@@ -1,7 +1,4 @@
-//! Tests for the VecMap collection.
-//!
-//! This is in a sibling module so that the tests are guaranteed to only cover
-//! states that can be created by the public API.
+//! Tests VecMap through its public API. The sibling module prevents access to private state.
 
 use crate::vecmap::*;
 
@@ -95,7 +92,6 @@ fn test_multiple_entries_independent() {
     assert_eq!(map.iter().count(), 3);
 }
 
-// entry_ref tests
 
 use std::cell::Cell;
 use std::rc::Rc;
