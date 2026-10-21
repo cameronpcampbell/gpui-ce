@@ -791,30 +791,25 @@ impl NativeSource {
 }
 
 fn get_system_subpixel_rendering() -> bool {
-    let mut smoothing_enabled = BOOL::default();
-    let enabled_result = unsafe {
+    system_subpixel_rendering_with(|action, value| unsafe {
         SystemParametersInfoW(
-            SPI_GETFONTSMOOTHING,
+            action,
             0,
-            Some((&mut smoothing_enabled as *mut BOOL).cast::<c_void>()),
+            Some((value as *mut c_uint).cast::<c_void>()),
             SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS::default(),
         )
-    };
+    })
+}
 
+fn system_subpixel_rendering_with(
+    query: impl FnOnce(SYSTEM_PARAMETERS_INFO_ACTION, &mut c_uint) -> windows::core::Result<()>,
+) -> bool {
     let mut smoothing_type = c_uint::default();
-    let type_result = unsafe {
-        SystemParametersInfoW(
-            SPI_GETFONTSMOOTHINGTYPE,
-            0,
-            Some((&mut smoothing_type as *mut c_uint).cast::<c_void>()),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS::default(),
-        )
-    };
+    let result = query(SPI_GETFONTSMOOTHINGTYPE, &mut smoothing_type);
 
-    enabled_result.is_ok()
-        && type_result.is_ok()
-        && smoothing_enabled.as_bool()
-        && smoothing_type == FE_FONTSMOOTHINGCLEARTYPE
+    // Preserve the pre-Parley policy of using the stored smoothing type independently
+    // of desktop smoothing enablement, and default to ClearType when the query fails.
+    result.is_err() || smoothing_type == FE_FONTSMOOTHINGCLEARTYPE
 }
 
 struct ColorRasterApartment {
@@ -960,6 +955,23 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
+    fn default_antialiasing_uses_smoothing_type_and_preserves_failure_fallback() {
+        for (smoothing_type, expected_subpixel) in [
+            (Ok(FE_FONTSMOOTHINGCLEARTYPE), true),
+            (Ok(FE_FONTSMOOTHINGSTANDARD), false),
+            (Err(windows::core::Error::from_hresult(E_FAIL)), true),
+        ] {
+            let subpixel = system_subpixel_rendering_with(|action, value| {
+                assert_eq!(action, SPI_GETFONTSMOOTHINGTYPE);
+                *value = smoothing_type?;
+
+                Ok(())
+            });
+            assert_eq!(subpixel, expected_subpixel);
+        }
+    }
+
+    #[test]
     fn fixed_fonts_cover_native_modes_instances_and_empty_glyphs() -> Result<()> {
         let system = DirectWriteTextSystem::new_headless()?;
         system.add_fonts(vec![
@@ -974,29 +986,24 @@ mod tests {
             .context("IBM Plex Sans has no A glyph")?;
 
         for scale_factor in [1.0, 1.5, 2.0] {
-            let grayscale = rasterize(
-                &system,
-                regular_id,
-                regular_glyph,
-                GlyphRenderMode::Grayscale,
-                point(0, 0),
-                scale_factor,
-            )?;
-            assert_eq!(grayscale.format, RasterizedGlyphFormat::AlphaMask);
-            grayscale.validate()?;
-
-            for subpixel_x in 0..SUBPIXEL_VARIANTS_X {
-                for subpixel_y in 0..SUBPIXEL_VARIANTS_Y {
-                    let subpixel = rasterize(
+            for (mode, expected_format) in [
+                (GlyphRenderMode::Grayscale, RasterizedGlyphFormat::AlphaMask),
+                (
+                    GlyphRenderMode::Subpixel,
+                    RasterizedGlyphFormat::BgraSubpixelMask,
+                ),
+            ] {
+                for subpixel_variant in subpixel_variants() {
+                    let rasterized = rasterize(
                         &system,
                         regular_id,
                         regular_glyph,
-                        GlyphRenderMode::Subpixel,
-                        point(subpixel_x, subpixel_y),
+                        mode,
+                        subpixel_variant,
                         scale_factor,
                     )?;
-                    assert_eq!(subpixel.format, RasterizedGlyphFormat::BgraSubpixelMask);
-                    subpixel.validate()?;
+                    assert_eq!(rasterized.format, expected_format);
+                    rasterized.validate()?;
                 }
             }
         }
@@ -1014,24 +1021,6 @@ mod tests {
         )?;
         assert_eq!(empty.size, Size::default());
         assert!(empty.pixels.is_empty());
-
-        let monochrome_color = rasterize(
-            &system,
-            regular_id,
-            regular_glyph,
-            GlyphRenderMode::Color,
-            point(0, 0),
-            1.0,
-        )?;
-        assert_eq!(monochrome_color.format, RasterizedGlyphFormat::BgraColor);
-        assert!(
-            monochrome_color
-                .pixels
-                .chunks_exact(4)
-                .filter(|pixel| pixel[3] != 0)
-                .all(|pixel| pixel[..3] == [255, 255, 255])
-        );
-        monochrome_color.validate()?;
 
         let synthesized_id = system.font_id(&font("IBM Plex Sans").bold().italic())?;
         let synthesized_glyph = system
@@ -1171,22 +1160,9 @@ mod tests {
 
         for character in ['A', 'B'] {
             let glyph_id = system.glyph_for_char(font_id, character).unwrap();
-            let red = color_params(
-                &system,
-                font_id,
-                glyph_id,
-                rgba(0xe02010ff),
-                point(0, 0),
-                2.0,
-            );
-            let green = color_params(
-                &system,
-                font_id,
-                glyph_id,
-                rgba(0x20c080ff),
-                point(0, 0),
-                2.0,
-            );
+            let [red, green] = [0xe02010ff, 0x20c080ff].map(|color| {
+                color_params(&system, font_id, glyph_id, rgba(color), point(0, 0), 2.0)
+            });
             let red_pixels = system.rasterize_glyph(&red)?;
             let green_pixels = system.rasterize_glyph(&green)?;
             red_pixels.validate()?;
@@ -1343,21 +1319,29 @@ mod tests {
         let font_id = system.font_id(&font("IBM Plex Sans"))?;
         let glyph_id = system.glyph_for_char(font_id, 'A').unwrap();
 
-        for alpha in [0, 64, 128, 255] {
+        for (alpha, channels) in [
+            (255, [255, 255, 255]),
+            (0, [16, 32, 224]),
+            (64, [16, 32, 224]),
+            (128, [16, 32, 224]),
+            (255, [16, 32, 224]),
+        ] {
             let params = color_params(
                 &system,
                 font_id,
                 glyph_id,
-                Rgba8::new(224, 32, 16, alpha).into(),
+                Rgba8::new(channels[2], channels[1], channels[0], alpha).into(),
                 point(1, 1),
                 1.5,
             );
             let rasterized = system.rasterize_glyph(&params)?;
             rasterized.validate()?;
             assert_eq!(rasterized.format, RasterizedGlyphFormat::BgraColor);
-            assert!(rasterized.pixels.chunks_exact(4).all(|pixel| {
-                pixel[3] <= alpha && (pixel[3] == 0 || pixel[..3] == [16, 32, 224])
-            }));
+            assert!(
+                rasterized.pixels.chunks_exact(4).all(|pixel| {
+                    pixel[3] <= alpha && (pixel[3] == 0 || pixel[..3] == channels)
+                })
+            );
 
             let renderer = system.renderer.read();
             let error = renderer.translate_color_glyph(&params).unwrap_err();
