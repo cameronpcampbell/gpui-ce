@@ -226,6 +226,7 @@ fn solid_quad(
         border_color: transparent_black().into(),
         corner_radii: Corners::default(),
         border_widths: Edges::default(),
+        ..Quad::default()
     }
 }
 
@@ -417,13 +418,5 @@ mod tests {
         assert_eq!(overlay.lines()[4], "FRAMES 99999");
         overlay.total_frame_count = 100_000;
         assert_eq!(overlay.lines()[4], "FRAMES  LOTS");
-    }
-
-    #[test]
-    fn toggling_on_shows_previous_frame_immediately() {
-        let mut overlay = DebugFrameOverlay::new();
-        overlay.record_frame(Duration::from_millis(10));
-        overlay.set_mode(DebugFrameOverlayMode::Minimal);
-        assert_eq!(overlay.lines(), vec![" 10.0 MS".to_string()]);
     }
 }

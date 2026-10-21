@@ -581,7 +581,6 @@ fn native_dialect(source: &str) -> String {
         .replace("@location(0) @blend_src(1)", "@location(1)")
 }
 
-
 fn write_interface(
     out_dir: &std::path::Path,
     layouts: &[BindingLayout<'_>],
@@ -761,7 +760,6 @@ fn binding_kind(
         space => panic!("unsupported shader resource address space {space:?}"),
     }
 }
-
 
 // HLSL uses the minimum supported Naga version. GLSL and MSL use the current version.
 fn write_native_shaders(out_dir: &std::path::Path) {
