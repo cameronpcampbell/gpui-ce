@@ -65,6 +65,7 @@ pub trait UnicodeTextStorage {
         magnitude: TextBoundary,
     ) -> Range<usize> {
         let offset = self.offset_from_caret(caret, direction, magnitude);
+
         match direction {
             NavigationDirection::Back => offset..caret,
             NavigationDirection::Forward => caret..offset,
@@ -80,6 +81,7 @@ pub trait UnicodeTextStorage {
     ) -> usize {
         use NavigationDirection::*;
         use TextBoundary::*;
+
         match (direction, boundary) {
             (Back, Cluster) => {
                 if caret == 0 {
@@ -88,18 +90,23 @@ pub trait UnicodeTextStorage {
 
                 let str = self.content_utf8();
                 let iter = str[..caret.min(str.len())].grapheme_indices(true);
+
                 iter.map(|(i, _)| i).next_back().unwrap_or(0)
             }
+
             (Forward, Cluster) => {
                 let str = self.content_utf8();
                 let len_utf8 = str.len();
+
                 if caret >= len_utf8 {
                     return len_utf8;
                 }
 
                 let mut iter = str[caret..].grapheme_indices(true);
+
                 iter.nth(1).map(|(i, _)| caret + i).unwrap_or(len_utf8)
             }
+
             (Back, Word) => {
                 let text = self.content_utf8();
                 let prefix = &text[..caret.min(text.len())];
@@ -109,6 +116,7 @@ pub trait UnicodeTextStorage {
                     .next_back()
                     .map_or(0, |(idx, _word)| idx)
             }
+
             (Forward, Word) => {
                 let text = self.content_utf8();
                 let len_utf8 = text.len();
@@ -122,20 +130,25 @@ pub trait UnicodeTextStorage {
                     .next()
                     .map_or(len_utf8, |(idx, word)| caret + idx + word.len())
             }
+
             // Returns the utf-8 character position of first character after the first new-line
             // preceding the character at the provided utf-8 character position.
             (Back, VisualLine | HardLine) => {
                 let str = self.content_utf8();
                 let iter = str[..caret.min(str.len())].rfind('\n');
+
                 iter.map(|pos| pos + 1).unwrap_or(0)
             }
+
             // Returns the utf-8 character position of the character immediately before the first
             // new-line character after the character at the provided utf-8 character position.
             (Forward, VisualLine | HardLine) => {
                 let str = self.content_utf8();
                 let iter = str[caret.min(str.len())..].find('\n');
+
                 iter.map(|pos| caret + pos).unwrap_or(str.len())
             }
+
             (Back, Document) => 0,
             (Forward, Document) => self.content_utf8().len(),
         }
@@ -147,6 +160,7 @@ pub trait UnicodeTextStorage {
 
         for (idx, word) in self.content_utf8().unicode_word_indices() {
             let word_end = idx + word.len();
+
             if offset >= idx && offset <= word_end {
                 return idx..word_end;
             }
@@ -164,6 +178,7 @@ pub struct StringStorage {
     value: String,
     version: u16,
 }
+
 impl<S> From<S> for StringStorage
 where
     S: Into<String>,
@@ -175,6 +190,7 @@ where
         }
     }
 }
+
 impl UnicodeTextStorage for StringStorage {
     fn version(&self) -> u16 {
         self.version
@@ -190,6 +206,7 @@ impl UnicodeTextStorage for StringStorage {
 
     fn replace_range(&mut self, range: Range<usize>, text: &str) {
         self.value.replace_range(range, &text);
+
         self.version = self.version.wrapping_add(1);
     }
 }

@@ -25,12 +25,14 @@ impl Menu {
     /// Set items to be in this menu
     pub fn items(mut self, items: impl IntoIterator<Item = MenuItem>) -> Self {
         self.items = items.into_iter().collect();
+
         self
     }
 
     /// Set whether this menu is disabled
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+
         self
     }
 
@@ -153,6 +155,7 @@ impl MenuItem {
         match self {
             MenuItem::Separator => OwnedMenuItem::Separator,
             MenuItem::Submenu(submenu) => OwnedMenuItem::Submenu(submenu.owned()),
+
             MenuItem::Action {
                 name,
                 action,
@@ -166,6 +169,7 @@ impl MenuItem {
                 checked,
                 disabled,
             },
+
             MenuItem::SystemMenu(os_menu) => OwnedMenuItem::SystemMenu(os_menu.owned()),
         }
     }
@@ -178,8 +182,10 @@ impl MenuItem {
             MenuItem::Action { checked: old, .. } => {
                 *old = checked;
             }
+
             _ => {}
         }
+
         self
     }
 
@@ -200,11 +206,14 @@ impl MenuItem {
             MenuItem::Action { disabled: old, .. } => {
                 *old = disabled;
             }
+
             MenuItem::Submenu(submenu) => {
                 submenu.disabled = disabled;
             }
+
             _ => {}
         }
+
         self
     }
 
@@ -282,6 +291,7 @@ impl Clone for OwnedMenuItem {
         match self {
             OwnedMenuItem::Separator => OwnedMenuItem::Separator,
             OwnedMenuItem::Submenu(submenu) => OwnedMenuItem::Submenu(submenu.clone()),
+
             OwnedMenuItem::Action {
                 name,
                 action,
@@ -295,6 +305,7 @@ impl Clone for OwnedMenuItem {
                 checked: *checked,
                 disabled: *disabled,
             },
+
             OwnedMenuItem::SystemMenu(os_menu) => OwnedMenuItem::SystemMenu(os_menu.clone()),
         }
     }
@@ -331,6 +342,7 @@ pub enum OsAction {
 pub(crate) fn init_app_menus(platform: &dyn Platform, cx: &App) {
     platform.on_will_open_app_menu(Box::new({
         let cx = cx.to_async();
+
         move || {
             if let Some(app) = cx.app.upgrade() {
                 app.borrow_mut().update(|cx| cx.clear_pending_keystrokes());
@@ -340,6 +352,7 @@ pub(crate) fn init_app_menus(platform: &dyn Platform, cx: &App) {
 
     platform.on_validate_app_menu_command(Box::new({
         let cx = cx.to_async();
+
         move |action| {
             cx.app
                 .upgrade()
@@ -350,6 +363,7 @@ pub(crate) fn init_app_menus(platform: &dyn Platform, cx: &App) {
 
     platform.on_app_menu_action(Box::new({
         let cx = cx.to_async();
+
         move |action| {
             if let Some(app) = cx.app.upgrade() {
                 app.borrow_mut().update(|cx| cx.dispatch_action(action));
@@ -381,6 +395,7 @@ mod tests {
         use super::MenuItem;
 
         let item = MenuItem::action("Test Action", gpui::NoAction);
+
         assert_eq!(
             match &item {
                 MenuItem::Action { name, .. } => name.as_ref(),
@@ -388,6 +403,7 @@ mod tests {
             },
             "Test Action"
         );
+
         assert!(matches!(
             item,
             MenuItem::Action {
@@ -402,6 +418,7 @@ mod tests {
                 .checked(true)
                 .is_checked()
         );
+
         assert!(
             MenuItem::action("Test Action", gpui::NoAction)
                 .disabled(true)
@@ -413,6 +430,7 @@ mod tests {
             items: vec![],
             disabled: true,
         });
+
         assert_eq!(
             match &submenu {
                 MenuItem::Submenu(menu) => menu.name.as_ref(),
@@ -420,6 +438,7 @@ mod tests {
             },
             "Submenu"
         );
+
         assert!(!submenu.is_checked());
         assert!(submenu.is_disabled());
     }

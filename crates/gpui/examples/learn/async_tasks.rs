@@ -13,6 +13,7 @@ mod example_prelude;
 use std::time::Duration;
 
 use gpui::colors::Colors;
+
 use gpui::{
     App, Bounds, Context, Entity, Render, Task, Window, WindowBounds, WindowOptions, div,
     prelude::*, px, rgb, size,
@@ -39,6 +40,7 @@ impl ForegroundTaskDemo {
     fn start_task(&mut self, cx: &mut Context<Self>) {
         self.is_loading = true;
         self.message = "Loading...".into();
+
         cx.notify();
 
         cx.spawn(async move |this, cx| {
@@ -50,6 +52,7 @@ impl ForegroundTaskDemo {
             this.update(cx, |this, cx| {
                 this.message = "Task completed!".into();
                 this.is_loading = false;
+
                 cx.notify();
             })
             .ok();
@@ -82,12 +85,14 @@ impl BackgroundTaskDemo {
         self.is_computing = true;
         self.progress = 0;
         self.result = None;
+
         cx.notify();
 
         cx.spawn(async move |this, cx| {
             for i in 0..100 {
                 let computation = cx.background_spawn(async move {
                     std::thread::sleep(Duration::from_millis(10));
+
                     (i + 1) as u64
                 });
 
@@ -96,6 +101,7 @@ impl BackgroundTaskDemo {
                 this.update(cx, |this, cx| {
                     this.progress = i as u32 + 1;
                     this.result = Some(partial_result);
+
                     cx.notify();
                 })
                 .ok();
@@ -103,6 +109,7 @@ impl BackgroundTaskDemo {
 
             this.update(cx, |this, cx| {
                 this.is_computing = false;
+
                 cx.notify();
             })
             .ok();
@@ -136,7 +143,9 @@ impl CancellableTaskDemo {
     fn toggle(&mut self, cx: &mut Context<Self>) {
         if self.counting_task.is_some() {
             self.counting_task = None;
+
             cx.notify();
+
         } else {
             self.counting_task = Some(cx.spawn(async move |this, cx| {
                 loop {
@@ -148,7 +157,9 @@ impl CancellableTaskDemo {
                     let should_continue = this
                         .update(cx, |this, cx| {
                             this.counter += 1;
+
                             cx.notify();
+
                             true
                         })
                         .unwrap_or(false);
@@ -158,6 +169,7 @@ impl CancellableTaskDemo {
                     }
                 }
             }));
+
             cx.notify();
         }
     }
@@ -184,6 +196,7 @@ impl ReturnValueDemo {
 
     fn calculate_sum(&mut self, cx: &mut Context<Self>) {
         self.is_calculating = true;
+
         cx.notify();
 
         let numbers = self.numbers.clone();
@@ -192,6 +205,7 @@ impl ReturnValueDemo {
             let result = cx
                 .background_spawn(async move {
                     std::thread::sleep(Duration::from_millis(500));
+
                     numbers.iter().sum::<i32>()
                 })
                 .await;
@@ -199,6 +213,7 @@ impl ReturnValueDemo {
             this.update(cx, |this, cx| {
                 this.sum = Some(result);
                 this.is_calculating = false;
+
                 cx.notify();
             })
             .ok();
@@ -209,11 +224,15 @@ impl ReturnValueDemo {
     fn randomize(&mut self, cx: &mut Context<Self>) {
         use std::collections::hash_map::RandomState;
         use std::hash::{BuildHasher, Hasher};
+
         let hasher = RandomState::new().build_hasher().finish();
+
         self.numbers = (0..5)
             .map(|i| ((hasher >> (i * 8)) & 0xFF) as i32 % 100)
             .collect();
+
         self.sum = None;
+
         cx.notify();
     }
 }
@@ -348,11 +367,13 @@ impl Render for AsyncTasksExample {
                             )
                             .child({
                                 let is_running = cancellable.is_running();
+
                                 let (bg, bg_hover) = if is_running {
                                     (rgb(0xd32f2f), rgb(0xe04545))
                                 } else {
                                     (rgb(0x388e3c), rgb(0x43a047))
                                 };
+
                                 div()
                                     .id("cancel-btn")
                                     .px_3()
@@ -548,6 +569,7 @@ fn progress_bar(colors: &Colors, progress: u32) -> impl IntoElement {
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(550.), px(850.)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(|cx| AsyncTasksExample::new(cx)),

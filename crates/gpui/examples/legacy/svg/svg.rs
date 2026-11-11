@@ -7,10 +7,12 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::Result;
+
 use gpui::{
     App, AssetSource, Bounds, Context, SharedString, Window, WindowBounds, WindowOptions, div,
     prelude::*, px, rgb, size, svg,
 };
+
 use gpui_platform::application;
 
 struct Assets {
@@ -82,12 +84,15 @@ fn run_example() {
             if !example_support::load_fonts(cx) {
                 return;
             }
+
             let bounds = Bounds::centered(None, size(px(300.0), px(300.0)), cx);
+
             cx.open_window(
                 WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
                 |_, cx| cx.new(|_| SvgExample),
             )
             .unwrap();
+
             cx.activate(true);
         });
 }

@@ -1,9 +1,11 @@
 use gpui::WindowAppearance;
 use objc2::{msg_send, rc::Retained, runtime::AnyObject};
+
 pub(crate) use objc2_app_kit::{
     NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSAppearanceNameVibrantDark,
     NSAppearanceNameVibrantLight,
 };
+
 use objc2_foundation::NSString;
 
 /// Converts an AppKit `NSAppearance` object supplied by a native window or
@@ -13,6 +15,7 @@ use objc2_foundation::NSString;
 /// is immediately owned and typed as `NSString` by objc2.
 pub(crate) unsafe fn window_appearance_from_native(appearance: *mut AnyObject) -> WindowAppearance {
     let name: Retained<NSString> = unsafe { msg_send![&*appearance, name] };
+
     if name.isEqualToString(unsafe { NSAppearanceNameVibrantLight }) {
         WindowAppearance::VibrantLight
     } else if name.isEqualToString(unsafe { NSAppearanceNameVibrantDark }) {
@@ -23,6 +26,7 @@ pub(crate) unsafe fn window_appearance_from_native(appearance: *mut AnyObject) -
         WindowAppearance::Dark
     } else {
         log::warn!("unknown macOS appearance: {}", name);
+
         WindowAppearance::Light
     }
 }

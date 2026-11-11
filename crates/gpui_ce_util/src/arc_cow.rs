@@ -15,6 +15,7 @@ impl<T: ?Sized + PartialEq> PartialEq for ArcCow<'_, T> {
     fn eq(&self, other: &Self) -> bool {
         let a = self.as_ref();
         let b = other.as_ref();
+
         a == b
     }
 }

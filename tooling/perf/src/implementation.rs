@@ -111,12 +111,15 @@ pub struct TestMdata {
     /// INVARIANT: If `version` <= `MDATA_VER`, this tool *must* be able to
     /// correctly parse the output of this test.
     pub version: u32,
+
     /// How many iterations to pass this test if this is preset, or how many
     /// iterations a test ended up running afterwards if determined at runtime.
     pub iterations: Option<NonZero<usize>>,
+
     /// The importance of this particular test. See the docs on `Importance` for
     /// details.
     pub importance: Importance,
+
     /// The weight of this particular test within its importance category. Used
     /// when comparing across runs.
     pub weight: u8,
@@ -127,6 +130,7 @@ pub struct TestMdata {
 pub struct Timings {
     /// Mean runtime for `self.iter_total` runs of this test.
     pub mean: Duration,
+
     /// Standard deviation for the above.
     pub stddev: Duration,
 }
@@ -174,6 +178,7 @@ impl Output {
         timings: Timings,
     ) {
         mdata.iterations = Some(iters);
+
         self.tests
             .push((name.as_ref().to_string(), Some(mdata), Ok(timings)));
     }
@@ -193,6 +198,7 @@ impl Output {
         if let Some(ref mut mdata) = mdata {
             mdata.iterations = attempted_iters;
         }
+
         self.tests
             .push((name.as_ref().to_string(), mdata, Err(kind)));
     }
@@ -209,15 +215,18 @@ impl Output {
             // Tests where we got no metadata go at the end.
             ((_, Some(_), _), (_, None, _)) => std::cmp::Ordering::Greater,
             ((_, None, _), (_, Some(_), _)) => std::cmp::Ordering::Less,
+
             // Then sort by importance, then weight.
             ((_, Some(a_mdata), _), (_, Some(b_mdata), _)) => {
                 let c = a_mdata.importance.cmp(&b_mdata.importance);
+
                 if matches!(c, std::cmp::Ordering::Equal) {
                     a_mdata.weight.cmp(&b_mdata.weight)
                 } else {
                     c
                 }
             }
+
             // Lastly by name.
             ((a_name, ..), (b_name, ..)) => a_name.cmp(b_name),
         });
@@ -232,6 +241,7 @@ impl Output {
         } else {
             String::new()
         };
+
         self.tests = std::mem::take(&mut self.tests)
             .into_iter()
             .chain(
@@ -267,28 +277,35 @@ impl Output {
                 // Running totals for averaging out tests.
                 let mut r_total_numerator = 0.;
                 let mut r_total_denominator = 0;
+
                 // Yeah this is O(n^2), but realistically it'll hardly be a bottleneck.
                 for (name, (s_timings, s_iters, weight)) in self_data {
                     // Only use the new weights if they conflict.
                     let Some((o_timings, o_iters, _)) = other_data.remove(&name) else {
                         continue;
                     };
+
                     let shift =
                         (o_timings.iters_per_sec(o_iters) / s_timings.iters_per_sec(s_iters)) - 1.;
+
                     if shift > max {
                         max = shift;
                     }
+
                     if shift < min {
                         min = shift;
                     }
+
                     r_total_numerator += shift * f64::from(weight);
                     r_total_denominator += u32::from(weight);
                 }
+
                 // There were no runs here!
                 if r_total_denominator == 0 {
                     None
                 } else {
                     let mean = r_total_numerator / f64::from(r_total_denominator);
+
                     // TODO: also aggregate standard deviation? That's harder to keep
                     // meaningful, though, since we dk which tests are correlated.
                     Some((cat, PerfDelta { max, mean, min }))
@@ -303,6 +320,7 @@ impl Output {
     /// each importance category having its tests contained.
     fn collapse(self) -> HashMap<Importance, CategoryInfo> {
         let mut categories = HashMap::<Importance, HashMap<String, _>>::default();
+
         for entry in self.tests {
             if let Some(mdata) = entry.1
                 && let Ok(timings) = entry.2
@@ -311,6 +329,7 @@ impl Output {
                     handle.insert(entry.0, (timings, mdata.iterations.unwrap(), mdata.weight));
                 } else {
                     let mut new = HashMap::default();
+
                     new.insert(entry.0, (timings, mdata.iterations.unwrap(), mdata.weight));
                     categories.insert(mdata.importance, new);
                 }
@@ -330,13 +349,17 @@ impl std::fmt::Display for Output {
 
         // We want to print important tests at the top, then alphabetical.
         let mut sorted = self.clone();
+
         sorted.sort();
+
         // Markdown header for making a nice little table :>
         writeln!(
             f,
             "| Command | Iter/sec | Mean [ms] | SD [ms] | Iterations | Importance (weight) |",
         )?;
+
         writeln!(f, "|:---|---:|---:|---:|---:|---:|")?;
+
         for (name, metadata, timings) in &sorted.tests {
             match metadata {
                 Some(metadata) => match timings {
@@ -364,6 +387,7 @@ impl std::fmt::Display for Output {
                             metadata.weight,
                         )?;
                     }
+
                     // We have (some) metadata, but the test errored.
                     Err(err) => writeln!(
                         f,
@@ -377,6 +401,7 @@ impl std::fmt::Display for Output {
                         metadata.weight
                     )?,
                 },
+
                 // No metadata, couldn't even parse the test output.
                 None => writeln!(
                     f,
@@ -386,6 +411,7 @@ impl std::fmt::Display for Output {
                 )?,
             }
         }
+
         Ok(())
     }
 }
@@ -395,8 +421,10 @@ impl std::fmt::Display for Output {
 struct PerfDelta {
     /// The biggest improvement / least bad regression.
     max: f64,
+
     /// The weighted average change in test times.
     mean: f64,
+
     /// The worst regression / smallest improvement.
     min: f64,
 }
@@ -412,11 +440,14 @@ impl std::fmt::Display for PerfReport {
         if self.deltas.is_empty() {
             return write!(f, "(no matching tests)");
         }
+
         let sorted = self.deltas.iter().collect::<Vec<_>>();
+
         writeln!(f, "| Category | Max | Mean | Min |")?;
         // We don't want to print too many newlines at the end, so handle newlines
         // a little jankily like this.
         write!(f, "|:---|---:|---:|---:|")?;
+
         for (cat, delta) in sorted.into_iter().rev() {
             const SIGN_POS: &str = "↑";
             const SIGN_NEG: &str = "↓";
@@ -433,6 +464,7 @@ impl std::fmt::Display for PerfReport {
                 } else {
                     SIGN_NEG
                 };
+
                 format!("{} {:.1}%", sign, time.abs() * 100.)
             };
 
@@ -445,6 +477,7 @@ impl std::fmt::Display for PerfReport {
                 prettify(delta.min)
             )?;
         }
+
         Ok(())
     }
 }

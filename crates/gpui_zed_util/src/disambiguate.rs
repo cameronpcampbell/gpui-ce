@@ -20,6 +20,7 @@ where
 {
     let mut details = vec![0usize; items.len()];
     let mut descriptions: HashMap<D, Vec<usize>> = HashMap::default();
+
     let mut current_descriptions: Vec<D> =
         items.iter().map(|item| get_description(item, 0)).collect();
 
@@ -29,11 +30,14 @@ where
         for (index, (item, &detail)) in items.iter().zip(&details).enumerate() {
             if detail > 0 {
                 let new_description = get_description(item, detail);
+
                 if new_description == current_descriptions[index] {
                     continue;
                 }
+
                 current_descriptions[index] = new_description;
             }
+
             descriptions
                 .entry(current_descriptions[index].clone())
                 .or_default()
@@ -43,6 +47,7 @@ where
         for (_, indices) in descriptions.drain() {
             if indices.len() > 1 {
                 any_collisions = true;
+
                 for index in indices {
                     details[index] += 1;
                 }
@@ -65,6 +70,7 @@ mod tests {
     fn test_no_conflicts() {
         let items = vec!["alpha", "beta", "gamma"];
         let details = compute_disambiguation_details(&items, |item, _detail| item.to_string());
+
         assert_eq!(details, vec![0, 0, 0]);
     }
 
@@ -72,10 +78,12 @@ mod tests {
     fn test_simple_two_way_conflict() {
         // Two items with the same base name but different parents.
         let items = vec![("src/foo.rs", "foo.rs"), ("lib/foo.rs", "foo.rs")];
+
         let details = compute_disambiguation_details(&items, |item, detail| match detail {
             0 => item.1.to_string(),
             _ => item.0.to_string(),
         });
+
         assert_eq!(details, vec![1, 1]);
     }
 
@@ -86,10 +94,12 @@ mod tests {
             ("foo.rs", "b/foo.rs"),
             ("foo.rs", "c/foo.rs"),
         ];
+
         let details = compute_disambiguation_details(&items, |item, detail| match detail {
             0 => item.0.to_string(),
             _ => item.1.to_string(),
         });
+
         assert_eq!(details, vec![1, 1, 1]);
     }
 
@@ -103,10 +113,13 @@ mod tests {
             vec!["file.rs", "src/file.rs", "b/src/file.rs"],
             vec!["file.rs", "lib/file.rs", "x/lib/file.rs"],
         ];
+
         let details = compute_disambiguation_details(&items, |item, detail| {
             let clamped = detail.min(item.len() - 1);
+
             item[clamped].to_string()
         });
+
         assert_eq!(details, vec![2, 2, 1]);
     }
 
@@ -117,10 +130,12 @@ mod tests {
             ("lib/foo.rs", "foo.rs"),
             ("src/bar.rs", "bar.rs"),
         ];
+
         let details = compute_disambiguation_details(&items, |item, detail| match detail {
             0 => item.1.to_string(),
             _ => item.0.to_string(),
         });
+
         assert_eq!(details, vec![1, 1, 0]);
     }
 
@@ -130,6 +145,7 @@ mod tests {
         // The algorithm must terminate rather than looping forever.
         let items = vec!["same", "same", "same"];
         let details = compute_disambiguation_details(&items, |item, _detail| item.to_string());
+
         // After bumping to 1, the description doesn't change from level 0,
         // so the items are skipped and the loop terminates.
         assert_eq!(details, vec![1, 1, 1]);
@@ -139,6 +155,7 @@ mod tests {
     fn test_single_item() {
         let items = vec!["only"];
         let details = compute_disambiguation_details(&items, |item, _detail| item.to_string());
+
         assert_eq!(details, vec![0]);
     }
 
@@ -147,6 +164,7 @@ mod tests {
         let items: Vec<&str> = vec![];
         let details = compute_disambiguation_details(&items, |item, _detail| item.to_string());
         let expected: Vec<usize> = vec![];
+
         assert_eq!(details, expected);
     }
 
@@ -178,6 +196,7 @@ mod tests {
                 })
                 .take(detail + 1)
                 .collect();
+
             components.reverse();
             components.join("/")
         }

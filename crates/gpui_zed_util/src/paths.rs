@@ -8,6 +8,7 @@ use std::fmt::{Display, Formatter};
 use std::mem;
 use std::path::StripPrefixError;
 use std::sync::Arc;
+
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
@@ -23,6 +24,7 @@ pub use path::PathStyle;
 #[cfg(not(target_family = "wasm"))]
 pub fn home_dir() -> &'static PathBuf {
     static HOME_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
     HOME_DIR.get_or_init(|| {
         if cfg!(any(test, feature = "test-support")) {
             if cfg!(target_os = "macos") {
@@ -32,6 +34,7 @@ pub fn home_dir() -> &'static PathBuf {
             } else {
                 PathBuf::from("/home/zed")
             }
+
         } else {
             dirs::home_dir().expect("failed to determine home directory")
         }
@@ -63,15 +66,19 @@ pub trait PathExt {
                 .map(Into::into)
                 .map_err(Into::into)
         }
+
         #[cfg(unix)]
         {
             use std::os::unix::prelude::OsStrExt;
+
             Ok(Self::from(Path::new(OsStr::from_bytes(bytes))))
         }
+
         #[cfg(windows)]
         {
             use anyhow::Context;
             use tendril::fmt::{Format, WTF8};
+
             WTF8::validate(bytes)
                 .then(|| {
                     // Safety: bytes are valid WTF-8 sequence.
@@ -104,17 +111,22 @@ impl<T: AsRef<Path>> PathExt for T {
         {
             self.as_ref().to_path_buf()
         }
+
         #[cfg(not(target_family = "wasm"))]
         if cfg!(any(target_os = "linux", target_os = "freebsd")) || cfg!(target_os = "macos") {
             match self.as_ref().strip_prefix(home_dir().as_path()) {
                 Ok(relative_path) => {
                     let mut shortened_path = PathBuf::new();
+
                     shortened_path.push("~");
                     shortened_path.push(relative_path);
+
                     shortened_path
                 }
+
                 Err(_) => self.as_ref().to_path_buf(),
             }
+
         } else {
             self.as_ref().to_path_buf()
         }
@@ -123,6 +135,7 @@ impl<T: AsRef<Path>> PathExt for T {
     fn extension_or_hidden_file_name(&self) -> Option<&str> {
         let path = self.as_ref();
         let file_name = path.file_name()?.to_str()?;
+
         if file_name.starts_with('.') {
             return file_name.strip_prefix('.');
         }
@@ -136,6 +149,7 @@ impl<T: AsRef<Path>> PathExt for T {
         // quite sketchy to convert this back to path at the end, but a lot of functions only accept paths
         // todo: ideally rework them..?
         let mut new_path = std::ffi::OsString::new();
+
         for component in self.as_ref().components() {
             match component {
                 std::path::Component::Prefix(prefix) => {
@@ -144,13 +158,17 @@ impl<T: AsRef<Path>> PathExt for T {
 
                     new_path.push(format!("/mnt/{}", drive_letter));
                 }
+
                 std::path::Component::RootDir => {}
+
                 std::path::Component::CurDir => {
                     new_path.push("/.");
                 }
+
                 std::path::Component::ParentDir => {
                     new_path.push("/..");
                 }
+
                 std::path::Component::Normal(os_str) => {
                     new_path.push("/");
                     new_path.push(os_str);
@@ -181,10 +199,12 @@ impl<T: AsRef<Path>> PathExt for T {
     #[cfg(not(target_family = "wasm"))]
     fn try_shell_safe(&self, shell_kind: crate::shell::ShellKind) -> anyhow::Result<String> {
         use anyhow::Context;
+
         let path_str = self
             .as_ref()
             .to_str()
             .with_context(|| "Path contains invalid UTF-8")?;
+
         shell_kind
             .try_quote(path_str)
             .as_deref()
@@ -222,8 +242,10 @@ pub fn strip_path_suffix<'a>(base: &'a Path, suffix: &Path) -> Option<&'a Path> 
         let os_str = unsafe {
             OsStr::from_encoded_bytes_unchecked(&remainder[0..remainder.len().saturating_sub(1)])
         };
+
         return Some(Path::new(os_str));
     }
+
     None
 }
 
@@ -255,9 +277,11 @@ impl SanitizedPath {
         #[cfg(target_os = "windows")]
         {
             let simplified = dunce::simplified(path.as_ref());
+
             if simplified == path.as_ref() {
                 // safe because `Path` and `SanitizedPath` have the same repr and Drop impl
                 unsafe { mem::transmute::<Arc<Path>, Arc<Self>>(path) }
+
             } else {
                 Self::unchecked_new(simplified).into()
             }
@@ -330,6 +354,7 @@ impl Display for SanitizedPath {
 impl From<&SanitizedPath> for Arc<SanitizedPath> {
     fn from(sanitized_path: &SanitizedPath) -> Self {
         let path: Arc<Path> = sanitized_path.0.into();
+
         // safe because `Path` and `SanitizedPath` have the same repr and Drop impl
         unsafe { mem::transmute(path) }
     }
@@ -429,20 +454,25 @@ pub fn normalize_lexically(path: &Path) -> Result<PathBuf, NormalizeError> {
     // `components` splits it into two: (Prefix, RootDir).
     let root = match iter.peek() {
         Some(Component::ParentDir) => return Err(NormalizeError),
+
         Some(p @ Component::RootDir) | Some(p @ Component::CurDir) => {
             lexical.push(p);
             iter.next();
             lexical.as_os_str().len()
         }
+
         Some(Component::Prefix(prefix)) => {
             lexical.push(prefix.as_os_str());
             iter.next();
+
             if let Some(p @ Component::RootDir) = iter.peek() {
                 lexical.push(p);
                 iter.next();
             }
+
             lexical.as_os_str().len()
         }
+
         None => return Ok(PathBuf::new()),
         Some(Component::Normal(_)) => 0,
     };
@@ -452,6 +482,7 @@ pub fn normalize_lexically(path: &Path) -> Result<PathBuf, NormalizeError> {
             Component::RootDir => unreachable!(),
             Component::Prefix(_) => return Err(NormalizeError),
             Component::CurDir => continue,
+
             Component::ParentDir => {
                 // It's an error if ParentDir causes us to go above the "root".
                 if lexical.as_os_str().len() == root {
@@ -460,9 +491,11 @@ pub fn normalize_lexically(path: &Path) -> Result<PathBuf, NormalizeError> {
                     lexical.pop();
                 }
             }
+
             Component::Normal(path) => lexical.push(path),
         }
     }
+
     Ok(lexical)
 }
 
@@ -478,6 +511,7 @@ pub fn insert_subtree(subtrees: &mut Vec<PathBuf>, path: PathBuf) {
     if subtrees.iter().any(|existing| path.starts_with(existing)) {
         return;
     }
+
     subtrees.retain(|existing| !existing.starts_with(&path));
     subtrees.push(path);
 }
@@ -520,6 +554,7 @@ const ROW_COL_CAPTURE_REGEX: &str = r"(?xs)
 pub struct PathWithPosition {
     pub path: PathBuf,
     pub row: Option<u32>,
+
     // Absent if row is absent.
     pub column: Option<u32>,
 }
@@ -622,6 +657,7 @@ impl PathWithPosition {
     pub fn parse_str(s: &str) -> Self {
         let trimmed = s.trim();
         let path = Path::new(trimmed);
+
         let Some(maybe_file_name_with_row_col) = path.file_name().unwrap_or_default().to_str()
         else {
             return Self {
@@ -630,6 +666,7 @@ impl PathWithPosition {
                 column: None,
             };
         };
+
         if maybe_file_name_with_row_col.is_empty() {
             return Self {
                 path: Path::new(s).to_path_buf(),
@@ -643,6 +680,7 @@ impl PathWithPosition {
         // in the future seems unlikely.
         static SUFFIX_RE: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(ROW_COL_CAPTURE_REGEX).unwrap());
+
         match SUFFIX_RE
             .captures(maybe_file_name_with_row_col)
             .map(|caps| caps.extract())
@@ -660,34 +698,41 @@ impl PathWithPosition {
                     column,
                 }
             }
+
             None => {
                 // The `ROW_COL_CAPTURE_REGEX` deals with separated digits only,
                 // but in reality there could be `foo/bar.py:22:in` inputs which we want to match too.
                 // The regex mentioned is not very extendable with "digit or random string" checks, so do this here instead.
                 let delimiter = ':';
+
                 let mut path_parts = s
                     .rsplitn(3, delimiter)
                     .collect::<Vec<_>>()
                     .into_iter()
                     .rev()
                     .fuse();
+
                 let mut path_string = path_parts.next().expect("rsplitn should have the rest of the string as its last parameter that we reversed").to_owned();
                 let mut row = None;
                 let mut column = None;
+
                 if let Some(maybe_row) = path_parts.next() {
                     if let Ok(parsed_row) = maybe_row.parse::<u32>() {
                         row = Some(parsed_row);
+
                         if let Some(parsed_column) = path_parts
                             .next()
                             .and_then(|maybe_col| maybe_col.parse::<u32>().ok())
                         {
                             column = Some(parsed_column);
                         }
+
                     } else {
                         path_string.push(delimiter);
                         path_string.push_str(maybe_row);
                     }
                 }
+
                 for split in path_parts {
                     path_string.push(delimiter);
                     path_string.push_str(split);
@@ -715,12 +760,14 @@ impl PathWithPosition {
 
     pub fn to_string(&self, path_to_string: &dyn Fn(&PathBuf) -> String) -> String {
         let path_string = path_to_string(&self.path);
+
         if let Some(row) = self.row {
             if let Some(column) = self.column {
                 format!("{path_string}:{row}:{column}")
             } else {
                 format!("{path_string}:{row}")
             }
+
         } else {
             path_string
         }
@@ -764,10 +811,12 @@ impl PathMatcher {
                     .build()
             })
             .collect::<Result<Vec<_>, _>>()?;
+
         let sources = globs
             .iter()
             .filter_map(|glob| {
                 let glob = glob.glob();
+
                 Some((
                     glob.to_string(),
                     RelPath::new(glob.as_ref(), path_style)
@@ -777,11 +826,15 @@ impl PathMatcher {
                 ))
             })
             .collect();
+
         let mut glob_builder = GlobSetBuilder::new();
+
         for single_glob in globs {
             glob_builder.add(single_glob);
         }
+
         let glob = glob_builder.build()?;
+
         Ok(PathMatcher {
             glob,
             sources,
@@ -795,6 +848,7 @@ impl PathMatcher {
 
     pub fn is_match<P: AsRef<RelPath>>(&self, other: P) -> bool {
         let other = other.as_ref();
+
         if self
             .sources
             .iter()
@@ -802,6 +856,7 @@ impl PathMatcher {
         {
             return true;
         }
+
         let other_path = other.display(self.path_style);
 
         if self.glob.is_match(&*other_path) {
@@ -814,11 +869,13 @@ impl PathMatcher {
 
     pub fn is_match_std_path<P: AsRef<Path>>(&self, other: P) -> bool {
         let other = other.as_ref();
+
         if self.sources.iter().any(|(_, source, _)| {
             other.starts_with(source.as_std_path()) || other.ends_with(source.as_std_path())
         }) {
             return true;
         }
+
         self.glob.is_match(other)
     }
 }
@@ -914,6 +971,7 @@ where
                     Ordering::Equal => ordering, // Same value, longer one is greater (leading zeros)
                     ord => ord,
                 }
+
             } else {
                 // If parsing fails (overflow), compare as strings
                 a_num_str.cmp(&b_num_str)
@@ -952,14 +1010,17 @@ pub fn natural_sort(a: &str, b: &str) -> Ordering {
             (None, None) => {
                 return b.cmp(a);
             }
+
             (None, _) => return Ordering::Less,
             (_, None) => return Ordering::Greater,
+
             (Some(&a_char), Some(&b_char)) => {
                 if a_char.is_ascii_digit() && b_char.is_ascii_digit() {
                     match compare_numeric_segments(&mut a_iter, &mut b_iter) {
                         Ordering::Equal => continue,
                         ordering => return ordering,
                     }
+
                 } else {
                     match a_char
                         .to_ascii_lowercase()
@@ -969,6 +1030,7 @@ pub fn natural_sort(a: &str, b: &str) -> Ordering {
                             a_iter.next();
                             b_iter.next();
                         }
+
                         ordering => return ordering,
                     }
                 }
@@ -1047,6 +1109,7 @@ fn case_group_key(name: &str, order: SortOrder) -> u8 {
         Some(c) => c,
         None => return 0,
     };
+
     match order {
         SortOrder::Upper if first.is_lowercase() => 1,
         SortOrder::Upper => 0,
@@ -1115,16 +1178,19 @@ pub fn compare_rel_paths_by(
                 } else {
                     Default::default()
                 };
+
                 let (b_stem, b_ext) = if b_leaf_file {
                     stem_and_extension(component_b)
                 } else {
                     Default::default()
                 };
+
                 let a_key = if a_leaf_file {
                     a_stem
                 } else {
                     Some(component_a)
                 };
+
                 let b_key = if b_leaf_file {
                     b_stem
                 } else {
@@ -1146,6 +1212,7 @@ pub fn compare_rel_paths_by(
                                 (false, true) if a.eq_ignore_ascii_case(b) => Ordering::Less,
                                 _ => Ordering::Equal,
                             })
+
                         } else {
                             name_cmp
                         };
@@ -1156,17 +1223,21 @@ pub fn compare_rel_paths_by(
                                     SortOrder::Unicode => {
                                         a_ext.unwrap_or_default().cmp(b_ext.unwrap_or_default())
                                     }
+
                                     _ => {
                                         let a_ext_str = a_ext.unwrap_or_default().to_lowercase();
                                         let b_ext_str = b_ext.unwrap_or_default().to_lowercase();
+
                                         a_ext_str.cmp(&b_ext_str)
                                     }
                                 }
+
                             } else {
                                 Ordering::Equal
                             }
                         })
                     }
+
                     (Some(_), None) => Ordering::Greater,
                     (None, Some(_)) => Ordering::Less,
                     (None, None) => Ordering::Equal,
@@ -1176,12 +1247,15 @@ pub fn compare_rel_paths_by(
                     return ordering;
                 }
             }
+
             (Some(_), None) => return Ordering::Greater,
             (None, Some(_)) => return Ordering::Less,
+
             (None, None) => {
                 if needs_final_tiebreak {
                     return compare_strings(path_a.as_unix_str(), path_b.as_unix_str(), order);
                 }
+
                 return Ordering::Equal;
             }
         }
@@ -1203,6 +1277,7 @@ pub fn compare_paths(
 
                 let ordering = a_is_file.cmp(&b_is_file).then_with(|| {
                     let path_a = Path::new(component_a.as_os_str());
+
                     let path_string_a = if a_is_file {
                         path_a.file_stem()
                     } else {
@@ -1211,6 +1286,7 @@ pub fn compare_paths(
                     .map(|s| s.to_string_lossy());
 
                     let path_b = Path::new(component_b.as_os_str());
+
                     let path_string_b = if b_is_file {
                         path_b.file_stem()
                     } else {
@@ -1229,7 +1305,9 @@ pub fn compare_paths(
                         if a_is_file && b_is_file {
                             let ext_a = path_a.extension().unwrap_or_default();
                             let ext_b = path_b.extension().unwrap_or_default();
+
                             ext_a.cmp(ext_b)
+
                         } else {
                             Ordering::Equal
                         }
@@ -1240,6 +1318,7 @@ pub fn compare_paths(
                     return ordering;
                 }
             }
+
             (Some(_), None) => break Ordering::Greater,
             (None, Some(_)) => break Ordering::Less,
             (None, None) => break Ordering::Equal,
@@ -1262,47 +1341,58 @@ impl WslPath {
         if cfg!(not(target_os = "windows")) {
             return None;
         }
+
         use std::{
             ffi::OsString,
             path::{Component, Prefix},
         };
 
         let mut components = path.as_ref().components();
+
         let Some(Component::Prefix(prefix)) = components.next() else {
             return None;
         };
+
         let (server, distro) = match prefix.kind() {
             Prefix::UNC(server, distro) => (server, distro),
             Prefix::VerbatimUNC(server, distro) => (server, distro),
             _ => return None,
         };
+
         let Some(Component::RootDir) = components.next() else {
             return None;
         };
 
         let server_str = server.to_string_lossy();
+
         if server_str == "wsl.localhost" || server_str == "wsl$" {
             let mut result = OsString::from("");
+
             for c in components {
                 use Component::*;
+
                 match c {
                     Prefix(p) => unreachable!("got {p:?}, but already stripped prefix"),
                     RootDir => unreachable!("got root dir, but already stripped root"),
                     CurDir => continue,
                     ParentDir => result.push("/.."),
+
                     Normal(s) => {
                         result.push("/");
                         result.push(s);
                     }
                 }
             }
+
             if result.is_empty() {
                 result.push("/");
             }
+
             Some(WslPath {
                 distro: distro.to_string_lossy().to_string(),
                 path: result,
             })
+
         } else {
             None
         }
@@ -1335,24 +1425,30 @@ impl UrlExt for url::Url {
         if let Some(segments) = self.path_segments() {
             let host = match self.host() {
                 None | Some(url::Host::Domain("localhost")) => None,
+
                 Some(_) if source_path_style.is_windows() && self.scheme() == "file" => {
                     self.host_str()
                 }
+
                 _ => return Err(ToFilePathError),
             };
 
             let str_len = self.as_str().len();
+
             let estimated_capacity = if source_path_style.is_windows() {
                 // remove scheme: - has possible \\ for hostname
                 str_len.saturating_sub(self.scheme().len() + 1)
+
             } else {
                 // remove scheme://
                 str_len.saturating_sub(self.scheme().len() + 3)
             };
+
             return match source_path_style {
                 PathStyle::Unix => {
                     file_url_segments_to_pathbuf_posix(estimated_capacity, host, segments)
                 }
+
                 PathStyle::Windows => {
                     file_url_segments_to_pathbuf_windows(estimated_capacity, host, segments)
                 }
@@ -1371,6 +1467,7 @@ impl UrlExt for url::Url {
             }
 
             let mut bytes = Vec::new();
+
             bytes
                 .try_reserve(estimated_capacity)
                 .map_err(|_| ToFilePathError)?;
@@ -1389,6 +1486,7 @@ impl UrlExt for url::Url {
             }
 
             let path = String::from_utf8(bytes).map_err(|_| ToFilePathError)?;
+
             debug_assert!(
                 PathStyle::Unix.is_absolute(&path),
                 "to_file_path() failed to produce an absolute Path"
@@ -1403,13 +1501,17 @@ impl UrlExt for url::Url {
             mut segments: std::str::Split<'_, char>,
         ) -> Result<PathBuf, ToFilePathError> {
             use percent_encoding::percent_decode_str;
+
             let mut string = String::new();
+
             string
                 .try_reserve(estimated_capacity)
                 .map_err(|_| ToFilePathError)?;
+
             if let Some(host) = host {
                 string.push_str(r"\\");
                 string.push_str(host);
+
             } else {
                 let first = segments.next().ok_or(ToFilePathError)?;
 
@@ -1428,7 +1530,9 @@ impl UrlExt for url::Url {
                         if !first.starts_with(|c| char::is_ascii_alphabetic(&c)) {
                             return Err(ToFilePathError);
                         }
+
                         let bytes = first.as_bytes();
+
                         if bytes[1] != b'%'
                             || bytes[2] != b'3'
                             || (bytes[3] != b'a' && bytes[3] != b'A')
@@ -1453,6 +1557,7 @@ impl UrlExt for url::Url {
                     Err(..) => return Err(ToFilePathError),
                 }
             }
+
             // ensure our estimated capacity was good
             if cfg!(test) {
                 debug_assert!(
@@ -1462,13 +1567,17 @@ impl UrlExt for url::Url {
                     estimated_capacity
                 );
             }
+
             debug_assert!(
                 PathStyle::Windows.is_absolute(&string),
                 "to_file_path() failed to produce an absolute Path"
             );
+
             let path = PathBuf::from(string);
+
             Ok(path)
         }
+
         Err(ToFilePathError)
     }
 }
@@ -1477,6 +1586,7 @@ impl UrlExt for url::Url {
 mod tests {
     use super::*;
     use path::rel_path::rel_path;
+
     // perf annotations replaced with #[test]
 
     #[test]
@@ -1485,6 +1595,7 @@ mod tests {
         // `(N)` is parsed as `name ` + row N. The fix lives in `derive_paths_with_position`,
         // which restores the original path when it exists on disk (file or directory).
         let parsed = PathWithPosition::parse_str("/root/Test (3)");
+
         assert_eq!(parsed.path, PathBuf::from("/root/Test "));
         assert_eq!(parsed.row, Some(3));
     }
@@ -1499,6 +1610,7 @@ mod tests {
         order: SortOrder,
     ) -> Vec<(&'static RelPath, bool)> {
         paths.sort_by(|&a, &b| compare_rel_paths_by(a, b, mode, order));
+
         paths
     }
 
@@ -1513,7 +1625,9 @@ mod tests {
             (Path::new("test_dirs/1.45/foo_2"), true),
             (Path::new("test_dirs/1.45/foo_1"), true),
         ];
+
         paths.sort_by(|&a, &b| compare_paths(a, b));
+
         assert_eq!(
             paths,
             vec![
@@ -1526,11 +1640,14 @@ mod tests {
                 (Path::new("test_dirs/1.46/bar_2"), true),
             ]
         );
+
         let mut paths = vec![
             (Path::new("root1/one.txt"), true),
             (Path::new("root1/one.two.txt"), true),
         ];
+
         paths.sort_by(|&a, &b| compare_paths(a, b));
+
         assert_eq!(
             paths,
             vec![
@@ -1549,7 +1666,9 @@ mod tests {
             (Path::new("test_dirs/file"), true),
             (Path::new("test_dirs/file.a"), true),
         ];
+
         paths.sort_by(|&a, &b| compare_paths(a, b));
+
         assert_eq!(
             paths,
             vec![
@@ -1576,7 +1695,9 @@ mod tests {
             (Path::new("test_dirs/bar"), true),
             (Path::new("test_dirs/BAR"), true),
         ];
+
         paths.sort_by(|&a, &b| compare_paths(a, b));
+
         assert_eq!(
             paths,
             vec![
@@ -1631,7 +1752,9 @@ mod tests {
             (RelPath::from_unix_str("Carrot").unwrap(), false),
             (RelPath::from_unix_str("aardvark.txt").unwrap(), true),
         ];
+
         paths.sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::Mixed, SortOrder::Default));
+
         // Case-insensitive: aardvark < Apple < banana < Carrot < zebra
         assert_eq!(
             paths,
@@ -1655,8 +1778,10 @@ mod tests {
             (RelPath::from_unix_str("Carrot").unwrap(), false),
             (RelPath::from_unix_str("aardvark.txt").unwrap(), true),
         ];
+
         paths
             .sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::FilesFirst, SortOrder::Default));
+
         // Files first (case-insensitive), then directories (case-insensitive)
         assert_eq!(
             paths,
@@ -1680,8 +1805,10 @@ mod tests {
             (RelPath::from_unix_str("carrot").unwrap(), false),
             (RelPath::from_unix_str("Aardvark.txt").unwrap(), true),
         ];
+
         paths
             .sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::FilesFirst, SortOrder::Default));
+
         assert_eq!(
             paths,
             vec![
@@ -1704,8 +1831,10 @@ mod tests {
             (RelPath::from_unix_str("dir10").unwrap(), false),
             (RelPath::from_unix_str("file1.txt").unwrap(), true),
         ];
+
         paths
             .sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::FilesFirst, SortOrder::Default));
+
         assert_eq!(
             paths,
             vec![
@@ -1726,7 +1855,9 @@ mod tests {
             (RelPath::from_unix_str("readme.txt").unwrap(), true),
             (RelPath::from_unix_str("ReadMe.rs").unwrap(), true),
         ];
+
         paths.sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::Mixed, SortOrder::Default));
+
         // All "readme" variants should group together, sorted by extension
         assert_eq!(
             paths,
@@ -1747,7 +1878,9 @@ mod tests {
             (RelPath::from_unix_str("file1.txt").unwrap(), true),
             (RelPath::from_unix_str("dir2").unwrap(), false),
         ];
+
         paths.sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::Mixed, SortOrder::Default));
+
         // Case-insensitive: dir1, dir2, file1, file2 (all mixed)
         assert_eq!(
             paths,
@@ -1766,7 +1899,9 @@ mod tests {
             (RelPath::from_unix_str("Hello.txt").unwrap(), true),
             (RelPath::from_unix_str("hello").unwrap(), false),
         ];
+
         paths.sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::Mixed, SortOrder::Default));
+
         assert_eq!(
             paths,
             vec![
@@ -1779,7 +1914,9 @@ mod tests {
             (RelPath::from_unix_str("hello").unwrap(), false),
             (RelPath::from_unix_str("Hello.txt").unwrap(), true),
         ];
+
         paths.sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::Mixed, SortOrder::Default));
+
         assert_eq!(
             paths,
             vec![
@@ -1798,7 +1935,9 @@ mod tests {
             (RelPath::from_unix_str("src").unwrap(), false),
             (RelPath::from_unix_str("target").unwrap(), false),
         ];
+
         paths.sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::Mixed, SortOrder::Default));
+
         assert_eq!(
             paths,
             vec![
@@ -1819,8 +1958,10 @@ mod tests {
             (RelPath::from_unix_str("src").unwrap(), false),
             (RelPath::from_unix_str("tests").unwrap(), false),
         ];
+
         paths
             .sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::FilesFirst, SortOrder::Default));
+
         assert_eq!(
             paths,
             vec![
@@ -1841,7 +1982,9 @@ mod tests {
             (RelPath::from_unix_str(".github").unwrap(), false),
             (RelPath::from_unix_str("src").unwrap(), false),
         ];
+
         paths.sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::Mixed, SortOrder::Default));
+
         assert_eq!(
             paths,
             vec![
@@ -1862,8 +2005,10 @@ mod tests {
             (RelPath::from_unix_str(".github").unwrap(), false),
             (RelPath::from_unix_str("src").unwrap(), false),
         ];
+
         paths
             .sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::FilesFirst, SortOrder::Default));
+
         assert_eq!(
             paths,
             vec![
@@ -1883,7 +2028,9 @@ mod tests {
             (RelPath::from_unix_str("file.md").unwrap(), true),
             (RelPath::from_unix_str("file.txt").unwrap(), true),
         ];
+
         paths.sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::Mixed, SortOrder::Default));
+
         assert_eq!(
             paths,
             vec![
@@ -1902,8 +2049,10 @@ mod tests {
             (RelPath::from_unix_str("main.c").unwrap(), true),
             (RelPath::from_unix_str("main").unwrap(), false),
         ];
+
         paths
             .sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::FilesFirst, SortOrder::Default));
+
         assert_eq!(
             paths,
             vec![
@@ -1923,7 +2072,9 @@ mod tests {
             (RelPath::from_unix_str("a.txt").unwrap(), true),
             (RelPath::from_unix_str("A.txt").unwrap(), true),
         ];
+
         paths.sort_by(|&a, &b| compare_rel_paths_by(a, b, SortMode::Mixed, SortOrder::Default));
+
         assert_eq!(
             paths,
             vec![
@@ -1947,6 +2098,7 @@ mod tests {
             rel_path_entry(".hidden", false),
             rel_path_entry("Carrot", false),
         ];
+
         assert_eq!(
             sorted_rel_paths(
                 directories_only_paths,
@@ -1974,6 +2126,7 @@ mod tests {
             rel_path_entry("File2.txt", true),
             rel_path_entry(".hidden", false),
         ];
+
         assert_eq!(
             sorted_rel_paths(
                 file_and_directory_paths.clone(),
@@ -1990,6 +2143,7 @@ mod tests {
                 rel_path_entry("file1.txt", true),
             ]
         );
+
         assert_eq!(
             sorted_rel_paths(
                 file_and_directory_paths.clone(),
@@ -2006,6 +2160,7 @@ mod tests {
                 rel_path_entry("file1.txt", true),
             ]
         );
+
         assert_eq!(
             sorted_rel_paths(
                 file_and_directory_paths,
@@ -2029,6 +2184,7 @@ mod tests {
             rel_path_entry("file20.txt", true),
             rel_path_entry("file2.txt", true),
         ];
+
         assert_eq!(
             sorted_rel_paths(natural_sort_paths, SortMode::Mixed, SortOrder::Upper,),
             vec![
@@ -2044,6 +2200,7 @@ mod tests {
             rel_path_entry("zebra.txt", true),
             rel_path_entry("Apple.txt", true),
         ];
+
         assert_eq!(
             sorted_rel_paths(accented_paths, SortMode::Mixed, SortOrder::Upper),
             vec![
@@ -2066,6 +2223,7 @@ mod tests {
             rel_path_entry(".hidden", false),
             rel_path_entry("Carrot", false),
         ];
+
         assert_eq!(
             sorted_rel_paths(
                 directories_only_paths,
@@ -2093,6 +2251,7 @@ mod tests {
             rel_path_entry("File2.txt", true),
             rel_path_entry(".hidden", false),
         ];
+
         assert_eq!(
             sorted_rel_paths(
                 file_and_directory_paths.clone(),
@@ -2109,6 +2268,7 @@ mod tests {
                 rel_path_entry("File2.txt", true),
             ]
         );
+
         assert_eq!(
             sorted_rel_paths(
                 file_and_directory_paths.clone(),
@@ -2125,6 +2285,7 @@ mod tests {
                 rel_path_entry("File2.txt", true),
             ]
         );
+
         assert_eq!(
             sorted_rel_paths(
                 file_and_directory_paths,
@@ -2155,6 +2316,7 @@ mod tests {
             rel_path_entry(".hidden", false),
             rel_path_entry("Carrot", false),
         ];
+
         assert_eq!(
             sorted_rel_paths(
                 directories_only_paths,
@@ -2182,6 +2344,7 @@ mod tests {
             rel_path_entry("File2.txt", true),
             rel_path_entry(".hidden", false),
         ];
+
         assert_eq!(
             sorted_rel_paths(
                 file_and_directory_paths.clone(),
@@ -2198,6 +2361,7 @@ mod tests {
                 rel_path_entry("file1.txt", true),
             ]
         );
+
         assert_eq!(
             sorted_rel_paths(
                 file_and_directory_paths.clone(),
@@ -2214,6 +2378,7 @@ mod tests {
                 rel_path_entry("file1.txt", true),
             ]
         );
+
         assert_eq!(
             sorted_rel_paths(
                 file_and_directory_paths,
@@ -2237,6 +2402,7 @@ mod tests {
             rel_path_entry("file2.txt", true),
             rel_path_entry("file20.txt", true),
         ];
+
         assert_eq!(
             sorted_rel_paths(numeric_paths, SortMode::Mixed, SortOrder::Unicode,),
             vec![
@@ -2252,6 +2418,7 @@ mod tests {
             rel_path_entry("zebra.txt", true),
             rel_path_entry("Apple.txt", true),
         ];
+
         assert_eq!(
             sorted_rel_paths(accented_paths, SortMode::Mixed, SortOrder::Unicode),
             vec![
@@ -2369,6 +2536,7 @@ mod tests {
                 column: None,
             }
         );
+
         assert_eq!(
             PathWithPosition::parse_str("foo/bar.rs:1902:::15:"),
             PathWithPosition {
@@ -2404,6 +2572,7 @@ mod tests {
                 column: None,
             }
         );
+
         assert_eq!(
             PathWithPosition::parse_str("/testing/out/src/file_finder.odin(7:15)"),
             PathWithPosition {
@@ -2566,6 +2735,7 @@ mod tests {
         ]
         .iter()
         .collect();
+
         if cfg!(any(target_os = "linux", target_os = "freebsd")) || cfg!(target_os = "macos") {
             assert_eq!(path.compact().to_str(), Some("~/some_file.txt"));
         } else {
@@ -2577,22 +2747,27 @@ mod tests {
     fn test_extension_or_hidden_file_name() {
         // No dots in name
         let path = Path::new("/a/b/c/file_name.rs");
+
         assert_eq!(path.extension_or_hidden_file_name(), Some("rs"));
 
         // Single dot in name
         let path = Path::new("/a/b/c/file.name.rs");
+
         assert_eq!(path.extension_or_hidden_file_name(), Some("rs"));
 
         // Multiple dots in name
         let path = Path::new("/a/b/c/long.file.name.rs");
+
         assert_eq!(path.extension_or_hidden_file_name(), Some("rs"));
 
         // Hidden file, no extension
         let path = Path::new("/a/b/c/.gitignore");
+
         assert_eq!(path.extension_or_hidden_file_name(), Some("gitignore"));
 
         // Hidden file, with extension
         let path = Path::new("/a/b/c/.eslintrc.js");
+
         assert_eq!(path.extension_or_hidden_file_name(), Some("eslintrc.js"));
     }
 
@@ -2638,6 +2813,7 @@ mod tests {
     fn test_sanitized_path() {
         let path = Path::new("C:\\Users\\someone\\test_file.rs");
         let sanitized_path = SanitizedPath::new(path);
+
         assert_eq!(
             sanitized_path.to_string(),
             "C:\\Users\\someone\\test_file.rs"
@@ -2645,6 +2821,7 @@ mod tests {
 
         let path = Path::new("\\\\?\\C:\\Users\\someone\\test_file.rs");
         let sanitized_path = SanitizedPath::new(path);
+
         assert_eq!(
             sanitized_path.to_string(),
             "C:\\Users\\someone\\test_file.rs"
@@ -2665,6 +2842,7 @@ mod tests {
                 !a_iter.next().is_some_and(|c| c.is_ascii_digit()),
                 "Iterator a should have consumed all digits"
             );
+
             assert!(
                 !b_iter.next().is_some_and(|c| c.is_ascii_digit()),
                 "Iterator b should have consumed all digits"
@@ -2694,6 +2872,7 @@ mod tests {
 
         // Large numbers
         assert_eq!(compare("9999999999", "10000000000"), Ordering::Less);
+
         assert_eq!(
             compare(
                 "340282366920938463463374607431768211455", // u128::MAX
@@ -2701,6 +2880,7 @@ mod tests {
             ),
             Ordering::Less
         );
+
         assert_eq!(
             compare(
                 "340282366920938463463374607431768211456", // > u128::MAX
@@ -2805,10 +2985,12 @@ mod tests {
             compare("Dir/file", true, "dir/file", true),
             Ordering::Greater
         );
+
         assert_eq!(
             compare("dir/File", true, "dir/file", true),
             Ordering::Greater
         );
+
         assert_eq!(compare("dir/file", true, "Dir/File", true), Ordering::Less);
 
         // Hidden files and special names
@@ -2821,10 +3003,12 @@ mod tests {
             compare("dir1/file", true, "dir2/file", true),
             Ordering::Less
         );
+
         assert_eq!(
             compare("dir2/file", true, "dir10/file", true),
             Ordering::Less
         );
+
         assert_eq!(
             compare("dir02/file", true, "dir2/file", true),
             Ordering::Greater
@@ -2839,6 +3023,7 @@ mod tests {
             compare("project/src/main.rs", true, "project/src/lib.rs", true),
             Ordering::Greater
         );
+
         assert_eq!(
             compare(
                 "project/tests/test_1.rs",
@@ -2848,6 +3033,7 @@ mod tests {
             ),
             Ordering::Less
         );
+
         assert_eq!(
             compare(
                 "project/v1.0.0/README.md",
@@ -2862,6 +3048,7 @@ mod tests {
     #[test]
     fn test_natural_sort_case_sensitivity() {
         std::thread::sleep(std::time::Duration::from_millis(100));
+
         // Same letter different case - lowercase should come first
         assert_eq!(natural_sort("a", "A"), Ordering::Less);
         assert_eq!(natural_sort("A", "a"), Ordering::Greater);
@@ -3002,18 +3189,22 @@ mod tests {
     fn test_multiple_extensions() {
         // No extensions
         let path = Path::new("/a/b/c/file_name");
+
         assert_eq!(path.multiple_extensions(), None);
 
         // Only one extension
         let path = Path::new("/a/b/c/file_name.tsx");
+
         assert_eq!(path.multiple_extensions(), None);
 
         // Stories sample extension
         let path = Path::new("/a/b/c/file_name.stories.tsx");
+
         assert_eq!(path.multiple_extensions(), Some("stories.tsx".to_string()));
 
         // Longer sample extension
         let path = Path::new("/a/b/c/long.app.tar.gz");
+
         assert_eq!(path.multiple_extensions(), Some("app.tar.gz".to_string()));
     }
 
@@ -3021,30 +3212,37 @@ mod tests {
     fn test_strip_path_suffix() {
         let base = Path::new("/a/b/c/file_name");
         let suffix = Path::new("file_name");
+
         assert_eq!(strip_path_suffix(base, suffix), Some(Path::new("/a/b/c")));
 
         let base = Path::new("/a/b/c/file_name.tsx");
         let suffix = Path::new("file_name.tsx");
+
         assert_eq!(strip_path_suffix(base, suffix), Some(Path::new("/a/b/c")));
 
         let base = Path::new("/a/b/c/file_name.stories.tsx");
         let suffix = Path::new("c/file_name.stories.tsx");
+
         assert_eq!(strip_path_suffix(base, suffix), Some(Path::new("/a/b")));
 
         let base = Path::new("/a/b/c/long.app.tar.gz");
         let suffix = Path::new("b/c/long.app.tar.gz");
+
         assert_eq!(strip_path_suffix(base, suffix), Some(Path::new("/a")));
 
         let base = Path::new("/a/b/c/long.app.tar.gz");
         let suffix = Path::new("/a/b/c/long.app.tar.gz");
+
         assert_eq!(strip_path_suffix(base, suffix), Some(Path::new("")));
 
         let base = Path::new("/a/b/c/long.app.tar.gz");
         let suffix = Path::new("/a/b/c/no_match.app.tar.gz");
+
         assert_eq!(strip_path_suffix(base, suffix), None);
 
         let base = Path::new("/a/b/c/long.app.tar.gz");
         let suffix = Path::new("app.tar.gz");
+
         assert_eq!(strip_path_suffix(base, suffix), None);
     }
 
@@ -3118,6 +3316,7 @@ mod tests {
                 Some(rel_path("c").to_arc()),
             ),
         ];
+
         let actual = expected.clone().map(|(style, child, parent, _)| {
             (
                 style,
@@ -3128,19 +3327,25 @@ mod tests {
                     .map(|rel_path| rel_path.to_arc()),
             )
         });
+
         pretty_assertions::assert_eq!(actual, expected);
     }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn test_wsl_path() {
         use super::WslPath;
+
         let path = "/a/b/c";
+
         assert_eq!(WslPath::from_path(&path), None);
 
         let path = r"\\wsl.localhost";
+
         assert_eq!(WslPath::from_path(&path), None);
 
         let path = r"\\wsl.localhost\Distro";
+
         assert_eq!(
             WslPath::from_path(&path),
             Some(WslPath {
@@ -3150,6 +3355,7 @@ mod tests {
         );
 
         let path = r"\\wsl.localhost\Distro\blue";
+
         assert_eq!(
             WslPath::from_path(&path),
             Some(WslPath {
@@ -3159,6 +3365,7 @@ mod tests {
         );
 
         let path = r"\\wsl$\archlinux\tomato\.\paprika\..\aubergine.txt";
+
         assert_eq!(
             WslPath::from_path(&path),
             Some(WslPath {
@@ -3168,6 +3375,7 @@ mod tests {
         );
 
         let path = r"\\windows.localhost\Distro\foo";
+
         assert_eq!(WslPath::from_path(&path), None);
     }
 
@@ -3176,18 +3384,21 @@ mod tests {
         use super::UrlExt;
 
         let url = url::Url::parse("file:///home/user/file.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Unix),
             Ok(PathBuf::from("/home/user/file.txt"))
         );
 
         let url = url::Url::parse("file:///").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Unix),
             Ok(PathBuf::from("/"))
         );
 
         let url = url::Url::parse("file:///a/b/c/d/e").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Unix),
             Ok(PathBuf::from("/a/b/c/d/e"))
@@ -3199,18 +3410,21 @@ mod tests {
         use super::UrlExt;
 
         let url = url::Url::parse("file:///home/user/file%20with%20spaces.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Unix),
             Ok(PathBuf::from("/home/user/file with spaces.txt"))
         );
 
         let url = url::Url::parse("file:///path%2Fwith%2Fencoded%2Fslashes").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Unix),
             Ok(PathBuf::from("/path/with/encoded/slashes"))
         );
 
         let url = url::Url::parse("file:///special%23chars%3F.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Unix),
             Ok(PathBuf::from("/special#chars?.txt"))
@@ -3222,6 +3436,7 @@ mod tests {
         use super::UrlExt;
 
         let url = url::Url::parse("file://localhost/home/user/file.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Unix),
             Ok(PathBuf::from("/home/user/file.txt"))
@@ -3233,6 +3448,7 @@ mod tests {
         use super::UrlExt;
 
         let url = url::Url::parse("file://somehost/home/user/file.txt").unwrap();
+
         assert_eq!(url.to_file_path_ext(PathStyle::Unix), Err(ToFilePathError));
     }
 
@@ -3241,12 +3457,14 @@ mod tests {
         use super::UrlExt;
 
         let url = url::Url::parse("file:///C:").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Unix),
             Ok(PathBuf::from("/C:/"))
         );
 
         let url = url::Url::parse("file:///D|").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Unix),
             Ok(PathBuf::from("/D|/"))
@@ -3258,18 +3476,21 @@ mod tests {
         use super::UrlExt;
 
         let url = url::Url::parse("file:///C:/Users/user/file.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Ok(PathBuf::from("C:\\Users\\user\\file.txt"))
         );
 
         let url = url::Url::parse("file:///D:/folder/subfolder/file.rs").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Ok(PathBuf::from("D:\\folder\\subfolder\\file.rs"))
         );
 
         let url = url::Url::parse("file:///C:/").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Ok(PathBuf::from("C:\\"))
@@ -3281,24 +3502,28 @@ mod tests {
         use super::UrlExt;
 
         let url = url::Url::parse("file:///C%3A/Users/file.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Ok(PathBuf::from("C:\\Users\\file.txt"))
         );
 
         let url = url::Url::parse("file:///c%3a/Users/file.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Ok(PathBuf::from("c:\\Users\\file.txt"))
         );
 
         let url = url::Url::parse("file:///D%3A/folder/file.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Ok(PathBuf::from("D:\\folder\\file.txt"))
         );
 
         let url = url::Url::parse("file:///d%3A/folder/file.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Ok(PathBuf::from("d:\\folder\\file.txt"))
@@ -3310,12 +3535,14 @@ mod tests {
         use super::UrlExt;
 
         let url = url::Url::parse("file://server/share/path/file.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Ok(PathBuf::from("\\\\server\\share\\path\\file.txt"))
         );
 
         let url = url::Url::parse("file://server/share").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Ok(PathBuf::from("\\\\server\\share"))
@@ -3327,12 +3554,14 @@ mod tests {
         use super::UrlExt;
 
         let url = url::Url::parse("file:///C:/Users/user/file%20with%20spaces.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Ok(PathBuf::from("C:\\Users\\user\\file with spaces.txt"))
         );
 
         let url = url::Url::parse("file:///C:/special%23chars%3F.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Ok(PathBuf::from("C:\\special#chars?.txt"))
@@ -3344,24 +3573,28 @@ mod tests {
         use super::UrlExt;
 
         let url = url::Url::parse("file:///1:/path/file.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Err(ToFilePathError)
         );
 
         let url = url::Url::parse("file:///CC:/path/file.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Err(ToFilePathError)
         );
 
         let url = url::Url::parse("file:///C/path/file.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Err(ToFilePathError)
         );
 
         let url = url::Url::parse("file:///invalid").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Err(ToFilePathError)
@@ -3373,14 +3606,18 @@ mod tests {
         use super::UrlExt;
 
         let url = url::Url::parse("http://example.com/path").unwrap();
+
         assert_eq!(url.to_file_path_ext(PathStyle::Unix), Err(ToFilePathError));
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Err(ToFilePathError)
         );
 
         let url = url::Url::parse("https://example.com/path").unwrap();
+
         assert_eq!(url.to_file_path_ext(PathStyle::Unix), Err(ToFilePathError));
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Err(ToFilePathError)
@@ -3392,6 +3629,7 @@ mod tests {
         use super::UrlExt;
 
         let url = url::Url::parse("file://localhost/C:/Users/file.txt").unwrap();
+
         assert_eq!(
             url.to_file_path_ext(PathStyle::Windows),
             Ok(PathBuf::from("C:\\Users\\file.txt"))

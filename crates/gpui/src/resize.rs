@@ -24,12 +24,14 @@ impl ResizeRegion {
     /// Sets diagonal reach; invalid sizes become zero.
     pub fn corner_size(mut self, corner_size: Pixels) -> Self {
         self.corner_size = sane(corner_size);
+
         self
     }
 
     /// Sets which sides can resize.
     pub fn enabled_edges(mut self, enabled_edges: Edges<bool>) -> Self {
         self.enabled_edges = enabled_edges;
+
         self
     }
 
@@ -39,6 +41,7 @@ impl ResizeRegion {
         self.enabled_edges.right &= !tiling.right;
         self.enabled_edges.bottom &= !tiling.bottom;
         self.enabled_edges.left &= !tiling.left;
+
         self
     }
 
@@ -80,16 +83,19 @@ impl ResizeRegion {
             && y < (top + bw).min(bottom)
             && x >= left
             && x < right;
+
         let right_hit = self.enabled_edges.right
             && x >= (right - bw).max(left)
             && x < right
             && y >= top
             && y < bottom;
+
         let bottom_hit = self.enabled_edges.bottom
             && y >= (bottom - bw).max(top)
             && y < bottom
             && x >= left
             && x < right;
+
         let left_hit = self.enabled_edges.left
             && x >= left
             && x < (left + bw).min(right)
@@ -104,6 +110,7 @@ impl ResizeRegion {
         let in_right_strip = right - x <= bw;
         let in_top_strip = y - top < bw;
         let in_bottom_strip = bottom - y <= bw;
+
         let corner_hit = if near_top
             && near_left
             && (in_top_strip || in_left_strip)
@@ -135,12 +142,14 @@ impl ResizeRegion {
         } else {
             None
         };
+
         if corner_hit.is_some() {
             return corner_hit;
         }
 
         // Choose the nearest side when strips overlap.
         let mut best: Option<(f32, ResizeEdge)> = None;
+
         for (hit, distance, edge) in [
             (top_hit, y - top, ResizeEdge::Top),
             (right_hit, right - x, ResizeEdge::Right),
@@ -151,6 +160,7 @@ impl ResizeRegion {
                 best = Some((distance, edge));
             }
         }
+
         best.map(|(_, edge)| edge)
     }
 }
@@ -220,7 +230,9 @@ mod tests {
             (60., 100., None),
         ] {
             let actual = region().hit_test(point(px(x), px(y)), bounds());
+
             assert_eq!(actual, expected.map(|(edge, _)| edge), "({x}, {y})");
+
             assert_eq!(
                 actual.map(CursorStyle::from),
                 expected.map(|(_, cursor)| cursor)
@@ -271,6 +283,7 @@ mod tests {
     fn every_edge_mask_disables_sides_and_demotes_corners() {
         for mask in 0..16 {
             let region = region().enabled_edges(edges(mask));
+
             for (x, y, bit, edge) in [
                 (60., 21., 1, ResizeEdge::Top),
                 (109., 60., 2, ResizeEdge::Right),
@@ -283,6 +296,7 @@ mod tests {
                     "mask={mask}, {edge:?}"
                 );
             }
+
             // These samples hit only the horizontal strip; disabling it leaves a hole.
             for (x, y, horizontal, vertical, side, corner) in [
                 (16., 21., 1, 8, ResizeEdge::Top, ResizeEdge::TopLeft),
@@ -295,6 +309,7 @@ mod tests {
                     (true, false) => Some(side),
                     (false, _) => None,
                 };
+
                 assert_eq!(
                     region.hit_test(point(px(x), px(y)), bounds()),
                     expected,
@@ -309,16 +324,20 @@ mod tests {
         for enabled in 0..16 {
             for tiled in 0..16 {
                 let e = edges(tiled);
+
                 let tiling = Tiling {
                     top: e.top,
                     right: e.right,
                     bottom: e.bottom,
                     left: e.left,
                 };
+
                 let actual = region()
                     .enabled_edges(edges(enabled))
                     .without_tiled_edges(tiling);
+
                 let expected = region().enabled_edges(edges(enabled & !tiled));
+
                 for (x, y) in [
                     (60., 21.),
                     (109., 60.),
@@ -330,12 +349,14 @@ mod tests {
                     (109., 99.),
                 ] {
                     let p = point(px(x), px(y));
+
                     assert_eq!(
                         actual.hit_test(p, bounds()),
                         expected.hit_test(p, bounds()),
                         "enabled={enabled}, tiled={tiled}, {p:?}"
                     );
                 }
+
                 assert_eq!(actual.without_tiled_edges(tiling), actual);
             }
         }
@@ -345,6 +366,7 @@ mod tests {
     fn overlapping_strips_and_corners_choose_the_nearest_boundaries() {
         let b = Bounds::new(point(px(10.), px(20.)), size(px(2.), px(2.)));
         let sides = ResizeRegion::new(px(5.)).corner_size(px(0.));
+
         for (x, y, side, corner) in [
             (10.25, 20.5, ResizeEdge::Left, ResizeEdge::TopLeft),
             (11.75, 20.5, ResizeEdge::Right, ResizeEdge::TopRight),
@@ -355,7 +377,9 @@ mod tests {
             (11., 21., ResizeEdge::Top, ResizeEdge::BottomRight),
         ] {
             let p = point(px(x), px(y));
+
             assert_eq!(sides.hit_test(p, b), Some(side), "{p:?}");
+
             assert_eq!(
                 sides.corner_size(px(5.)).hit_test(p, b),
                 Some(corner),
@@ -371,6 +395,7 @@ mod tests {
                 ResizeRegion::new(px(invalid)).hit_test(point(px(10.), px(20.)), bounds()),
                 None
             );
+
             // Invalid corner sizes disable diagonals but keep side handles.
             assert_eq!(
                 region()
@@ -378,6 +403,7 @@ mod tests {
                     .hit_test(point(px(11.), px(21.)), bounds()),
                 Some(ResizeEdge::Top)
             );
+
             for b in [
                 Bounds::new(bounds().origin, size(px(invalid), px(80.))),
                 Bounds::new(bounds().origin, size(px(100.), px(invalid))),
@@ -385,15 +411,18 @@ mod tests {
                 assert_eq!(region().hit_test(bounds().origin, b), None, "{b:?}");
             }
         }
+
         for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             for p in [point(px(invalid), px(20.)), point(px(10.), px(invalid))] {
                 assert_eq!(region().hit_test(p, bounds()), None);
+
                 assert_eq!(
                     region().hit_test(bounds().origin, Bounds::new(p, bounds().size)),
                     None
                 );
             }
         }
+
         for b in [
             Bounds::new(point(px(f32::MAX), px(0.)), size(px(f32::MAX), px(80.))),
             Bounds::new(point(px(0.), px(f32::MAX)), size(px(100.), px(f32::MAX))),

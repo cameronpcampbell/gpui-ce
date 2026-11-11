@@ -4,17 +4,20 @@ use std::{ptr::NonNull, sync::Arc};
 
 use gpui::{DevicePixels, Scene, Size};
 use raw_window_handle::{RawWindowHandle, WaylandWindowHandle};
+
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle, delegate_noop,
     globals::{GlobalListContents, registry_queue_init},
     protocol::{wl_compositor, wl_registry, wl_surface},
 };
+
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 use super::{
     NativeBackend, NativeSurfaceTarget, SoftwareAdapterPolicy, WgpuAtlas, WgpuContext,
     create_surface,
 };
+
 use crate::{WgpuRenderer, WgpuSurfaceConfig};
 
 #[derive(Default)]
@@ -64,6 +67,7 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for WindowState {
     ) {
         if let xdg_surface::Event::Configure { serial } = event {
             surface.ack_configure(serial);
+
             state.configured = true;
         }
     }
@@ -80,25 +84,32 @@ fn failed_frames_release_surface_images() {
     let surface = compositor.create_surface(&queue, ());
     let shell_surface = shell.get_xdg_surface(&surface, &queue, ());
     let toplevel = shell_surface.get_toplevel(&queue, ());
+
     toplevel.set_title("GPUI surface recovery test".into());
     surface.commit();
+
     let mut state = WindowState::default();
+
     events.roundtrip(&mut state).unwrap();
+
     assert!(
         state.configured,
         "compositor must configure the test window"
     );
+
     connection.flush().unwrap();
 
     // Use a real Vulkan swapchain: a headless texture cannot expose exhausted
     // presentation images. Keep the Wayland objects alive until after rendering.
     let instance = NativeBackend::Vulkan.instance(Some(Box::new(connection.backend())));
     let handle = WaylandWindowHandle::new(NonNull::new(surface.id().as_ptr().cast()).unwrap());
+
     let gpu_surface = create_surface(
         &instance.raw,
         NativeSurfaceTarget::Window(RawWindowHandle::Wayland(handle)),
     )
     .unwrap();
+
     let context = WgpuContext::new_with_adapter_policy(
         instance,
         &gpu_surface,
@@ -107,6 +118,7 @@ fn failed_frames_release_surface_images() {
         None,
     )
     .unwrap();
+
     let mut renderer = WgpuRenderer::new_internal(
         None,
         &context,
@@ -124,9 +136,13 @@ fn failed_frames_release_surface_images() {
         Arc::new(WgpuAtlas::from_context(&context)),
     )
     .unwrap();
+
     let mut scene = Scene::default();
+
     scene.finish();
+
     assert!(renderer.draw(&scene), "initial frame must present");
+
     events.roundtrip(&mut state).unwrap();
 
     for attempt in 0..8 {
@@ -134,18 +150,24 @@ fn failed_frames_release_surface_images() {
         // acquired an image. Do not mock acquisition or call recovery ourselves.
         renderer.faults.consecutive_failed_frames = 5;
         *renderer.faults.pending_error.lock().unwrap() = Some("injected frame error".into());
+
         assert!(!renderer.draw(&scene), "injected frame {attempt} must fail");
+
         assert!(
             renderer.faults.pending_error.lock().unwrap().is_none(),
             "frame {attempt} never reached rendering: surface images were exhausted"
         );
+
         events.roundtrip(&mut state).unwrap();
     }
+
     assert!(
         renderer.draw(&scene),
         "healthy frame must present after repeated failures"
     );
+
     drop(renderer);
+
     toplevel.destroy();
     shell_surface.destroy();
     surface.destroy();

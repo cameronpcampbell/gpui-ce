@@ -10,18 +10,25 @@ use std::sync::Arc;
 pub struct Colors {
     /// Text color
     pub text: Rgba,
+
     /// Selected text color
     pub selected_text: Rgba,
+
     /// Background color
     pub background: Rgba,
+
     /// Disabled color
     pub disabled: Rgba,
+
     /// Selected color
     pub selected: Rgba,
+
     /// Border color
     pub border: Rgba,
+
     /// Separator color
     pub separator: Rgba,
+
     /// Container color
     pub container: Rgba,
 }

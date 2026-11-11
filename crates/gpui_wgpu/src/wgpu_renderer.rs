@@ -45,6 +45,7 @@ struct GpuFaultState {
     pending_error: Arc<Mutex<Option<String>>>,
     consecutive_failed_frames: u32,
     device_lost: Arc<std::sync::atomic::AtomicBool>,
+
     #[cfg(not(target_family = "wasm"))]
     recovery_not_before: Option<std::time::Instant>,
 }
@@ -53,12 +54,15 @@ pub struct WgpuRenderer {
     /// Shared GPU context for device recovery coordination (unused on WASM).
     #[allow(dead_code)]
     context: Option<GpuContext>,
+
     /// Compositor GPU hint for adapter selection (unused on WASM).
     #[allow(dead_code)]
     compositor_gpu: Option<CompositorGpuHint>,
+
     /// Application-requested extra wgpu features/limits, stored for device recovery.
     #[allow(dead_code)]
     extra_requirements: Option<WgpuDeviceRequirements>,
+
     resources: Option<WgpuResources>,
     target: RenderTarget,
     atlas: Arc<WgpuAtlas>,
@@ -95,6 +99,7 @@ impl WgpuRenderer {
     ) -> anyhow::Result<Self> {
         let target =
             RenderTarget::new(&context.adapter, &context.device, surface.as_ref(), config)?;
+
         if let Some(surface) = surface.as_ref() {
             surface.configure(&context.device, target.configuration());
         }
@@ -102,6 +107,7 @@ impl WgpuRenderer {
         let dual_source_blending = context.supports_dual_source_blending();
         let rendering_params = RenderingParameters::new(&context.adapter, target.format());
         let adapter_info = context.adapter.get_info();
+
         let (resources, metadata) = WgpuResources::new(
             context,
             surface,
@@ -109,6 +115,7 @@ impl WgpuRenderer {
             &rendering_params,
             dual_source_blending,
         )?;
+
         let ResourceMetadata {
             globals,
             last_error,
@@ -141,11 +148,15 @@ impl WgpuRenderer {
         if !self.target.resize(size) {
             return;
         }
+
         let config = self.target.configuration().clone();
+
         let Some(resources) = self.resources.as_mut() else {
             return;
         };
+
         resources.invalidate_intermediate_textures();
+
         if let Some(surface) = resources.surface.as_ref() {
             surface.configure(&resources.device, &config);
         }
@@ -175,20 +186,25 @@ impl WgpuRenderer {
         if !self.target.set_transparent(transparent) {
             return;
         }
+
         let config = self.target.configuration().clone();
+
         if let Some(resources) = self.resources.as_ref() {
             if let Some(surface) = resources.surface.as_ref() {
                 surface.configure(&resources.device, &config);
             }
         }
+
         self.rebuild_pipelines();
     }
 
     pub(super) fn rebuild_pipelines(&mut self) {
         let config = self.target.configuration();
+
         let Some(resources) = self.resources.as_mut() else {
             return;
         };
+
         resources.pipelines = ShaderPipelines::new(
             &resources.device,
             &resources.bind_group_layouts,
@@ -215,6 +231,7 @@ impl WgpuRenderer {
 
     pub fn gpu_context(&self) -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
         let resources = self.resources();
+
         (resources.device.clone(), resources.queue.clone())
     }
 
@@ -227,6 +244,7 @@ impl WgpuRenderer {
         }) {
             return Some(context);
         }
+
         self.resources.as_ref().map(|resources| {
             WgpuContextHandle::from_resources(
                 resources.device.clone(),
@@ -349,17 +367,22 @@ mod tests {
     fn rust_storage_types_match_shader_strides() {
         fn module_layout(source: &wgsl_rs::Source) -> (naga::Module, naga::proc::Layouter) {
             let source = source.wgsl_source().expect("shader must generate WGSL");
+
             let module =
                 naga::front::wgsl::parse_str(&format!("enable dual_source_blending;\n{source}"))
                     .expect("generated shader must parse as WGSL");
+
             let mut layouter = naga::proc::Layouter::default();
+
             layouter
                 .update(module.to_ctx())
                 .expect("generated shader types must have valid layouts");
+
             (module, layouter)
         }
 
         let (base, base_layout) = module_layout(&gpui_render::shaders::base::WGSL_SOURCE);
+
         let (subpixel, subpixel_layout) =
             module_layout(&gpui_render::shaders::subpixel_sprite::WGSL_SOURCE);
 
@@ -372,6 +395,7 @@ mod tests {
                 .iter()
                 .find(|(_, ty)| ty.name.as_deref() == Some(abi.wgsl_type))
                 .map(|(handle, _)| handle);
+
             let shader_stride = if let Some(handle) = base_handle {
                 base_layout[handle].to_stride()
             } else {
@@ -380,8 +404,10 @@ mod tests {
                     .iter()
                     .find(|(_, ty)| ty.name.as_deref() == Some(abi.wgsl_type))
                     .unwrap_or_else(|| panic!("missing WGSL type {}", abi.wgsl_type));
+
                 subpixel_layout[handle].to_stride()
             };
+
             assert_eq!(
                 shader_stride as usize, abi.rust_stride,
                 "Rust and WGSL layouts differ for {}",
@@ -393,9 +419,11 @@ mod tests {
     #[test]
     fn large_filter_scenes_reserve_unique_uniform_slots() {
         let mut scene = Scene::default();
+
         scene
             .backdrop_filters
             .resize_with(100, BackdropFilter::default);
+
         scene.finish();
 
         assert_eq!(
@@ -414,6 +442,7 @@ mod tests {
     #[test]
     fn large_blur_radii_expand_tap_spacing_instead_of_truncating_the_kernel() {
         let kernel = BlurKernel::for_radius(100.0).expect("positive radii have a blur kernel");
+
         assert_eq!(kernel.standard_deviation, 50.0);
         assert_eq!(kernel.sample_count, MAX_GAUSSIAN_SAMPLES_PER_SIDE);
         assert!(kernel.sample_step > 4.0);
@@ -423,7 +452,9 @@ mod tests {
     #[test]
     fn desktop_blending_preserves_source_over_alpha() {
         let straight = pipelines::desktop_scene_blend_state(wgpu::CompositeAlphaMode::Opaque);
+
         assert_eq!(straight.color.src_factor, wgpu::BlendFactor::SrcAlpha);
+
         assert_eq!(
             straight.alpha.dst_factor,
             wgpu::BlendFactor::OneMinusSrcAlpha
@@ -431,7 +462,9 @@ mod tests {
 
         let premultiplied =
             pipelines::desktop_scene_blend_state(wgpu::CompositeAlphaMode::PreMultiplied);
+
         assert_eq!(premultiplied.color.src_factor, wgpu::BlendFactor::One);
+
         assert_eq!(
             premultiplied.alpha.dst_factor,
             wgpu::BlendFactor::OneMinusSrcAlpha
@@ -446,8 +479,10 @@ mod tests {
         let mut renderer = WgpuRenderer::new_headless(&context, size)?;
         let bounds = test_bounds(0.0, 0.0, 3.0, 3.0);
         let mut scene = Scene::default();
+
         // Forces a non-zero first-instance index in the mixed-type arena.
         scene.insert_primitive(Quad::default());
+
         scene.insert_primitive(Underline {
             order: 0,
             padding: 0,
@@ -460,15 +495,18 @@ mod tests {
             thickness: ScaledPixels(1.0),
             wavy: false.into(),
         });
+
         scene.finish();
 
         let image = renderer.render_to_image(&scene)?;
         let center = image.get_pixel(1, 1).0;
+
         assert_eq!(
             center,
             [128, 0, 0, 255],
             "must match the retired Metal renderer's mixed primitive baseline"
         );
+
         Ok(())
     }
 
@@ -485,6 +523,7 @@ mod tests {
             images_differ_in_region(&default_image, &custom_image, 4, 16),
             "custom dash length and gap must change the ordinary quad pipeline"
         );
+
         assert!(
             images_differ_in_region(&default_image, &custom_image, 24, 36),
             "custom dash length and gap must change the smoothed quad pipeline"
@@ -502,8 +541,10 @@ mod tests {
             152, 255, 223, 155, 105, 255, 57, 196, 22, 255, 10, 34, 4, 255, 165, 60, 182, 255, 193,
             114, 151, 255,
         ];
+
         let bounds = |x, y| test_bounds(x, y, 2.0, 2.0);
         let mut scene = Scene::default();
+
         for (order, (bounds, background)) in [
             (
                 bounds(0.0, 0.0),
@@ -540,11 +581,16 @@ mod tests {
                 ..Default::default()
             });
         }
+
         scene.finish();
+
         let context = WgpuContext::new_headless(None)?;
+
         let mut renderer =
             WgpuRenderer::new_headless(&context, gpui::size(DevicePixels(4), DevicePixels(4)))?;
+
         let actual = renderer.render_to_image(&scene)?;
+
         for (index, (actual, expected)) in actual.as_raw().iter().zip(LEGACY).enumerate() {
             assert!(
                 actual.abs_diff(*expected) <= MAX_CROSS_BACKEND_CHANNEL_DELTA,
@@ -556,7 +602,9 @@ mod tests {
                 expected,
             );
         }
+
         assert_eq!(actual.as_raw().len(), LEGACY.len());
+
         Ok(())
     }
 
@@ -566,13 +614,18 @@ mod tests {
         let context = WgpuContext::new_headless(None)?;
         let size = gpui::size(DevicePixels(12), DevicePixels(12));
         let bounds = test_bounds(0.0, 0.0, 12.0, 12.0);
+
         let render = |quad| -> anyhow::Result<image::RgbaImage> {
             let mut scene = Scene::default();
+
             scene.insert_primitive(quad);
             scene.finish();
+
             let mut renderer = WgpuRenderer::new_headless(&context, size)?;
+
             renderer.render_to_image(&scene)
         };
+
         let backgrounds = [
             gpui::solid_background(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
             gpui::checkerboard(gpui::hsla(0.6, 0.7, 0.5, 1.0), 2.0),
@@ -583,6 +636,7 @@ mod tests {
                 gpui::linear_color_stop(gpui::hsla(0.1, 0.8, 0.6, 1.0), 1.0),
             ),
         ];
+
         let border_samples = [
             (1, 1),
             (6, 1),
@@ -604,6 +658,7 @@ mod tests {
                 background,
                 ..Default::default()
             })?;
+
             let bordered = render(Quad {
                 bounds,
                 content_mask: gpui::ContentMask {
@@ -618,6 +673,7 @@ mod tests {
             for (x, y) in border_samples {
                 let border_pixel = bordered.get_pixel(x, y).0;
                 let fill_pixel = filled.get_pixel(x, y).0;
+
                 for (channel, (border, fill)) in
                     border_pixel.iter().zip(fill_pixel.iter()).enumerate()
                 {
@@ -627,12 +683,14 @@ mod tests {
                     );
                 }
             }
+
             assert_eq!(
                 bordered.get_pixel(6, 6).0,
                 [0, 0, 0, 255],
                 "border background must not paint the quad interior for {background:?}"
             );
         }
+
         Ok(())
     }
 
@@ -644,6 +702,7 @@ mod tests {
         let mut renderer = WgpuRenderer::new_headless(&context, size)?;
         let bounds = test_bounds(0.0, 0.0, 4.0, 4.0);
         let mut scene = Scene::default();
+
         scene.insert_primitive(BackdropFilter {
             bounds,
             content_mask: gpui::ContentMask {
@@ -654,10 +713,12 @@ mod tests {
             opacity: 1.0,
             ..BackdropFilter::default()
         });
+
         scene.finish();
 
         renderer.render_to_image(&scene)?;
         renderer.render_to_image(&scene)?;
+
         Ok(())
     }
 
@@ -670,6 +731,7 @@ mod tests {
         let full_bounds = test_bounds(0.0, 0.0, 5.0, 5.0);
         let center_bounds = test_bounds(2.0, 2.0, 1.0, 1.0);
         let mut scene = Scene::default();
+
         scene.insert_primitive(Quad {
             order: 0,
             bounds: full_bounds,
@@ -680,6 +742,7 @@ mod tests {
             background: gpui::solid_background(gpui::hsla(0.0, 0.0, 0.0, 1.0)),
             ..Default::default()
         });
+
         scene.insert_primitive(Quad {
             order: 1,
             bounds: center_bounds,
@@ -690,6 +753,7 @@ mod tests {
             background: gpui::solid_background(gpui::hsla(0.0, 0.0, 1.0, 1.0)),
             ..Default::default()
         });
+
         scene.insert_primitive(BackdropFilter {
             order: 2,
             bounds: full_bounds,
@@ -701,19 +765,23 @@ mod tests {
             opacity: 1.0,
             ..Default::default()
         });
+
         scene.finish();
 
         let image = renderer.render_to_image(&scene)?;
+
         for y in 0..5 {
             for x in 0..5 {
                 let actual = image.get_pixel(x, y).0;
                 let horizontal = image.get_pixel(4 - x, y).0;
                 let vertical = image.get_pixel(x, 4 - y).0;
+
                 for channel in 0..4 {
                     assert!(
                         actual[channel].abs_diff(horizontal[channel]) <= 1,
                         "horizontal blur asymmetry at ({x}, {y}), channel {channel}: {actual:?} vs {horizontal:?}"
                     );
+
                     assert!(
                         actual[channel].abs_diff(vertical[channel]) <= 1,
                         "vertical blur asymmetry at ({x}, {y}), channel {channel}: {actual:?} vs {vertical:?}"
@@ -721,10 +789,12 @@ mod tests {
                 }
             }
         }
+
         assert!(
             image.get_pixel(1, 2).0[0] > 0,
             "blur must spread from the center pixel"
         );
+
         Ok(())
     }
 
@@ -736,6 +806,7 @@ mod tests {
         let mut renderer = WgpuRenderer::new_headless(&context, size)?;
         let bounds = test_bounds(0.0, 0.0, 1.0, 1.0);
         let mut scene = Scene::default();
+
         for index in 0..512 {
             scene.insert_primitive(Quad {
                 order: index * 2,
@@ -747,6 +818,7 @@ mod tests {
                 background: gpui::solid_background(gpui::hsla(0.0, 0.0, 0.0, 1.0)),
                 ..Default::default()
             });
+
             scene.insert_primitive(Underline {
                 order: index * 2 + 1,
                 padding: 0,
@@ -760,7 +832,9 @@ mod tests {
                 wavy: false.into(),
             });
         }
+
         scene.finish();
+
         assert_eq!(
             scene
                 .render_commands()
@@ -771,6 +845,7 @@ mod tests {
         );
 
         renderer.render_to_image(&scene)?;
+
         Ok(())
     }
 
@@ -820,8 +895,11 @@ mod tests {
             opacity,
             is_start: true,
         };
+
         scene.insert_primitive(boundary.clone());
+
         paint(scene);
+
         scene.insert_primitive(gpui::FilterBoundary {
             is_start: false,
             ..boundary
@@ -847,28 +925,35 @@ mod tests {
         let target_size = gpui::size(DevicePixels(16), DevicePixels(8));
         let green = gpui::hsla(1.0 / 3.0, 1.0, 0.5, 1.0);
         let mut slider = Scene::default();
+
         test_group(&mut slider, bounds, 0.5, smallvec![], |scene| {
             scene.insert_primitive(test_quad(test_bounds(0.0, 3.0, 8.0, 2.0), bounds, red()));
             scene.insert_primitive(test_quad(test_bounds(4.0, 1.0, 4.0, 6.0), bounds, white()));
         });
 
         let mut translucent = Scene::default();
+
         translucent.insert_primitive(test_quad(bounds, bounds, green));
+
         test_group(&mut translucent, bounds, 0.5, smallvec![], |scene| {
             scene.insert_primitive(test_quad(bounds, bounds, red().opacity(0.5)));
             scene.insert_primitive(test_quad(bounds, bounds, blue().opacity(0.5)));
         });
 
         let mut nested = Scene::default();
+
         test_group(&mut nested, bounds, 0.5, smallvec![], |scene| {
             scene.insert_primitive(test_quad(bounds, bounds, red()));
+
             test_group(scene, bounds, 0.5, smallvec![], |scene| {
                 scene.insert_primitive(test_quad(bounds, bounds, blue()));
+
                 test_group(scene, bounds, 0.5, smallvec![], |scene| {
                     scene.insert_primitive(test_quad(bounds, bounds, white()));
                 });
             });
         });
+
         nested.insert_primitive(test_quad(test_bounds(12.0, 0.0, 4.0, 8.0), bounds, green));
 
         for scene in [&mut slider, &mut translucent, &mut nested] {
@@ -904,6 +989,7 @@ mod tests {
 
                 for &(x, y, expected) in samples {
                     let actual = image.get_pixel(x, y).0;
+
                     assert!(
                         actual
                             .iter()
@@ -925,6 +1011,7 @@ mod tests {
         let target_size = gpui::size(DevicePixels(16), DevicePixels(8));
         let green = gpui::hsla(1.0 / 3.0, 1.0, 0.5, 1.0);
         let blur = smallvec![gpui::ScaledFilter::Blur(ScaledPixels(2.0))];
+
         let backdrop = BackdropFilter {
             bounds,
             content_mask: gpui::ContentMask {
@@ -935,13 +1022,16 @@ mod tests {
             opacity: 1.0,
             ..Default::default()
         };
+
         let paint_background = |scene: &mut Scene| {
             scene.insert_primitive(test_quad(bounds, bounds, red()));
             scene.insert_primitive(test_quad(test_bounds(8.0, 0.0, 8.0, 8.0), bounds, blue()));
         };
 
         let mut original = Scene::default();
+
         paint_background(&mut original);
+
         original.finish();
 
         for (renderer_idx, renderer) in test_renderers()?.iter_mut().enumerate() {
@@ -967,6 +1057,7 @@ mod tests {
                         } else {
                             smallvec![]
                         };
+
                         test_group(scene, bounds, 1.0, filters, |scene| {
                             scene.insert_primitive(test_quad(
                                 test_bounds(6.0, 2.0, 4.0, 4.0),
@@ -974,6 +1065,7 @@ mod tests {
                                 white(),
                             ));
                         });
+
                     } else if blur_enabled {
                         scene.insert_primitive(backdrop.clone());
                     }
@@ -991,6 +1083,7 @@ mod tests {
 
                 paint(&mut reference, true);
                 paint(&mut unfiltered, false);
+
                 test_group(&mut grouped, bounds, 0.5, smallvec![], |scene| {
                     if depth == 2 {
                         test_group(scene, bounds, 0.5, smallvec![], |scene| paint(scene, true));
@@ -1022,6 +1115,7 @@ mod tests {
 
                 if content_blur {
                     let falloff = reference.get_pixel(5, 4).0;
+
                     assert!(
                         falloff[0] > 8 && falloff[1] > 8 && falloff[2] > 8,
                         "renderer {renderer_idx}: content blur must spread outside the white quad: {falloff:?}"
@@ -1040,9 +1134,11 @@ mod tests {
                         } else {
                             background[channel_idx] as f32
                         };
+
                         let expected = (reference[channel_idx] as f32 * opacity
                             + original * (1.0 - opacity))
                             .round() as u8;
+
                         assert!(
                             actual[channel_idx].abs_diff(expected) <= 3,
                             "renderer {renderer_idx}, {name}, pixel {pixel_idx}, channel {channel_idx}: {}, expected {expected}",

@@ -5,6 +5,7 @@ use gpui::{
     App, Bounds, Context, TitlebarOptions, Window, WindowBounds, WindowOptions, div, prelude::*,
     px, rgb, size,
 };
+
 use gpui_platform::application;
 use std::time::Duration;
 
@@ -35,14 +36,19 @@ impl Render for VisibilityExample {
                     .child("Hide for 3 seconds")
                     .on_click(cx.listener(|_, _, window, cx| {
                         let handle = window.window_handle();
+
                         window.set_visible(false);
+
                         cx.spawn(async move |this, cx| {
                             cx.background_executor().timer(Duration::from_secs(3)).await;
+
                             this.update(cx, |this, cx| {
                                 this.restores += 1;
+
                                 cx.notify();
                             })
                             .ok();
+
                             handle
                                 .update(cx, |_, window, _| window.set_visible(true))
                                 .ok();
@@ -55,8 +61,10 @@ impl Render for VisibilityExample {
 
 fn main() {
     let smoke = std::env::args().any(|arg| arg == "--smoke");
+
     application().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(520.), px(280.)), cx);
+
         let handle = cx
             .open_window(
                 WindowOptions::new()
@@ -71,30 +79,39 @@ fn main() {
                 |_, cx| cx.new(|_| VisibilityExample { restores: 0 }),
             )
             .unwrap();
+
         eprintln!("VISIBILITY hidden initially");
+
         cx.spawn(async move |cx| {
             let states: &[bool] = if smoke {
                 &[true, false, true, false, true]
             } else {
                 &[true]
             };
+
             for &visible in states {
                 cx.background_executor().timer(Duration::from_secs(3)).await;
+
                 handle
                     .update(cx, |this, window, cx| {
                         // Repeated calls should be harmless.
                         window.set_visible(visible);
                         window.set_visible(visible);
+
                         if visible {
                             this.restores += 1;
+
                             cx.notify();
                         }
                     })
                     .unwrap();
+
                 eprintln!("VISIBILITY {}", if visible { "shown" } else { "hidden" });
             }
+
             if smoke {
                 cx.background_executor().timer(Duration::from_secs(3)).await;
+
                 cx.update(|cx| cx.quit());
             }
         })

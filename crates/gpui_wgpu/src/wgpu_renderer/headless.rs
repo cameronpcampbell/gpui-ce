@@ -42,6 +42,7 @@ impl WgpuRenderer {
         let width = self.target.width();
         let height = self.target.height();
         let padded_bytes_per_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+
         let texture = self
             .resources()
             .device
@@ -59,7 +60,9 @@ impl WgpuRenderer {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
+
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         let readback = self
             .resources()
             .device
@@ -69,6 +72,7 @@ impl WgpuRenderer {
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
+
         OffscreenTarget {
             texture,
             view,
@@ -87,12 +91,14 @@ impl WgpuRenderer {
         let height = target.size.height.0 as u32;
         let bytes_per_row = width * 4;
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+
         target
             .readback
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
                 let _ = sender.send(result);
             });
+
         self.resources()
             .device
             .poll(wgpu::PollType::Wait {
@@ -100,6 +106,7 @@ impl WgpuRenderer {
                 timeout: None,
             })
             .map_err(|error| anyhow::anyhow!("failed to poll offscreen readback: {error}"))?;
+
         receiver
             .recv()
             .map_err(|error| anyhow::anyhow!("offscreen readback callback dropped: {error}"))?
@@ -107,16 +114,21 @@ impl WgpuRenderer {
 
         let mapped = target.readback.slice(..).get_mapped_range();
         let mut pixels = Vec::with_capacity(bytes_per_row as usize * height as usize);
+
         for row in mapped.chunks_exact(target.padded_bytes_per_row as usize) {
             pixels.extend_from_slice(&row[..bytes_per_row as usize]);
         }
+
         drop(mapped);
+
         target.readback.unmap();
+
         if self.target.format() == wgpu::TextureFormat::Bgra8Unorm {
             for pixel in pixels.chunks_exact_mut(4) {
                 pixel.swap(0, 2);
             }
         }
+
         image::RgbaImage::from_raw(width, height, pixels)
             .ok_or_else(|| anyhow::anyhow!("offscreen readback dimensions did not match its data"))
     }
@@ -124,9 +136,11 @@ impl WgpuRenderer {
     /// Renders through the normal scene path and reads back without presenting.
     pub fn render_to_image(&mut self, scene: &Scene) -> anyhow::Result<image::RgbaImage> {
         let target = self.create_offscreen_target();
+
         let submission = self
             .render_to_view_with_readback(scene, &target.view, target.readback_copy())
             .ok_or_else(|| anyhow::anyhow!("failed to render scene into the offscreen target"))?;
+
         self.read_offscreen_target(&target, submission)
     }
 }
@@ -152,6 +166,7 @@ pub struct WgpuHeadlessRenderer {
 impl WgpuHeadlessRenderer {
     pub fn new() -> anyhow::Result<Self> {
         let context = WgpuContext::new_headless(None)?;
+
         let renderer = WgpuRenderer::new_headless(
             &context,
             Size {
@@ -159,6 +174,7 @@ impl WgpuHeadlessRenderer {
                 height: DevicePixels(1),
             },
         )?;
+
         Ok(Self {
             renderer,
             target: None,
@@ -170,6 +186,7 @@ impl WgpuHeadlessRenderer {
             size.width.0 > 0 && size.height.0 > 0,
             "headless render target must have positive dimensions"
         );
+
         if self
             .target
             .as_ref()
@@ -177,8 +194,11 @@ impl WgpuHeadlessRenderer {
         {
             return Ok(());
         }
+
         self.renderer.update_drawable_size(size);
+
         self.target = Some(self.renderer.create_offscreen_target());
+
         Ok(())
     }
 
@@ -189,10 +209,13 @@ impl WgpuHeadlessRenderer {
         size: Size<DevicePixels>,
     ) -> anyhow::Result<()> {
         self.ensure_target(size)?;
+
         let target = self.target.as_ref().expect("target was just ensured");
+
         let submission =
             super::frame::render_to_view(&mut self.renderer, scene, &target.view, None)
                 .ok_or_else(|| anyhow::anyhow!("failed to render headless scene"))?;
+
         self.renderer
             .resources()
             .device
@@ -201,6 +224,7 @@ impl WgpuHeadlessRenderer {
                 timeout: None,
             })
             .map_err(|error| anyhow::anyhow!("failed to wait for headless render: {error}"))?;
+
         Ok(())
     }
 }
@@ -212,21 +236,27 @@ impl gpui::PlatformHeadlessRenderer for WgpuHeadlessRenderer {
         size: Size<DevicePixels>,
     ) -> anyhow::Result<image::RgbaImage> {
         self.ensure_target(size)?;
+
         let target = self.target.as_ref().expect("target was just ensured");
+
         let submission = self
             .renderer
             .render_to_view_with_readback(scene, &target.view, target.readback_copy())
             .ok_or_else(|| anyhow::anyhow!("failed to render headless scene"))?;
+
         self.renderer.read_offscreen_target(target, submission)
     }
 
     fn render_scene(&mut self, scene: &Scene, size: Size<DevicePixels>) -> anyhow::Result<()> {
         self.ensure_target(size)?;
+
         let target = self.target.as_ref().expect("target was just ensured");
+
         anyhow::ensure!(
             self.renderer.render_to_view(scene, &target.view),
             "failed to render headless scene"
         );
+
         Ok(())
     }
 

@@ -32,6 +32,7 @@ impl Progress {
     /// Returns progress clamped to the normalized range.
     pub fn clamped(value: f32) -> Self {
         assert!(!value.is_nan(), "progress must not be NaN");
+
         Self(value.clamp(Self::START.0, Self::END.0))
     }
 
@@ -52,6 +53,7 @@ impl Progress {
 
     fn eased(value: f32) -> Self {
         assert!(value.is_finite(), "easing must return a finite value");
+
         Self(value)
     }
 }
@@ -123,6 +125,7 @@ impl MotionPass {
     /// Configures this pass's easing function.
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
         self.easing = Easing::new(easing);
+
         self
     }
 
@@ -142,10 +145,12 @@ impl MotionPass {
 
     fn local_time(&self, elapsed_nanos: u128) -> Progress {
         let duration_nanos = self.duration_nanos();
+
         debug_assert!(duration_nanos > 0);
         debug_assert!(elapsed_nanos < duration_nanos);
 
         let linear = elapsed_nanos as f64 / duration_nanos as f64;
+
         Progress::clamped(linear as f32)
     }
 }
@@ -250,6 +255,7 @@ impl Direction {
         match self {
             Self::Forward => PassDirection::Forward,
             Self::Reverse => PassDirection::Reverse,
+
             Self::Alternate => {
                 if iteration.is_multiple_of(2) {
                     PassDirection::Forward
@@ -257,6 +263,7 @@ impl Direction {
                     PassDirection::Reverse
                 }
             }
+
             Self::AlternateReverse => {
                 if iteration.is_multiple_of(2) {
                     PassDirection::Reverse
@@ -395,6 +402,7 @@ impl Motion<DurationDescription> {
     /// easing for its backward iterations.
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
         self.description.forward.easing = Easing::new(easing);
+
         self
     }
 
@@ -402,6 +410,7 @@ impl Motion<DurationDescription> {
     /// Use [`Motion::spring`] for a spring that settles and preserves velocity across retargets.
     pub fn with_spring(self, config: SpringConfig) -> Self {
         let duration = self.forward.duration.as_secs_f32();
+
         let initial_state = SpringState {
             position: 0.0,
             velocity: 0.0,
@@ -423,6 +432,7 @@ impl Motion<DurationDescription> {
     /// Replaces the forward pass.
     pub fn with_forward_pass(mut self, pass: MotionPass) -> Self {
         self.forward = pass;
+
         self
     }
 
@@ -438,12 +448,14 @@ impl Motion<DurationDescription> {
     /// ease-in begins slowly and accelerates toward the origin.
     pub fn with_reverse_pass(mut self, pass: MotionPass) -> Self {
         self.reverse = Some(pass);
+
         self
     }
 
     /// Delays the start of playback once per run.
     pub fn with_delay(mut self, delay: Duration) -> Self {
         self.delay = delay;
+
         self
     }
 
@@ -462,6 +474,7 @@ impl Motion<DurationDescription> {
         self.playback.iterations = Iterations::Finite(
             NonZeroU32::new(iterations).expect("motion iterations must be at least 1"),
         );
+
         self
     }
 
@@ -471,6 +484,7 @@ impl Motion<DurationDescription> {
     /// at a deterministic resting presentation.
     pub fn repeat_forever(mut self) -> Self {
         self.playback.iterations = Iterations::Forever;
+
         self
     }
 
@@ -481,18 +495,21 @@ impl Motion<DurationDescription> {
     /// none is configured.
     pub fn alternate(mut self) -> Self {
         self.playback.direction = Direction::Alternate;
+
         self
     }
 
     /// Configures the direction of playback iterations.
     pub fn direction(mut self, direction: Direction) -> Self {
         self.playback.direction = direction;
+
         self
     }
 
     /// Replaces the playback policy.
     pub fn with_playback(mut self, playback: Playback) -> Self {
         self.playback = playback;
+
         self
     }
 
@@ -524,12 +541,15 @@ impl Motion<DurationDescription> {
         let iterations = u128::from(iterations.get());
         let forward = self.forward.duration_nanos();
         let reverse = self.reverse_pass_or_forward().duration_nanos();
+
         match self.playback.direction {
             Direction::Forward => forward.checked_mul(iterations),
             Direction::Reverse => reverse.checked_mul(iterations),
+
             Direction::Alternate => (forward.checked_add(reverse)?)
                 .checked_mul(iterations / 2)?
                 .checked_add(forward.checked_mul(iterations % 2)?),
+
             Direction::AlternateReverse => (forward.checked_add(reverse)?)
                 .checked_mul(iterations / 2)?
                 .checked_add(reverse.checked_mul(iterations % 2)?),
@@ -542,12 +562,15 @@ impl Motion<DurationDescription> {
         let Iterations::Finite(iterations) = self.playback.iterations else {
             return Some(MotionExtent::Infinite);
         };
+
         let nanos = self
             .delay
             .as_nanos()
             .checked_add(self.finite_duration_nanos(iterations)?)?;
+
         let seconds = u64::try_from(nanos / 1_000_000_000).ok()?;
         let subsec_nanos = (nanos % 1_000_000_000) as u32;
+
         Some(MotionExtent::Finite(Duration::new(seconds, subsec_nanos)))
     }
 
@@ -561,32 +584,41 @@ impl Motion<DurationDescription> {
     fn active_pass(&self, elapsed_nanos: u128) -> Option<(&MotionPass, u128, PassDirection, u128)> {
         let forward_duration = self.forward.duration_nanos();
         let reverse_duration = self.reverse_pass_or_forward().duration_nanos();
+
         match self.playback.direction {
             Direction::Forward | Direction::Reverse => {
                 let direction = self.playback.direction.pass(0);
                 let pass = self.pass(direction);
                 let duration = pass.duration_nanos();
+
                 if duration == 0 {
                     return None;
                 }
+
                 let iteration = elapsed_nanos / duration;
                 let local = elapsed_nanos % duration;
+
                 Some((pass, local, direction, iteration))
             }
+
             Direction::Alternate | Direction::AlternateReverse => {
                 let cycle = forward_duration + reverse_duration;
+
                 if cycle == 0 {
                     return None;
                 }
+
                 let first = self.playback.direction.pass(0);
                 let first_duration = self.pass(first).duration_nanos();
                 let cycle_index = elapsed_nanos / cycle;
                 let in_cycle = elapsed_nanos % cycle;
                 let iteration = cycle_index * 2;
+
                 if in_cycle < first_duration {
                     Some((self.pass(first), in_cycle, first, iteration))
                 } else {
                     let second = self.playback.direction.pass(1);
+
                     Some((
                         self.pass(second),
                         in_cycle - first_duration,
@@ -617,9 +649,11 @@ impl Motion<DurationDescription> {
                 PassDirection::Forward => Progress::END,
                 PassDirection::Reverse => Progress::START,
             }
+
         } else {
             self.presentation(self.pass(direction), Progress::END, direction)
         };
+
         MotionSample {
             progress,
             local_time: Progress::END,
@@ -637,6 +671,7 @@ impl Motion<DurationDescription> {
         direction: PassDirection,
     ) -> Progress {
         let eased = pass.easing.sample(local_time);
+
         if direction == PassDirection::Reverse {
             eased.reversed()
         } else {
@@ -662,12 +697,15 @@ impl Motion<DurationDescription> {
         }
 
         let elapsed_nanos = (elapsed - self.delay).as_nanos();
+
         if let Iterations::Finite(iterations) = self.playback.iterations {
             let total_duration = self
                 .finite_duration_nanos(iterations)
                 .expect("finite Motion extent fits in u128 nanoseconds");
+
             if elapsed_nanos >= total_duration {
                 let last = u128::from(iterations.get() - 1);
+
                 return self.terminal_sample(
                     self.playback.direction.pass(last),
                     last,
@@ -680,6 +718,7 @@ impl Motion<DurationDescription> {
         let Some((pass, elapsed_in_pass, direction, iteration)) = self.active_pass(elapsed_nanos)
         else {
             let direction = self.playback.direction.pass(0);
+
             return MotionSample {
                 progress: self.start_progress(),
                 local_time: Progress::START,
@@ -732,11 +771,13 @@ impl Motion<DurationDescription> {
         match self.playback.iterations {
             Iterations::Finite(iterations) => {
                 let last = u128::from(iterations.get() - 1);
+
                 match self.playback.direction.pass(last) {
                     PassDirection::Forward => Progress::END,
                     PassDirection::Reverse => Progress::START,
                 }
             }
+
             Iterations::Forever => self.start_progress(),
         }
     }
@@ -785,9 +826,11 @@ impl Motion<SpringDescription> {
     /// Sets the spring's settling tolerance.
     pub fn with_epsilon(mut self, epsilon: f32) -> Self {
         self.description.epsilon = epsilon;
+
         self.description.settle_after =
             self.config
                 .settle_time(SpringState::default(), 1.0, epsilon);
+
         self
     }
 
@@ -922,6 +965,7 @@ mod tests {
 
     fn assert_sample(motion: &Motion, elapsed: Duration, value: f32, is_active: bool) {
         let sample = motion.sample(elapsed);
+
         assert_eq!(sample.progress, progress(value));
         assert_eq!(sample.is_active, is_active);
     }
@@ -935,6 +979,7 @@ mod tests {
     #[test]
     fn samples_default_one_shot_and_custom_easing() {
         let motion = Duration::from_secs(2).with_easing(|progress| progress * progress);
+
         assert_eq!(motion.forward_pass().duration(), Duration::from_secs(2));
         assert!(motion.reverse_pass().is_none());
         assert_eq!(motion.delay(), Duration::ZERO);
@@ -943,6 +988,7 @@ mod tests {
         assert_sample(&motion, Duration::ZERO, 0.0, true);
         assert_sample(&motion, Duration::from_secs(1), 0.25, true);
         assert_sample(&motion, Duration::from_secs(3), 1.0, false);
+
         assert_eq!(
             motion
                 .sample_at(Duration::from_secs(3), Duration::from_secs(5))
@@ -991,18 +1037,21 @@ mod tests {
             let motion = Motion::new(Duration::from_secs(1))
                 .iterations(iterations)
                 .alternate();
+
             assert_sample(
                 &motion,
                 Duration::from_secs(u64::from(iterations)),
                 expected_final,
                 false,
             );
+
             assert_sample(&motion, Duration::from_secs(100), expected_final, false);
         }
 
         let motion = Motion::new(Duration::from_secs(1))
             .iterations(4)
             .alternate();
+
         for (milliseconds, value) in [
             (0, 0.0),
             (500, 0.5),
@@ -1029,6 +1078,7 @@ mod tests {
             motion.reverse_pass().unwrap().duration(),
             Duration::from_secs(2)
         );
+
         assert_sample(&motion, Duration::from_millis(500), 0.5, true);
         assert_sample(&motion, Duration::from_secs(1), 1.0, true);
         assert_sample(&motion, Duration::from_secs(2), 0.75, true);
@@ -1040,6 +1090,7 @@ mod tests {
     #[test]
     fn infinite_motion_restarts_or_alternates_without_completing() {
         let restarting = Motion::new(Duration::from_secs(1)).repeat_forever();
+
         assert_sample(&restarting, Duration::from_millis(250), 0.25, true);
         assert_sample(&restarting, Duration::from_secs(1), 1.0, true);
         assert_sample(&restarting, Duration::from_millis(2_500), 0.5, true);
@@ -1047,6 +1098,7 @@ mod tests {
         let alternating = Motion::new(Duration::from_secs(1))
             .repeat_forever()
             .alternate();
+
         assert_sample(&alternating, Duration::from_millis(1_250), 0.75, true);
         assert_sample(&alternating, Duration::from_secs(2), 0.0, true);
     }
@@ -1062,14 +1114,17 @@ mod tests {
             let mut motion = Motion::new(Duration::ZERO)
                 .with_delay(Duration::from_millis(10))
                 .iterations(iterations);
+
             if alternate {
                 motion = motion.alternate();
             }
+
             assert_sample(&motion, Duration::from_millis(9), 0.0, true);
             assert_sample(&motion, Duration::from_millis(10), expected, false);
         }
 
         let forever = Motion::new(Duration::ZERO).repeat_forever().alternate();
+
         assert_sample(&forever, Duration::ZERO, 0.0, false);
         assert_sample(&forever, Duration::MAX, 0.0, false);
     }
@@ -1080,6 +1135,7 @@ mod tests {
             .with_reverse_pass(MotionPass::new(Duration::from_secs(2)))
             .iterations(2)
             .alternate();
+
         assert_sample(&zero_forward, Duration::ZERO, 1.0, true);
         assert_sample(&zero_forward, Duration::from_secs(1), 0.5, true);
         assert_sample(&zero_forward, Duration::from_secs(2), 0.0, false);
@@ -1088,6 +1144,7 @@ mod tests {
             .with_reverse_pass(MotionPass::new(Duration::ZERO))
             .iterations(3)
             .alternate();
+
         assert_sample(&zero_reverse, Duration::from_secs(1), 0.0, true);
         assert_sample(&zero_reverse, Duration::from_secs(2), 1.0, false);
     }
@@ -1097,11 +1154,13 @@ mod tests {
         let nanos = Motion::new(Duration::from_nanos(3))
             .iterations(3)
             .alternate();
+
         assert_sample(&nanos, Duration::from_nanos(3), 1.0, true);
         assert_sample(&nanos, Duration::from_nanos(6), 0.0, true);
         assert_sample(&nanos, Duration::from_nanos(9), 1.0, false);
 
         let enormous = Motion::new(Duration::MAX).iterations(u32::MAX);
+
         assert_sample(&enormous, Duration::MAX, 1.0, true);
     }
 
@@ -1109,23 +1168,30 @@ mod tests {
     fn playback_model_and_sample_distinguish_end_from_completion() {
         assert_eq!(Iterations::default(), Iterations::Finite(NonZeroU32::MIN));
         assert_eq!(Playback::default().direction(), Direction::Forward);
+
         let motion = Motion::new(secs(1)).iterations(3);
+
         assert_eq!(
             motion.playback().iterations(),
             Iterations::Finite(NonZeroU32::new(3).unwrap())
         );
+
         let boundary = motion.sample(secs(1));
+
         assert_eq!(boundary.progress, Progress::END);
         assert_eq!(boundary.local_time, Progress::END);
         assert_eq!(boundary.iteration, 0);
         assert!(boundary.is_at_end());
         assert!(!boundary.is_complete());
+
         let next = motion.sample(secs(1) + Duration::from_nanos(1));
+
         assert_eq!(next.iteration, 1);
         assert_eq!(next.phase, MotionPhase::Playing);
 
         let alternating = Motion::new(secs(1)).iterations(2).alternate();
         let end = alternating.sample(secs(2));
+
         assert_eq!(end.progress, Progress::START);
         assert!(!end.is_at_end());
         assert!(end.is_complete());
@@ -1136,7 +1202,9 @@ mod tests {
     fn overshoot_is_not_the_presentation_endpoint() {
         let motion =
             Motion::new(secs(1)).with_easing(|progress| if progress < 1.0 { 1.2 } else { 1.0 });
+
         let overshoot = motion.sample(millis(500));
+
         assert_eq!(overshoot.progress.get(), 1.2);
         assert!(!overshoot.progress.is_at_end());
         assert!(!overshoot.is_at_end());
@@ -1172,9 +1240,12 @@ mod tests {
                 .with_delay(millis(100))
                 .iterations(2)
                 .direction(configured);
+
             let delayed = motion.sample(Duration::ZERO);
+
             assert_eq!(delayed.phase, MotionPhase::Delayed);
             assert_eq!(delayed.direction, first);
+
             assert_eq!(
                 delayed.progress,
                 if first == PassDirection::Reverse {
@@ -1183,12 +1254,17 @@ mod tests {
                     Progress::START
                 }
             );
+
             let active = motion.sample(millis(600));
+
             assert_eq!(active.direction, first);
             assert_eq!(active.iteration, 0);
             assert_eq!(active.local_time, progress(0.5));
+
             let boundary = motion.sample(millis(1_100));
+
             assert_eq!(boundary.phase, MotionPhase::Playing);
+
             assert_eq!(
                 boundary.progress,
                 if first == PassDirection::Forward {
@@ -1197,11 +1273,15 @@ mod tests {
                     Progress::START
                 }
             );
+
             let later = motion.sample(millis(1_600));
+
             assert_eq!(later.direction, second);
             assert_eq!(later.iteration, 1);
             assert_eq!(later.local_time, progress(0.5));
+
             let completed = motion.sample(millis(2_100));
+
             assert_eq!(completed.direction, second);
             assert!(completed.is_complete());
         }
@@ -1212,7 +1292,9 @@ mod tests {
         let motion = Motion::new(secs(1))
             .with_reverse_pass(MotionPass::new(secs(2)).with_easing(|t| t * t))
             .direction(Direction::Reverse);
+
         let sample = motion.sample(secs(1));
+
         assert_eq!(sample.local_time, progress(0.5));
         assert_eq!(sample.progress, progress(0.75));
         assert_eq!(sample.direction, PassDirection::Reverse);
@@ -1224,6 +1306,7 @@ mod tests {
             .with_reverse_pass(MotionPass::new(millis(700)))
             .with_delay(millis(200))
             .iterations(3);
+
         for (direction, expected) in [
             (Direction::Forward, 1_100),
             (Direction::Reverse, 2_300),
@@ -1235,6 +1318,7 @@ mod tests {
                 Some(MotionExtent::Finite(millis(expected)))
             );
         }
+
         for direction in [Direction::Alternate, Direction::AlternateReverse] {
             assert_eq!(
                 base.clone()
@@ -1244,14 +1328,17 @@ mod tests {
                 Some(MotionExtent::Finite(millis(1_200)))
             );
         }
+
         assert_eq!(
             base.repeat_forever().checked_extent(),
             Some(MotionExtent::Infinite)
         );
+
         assert_eq!(
             Motion::new(Duration::MAX).iterations(2).checked_extent(),
             None
         );
+
         assert_eq!(
             Motion::new(Duration::MAX)
                 .with_delay(Duration::from_nanos(1))
@@ -1266,16 +1353,20 @@ mod tests {
             .with_reverse_pass(MotionPass::new(secs(1)))
             .iterations(2)
             .direction(Direction::AlternateReverse);
+
         assert_eq!(
             finite.sample(Duration::ZERO).direction,
             PassDirection::Reverse
         );
+
         assert_eq!(finite.sample(Duration::ZERO).progress, Progress::END);
         assert_eq!(finite.sample(secs(1)).phase, MotionPhase::Completed);
+
         let forever = Motion::new(Duration::ZERO)
             .with_reverse_pass(MotionPass::new(Duration::ZERO))
             .repeat_forever()
             .direction(Direction::AlternateReverse);
+
         assert_eq!(forever.sample(Duration::MAX).phase, MotionPhase::Inactive);
         assert_eq!(forever.sample(Duration::MAX).progress, Progress::END);
     }
@@ -1297,19 +1388,23 @@ mod tests {
                     .with_reverse_pass(MotionPass::new(reverse))
                     .iterations(3)
                     .direction(direction);
+
                 let MotionExtent::Finite(extent) = motion.checked_extent().unwrap() else {
                     panic!("finite playback must have finite extent");
                 };
+
                 assert_eq!(motion.sample(extent).phase, MotionPhase::Completed);
                 assert!(!motion.sample(extent).is_active);
 
                 let forever = motion.repeat_forever();
                 let sample = forever.sample(Duration::MAX);
+
                 let applicable_duration = match direction {
                     Direction::Forward => forward,
                     Direction::Reverse => reverse,
                     Direction::Alternate | Direction::AlternateReverse => forward + reverse,
                 };
+
                 assert_eq!(
                     sample.phase == MotionPhase::Inactive,
                     applicable_duration.is_zero()
@@ -1318,7 +1413,9 @@ mod tests {
         }
 
         let fallback = Motion::new(secs(1)).direction(Direction::Reverse);
+
         assert_eq!(fallback.sample(millis(500)).progress, progress(0.5));
+
         assert_eq!(
             fallback.checked_extent(),
             Some(MotionExtent::Finite(secs(1)))
@@ -1330,17 +1427,22 @@ mod tests {
     fn zero_iterations_are_invalid() {
         let _ = Motion::new(Duration::from_secs(1)).iterations(0);
     }
+
     #[test]
     fn spring_motion_preserves_overshoot_and_rich_sample_metadata() {
         let config = SpringConfig::new(100.0, 6.0, 1.0);
         let sampled = Motion::new(secs(1)).with_spring(config);
+
         assert!((1..100).any(|step| { sampled.sample(millis(step * 10)).progress.get() > 1.0 }));
 
         let native: AnyMotion = config.into();
         let loose = Motion::spring(config).with_epsilon(0.1);
         let cutoff = loose.settle_after;
+
         assert!(native.sample(cutoff).is_active);
+
         let completed = AnyMotion::from(loose).sample_at(Duration::ZERO, cutoff);
+
         assert!(completed.is_complete());
         assert_eq!(completed.progress, Progress::END);
         assert_eq!(completed.local_time, Progress::END);
@@ -1350,7 +1452,9 @@ mod tests {
     #[test]
     fn resting_progress_uses_the_configured_endpoint() {
         let forward = Motion::new(secs(1)).with_easing(|_| 0.5);
+
         assert_eq!(forward.resting_progress(), Progress::END);
+
         assert_eq!(
             forward
                 .clone()
@@ -1358,6 +1462,7 @@ mod tests {
                 .resting_progress(),
             Progress::START
         );
+
         assert_eq!(
             forward
                 .repeat_forever()

@@ -31,7 +31,9 @@ use crate::{
     FocusHandle, InspectorElementId, LayoutId, Pixels, Point, Size, Style, Window,
     util::FluentBuilder, window::with_element_arena,
 };
+
 use derive_more::{Deref, DerefMut};
+
 use std::{
     any::Any,
     fmt::{self, Debug, Display},
@@ -477,6 +479,7 @@ pub trait ParentElementTyped {
         Self: Sized,
     {
         self.extend(std::iter::once(child));
+
         self
     }
 
@@ -486,6 +489,7 @@ pub trait ParentElementTyped {
         Self: Sized,
     {
         self.extend(children);
+
         self
     }
 }
@@ -505,6 +509,7 @@ pub trait ParentElement {
         Self: Sized,
     {
         self.extend(std::iter::once(child.into_element().into_any()));
+
         self
     }
 
@@ -514,6 +519,7 @@ pub trait ParentElement {
         Self: Sized,
     {
         self.extend(children.into_iter().map(|child| child.into_any_element()));
+
         self
     }
 }
@@ -532,8 +538,10 @@ impl Display for GlobalElementId {
             if i > 0 {
                 write!(f, ".")?;
             }
+
             write!(f, "{}", element_id)?;
         }
+
         Ok(())
     }
 }
@@ -541,8 +549,11 @@ impl Display for GlobalElementId {
 impl GlobalElementId {
     pub(crate) fn accesskit_node_id(&self) -> accesskit::NodeId {
         use std::hash::{Hash, Hasher};
+
         let mut hasher = std::hash::DefaultHasher::default();
+
         self.hash(&mut hasher);
+
         accesskit::NodeId(hasher.finish())
     }
 }
@@ -572,6 +583,7 @@ trait ElementObject {
 pub struct Drawable<E: Element> {
     /// The wrapped element.
     pub element: E,
+
     phase: ElementDrawPhase<E::RequestLayoutState, E::PrepaintState>,
 }
 
@@ -617,10 +629,12 @@ impl<E: Element> Drawable<E> {
             ElementDrawPhase::Start => {
                 let global_id = self.element.id().map(|element_id| {
                     window.element_id_stack.push(element_id);
+
                     GlobalElementId(Arc::from(&*window.element_id_stack))
                 });
 
                 let inspector_id;
+
                 #[cfg(any(feature = "inspector", debug_assertions))]
                 {
                     inspector_id = self.element.source_location().map(|source| {
@@ -628,9 +642,11 @@ impl<E: Element> Drawable<E> {
                             global_id: GlobalElementId(Arc::from(&*window.element_id_stack)),
                             source_location: source,
                         };
+
                         window.build_inspector_element_id(path)
                     });
                 }
+
                 #[cfg(not(any(feature = "inspector", debug_assertions)))]
                 {
                     inspector_id = None;
@@ -649,6 +665,7 @@ impl<E: Element> Drawable<E> {
                         window,
                         cx,
                     ));
+
                 #[cfg(not(all(
                     feature = "hot-patching",
                     debug_assertions,
@@ -671,8 +688,10 @@ impl<E: Element> Drawable<E> {
                     inspector_id,
                     request_layout,
                 };
+
                 layout_id
             }
+
             _ => panic!("must call request_layout only once"),
         }
     }
@@ -694,32 +713,41 @@ impl<E: Element> Drawable<E> {
             } => {
                 if let Some(element_id) = self.element.id() {
                     window.element_id_stack.push(element_id);
+
                     debug_assert_eq!(&*global_id.as_ref().unwrap().0, &*window.element_id_stack);
                 }
 
                 let bounds = window.layout_bounds(layout_id);
                 let mut pushed_a11y_node = false;
+
                 if window.a11y.is_active() {
                     if let Some(global_id) = global_id.as_ref() {
                         let hidden = self.element.is_a11y_hidden();
                         let role = self.element.a11y_role();
+
                         if role.is_some() || hidden {
                             let role = role.unwrap_or(accesskit::Role::GenericContainer);
                             let node_id = global_id.accesskit_node_id();
                             let mut node = accesskit::Node::new(role);
                             let scale = window.scale_factor();
+
                             node.set_bounds(accesskit::Rect {
                                 x0: (bounds.origin.x.0 * scale) as f64,
                                 y0: (bounds.origin.y.0 * scale) as f64,
                                 x1: ((bounds.origin.x.0 + bounds.size.width.0) * scale) as f64,
                                 y1: ((bounds.origin.y.0 + bounds.size.height.0) * scale) as f64,
                             });
+
                             self.element.write_a11y_info(&mut node);
+
                             if hidden {
                                 node.set_hidden();
                             }
+
                             window.a11y.node_bounds.insert(node_id, bounds);
+
                             pushed_a11y_node = window.a11y.nodes.push(node_id, node);
+
                             #[cfg(debug_assertions)]
                             if pushed_a11y_node {
                                 let view = window
@@ -727,7 +755,9 @@ impl<E: Element> Drawable<E> {
                                     .view_type_names
                                     .get(&window.current_view())
                                     .copied();
+
                                 let source_location = self.element.source_location();
+
                                 window.a11y.nodes.record_node_info(
                                     node_id,
                                     crate::window::a11y::debug::NodeDebugInfo {
@@ -745,6 +775,7 @@ impl<E: Element> Drawable<E> {
                 let node_id = window.next_frame.dispatch_tree.push_node();
 
                 let inline_fragments = window.inline_fragments(layout_id);
+
                 let previous_fragments = std::mem::replace(
                     &mut window.current_inline_fragments,
                     inline_fragments.clone(),
@@ -786,6 +817,7 @@ impl<E: Element> Drawable<E> {
                 });
 
                 window.current_inline_fragments = previous_fragments;
+
                 window.next_frame.dispatch_tree.pop_node();
 
                 if pushed_a11y_node {
@@ -800,17 +832,21 @@ impl<E: Element> Drawable<E> {
                             element_id: global_id.0.last().map(|id| format!("{id:?}")),
                             source_location: self.element.source_location(),
                         };
+
                         let mut builder = A11ySubtreeBuilder::new(
                             global_id.accesskit_node_id(),
                             &mut window.a11y.nodes,
                         );
+
                         #[cfg(debug_assertions)]
                         {
                             builder = builder.with_creator(creator);
                         }
+
                         self.element
                             .a11y_synthetic_children(&mut prepaint, &mut builder);
                     }
+
                     window.a11y.nodes.pop();
                 }
 
@@ -828,6 +864,7 @@ impl<E: Element> Drawable<E> {
                     inline_fragments,
                 };
             }
+
             _ => panic!("must call request_layout before prepaint"),
         }
     }
@@ -850,6 +887,7 @@ impl<E: Element> Drawable<E> {
             } => {
                 if let Some(element_id) = self.element.id() {
                     window.element_id_stack.push(element_id);
+
                     debug_assert_eq!(&*global_id.as_ref().unwrap().0, &*window.element_id_stack);
                 }
 
@@ -873,6 +911,7 @@ impl<E: Element> Drawable<E> {
                     window,
                     cx,
                 ));
+
                 #[cfg(not(all(
                     feature = "hot-patching",
                     debug_assertions,
@@ -895,8 +934,10 @@ impl<E: Element> Drawable<E> {
                 window.current_inline_fragments = previous_fragments;
 
                 self.phase = ElementDrawPhase::Painted;
+
                 (request_layout, prepaint)
             }
+
             _ => panic!("must call prepaint before paint"),
         }
     }
@@ -919,6 +960,7 @@ impl<E: Element> Drawable<E> {
                 request_layout,
             } => {
                 window.compute_layout(layout_id, available_space, cx);
+
                 self.phase = ElementDrawPhase::LayoutComputed {
                     layout_id,
                     global_id,
@@ -926,8 +968,10 @@ impl<E: Element> Drawable<E> {
                     available_space,
                     request_layout,
                 };
+
                 layout_id
             }
+
             ElementDrawPhase::LayoutComputed {
                 layout_id,
                 global_id,
@@ -938,6 +982,7 @@ impl<E: Element> Drawable<E> {
                 if available_space != prev_available_space {
                     window.compute_layout(layout_id, available_space, cx);
                 }
+
                 self.phase = ElementDrawPhase::LayoutComputed {
                     layout_id,
                     global_id,
@@ -945,8 +990,10 @@ impl<E: Element> Drawable<E> {
                     available_space,
                     request_layout,
                 };
+
                 layout_id
             }
+
             _ => panic!("cannot measure after painting"),
         };
 
@@ -1034,6 +1081,7 @@ impl AnyElement {
     {
         let element = with_element_arena(|arena| arena.alloc(|| Drawable::new(element)))
             .map(|element| element as &mut dyn ElementObject);
+
         AnyElement(element)
     }
 
@@ -1136,6 +1184,7 @@ impl Element for AnyElement {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let layout_id = self.request_layout(window, cx);
+
         (layout_id, ())
     }
 

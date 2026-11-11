@@ -10,6 +10,7 @@ use schemars::{JsonSchema, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::borrow::Cow;
 use std::ops::{AddAssign, Range};
+
 use std::{
     cmp::{self, PartialOrd},
     f32::consts::GOLDEN_RATIO,
@@ -17,6 +18,7 @@ use std::{
     hash::Hash,
     ops::{Add, Div, Mul, MulAssign, Neg, Sub},
 };
+
 use taffy::prelude::{TaffyGridLine, TaffyGridSpan};
 
 use crate::{App, DisplayId};
@@ -86,6 +88,7 @@ pub trait Along {
 pub struct Point<T: Clone + Debug + Default + PartialEq> {
     /// The x coordinate of the point.
     pub x: T,
+
     /// The y coordinate of the point.
     pub y: T,
 }
@@ -176,6 +179,7 @@ impl<T: Clone + Debug + Default + PartialEq> Along for Point<T> {
                 x: f(self.x.clone()),
                 y: self.y.clone(),
             },
+
             Axis::Vertical => Point {
                 x: self.x.clone(),
                 y: f(self.y.clone()),
@@ -232,6 +236,7 @@ impl Point<Pixels> {
     /// ```
     pub fn is_nearly_eq(&self, other: &Self, epsilon: Pixels) -> bool {
         let diff = *self - *other;
+
         diff.x.abs() < epsilon && diff.y.abs() < epsilon
     }
 }
@@ -412,6 +417,7 @@ impl<T: Clone + Debug + Default + PartialEq + Display> Display for Point<T> {
 pub struct Size<T: Clone + Debug + Default + PartialEq> {
     /// The width component of the size.
     pub width: T,
+
     /// The height component of the size.
     pub height: T,
 }
@@ -552,6 +558,7 @@ where
                 width: f(self.width.clone()),
                 height: self.height.clone(),
             },
+
             Axis::Vertical => Size {
                 width: self.width.clone(),
                 height: f(self.height.clone()),
@@ -754,6 +761,7 @@ impl Size<Length> {
 pub struct Bounds<T: Clone + Debug + Default + PartialEq> {
     /// The origin point of this area.
     pub origin: Point<T>,
+
     /// The size of the rectangle.
     pub size: Size<T>,
 }
@@ -851,10 +859,12 @@ where
             x: top_left.x.clone(),
             y: top_left.y.clone(),
         };
+
         let size = Size {
             width: bottom_right.x - top_left.x,
             height: bottom_right.y - top_left.y,
         };
+
         Bounds { origin, size }
     }
 }
@@ -867,6 +877,7 @@ where
     /// at the anchor along the edges of size subtracted from the original origin.
     pub fn from_anchor_and_size(corner: Anchor, origin: Point<T>, size: Size<T>) -> Bounds<T> {
         let origin = origin - size.at_anchor(corner);
+
         Bounds { origin, size }
     }
 }
@@ -881,6 +892,7 @@ where
             x: center.x - size.width.half(),
             y: center.y - size.height.half(),
         };
+
         Self::new(origin, size)
     }
 }
@@ -1063,6 +1075,7 @@ where
     #[must_use]
     pub fn dilate(&self, amount: T) -> Bounds<T> {
         let double_amount = amount.clone() + amount.clone();
+
         Bounds {
             origin: self.origin.clone() - point(amount.clone(), amount),
             size: self.size.clone() + size(double_amount.clone(), double_amount),
@@ -1139,10 +1152,12 @@ impl<T: PartialOrd + Add<T, Output = T> + Sub<Output = T> + Clone + Debug + Defa
     /// ```
     pub fn intersect(&self, other: &Self) -> Self {
         let upper_left = self.origin.max(&other.origin);
+
         let bottom_right = self
             .bottom_right()
             .min(&other.bottom_right())
             .max(&upper_left);
+
         Self::from_corners(upper_left, bottom_right)
     }
 
@@ -1182,6 +1197,7 @@ impl<T: PartialOrd + Add<T, Output = T> + Sub<Output = T> + Clone + Debug + Defa
     pub fn union(&self, other: &Self) -> Self {
         let top_left = self.origin.min(&other.origin);
         let bottom_right = self.bottom_right().max(&other.bottom_right());
+
         Bounds::from_corners(top_left, bottom_right)
     }
 }
@@ -1750,10 +1766,13 @@ impl Bounds<DevicePixels> {
 pub struct Edges<T: Clone + Debug + Default + PartialEq> {
     /// The size of the top edge.
     pub top: T,
+
     /// The size of the right edge.
     pub right: T,
+
     /// The size of the bottom edge.
     pub bottom: T,
+
     /// The size of the left edge.
     pub left: T,
 }
@@ -2189,6 +2208,7 @@ impl Edges<Pixels> {
 impl From<f32> for Edges<Pixels> {
     fn from(val: f32) -> Self {
         let val: Pixels = val.into();
+
         val.into()
     }
 }
@@ -2270,6 +2290,7 @@ impl Anchor {
                 Anchor::LeftCenter => Anchor::LeftCenter,
                 Anchor::RightCenter => Anchor::RightCenter,
             },
+
             Axis::Horizontal => match self {
                 Anchor::TopLeft => Anchor::TopRight,
                 Anchor::TopRight => Anchor::TopLeft,
@@ -2302,10 +2323,13 @@ impl Anchor {
 pub struct Corners<T: Clone + Debug + Default + PartialEq> {
     /// The value associated with the top left corner.
     pub top_left: T,
+
     /// The value associated with the top right corner.
     pub top_right: T,
+
     /// The value associated with the bottom right corner.
     pub bottom_right: T,
+
     /// The value associated with the bottom left corner.
     pub bottom_left: T,
 }
@@ -2510,6 +2534,7 @@ impl<T: Div<f32, Output = T> + Ord + Clone + Debug + Default + PartialEq> Corner
     #[must_use]
     pub fn clamp_radii_for_quad_size(self, size: Size<T>) -> Corners<T> {
         let max = cmp::min(size.width, size.height) / 2.;
+
         Corners {
             top_left: cmp::min(self.top_left, max.clone()),
             top_right: cmp::min(self.top_right, max.clone()),
@@ -2670,6 +2695,7 @@ pub fn percentage(value: f32) -> Percentage {
         (0.0..=1.0).contains(&value),
         "Percentage must be between 0 and 1"
     );
+
     Percentage(value)
 }
 
@@ -3284,10 +3310,12 @@ pub struct Rems(pub f32);
 impl Rems {
     /// A length of zero.
     pub const ZERO: Self = Self(0.0);
+
     /// Convert this Rem value to pixels.
     pub fn to_pixels(self, rem_size: Pixels) -> Pixels {
         self * rem_size
     }
+
     /// Convert from pixels to Rem
     pub fn from_pixels(length: Pixels, window: &gpui::Window) -> Self {
         Self(length / window.rem_size())
@@ -3646,7 +3674,9 @@ impl TryFrom<&'_ str> for DefiniteLength {
             let relative = Relative::try_from(value).with_context(|| {
                 format!("invalid DefiniteLength '{value}', expected {EXPECTED_DEFINITE_LENGTH}")
             })?;
+
             Ok(DefiniteLength::Relative(relative))
+
         } else if let Ok(absolute_length) = value.try_into() {
             Ok(DefiniteLength::Absolute(absolute_length))
         } else {
@@ -3922,6 +3952,7 @@ impl From<()> for Length {
 pub struct GridLocation {
     /// The rows this item uses within the grid.
     pub row: Range<GridPlacement>,
+
     /// The columns this item uses within the grid.
     pub column: Range<GridPlacement>,
 }
@@ -4122,6 +4153,7 @@ mod tests {
                 height: 5.0,
             },
         };
+
         let bounds2 = Bounds {
             origin: Point { x: 4.0, y: 4.0 },
             size: Size {
@@ -4129,6 +4161,7 @@ mod tests {
                 height: 5.0,
             },
         };
+
         let bounds3 = Bounds {
             origin: Point { x: 10.0, y: 10.0 },
             size: Size {

@@ -206,6 +206,7 @@ impl<'de> Deserialize<'de> for SharedString {
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
+
         Ok(SharedString::new(&s))
     }
 }

@@ -15,6 +15,7 @@ use crate::{
     WindowHandle, WindowOptions,
     app::{GpuiBorrow, GpuiMode},
 };
+
 use anyhow::Result;
 use image::RgbaImage;
 use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
@@ -45,10 +46,13 @@ use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
 pub struct HeadlessAppContext {
     /// The underlying app cell.
     pub app: Rc<AppCell>,
+
     /// The background executor for running async tasks.
     pub background_executor: BackgroundExecutor,
+
     /// The foreground executor for running tasks on the main thread.
     pub foreground_executor: ForegroundExecutor,
+
     dispatcher: TestDispatcher,
     text_system: Arc<TextSystem>,
 }
@@ -92,6 +96,7 @@ impl HeadlessAppContext {
 
         let renderer_factory: Box<dyn Fn() -> Option<Box<dyn PlatformHeadlessRenderer>>> =
             Box::new(renderer_factory);
+
         let platform = TestPlatform::with_platform(
             background_executor.clone(),
             foreground_executor.clone(),
@@ -101,11 +106,13 @@ impl HeadlessAppContext {
 
         let text_system = Arc::new(TextSystem::new(platform_text_system));
         let http_client = crate::http_client::FakeHttpClient::with_404_response();
+
         let app = App::new_app(
             platform,
             AssetRegistry::from(asset_source).into(),
             http_client,
         );
+
         app.borrow_mut().mode = GpuiMode::test();
 
         Self {
@@ -135,6 +142,7 @@ impl HeadlessAppContext {
         };
 
         let mut cx = self.app.borrow_mut();
+
         cx.open_window(
             WindowOptions::new()
                 .window_bounds(Some(WindowBounds::Windowed(bounds)))
@@ -170,6 +178,7 @@ impl HeadlessAppContext {
     /// Runs `f` with mutable access to the [`App`]. This doesn't run pending tasks.
     pub fn update<R>(&mut self, f: impl FnOnce(&mut App) -> R) -> R {
         let mut app = self.app.borrow_mut();
+
         f(&mut app)
     }
 
@@ -187,6 +196,7 @@ impl HeadlessAppContext {
         f: impl FnOnce(AnyView, &mut Window, &mut App) -> R,
     ) -> Result<R> {
         let mut app = self.app.borrow_mut();
+
         app.update_window(window, f)
     }
 
@@ -218,6 +228,7 @@ impl HeadlessAppContext {
         color: Hsla,
     ) -> Result<Vec<Bounds<ScaledPixels>>> {
         let color = color.into();
+
         self.update_window(window, |_, window, _| {
             window
                 .rendered_frame
@@ -243,6 +254,7 @@ impl HeadlessAppContext {
         color: Hsla,
     ) -> Result<Vec<Bounds<ScaledPixels>>> {
         let color = color.into();
+
         self.update_window(window, |_, window, _| {
             window
                 .rendered_frame
@@ -268,6 +280,7 @@ impl HeadlessAppContext {
         color: Hsla,
     ) -> Result<Vec<Bounds<ScaledPixels>>> {
         let color = color.into();
+
         self.update_window(window, |_, window, _| {
             window
                 .rendered_frame
@@ -289,6 +302,7 @@ impl HeadlessAppContext {
     /// Also returns an error if the window has been closed.
     pub fn capture_screenshot(&mut self, window: AnyWindowHandle) -> Result<RgbaImage> {
         let mut app = self.app.borrow_mut();
+
         app.update_window(window, |_, window, _| window.render_to_image())?
     }
 
@@ -319,11 +333,13 @@ impl Drop for HeadlessAppContext {
 impl AppContext for HeadlessAppContext {
     fn new<T: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T> {
         let mut app = self.app.borrow_mut();
+
         app.new(build_entity)
     }
 
     fn reserve_entity<T: 'static>(&mut self) -> Reservation<T> {
         let mut app = self.app.borrow_mut();
+
         app.reserve_entity()
     }
 
@@ -333,6 +349,7 @@ impl AppContext for HeadlessAppContext {
         build_entity: impl FnOnce(&mut Context<T>) -> T,
     ) -> Entity<T> {
         let mut app = self.app.borrow_mut();
+
         app.insert_entity(reservation, build_entity)
     }
 
@@ -342,6 +359,7 @@ impl AppContext for HeadlessAppContext {
         update: impl FnOnce(&mut T, &mut Context<T>) -> R,
     ) -> R {
         let mut app = self.app.borrow_mut();
+
         app.update_entity(handle, update)
     }
 
@@ -357,11 +375,13 @@ impl AppContext for HeadlessAppContext {
         T: 'static,
     {
         let app = self.app.borrow();
+
         app.read_entity(handle, read)
     }
 
     fn notify(&mut self, entity_id: EntityId) {
         let mut app = self.app.borrow_mut();
+
         app.notify(entity_id);
     }
 
@@ -371,6 +391,7 @@ impl AppContext for HeadlessAppContext {
         EventType: 'static,
     {
         let mut app = self.app.borrow_mut();
+
         app.emit(entity, event)
     }
 
@@ -379,6 +400,7 @@ impl AppContext for HeadlessAppContext {
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
     {
         let mut lock = self.app.borrow_mut();
+
         lock.update_window(window, f)
     }
 
@@ -388,6 +410,7 @@ impl AppContext for HeadlessAppContext {
         f: impl FnOnce(&mut Window, &mut App) -> R,
     ) -> Option<R> {
         let mut lock = self.app.borrow_mut();
+
         lock.with_window(entity_id, f)
     }
 
@@ -400,6 +423,7 @@ impl AppContext for HeadlessAppContext {
         T: 'static,
     {
         let app = self.app.borrow();
+
         app.read_window(window, read)
     }
 
@@ -415,22 +439,26 @@ impl AppContext for HeadlessAppContext {
         G: Global,
     {
         let app = self.app.borrow();
+
         app.read_global(callback)
     }
 
     fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
         let mut app = self.app.borrow_mut();
+
         app.insert_global_entity(entity)
     }
 
     fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
         let mut app = self.app.borrow_mut();
+
         app.remove_global_entity(entity)
     }
 
     fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
         let app = self.app.borrow();
         let iter = app.global_entities();
+
         // Cloning the iterator here so that lock can be released when function is going out of scope
         iter.collect::<Vec<_>>().into_iter()
     }

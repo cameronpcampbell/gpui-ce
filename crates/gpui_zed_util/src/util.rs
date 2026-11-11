@@ -33,11 +33,13 @@ use itertools::Either;
 use regex::Regex;
 use std::path::PathBuf;
 use std::sync::LazyLock;
+
 use std::{
     borrow::Cow,
     cmp::{self, Ordering},
     ops::{Range, RangeInclusive},
 };
+
 use unicase::UniCase;
 
 pub use gpui_util::*;
@@ -74,6 +76,7 @@ pub fn truncate(s: &str, max_chars: usize) -> &str {
 pub fn parse_os_release(content: &str) -> Option<String> {
     let mut id = None;
     let mut version_id = None;
+
     for line in content.lines() {
         match line.split_once('=') {
             Some(("ID", value)) => id = Some(value.trim_matches('"')),
@@ -81,7 +84,9 @@ pub fn parse_os_release(content: &str) -> Option<String> {
             _ => {}
         }
     }
+
     let id = id?;
+
     Some(match version_id {
         Some(version) => format!("{id} {version}"),
         None => id.to_string(),
@@ -98,7 +103,9 @@ pub fn truncate_and_trailoff(s: &str, max_chars: usize) -> String {
     if s.len() <= max_chars {
         return s.to_string();
     }
+
     let truncation_ix = s.char_indices().map(|(i, _)| i).nth(max_chars);
+
     match truncation_ix {
         Some(index) => s[..index].to_string() + "…",
         _ => s.to_string(),
@@ -115,11 +122,14 @@ pub fn truncate_and_remove_front(s: &str, max_chars: usize) -> String {
     if s.len() <= max_chars {
         return s.to_string();
     }
+
     let suffix_char_length = max_chars.saturating_sub(1);
+
     let truncation_ix = s
         .char_indices()
         .map(|(i, _)| i)
         .nth_back(suffix_char_length);
+
     match truncation_ix {
         Some(index) if index > 0 => "…".to_string() + &s[index..],
         _ => s.to_string(),
@@ -131,9 +141,12 @@ pub fn truncate_and_remove_front(s: &str, max_chars: usize) -> String {
 /// Returns string unchanged if its length is smaller than max_lines.
 pub fn truncate_lines_and_trailoff(s: &str, max_lines: usize) -> String {
     let mut lines = s.lines().take(max_lines).collect::<Vec<_>>();
+
     if lines.len() > max_lines - 1 {
         lines.pop();
+
         lines.join("\n") + "\n…"
+
     } else {
         lines.join("\n")
     }
@@ -191,6 +204,7 @@ fn test_truncate_lines_to_byte_limit() {
 
     // Test with non-ASCII characters
     let text_utf8 = "Line 1\nLíne 2\nLine 3";
+
     assert_eq!(
         truncate_lines_to_byte_limit(text_utf8, 15),
         "Line 1\nLíne 2\n"
@@ -206,15 +220,18 @@ where
     F: FnMut(&T, &T) -> Ordering,
 {
     let mut start_index = 0;
+
     for new_item in new_items {
         if let Err(i) = vec[start_index..].binary_search_by(|m| cmp(m, &new_item)) {
             let index = start_index + i;
+
             if vec.len() < limit {
                 vec.insert(index, new_item);
             } else if index < vec.len() {
                 vec.pop();
                 vec.insert(index, new_item);
             }
+
             start_index = index;
         }
     }
@@ -238,6 +255,7 @@ Error: Running Zed as root or via sudo is unsupported.
        It is untested and not recommended, don't complain when things break.
        If you wish to proceed anyways, set `ZED_ALLOW_ROOT=true` in your environment."
         );
+
         std::process::exit(1);
     }
 }
@@ -248,12 +266,14 @@ fn load_shell_from_passwd() -> Result<()> {
         n if n < 0 => 1024,
         n => n as usize,
     };
+
     let mut buffer = Vec::with_capacity(buflen);
 
     let mut pwd: std::mem::MaybeUninit<libc::passwd> = std::mem::MaybeUninit::uninit();
     let mut result: *mut libc::passwd = std::ptr::null_mut();
 
     let uid = unsafe { libc::getuid() };
+
     let status = unsafe {
         libc::getpwuid_r(
             uid,
@@ -263,6 +283,7 @@ fn load_shell_from_passwd() -> Result<()> {
             &mut result,
         )
     };
+
     anyhow::ensure!(!result.is_null(), "passwd entry for uid {} not found", uid);
 
     // SAFETY: If `getpwuid_r` doesn't error, we have the entry here.
@@ -274,6 +295,7 @@ fn load_shell_from_passwd() -> Result<()> {
         uid,
         status
     );
+
     anyhow::ensure!(
         entry.pw_uid == uid,
         "passwd entry has different uid ({}) than getuid ({}) returned",
@@ -282,6 +304,7 @@ fn load_shell_from_passwd() -> Result<()> {
     );
 
     let shell = unsafe { std::ffi::CStr::from_ptr(entry.pw_shell).to_str().unwrap() };
+
     let should_set_shell = std::env::var("SHELL").map_or(true, |shell_env| {
         shell_env != shell && !std::path::Path::new(&shell_env).exists()
     });
@@ -291,6 +314,7 @@ fn load_shell_from_passwd() -> Result<()> {
             "updating SHELL environment variable to value from passwd entry: {:?}",
             shell,
         );
+
         unsafe { std::env::set_var("SHELL", shell) };
     }
 
@@ -302,8 +326,10 @@ fn load_shell_from_passwd() -> Result<()> {
 pub fn get_shell_safe_zed_path(shell_kind: shell::ShellKind) -> anyhow::Result<String> {
     use anyhow::Context as _;
     use paths::PathExt;
+
     let mut zed_path =
         std::env::current_exe().context("Failed to determine current zed executable path.")?;
+
     if cfg!(target_os = "linux")
         && !zed_path.is_file()
         && let Some(truncated) = zed_path
@@ -325,8 +351,10 @@ pub fn get_shell_safe_zed_path(shell_kind: shell::ShellKind) -> anyhow::Result<S
 /// should be called from the zed executable, not zed-cli.
 pub fn get_zed_cli_path() -> Result<PathBuf> {
     use anyhow::Context as _;
+
     let zed_path =
         std::env::current_exe().context("Failed to determine current zed executable path.")?;
+
     let parent = zed_path
         .parent()
         .context("Failed to determine parent directory of zed executable path.")?;
@@ -335,12 +363,15 @@ pub fn get_zed_cli_path() -> Result<PathBuf> {
         // On macOS, the zed executable and zed-cli are inside the app bundle,
         // so here ./cli is for both installed and development builds.
         &["./cli"]
+
     } else if cfg!(target_os = "windows") {
         // bin/zed.exe is for installed builds, ./cli.exe is for development builds.
         &["bin/zed.exe", "./cli.exe"]
+
     } else if cfg!(target_os = "linux") || cfg!(target_os = "freebsd") {
         // bin is the standard, ./cli is for the target directory in development builds.
         &["../bin/zed", "./cli"]
+
     } else {
         anyhow::bail!("unsupported platform for determining zed-cli path");
     };
@@ -384,6 +415,7 @@ pub async fn load_login_shell_environment() -> Result<()> {
         if name == "SHLVL" {
             continue;
         }
+
         unsafe { std::env::set_var(&name, &value) };
     }
 
@@ -408,11 +440,13 @@ pub fn set_pre_exec_to_start_new_session(
     #[cfg(unix)]
     unsafe {
         use std::os::unix::process::CommandExt;
+
         command.pre_exec(|| {
             libc::setsid();
             Ok(())
         });
     };
+
     command
 }
 
@@ -457,6 +491,7 @@ pub fn merge_json_value_into(source: serde_json::Value, target: &mut serde_json:
                 }
             }
         }
+
         (source, target) => *target = source,
     }
 }
@@ -474,6 +509,7 @@ pub fn union_json_value_into(source: serde_json::Value, target: &mut serde_json:
                 }
             }
         }
+
         (Value::Array(source), Value::Array(target)) => {
             for value in source {
                 if !target.contains(&value) {
@@ -481,19 +517,23 @@ pub fn union_json_value_into(source: serde_json::Value, target: &mut serde_json:
                 }
             }
         }
+
         (source, target) => *target = source,
     }
 }
 
 pub fn merge_non_null_json_value_into(source: serde_json::Value, target: &mut serde_json::Value) {
     use serde_json::Value;
+
     if let Value::Object(source_object) = source {
         let target_object = if let Value::Object(target) = target {
             target
         } else {
             *target = Value::Object(Default::default());
+
             target.as_object_mut().unwrap()
         };
+
         for (key, value) in source_object {
             if let Some(target) = target_object.get_mut(&key) {
                 merge_non_null_json_value_into(value, target);
@@ -501,6 +541,7 @@ pub fn merge_non_null_json_value_into(source: serde_json::Value, target: &mut se
                 target_object.insert(key, value);
             }
         }
+
     } else if !source.is_null() {
         *target = source
     }
@@ -514,22 +555,27 @@ pub fn expanded_and_wrapped_usize_range(
 ) -> impl Iterator<Item = usize> {
     let start_wraps = range.start < additional_before;
     let end_wraps = wrap_length < range.end + additional_after;
+
     if start_wraps && end_wraps {
         Either::Left(0..wrap_length)
     } else if start_wraps {
         let wrapped_start = (range.start + wrap_length).saturating_sub(additional_before);
+
         if wrapped_start <= range.end {
             Either::Left(0..wrap_length)
         } else {
             Either::Right((0..range.end + additional_after).chain(wrapped_start..wrap_length))
         }
+
     } else if end_wraps {
         let wrapped_end = range.end + additional_after - wrap_length;
+
         if range.start <= wrapped_end {
             Either::Left(0..wrap_length)
         } else {
             Either::Right((0..wrapped_end).chain(range.start - additional_before..wrap_length))
         }
+
     } else {
         Either::Left((range.start - additional_before)..(range.end + additional_after))
     }
@@ -550,22 +596,32 @@ pub fn wrapped_usize_outward_from(
 
     std::iter::from_fn(move || {
         count += 1;
+
         if count > wrap_length {
             None
         } else if count == 1 {
             Some(start % wrap_length)
         } else if after_offset <= additional_after && after_offset <= before_offset {
             let value = (start + after_offset) % wrap_length;
+
             after_offset += 1;
+
             Some(value)
+
         } else if before_offset <= additional_before {
             let value = (start + wrap_length - before_offset) % wrap_length;
+
             before_offset += 1;
+
             Some(value)
+
         } else if after_offset <= additional_after {
             let value = (start + after_offset) % wrap_length;
+
             after_offset += 1;
+
             Some(value)
+
         } else {
             None
         }
@@ -591,6 +647,7 @@ mod rng {
 
         pub fn with_simple_text(mut self) -> Self {
             self.simple_text = true;
+
             self
         }
     }
@@ -612,10 +669,12 @@ mod rng {
                 0..=19 => [' ', '\n', '\r', '\t'].choose(&mut self.rng).copied(),
                 // two-byte greek letters
                 20..=32 => char::from_u32(self.rng.random_range(('α' as u32)..('ω' as u32 + 1))),
+
                 // // three-byte characters
                 33..=45 => ['✋', '✅', '❌', '❎', '⭐']
                     .choose(&mut self.rng)
                     .copied(),
+
                 // // four-byte characters
                 46..=58 => ['🍐', '🏀', '🍗', '🎉'].choose(&mut self.rng).copied(),
                 // ascii letters
@@ -624,6 +683,7 @@ mod rng {
         }
     }
 }
+
 #[cfg(any(test, feature = "test-support"))]
 pub use rng::RandomCharIter;
 
@@ -653,14 +713,18 @@ pub fn asset_str<A: rust_embed::RustEmbed>(path: &str) -> Cow<'static, str> {
 /// (a crate dir under the checkout) stay inside it.
 pub fn dev_repo_root() -> Option<&'static std::path::Path> {
     use std::path::PathBuf;
+
     static ROOT: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
     ROOT.get_or_init(|| {
         let exe = std::env::current_exe().ok();
+
         let candidates = [
             exe.clone(),
             exe.and_then(|exe| exe.canonicalize().ok()),
             std::env::current_dir().ok(),
         ];
+
         candidates.into_iter().flatten().find_map(|start| {
             Some(
                 start
@@ -702,7 +766,9 @@ fn fs_embed_file_names(root_relative: &str, includes: &[&str], excludes: &[&str]
     let Some(root) = dev_repo_root().map(|root| root.join(root_relative)) else {
         return Vec::new();
     };
+
     let matcher = rust_embed::utils::PathMatcher::new(includes, excludes);
+
     rust_embed::utils::get_files(root.to_string_lossy().into_owned(), matcher)
         .map(|entry| entry.rel_path)
         .collect()
@@ -720,12 +786,15 @@ pub fn __fs_embed_get(
     excludes: &[&str],
 ) -> Option<rust_embed::EmbeddedFile> {
     let matcher = rust_embed::utils::PathMatcher::new(includes, excludes);
+
     if !matcher.is_path_included(file_path) {
         return None;
     }
+
     let root = dev_repo_root()
         .expect("dev asset loading requires running from within the checkout")
         .join(root_relative);
+
     rust_embed::utils::read_file_from_fs(&root.join(file_path)).ok()
 }
 
@@ -860,8 +929,11 @@ macro_rules! fs_embed {
 
 pub trait RangeExt<T> {
     fn sorted(&self) -> Self;
+
     fn to_inclusive(&self) -> RangeInclusive<T>;
+
     fn overlaps(&self, other: &Range<T>) -> bool;
+
     fn contains_inclusive(&self, other: &Range<T>) -> bool;
 }
 
@@ -915,6 +987,7 @@ impl<'a> NumericPrefixWithSuffix<'a> {
         let (prefix, remainder) = str.split_at(i);
 
         let prefix = prefix.parse().ok();
+
         Self(prefix, remainder)
     }
 }
@@ -927,8 +1000,10 @@ impl Ord for NumericPrefixWithSuffix<'_> {
             (None, None) => UniCase::new(self.1)
                 .cmp(&UniCase::new(other.1))
                 .then_with(|| self.1.cmp(other.1).reverse()),
+
             (None, Some(_)) => Ordering::Greater,
             (Some(_), None) => Ordering::Less,
+
             (Some(a), Some(b)) => a.cmp(&b).then_with(|| {
                 UniCase::new(self.1)
                     .cmp(&UniCase::new(other.1))
@@ -947,6 +1022,7 @@ impl PartialOrd for NumericPrefixWithSuffix<'_> {
 fn emoji_regex() -> &'static Regex {
     static EMOJI_REGEX: LazyLock<Regex> =
         LazyLock::new(|| Regex::new("(\\p{Emoji}|\u{200D})").unwrap());
+
     &EMOJI_REGEX
 }
 
@@ -954,12 +1030,15 @@ fn emoji_regex() -> &'static Regex {
 /// E.g. "👨‍👩‍👧‍👧👋" will return true, but "👋!" will return false.
 pub fn word_consists_of_emojis(s: &str) -> bool {
     let mut prev_end = 0;
+
     for capture in emoji_regex().find_iter(s) {
         if capture.start() != prev_end {
             return false;
         }
+
         prev_end = capture.end();
     }
+
     prev_end == s.len()
 }
 
@@ -977,6 +1056,7 @@ pub fn split_str_with_ranges<'s>(
             if i > start {
                 result.push((start..i, &s[start..i]));
             }
+
             start = i + ch.len_utf8();
         }
     }
@@ -1022,10 +1102,12 @@ mod tests {
     #[test]
     fn test_fs_embed_iter_and_get() {
         let inherent_names: Vec<_> = FsEmbedTestAssets::iter().collect();
+
         assert!(
             inherent_names.iter().any(|name| name == "util.rs"),
             "iter should list files matching the include globs, got {inherent_names:?}"
         );
+
         assert!(
             !inherent_names.iter().any(|name| name.ends_with(".toml")),
             "iter should filter files excluded by the globs, got {inherent_names:?}"
@@ -1033,15 +1115,18 @@ mod tests {
 
         let trait_names: Vec<_> =
             <FsEmbedTestAssets as crate::__rust_embed::RustEmbed>::iter().collect();
+
         assert_eq!(inherent_names, trait_names);
 
         let file = FsEmbedTestAssets::get("util.rs").expect("util.rs should be readable");
+
         assert!(
             std::str::from_utf8(&file.data)
                 .expect("util.rs should be utf-8")
                 .contains("fs_embed"),
             "get should read the real file contents"
         );
+
         assert!(
             FsEmbedTestAssets::get("Cargo.toml").is_none(),
             "get should filter files excluded by the globs"
@@ -1072,6 +1157,7 @@ mod tests {
     fn test_parse_os_release() {
         let os_release =
             "NAME=\"Ubuntu\"\nID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04 LTS\"\n";
+
         assert_eq!(
             parse_os_release(os_release),
             Some("ubuntu 24.04".to_string())
@@ -1090,35 +1176,48 @@ mod tests {
         let mut vec = vec![];
 
         extend_sorted(&mut vec, vec![21, 17, 13, 8, 1, 0], 5, |a, b| b.cmp(a));
+
         assert_eq!(vec, &[21, 17, 13, 8, 1]);
 
         extend_sorted(&mut vec, vec![101, 19, 17, 8, 2], 8, |a, b| b.cmp(a));
+
         assert_eq!(vec, &[101, 21, 19, 17, 13, 8, 2, 1]);
 
         extend_sorted(&mut vec, vec![1000, 19, 17, 9, 5], 8, |a, b| b.cmp(a));
+
         assert_eq!(vec, &[1000, 101, 21, 19, 17, 13, 9, 8]);
     }
 
     #[test]
     fn test_truncate_to_bottom_n_sorted_by() {
         let mut vec: Vec<u32> = vec![5, 2, 3, 4, 1];
+
         truncate_to_bottom_n_sorted_by(&mut vec, 10, &u32::cmp);
+
         assert_eq!(vec, &[1, 2, 3, 4, 5]);
 
         vec = vec![5, 2, 3, 4, 1];
+
         truncate_to_bottom_n_sorted_by(&mut vec, 5, &u32::cmp);
+
         assert_eq!(vec, &[1, 2, 3, 4, 5]);
 
         vec = vec![5, 2, 3, 4, 1];
+
         truncate_to_bottom_n_sorted_by(&mut vec, 4, &u32::cmp);
+
         assert_eq!(vec, &[1, 2, 3, 4]);
 
         vec = vec![5, 2, 3, 4, 1];
+
         truncate_to_bottom_n_sorted_by(&mut vec, 1, &u32::cmp);
+
         assert_eq!(vec, &[1]);
 
         vec = vec![5, 2, 3, 4, 1];
+
         truncate_to_bottom_n_sorted_by(&mut vec, 0, &u32::cmp);
+
         assert!(vec.is_empty());
     }
 
@@ -1161,48 +1260,56 @@ mod tests {
     #[test]
     fn test_numeric_prefix_str_method() {
         let target = "1a";
+
         assert_eq!(
             NumericPrefixWithSuffix::from_numeric_prefixed_str(target),
             NumericPrefixWithSuffix(Some(1), "a")
         );
 
         let target = "12ab";
+
         assert_eq!(
             NumericPrefixWithSuffix::from_numeric_prefixed_str(target),
             NumericPrefixWithSuffix(Some(12), "ab")
         );
 
         let target = "12_ab";
+
         assert_eq!(
             NumericPrefixWithSuffix::from_numeric_prefixed_str(target),
             NumericPrefixWithSuffix(Some(12), "_ab")
         );
 
         let target = "1_2ab";
+
         assert_eq!(
             NumericPrefixWithSuffix::from_numeric_prefixed_str(target),
             NumericPrefixWithSuffix(Some(1), "_2ab")
         );
 
         let target = "1.2";
+
         assert_eq!(
             NumericPrefixWithSuffix::from_numeric_prefixed_str(target),
             NumericPrefixWithSuffix(Some(1), ".2")
         );
 
         let target = "1.2_a";
+
         assert_eq!(
             NumericPrefixWithSuffix::from_numeric_prefixed_str(target),
             NumericPrefixWithSuffix(Some(1), ".2_a")
         );
 
         let target = "12.2_a";
+
         assert_eq!(
             NumericPrefixWithSuffix::from_numeric_prefixed_str(target),
             NumericPrefixWithSuffix(Some(12), ".2_a")
         );
 
         let target = "12a.2_a";
+
         assert_eq!(
             NumericPrefixWithSuffix::from_numeric_prefixed_str(target),
             NumericPrefixWithSuffix(Some(12), "a.2_a")
@@ -1212,7 +1319,9 @@ mod tests {
     #[test]
     fn test_numeric_prefix_with_suffix() {
         let mut sorted = vec!["1-abc", "10", "11def", "2", "21-abc"];
+
         sorted.sort_by_key(|s| NumericPrefixWithSuffix::from_numeric_prefixed_str(s));
+
         assert_eq!(sorted, ["1-abc", "2", "10", "11def", "21-abc"]);
 
         for numeric_prefix_less in ["numeric_prefix_less", "aaa", "~™£"] {
@@ -1275,36 +1384,43 @@ Line 3"#
             expanded_and_wrapped_usize_range(2..4, 1, 1, 8).collect::<Vec<usize>>(),
             (1..5).collect::<Vec<usize>>()
         );
+
         // Start wraps
         assert_eq!(
             expanded_and_wrapped_usize_range(2..4, 3, 1, 8).collect::<Vec<usize>>(),
             ((0..5).chain(7..8)).collect::<Vec<usize>>()
         );
+
         // Start wraps all the way around
         assert_eq!(
             expanded_and_wrapped_usize_range(2..4, 5, 1, 8).collect::<Vec<usize>>(),
             (0..8).collect::<Vec<usize>>()
         );
+
         // Start wraps all the way around and past 0
         assert_eq!(
             expanded_and_wrapped_usize_range(2..4, 10, 1, 8).collect::<Vec<usize>>(),
             (0..8).collect::<Vec<usize>>()
         );
+
         // End wraps
         assert_eq!(
             expanded_and_wrapped_usize_range(3..5, 1, 4, 8).collect::<Vec<usize>>(),
             (0..1).chain(2..8).collect::<Vec<usize>>()
         );
+
         // End wraps all the way around
         assert_eq!(
             expanded_and_wrapped_usize_range(3..5, 1, 5, 8).collect::<Vec<usize>>(),
             (0..8).collect::<Vec<usize>>()
         );
+
         // End wraps all the way around and past the end
         assert_eq!(
             expanded_and_wrapped_usize_range(3..5, 1, 10, 8).collect::<Vec<usize>>(),
             (0..8).collect::<Vec<usize>>()
         );
+
         // Both start and end wrap
         assert_eq!(
             expanded_and_wrapped_usize_range(3..5, 4, 4, 8).collect::<Vec<usize>>(),
@@ -1319,31 +1435,37 @@ Line 3"#
             wrapped_usize_outward_from(4, 2, 2, 10).collect::<Vec<usize>>(),
             vec![4, 5, 3, 6, 2]
         );
+
         // Wrapping at end
         assert_eq!(
             wrapped_usize_outward_from(8, 2, 3, 10).collect::<Vec<usize>>(),
             vec![8, 9, 7, 0, 6, 1]
         );
+
         // Wrapping at start
         assert_eq!(
             wrapped_usize_outward_from(1, 3, 2, 10).collect::<Vec<usize>>(),
             vec![1, 2, 0, 3, 9, 8]
         );
+
         // All values wrap around
         assert_eq!(
             wrapped_usize_outward_from(5, 10, 10, 8).collect::<Vec<usize>>(),
             vec![5, 6, 4, 7, 3, 0, 2, 1]
         );
+
         // None before / after
         assert_eq!(
             wrapped_usize_outward_from(3, 0, 0, 8).collect::<Vec<usize>>(),
             vec![3]
         );
+
         // Starting point already wrapped
         assert_eq!(
             wrapped_usize_outward_from(15, 2, 2, 10).collect::<Vec<usize>>(),
             vec![5, 6, 4, 7, 3]
         );
+
         // wrap_length of 0
         assert_eq!(
             wrapped_usize_outward_from(4, 2, 2, 0).collect::<Vec<usize>>(),
@@ -1385,6 +1507,7 @@ Line 3"#
                 "deeper": { "list": [1, 2], "other": "kept" },
             },
         });
+
         let source = json!({
             "replaced_scalar": "new",
             "replaced_array": ["default-2", "user"],
@@ -1437,6 +1560,7 @@ Line 3"#
                 "scalar": 2,
             },
         });
+
         let source = json!({
             "replaced_scalar": "new",
             "unioned_array": ["shared", "second"],

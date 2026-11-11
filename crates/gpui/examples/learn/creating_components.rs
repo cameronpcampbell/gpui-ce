@@ -12,6 +12,7 @@ mod example_prelude;
 
 use example_prelude::init_example;
 use gpui::colors::Colors;
+
 use gpui::{
     App, Bounds, Context, Entity, IntoElement, Render, RenderOnce, Window, WindowBounds,
     WindowOptions, div, prelude::*, px, rgb, size,
@@ -86,9 +87,11 @@ fn use_state_counter(colors: &Colors, window: &mut Window, cx: &mut App) -> impl
                         .child("−")
                         .on_click({
                             let state = state.clone();
+
                             move |_, _, cx| {
                                 state.update(cx, |state, cx| {
                                     state.count -= 1;
+
                                     cx.notify();
                                 });
                             }
@@ -108,6 +111,7 @@ fn use_state_counter(colors: &Colors, window: &mut Window, cx: &mut App) -> impl
                         .on_click(move |_, _, cx| {
                             state.update(cx, |state, cx| {
                                 state.count += 1;
+
                                 cx.notify();
                             });
                         }),
@@ -153,11 +157,13 @@ impl RenderOnceCounter {
 
     fn on_increment(mut self, callback: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_increment = Some(Box::new(callback));
+
         self
     }
 
     fn on_decrement(mut self, callback: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_decrement = Some(Box::new(callback));
+
         self
     }
 }
@@ -258,11 +264,13 @@ impl RenderCounter {
 
     fn increment(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.count += 1;
+
         cx.notify();
     }
 
     fn decrement(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.count -= 1;
+
         cx.notify();
     }
 }
@@ -395,10 +403,12 @@ impl Render for CreatingComponentsExample {
                         RenderOnceCounter::new(colors.clone(), render_once_count)
                             .on_increment({
                                 let handle = handle.clone();
+
                                 move |_window, cx| {
                                     handle
                                         .update(cx, |this, cx| {
                                             this.render_once_count += 1;
+
                                             cx.notify();
                                         })
                                         .ok();
@@ -408,6 +418,7 @@ impl Render for CreatingComponentsExample {
                                 handle
                                     .update(cx, |this, cx| {
                                         this.render_once_count -= 1;
+
                                         cx.notify();
                                     })
                                     .ok();
@@ -421,6 +432,7 @@ impl Render for CreatingComponentsExample {
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(700.), px(400.)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(|cx| CreatingComponentsExample::new(cx)),

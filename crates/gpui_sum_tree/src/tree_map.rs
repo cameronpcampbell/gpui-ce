@@ -46,6 +46,7 @@ impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
                 .map(|(key, value)| MapEntry { key, value }),
             (),
         );
+
         Self(tree)
     }
 
@@ -61,12 +62,14 @@ impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
         let (.., item) = self
             .0
             .find::<MapKeyRef<'_, K>, _>((), &MapKeyRef(Some(key)), Bias::Left);
+
         if let Some(item) = item {
             if Some(key) == item.key().0.as_ref() {
                 Some(&item.value)
             } else {
                 None
             }
+
         } else {
             None
         }
@@ -87,6 +90,7 @@ impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
             .into_iter()
             .map(|(key, value)| Edit::Insert(MapEntry { key, value }))
             .collect();
+
         self.0.edit(edits, ());
     }
 
@@ -99,13 +103,19 @@ impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
         let mut cursor = self.0.cursor::<MapKeyRef<'_, K>>(());
         let key = MapKeyRef(Some(key));
         let mut new_tree = cursor.slice(&key, Bias::Left);
+
         if key.cmp(&cursor.end(), ()) == Ordering::Equal {
             removed = Some(cursor.item().unwrap().value.clone());
+
             cursor.next();
         }
+
         new_tree.append(cursor.suffix(), ());
+
         drop(cursor);
+
         self.0 = new_tree;
+
         removed
     }
 
@@ -114,9 +124,12 @@ impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
         let end = MapSeekTargetAdaptor(end);
         let mut cursor = self.0.cursor::<MapKeyRef<'_, K>>(());
         let mut new_tree = cursor.slice(&start, Bias::Left);
+
         cursor.seek(&end, Bias::Left);
         new_tree.append(cursor.suffix(), ());
+
         drop(cursor);
+
         self.0 = new_tree;
     }
 
@@ -124,6 +137,7 @@ impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
     pub fn closest(&self, key: &K) -> Option<(&K, &V)> {
         let mut cursor = self.0.cursor::<MapKeyRef<'_, K>>(());
         let key = MapKeyRef(Some(key));
+
         cursor.seek(&key, Bias::Right);
         cursor.prev();
         cursor.item().map(|item| (&item.key, &item.value))
@@ -132,6 +146,7 @@ impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
     pub fn iter_from<'a>(&'a self, from: &K) -> impl Iterator<Item = (&'a K, &'a V)> + 'a {
         let mut cursor = self.0.cursor::<MapKeyRef<'_, K>>(());
         let from_key = MapKeyRef(Some(from));
+
         cursor.seek(&from_key, Bias::Left);
 
         cursor.map(|map_entry| (&map_entry.key, &map_entry.value))
@@ -145,15 +160,22 @@ impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
         let key = MapKeyRef(Some(key));
         let mut new_tree = cursor.slice(&key, Bias::Left);
         let mut result = None;
+
         if key.cmp(&cursor.end(), ()) == Ordering::Equal {
             let mut updated = cursor.item().unwrap().clone();
+
             result = Some(f(&mut updated.value));
+
             new_tree.push(updated, ());
             cursor.next();
         }
+
         new_tree.append(cursor.suffix(), ());
+
         drop(cursor);
+
         self.0 = new_tree;
+
         result
     }
 
@@ -161,13 +183,17 @@ impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
         let mut new_map = SumTree::<MapEntry<K, V>>::default();
 
         let mut cursor = self.0.cursor::<MapKeyRef<'_, K>>(());
+
         cursor.next();
+
         while let Some(item) = cursor.item() {
             if predicate(&item.key, &item.value) {
                 new_map.push(item.clone(), ());
             }
+
             cursor.next();
         }
+
         drop(cursor);
 
         self.0 = new_map;
@@ -363,20 +389,25 @@ mod tests {
     #[test]
     fn test_basic() {
         let mut map = TreeMap::default();
+
         assert_eq!(map.iter().collect::<Vec<_>>(), vec![]);
 
         map.insert(3, "c");
+
         assert_eq!(map.get(&3), Some(&"c"));
         assert_eq!(map.iter().collect::<Vec<_>>(), vec![(&3, &"c")]);
 
         map.insert(1, "a");
+
         assert_eq!(map.get(&1), Some(&"a"));
         assert_eq!(map.iter().collect::<Vec<_>>(), vec![(&1, &"a"), (&3, &"c")]);
 
         map.insert(2, "b");
+
         assert_eq!(map.get(&2), Some(&"b"));
         assert_eq!(map.get(&1), Some(&"a"));
         assert_eq!(map.get(&3), Some(&"c"));
+
         assert_eq!(
             map.iter().collect::<Vec<_>>(),
             vec![(&1, &"a"), (&2, &"b"), (&3, &"c")]
@@ -387,16 +418,19 @@ mod tests {
         assert_eq!(map.closest(&10), Some((&3, &"c")));
 
         map.remove(&2);
+
         assert_eq!(map.get(&2), None);
         assert_eq!(map.iter().collect::<Vec<_>>(), vec![(&1, &"a"), (&3, &"c")]);
 
         assert_eq!(map.closest(&2), Some((&1, &"a")));
 
         map.remove(&3);
+
         assert_eq!(map.get(&3), None);
         assert_eq!(map.iter().collect::<Vec<_>>(), vec![(&1, &"a")]);
 
         map.remove(&1);
+
         assert_eq!(map.get(&1), None);
         assert_eq!(map.iter().collect::<Vec<_>>(), vec![]);
 
@@ -404,6 +438,7 @@ mod tests {
         map.insert(5, "e");
         map.insert(6, "f");
         map.retain(|key, _| *key % 2 == 0);
+
         assert_eq!(map.iter().collect::<Vec<_>>(), vec![(&4, &"d"), (&6, &"f")]);
     }
 
@@ -438,11 +473,13 @@ mod tests {
     #[test]
     fn test_insert_tree() {
         let mut map = TreeMap::default();
+
         map.insert("a", 1);
         map.insert("b", 2);
         map.insert("c", 3);
 
         let mut other = TreeMap::default();
+
         other.insert("a", 2);
         other.insert("b", 2);
         other.insert("d", 4);
@@ -459,10 +496,12 @@ mod tests {
     #[test]
     fn test_extend() {
         let mut map = TreeMap::default();
+
         map.insert("a", 1);
         map.insert("b", 2);
         map.insert("c", 3);
         map.extend([("a", 2), ("b", 2), ("d", 4)]);
+
         assert_eq!(map.iter().count(), 4);
         assert_eq!(map.get(&"a"), Some(&2));
         assert_eq!(map.get(&"b"), Some(&2));

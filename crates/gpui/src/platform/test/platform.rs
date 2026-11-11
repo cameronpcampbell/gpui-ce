@@ -6,6 +6,7 @@ use crate::{
     SourceMetadata, SystemNotification, SystemNotificationResponse, Task, TestDisplay, TestWindow,
     ThermalState, WindowAppearance, WindowParams, size,
 };
+
 #[cfg(any(test, feature = "test-support"))]
 use crate::{PathPromptOptions, TestTextSystem};
 use anyhow::Result;
@@ -13,6 +14,7 @@ use anyhow::Result;
 use collections::VecDeque;
 use futures::channel::oneshot;
 use parking_lot::Mutex;
+
 use std::{
     cell::RefCell,
     path::{Path, PathBuf},
@@ -29,18 +31,24 @@ pub(crate) struct TestPlatform {
     active_display: Rc<dyn PlatformDisplay>,
     active_cursor: Mutex<CursorStyle>,
     current_clipboard_item: Mutex<Option<ClipboardItem>>,
+
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     current_primary_item: Mutex<Option<ClipboardItem>>,
+
     #[cfg(target_os = "macos")]
     current_find_pasteboard_item: Mutex<Option<ClipboardItem>>,
+
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) prompts: RefCell<TestPrompts>,
+
     screen_capture_sources: RefCell<Vec<TestScreenCaptureSource>>,
     pub opened_url: RefCell<Option<String>>,
     pub(crate) system_notifications: RefCell<TestSystemNotifications>,
     pub text_system: Arc<dyn PlatformTextSystem>,
+
     pub expect_restart:
         RefCell<Option<oneshot::Sender<(Option<PathBuf>, Vec<std::ffi::OsString>)>>>,
+
     headless_renderer_factory: Option<Box<dyn Fn() -> Option<Box<dyn PlatformHeadlessRenderer>>>>,
     weak: Weak<Self>,
 }
@@ -69,8 +77,10 @@ impl ScreenCaptureSource for TestScreenCaptureSource {
     ) -> oneshot::Receiver<Result<Box<dyn ScreenCaptureStream>>> {
         let (mut tx, rx) = oneshot::channel();
         let stream = TestScreenCaptureStream {};
+
         tx.send(Ok(Box::new(stream) as Box<dyn ScreenCaptureStream>))
             .ok();
+
         rx
     }
 }
@@ -103,6 +113,7 @@ pub(crate) struct TestSystemNotifications {
 pub(crate) struct TestPrompts {
     multiple_choice: VecDeque<TestPrompt>,
     new_path: VecDeque<(PathBuf, oneshot::Sender<Result<Option<PathBuf>>>)>,
+
     paths: VecDeque<(
         PathPromptOptions,
         oneshot::Sender<Result<Option<Vec<PathBuf>>>>,
@@ -175,6 +186,7 @@ impl TestPlatform {
             .new_path
             .pop_front()
             .expect("no pending new path prompt");
+
         tx.send(Ok(select_path(&path))).ok();
     }
 
@@ -189,7 +201,9 @@ impl TestPlatform {
             .paths
             .pop_front()
             .expect("no pending paths prompt");
+
         let selection = select_paths(&options);
+
         if let Some(paths) = &selection
             && !options.multiple
             && paths.len() > 1
@@ -199,6 +213,7 @@ impl TestPlatform {
                 paths.len()
             );
         }
+
         tx.send(Ok(selection)).ok();
     }
 
@@ -216,12 +231,14 @@ impl TestPlatform {
             .multiple_choice
             .pop_front()
             .expect("no pending multiple choice prompt");
+
         let Some(ix) = prompt.answers.iter().position(|a| a == response) else {
             panic!(
                 "PROMPT: {}\n{:?}\n{:?}\nCannot respond with {}",
                 prompt.msg, prompt.detail, prompt.answers, response
             )
         };
+
         prompt.tx.send(ix).ok();
     }
 
@@ -234,6 +251,7 @@ impl TestPlatform {
     pub(crate) fn pending_prompt(&self) -> Option<(String, String)> {
         let prompts = self.prompts.borrow();
         let prompt = prompts.multiple_choice.front()?;
+
         Some((
             prompt.msg.clone(),
             prompt.detail.clone().unwrap_or_default(),
@@ -256,6 +274,7 @@ impl TestPlatform {
     ) -> oneshot::Receiver<usize> {
         let (tx, rx) = oneshot::channel();
         let answers: Vec<String> = answers.iter().map(|s| s.label().to_string()).collect();
+
         self.prompts
             .borrow_mut()
             .multiple_choice
@@ -265,6 +284,7 @@ impl TestPlatform {
                 answers,
                 tx,
             });
+
         rx
     }
 
@@ -284,6 +304,7 @@ impl TestPlatform {
     pub(crate) fn set_active_window(&self, window: Option<TestWindow>) {
         let executor = self.foreground_executor();
         let previous_window = self.active_window.borrow_mut().take();
+
         self.active_window.borrow_mut().clone_from(&window);
 
         executor
@@ -294,8 +315,10 @@ impl TestPlatform {
                     {
                         return;
                     }
+
                     previous_window.simulate_active_status_change(false);
                 }
+
                 if let Some(window) = window {
                     window.simulate_active_status_change(true);
                 }
@@ -338,8 +361,10 @@ impl TestPlatform {
             .borrow_mut()
             .response_callback
             .take();
+
         if let Some(mut callback) = callback {
             callback(response);
+
             self.system_notifications
                 .borrow_mut()
                 .response_callback
@@ -423,6 +448,7 @@ impl Platform for TestPlatform {
         &self,
     ) -> oneshot::Receiver<Result<Vec<Rc<dyn ScreenCaptureSource>>>> {
         let (mut tx, rx) = oneshot::channel();
+
         tx.send(Ok(self
             .screen_capture_sources
             .borrow()
@@ -430,6 +456,7 @@ impl Platform for TestPlatform {
             .map(|source| Rc::new(source.clone()) as Rc<dyn ScreenCaptureSource>)
             .collect()))
             .ok();
+
         rx
     }
 
@@ -446,6 +473,7 @@ impl Platform for TestPlatform {
         params: WindowParams,
     ) -> anyhow::Result<Box<dyn crate::PlatformWindow>> {
         let renderer = self.headless_renderer_factory.as_ref().and_then(|f| f());
+
         let window = TestWindow::new(
             handle,
             params,
@@ -453,6 +481,7 @@ impl Platform for TestPlatform {
             self.active_display.clone(),
             renderer,
         );
+
         Ok(Box::new(window))
     }
 
@@ -476,7 +505,9 @@ impl Platform for TestPlatform {
         options: crate::PathPromptOptions,
     ) -> oneshot::Receiver<Result<Option<Vec<std::path::PathBuf>>>> {
         let (tx, rx) = oneshot::channel();
+
         self.prompts.borrow_mut().paths.push_back((options, tx));
+
         rx
     }
 
@@ -501,10 +532,12 @@ impl Platform for TestPlatform {
         _suggested_name: Option<&str>,
     ) -> oneshot::Receiver<Result<Option<std::path::PathBuf>>> {
         let (tx, rx) = oneshot::channel();
+
         self.prompts
             .borrow_mut()
             .new_path
             .push_back((directory.to_path_buf(), tx));
+
         rx
     }
 
@@ -544,6 +577,7 @@ impl Platform for TestPlatform {
 
     fn show_system_notification(&self, notification: SystemNotification) {
         let mut system_notifications = self.system_notifications.borrow_mut();
+
         if system_notifications.app_identity.is_none() {
             return;
         }
@@ -552,19 +586,23 @@ impl Platform for TestPlatform {
             .delivered
             .iter_mut()
             .find(|delivered| delivered.tag == notification.tag);
+
         if let Some(delivered) = delivered {
             *delivered = notification.clone();
         } else {
             system_notifications.delivered.push(notification.clone());
         }
+
         system_notifications.shown.push(notification);
     }
 
     fn dismiss_system_notification(&self, tag: &str) {
         let mut system_notifications = self.system_notifications.borrow_mut();
+
         system_notifications
             .delivered
             .retain(|notification| notification.tag != tag);
+
         system_notifications
             .dismissed
             .push(SharedString::from(tag.to_string()));

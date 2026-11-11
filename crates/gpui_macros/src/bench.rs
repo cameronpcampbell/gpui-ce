@@ -8,41 +8,57 @@ pub fn bench(args: TokenStream, function: TokenStream) -> TokenStream {
     let mut input_name: Option<LitStr> = None;
     let mut group_name: Option<LitStr> = None;
     let mut sample_size: Option<usize> = None;
+
     if !args.is_empty() {
         let parser = syn::meta::parser(|meta| {
             if meta.path.is_ident("fps") {
                 let value: syn::LitInt = meta.value()?.parse()?;
                 let value = value.base10_parse::<u64>()?;
+
                 if value == 0 {
                     return Err(meta.error("#[gpui::bench] `fps` must be greater than zero"));
                 }
+
                 fps = Some(value);
+
                 Ok(())
+
             } else if meta.path.is_ident("inputs") {
                 inputs = Some(meta.value()?.parse()?);
+
                 Ok(())
+
             } else if meta.path.is_ident("input_name") {
                 input_name = Some(meta.value()?.parse()?);
+
                 Ok(())
+
             } else if meta.path.is_ident("group") {
                 group_name = Some(meta.value()?.parse()?);
+
                 Ok(())
+
             } else if meta.path.is_ident("sample_size") {
                 let value: syn::LitInt = meta.value()?.parse()?;
                 let value = value.base10_parse::<usize>()?;
+
                 if value == 0 {
                     return Err(
                         meta.error("#[gpui::bench] `sample_size` must be greater than zero")
                     );
                 }
+
                 sample_size = Some(value);
+
                 Ok(())
+
             } else {
                 Err(meta.error(
                     "#[gpui::bench] only accepts `fps = N`, `inputs = EXPR`, `input_name = \"...\"`, `group = \"...\"`, and `sample_size = N`",
                 ))
             }
         });
+
         if let Err(error) = parser.parse(args) {
             return error_to_stream(error);
         }
@@ -69,6 +85,7 @@ pub fn bench(args: TokenStream, function: TokenStream) -> TokenStream {
 
     let outer_fn_name = inner_fn.sig.ident.clone();
     let inner_fn_name = format_ident!("__gpui_bench_{}", outer_fn_name);
+
     inner_fn.sig.ident = inner_fn_name.clone();
 
     let benchmark = if let Some(inputs) = inputs {
@@ -76,12 +93,15 @@ pub fn bench(args: TokenStream, function: TokenStream) -> TokenStream {
             Some(input_name) => quote! { #input_name },
             None => quote! { stringify!(#outer_fn_name) },
         };
+
         let group_name = match group_name {
             Some(group_name) => quote! { #group_name },
             None => quote! { stringify!(#outer_fn_name) },
         };
+
         let sample_size =
             sample_size.map(|sample_size| quote! { group.sample_size(#sample_size); });
+
         quote! {
             let report = #report_expr;
             let mut group = criterion.benchmark_group(#group_name);
@@ -109,6 +129,7 @@ pub fn bench(args: TokenStream, function: TokenStream) -> TokenStream {
             group.finish();
             report.print(Some(stringify!(#outer_fn_name)));
         }
+
     } else {
         if let Some(input_name) = input_name {
             return error_to_stream(syn::Error::new(
@@ -116,18 +137,21 @@ pub fn bench(args: TokenStream, function: TokenStream) -> TokenStream {
                 "#[gpui::bench] `input_name` requires `inputs`",
             ));
         }
+
         if let Some(group_name) = group_name {
             return error_to_stream(syn::Error::new(
                 group_name.span(),
                 "#[gpui::bench] `group` requires `inputs`",
             ));
         }
+
         if sample_size.is_some() {
             return error_to_stream(syn::Error::new(
                 proc_macro2::Span::call_site(),
                 "#[gpui::bench] `sample_size` requires `inputs`",
             ));
         }
+
         quote! {
             let report = #report_expr;
             criterion.bench_function(stringify!(#outer_fn_name), {

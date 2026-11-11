@@ -7,6 +7,7 @@ use gpui::{
     App, Bounds, Context, Div, ElementId, FocusHandle, KeyBinding, SharedString, Stateful, Window,
     WindowBounds, WindowOptions, actions, div, prelude::*, px, size,
 };
+
 use gpui_platform::application;
 
 actions!(example, [Tab, TabPrev, Quit]);
@@ -35,6 +36,7 @@ impl Example {
         ];
 
         let focus_handle = cx.focus_handle();
+
         window.focus(&focus_handle, cx);
 
         Self {
@@ -48,11 +50,13 @@ impl Example {
 
     fn on_tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<Self>) {
         window.focus_next(cx);
+
         self.message = SharedString::from("Pressed Tab - focus-visible border should appear!");
     }
 
     fn on_tab_prev(&mut self, _: &TabPrev, window: &mut Window, cx: &mut Context<Self>) {
         window.focus_prev(cx);
+
         self.message =
             SharedString::from("Pressed Shift-Tab - focus-visible border should appear!");
     }
@@ -133,6 +137,7 @@ impl Render for Example {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.message =
                                             "Clicked button 1 - focus border is visible!".into();
+
                                         cx.notify();
                                     })),
                             ),
@@ -158,6 +163,7 @@ impl Render for Example {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.message =
                                             "Clicked button 2 - no border! Try Tab instead.".into();
+
                                         cx.notify();
                                     })),
                             ),
@@ -189,6 +195,7 @@ impl Render for Example {
                                         this.message =
                                             "Clicked button 3 - yellow border. Tab shows green!"
                                                 .into();
+
                                         cx.notify();
                                     })),
                             ),
@@ -202,6 +209,7 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         cx.bind_keys([
             KeyBinding::new("tab", Tab, None),
             KeyBinding::new("shift-tab", TabPrev, None),
@@ -209,6 +217,7 @@ fn run_example() {
         ]);
 
         let bounds = Bounds::centered(None, size(px(800.), px(600.0)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| cx.new(|cx| Example::new(window, cx)),

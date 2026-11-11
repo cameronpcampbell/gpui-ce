@@ -188,6 +188,7 @@ impl PlatformWindow for HeadlessWindow {
 
     fn toggle_fullscreen(&self) {
         let mut state = self.0.borrow_mut();
+
         state.is_fullscreen = !state.is_fullscreen;
     }
 
@@ -250,9 +251,13 @@ struct HeadlessAtlasState {
 impl HeadlessAtlasState {
     fn insert_tile(&mut self, key: AtlasKey, size: Size<DevicePixels>) -> AtlasTile {
         self.next_id += 1;
+
         let texture_id = self.next_id;
+
         self.next_id += 1;
+
         let tile_id = self.next_id;
+
         let tile = AtlasTile {
             texture_id: AtlasTextureId {
                 index: texture_id,
@@ -282,6 +287,7 @@ impl PlatformAtlas for HeadlessAtlas {
     ) -> anyhow::Result<Option<AtlasTile>> {
         {
             let state = self.0.lock();
+
             if let Some(&tile) = state.tiles.get(key) {
                 return Ok(Some(tile));
             }
@@ -309,6 +315,7 @@ impl PlatformAtlas for HeadlessAtlas {
         let glyph = build()?;
 
         let mut state = self.0.lock();
+
         let tile = if glyph.size == Size::default() {
             None
         } else {
@@ -322,6 +329,7 @@ impl PlatformAtlas for HeadlessAtlas {
 
     fn remove(&self, key: &AtlasKey) {
         let mut state = self.0.lock();
+
         state.glyph_cache.remove(key);
         state.tiles.remove(key);
     }

@@ -75,8 +75,10 @@ struct BindingLayout<'a> {
 
 struct NativeShaderModule {
     pipeline: &'static shaders::interface::Pipeline,
+
     /// Path of `pipeline` inside `crate::shaders::interface`, for the generated table.
     pipeline_path: &'static str,
+
     source: &'static wgsl_rs::Source,
     requires_dual_source_lowering: bool,
 }
@@ -96,11 +98,14 @@ fn main() {
         "gpui_base.wgsl",
         shader_source("gpui_base.wgsl", &shaders::base::WGSL_SOURCE),
     );
+
     let subpixel = shader_source("gpui_subpixel.wgsl", &shaders::subpixel_sprite::WGSL_SOURCE);
+
     let subpixel_dual_source = ShaderArtifact::current_only(
         "gpui_subpixel_dual_source.wgsl",
         format!("enable dual_source_blending;\n{subpixel}"),
     );
+
     // Dual-source blending only exists in current compilers, so that artifact skips the floor.
     base.validate_and_write(&out_dir);
     subpixel_dual_source.validate_and_write(&out_dir);
@@ -110,17 +115,21 @@ fn main() {
         "gpui_base_downlevel.wgsl",
         downlevel_dialect("gpui_base_downlevel.wgsl", &base.source),
     );
+
     downlevel.validate_and_write(&out_dir);
 
     let quad = shader_source("quad interface", &shaders::quad::WGSL_SOURCE);
+
     let monochrome = shader_source(
         "monochrome sprite interface",
         &shaders::monochrome_sprite::WGSL_SOURCE,
     );
+
     let polychrome = shader_source(
         "polychrome sprite interface",
         &shaders::polychrome_sprite::WGSL_SOURCE,
     );
+
     let subpixel_interface = format!(
         "enable dual_source_blending;\n{}",
         shader_source(
@@ -128,6 +137,7 @@ fn main() {
             &shaders::subpixel_sprite::WGSL_SOURCE,
         )
     );
+
     let surface = shader_source("surface interface", &shaders::surface::WGSL_SOURCE);
     let blur = shader_source("blur interface", &shaders::blur::WGSL_SOURCE);
     let downlevel_quad = downlevel_dialect("quad interface", &quad);
@@ -179,6 +189,7 @@ fn main() {
             dialect: ReflectionDialect::Modern,
         },
     ];
+
     let downlevel_layouts = [
         BindingLayout {
             constant: "DOWNLEVEL_INSTANCE_BINDINGS",
@@ -205,6 +216,7 @@ fn main() {
             dialect: ReflectionDialect::Downlevel,
         },
     ];
+
     write_interface(&out_dir, &layouts, &downlevel_layouts);
     write_native_shaders(&out_dir);
 }
@@ -231,6 +243,7 @@ fn write_bytes(out_dir: &std::path::Path, name: &str, bytes: &[u8]) {
 fn validate_with_current(name: &str, source: &str) {
     let module = naga::front::wgsl::parse_str(source)
         .unwrap_or_else(|error| panic!("current Naga failed to parse {name}: {error}"));
+
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
@@ -242,6 +255,7 @@ fn validate_with_current(name: &str, source: &str) {
 fn validate_with_floor(name: &str, source: &str) {
     let module = naga_old::front::wgsl::parse_str(source)
         .unwrap_or_else(|error| panic!("floor Naga failed to parse {name}: {error}"));
+
     naga_old::valid::Validator::new(
         naga_old::valid::ValidationFlags::all(),
         naga_old::valid::Capabilities::all(),
@@ -253,6 +267,7 @@ fn validate_with_floor(name: &str, source: &str) {
 /// Validates with the current Naga always, plus the floor Naga unless current-only.
 fn validate_artifact(artifact: &ShaderArtifact) {
     validate_with_current(artifact.file_name, &artifact.source);
+
     if matches!(artifact.compatibility, NagaCompatibility::CurrentAndFloor) {
         validate_with_floor(artifact.file_name, &artifact.source);
     }
@@ -265,12 +280,15 @@ fn downlevel_dialect(name: &str, source: &str) -> String {
 
     for line in source.lines() {
         let trimmed = line.trim();
+
         if let Some(array) = parse_storage_array_decl(trimmed) {
             transformed.push_str(&format!(
                 "@group(1) @binding(0) var {}_DATA: texture_2d<u32>;\n",
                 array.name
             ));
+
             arrays.push(array);
+
         } else {
             transformed.push_str(line);
             transformed.push('\n');
@@ -282,12 +300,16 @@ fn downlevel_dialect(name: &str, source: &str) -> String {
             !source.contains("var<storage"),
             "downlevel transform matched no storage arrays in {name}"
         );
+
         transformed
+
     } else {
         for array in &arrays {
             transformed = rewrite_array_accesses(&transformed, &array.name);
         }
+
         transformed.push_str(&emit_downlevel_runtime(name, source, &arrays));
+
         transformed
     }
 }
@@ -295,15 +317,18 @@ fn downlevel_dialect(name: &str, source: &str) -> String {
 fn parse_storage_array_decl(line: &str) -> Option<StorageArray> {
     let rest = line.strip_prefix("@group(1) @binding(0) var<storage, read> ")?;
     let (name, rest) = rest.split_once(": array<")?;
+
     let type_name = rest
         .strip_suffix(';')?
         .strip_suffix('>')?
         .trim()
         .to_string();
+
     assert!(
         !type_name.is_empty(),
         "storage array declaration has no element type"
     );
+
     Some(StorageArray {
         name: name.trim().to_string(),
         element_type: type_name,
@@ -315,39 +340,52 @@ fn rewrite_array_accesses(source: &str, array_name: &str) -> String {
     let pattern = format!("{array_name}[u32(");
     let mut output = String::with_capacity(source.len());
     let mut rest = source;
+
     while let Some(position) = rest.find(&pattern) {
         let arg_start = position + pattern.len();
+
         // Find the matching `)` for the u32( call, then the closing `]`.
         let arg_end = rest[arg_start..]
             .find(')')
             .unwrap_or_else(|| panic!("unbalanced u32( in {array_name} access"));
+
         let close = rest.get(arg_start + arg_end + 1..=arg_start + arg_end + 1);
+
         assert_eq!(close, Some("]"), "expected ] after {array_name} access");
+
         output.push_str(&rest[..position]);
+
         output.push_str(&format!(
             "dl_load_{array_name}({})",
             &rest[arg_start..arg_start + arg_end]
         ));
+
         rest = &rest[arg_start + arg_end + 2..];
     }
+
     output.push_str(rest);
+
     output
 }
 
 /// Emits the data-texture runtime: range uniform, word extractor, typed decoders.
 fn emit_downlevel_runtime(name: &str, base_source: &str, arrays: &[StorageArray]) -> String {
     let mut runtime = String::new();
+
     writeln!(runtime).unwrap();
+
     writeln!(
         runtime,
         "// --- generated downlevel transport (build.rs) ---"
     )
     .unwrap();
+
     writeln!(
         runtime,
         "const DATA_TEXTURE_WIDTH: u32 = {DATA_TEXTURE_WIDTH}u;"
     )
     .unwrap();
+
     writeln!(
         runtime,
         "struct DataRange {{
@@ -359,6 +397,7 @@ fn emit_downlevel_runtime(name: &str, base_source: &str, arrays: &[StorageArray]
 @group(1) @binding({DOWNLEVEL_RANGE_BINDING}) var<uniform> DATA_RANGE: DataRange;"
     )
     .unwrap();
+
     writeln!(
         runtime,
         "fn dl_scene_word(t: texture_2d<u32>, base: u32, w: u32) -> u32 {{
@@ -373,16 +412,22 @@ fn emit_downlevel_runtime(name: &str, base_source: &str, arrays: &[StorageArray]
     // Parse with the current Naga to drive layout-aware decoder codegen.
     let module = naga::front::wgsl::parse_str(base_source)
         .unwrap_or_else(|error| panic!("failed to parse {name} for decoder codegen: {error}"));
+
     let mut layouter = naga::proc::Layouter::default();
+
     layouter
         .update(module.to_ctx())
         .unwrap_or_else(|error| panic!("failed to lay out {name}: {error}"));
 
     let mut emitted: BTreeSet<String> = BTreeSet::new();
+
     for array in arrays {
         let handle = find_type(&module, &array.element_type, name);
+
         emit_type_decoder(&module, &layouter, handle, &mut runtime, &mut emitted);
+
         let words = words_per_element(&layouter, handle);
+
         writeln!(
             runtime,
             "fn dl_load_{array_name}(i: u32) -> {type_name} {{
@@ -393,6 +438,7 @@ fn emit_downlevel_runtime(name: &str, base_source: &str, arrays: &[StorageArray]
         )
         .unwrap();
     }
+
     runtime
 }
 
@@ -420,12 +466,15 @@ fn emit_type_decoder(
         .name
         .clone()
         .unwrap_or_else(|| panic!("anonymous types are not supported by the downlevel transport"));
+
     if !emitted.insert(name.clone()) {
         return;
     }
+
     // Ensure nested named types are emitted before their users.
     let ty = &module.types[handle];
     let mut members = Vec::new();
+
     if let naga::TypeInner::Struct { members: list, .. } = &ty.inner {
         for member in list {
             let member_layout = layouter[member.ty];
@@ -434,11 +483,15 @@ fn emit_type_decoder(
             // all elements while their stride is the distance between elements;
             // rebuilding offsets here is easy to get wrong as layouts evolve.
             let offset = member.offset;
+
             assert_eq!(offset % 4, 0, "struct member is not word aligned");
+
             if let naga::TypeInner::Struct { .. } = &module.types[member.ty].inner {
                 emit_type_decoder(module, layouter, member.ty, out, emitted);
             }
+
             members.push((member.ty, offset / 4));
+
             assert!(
                 offset
                     .checked_add(member_layout.size)
@@ -447,6 +500,7 @@ fn emit_type_decoder(
                 name
             );
         }
+
     } else {
         panic!("expected struct type {name}");
     }
@@ -456,6 +510,7 @@ fn emit_type_decoder(
         .map(|(member_ty, word)| decode_expr(module, layouter, *member_ty, *word, out, emitted))
         .collect::<Vec<_>>()
         .join(", ");
+
     write!(
         out,
         "fn dl_load_{name}_impl(t: texture_2d<u32>, base: u32) -> {name} {{
@@ -479,14 +534,17 @@ fn decode_expr(
             kind: naga::ScalarKind::Uint,
             ..
         }) => format!("dl_scene_word(t, base, {word}u)"),
+
         naga::TypeInner::Scalar(naga::Scalar {
             kind: naga::ScalarKind::Float,
             ..
         }) => format!("bitcast<f32>(dl_scene_word(t, base, {word}u))"),
+
         naga::TypeInner::Scalar(naga::Scalar {
             kind: naga::ScalarKind::Sint,
             ..
         }) => format!("bitcast<i32>(dl_scene_word(t, base, {word}u))"),
+
         naga::TypeInner::Vector { size, scalar } => {
             let kind = match scalar.kind {
                 naga::ScalarKind::Uint => "u32",
@@ -494,30 +552,41 @@ fn decode_expr(
                 naga::ScalarKind::Sint => "i32",
                 other => panic!("unsupported vector scalar {other:?}"),
             };
+
             let cast = |w: u32| match scalar.kind {
                 naga::ScalarKind::Uint => format!("dl_scene_word(t, base, {w}u)"),
+
                 naga::ScalarKind::Float => {
                     format!("bitcast<f32>(dl_scene_word(t, base, {w}u))")
                 }
+
                 naga::ScalarKind::Sint => {
                     format!("bitcast<i32>(dl_scene_word(t, base, {w}u))")
                 }
+
                 other => panic!("unsupported scalar {other:?}"),
             };
+
             let size_word = u32::from(*size);
+
             let components = (0..size_word)
                 .map(|index| cast(word + index))
                 .collect::<Vec<_>>()
                 .join(", ");
+
             format!("vec{size_word}<{kind}>({components})")
         }
+
         naga::TypeInner::Matrix { columns, rows, .. } => {
             assert_eq!(scalar_kind(module, handle), naga::ScalarKind::Float);
+
             let rows_word = u32::from(*rows);
             let columns_word = u32::from(*columns);
+
             let column_exprs = (0..columns_word)
                 .map(|column| {
                     let base = word + column * rows_word;
+
                     let components = (0..rows_word)
                         .map(|component| {
                             format!(
@@ -527,22 +596,28 @@ fn decode_expr(
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
+
                     format!("vec{rows_word}<f32>({components})")
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
+
             format!("mat{columns_word}x{rows_word}<f32>({column_exprs})")
         }
+
         naga::TypeInner::Array { base, size, stride } => {
             // `Layouter::to_stride` on an array handle is the stride of the
             // array as a member of another array, i.e. its total size rounded
             // to alignment. The element stride lives on TypeInner::Array and
             // must be used for indexing individual elements.
             assert_eq!(*stride % 4, 0, "array element stride is not word aligned");
+
             let element_stride = *stride / 4;
+
             let naga::ArraySize::Constant(length) = size else {
                 panic!("runtime-sized arrays are not supported inside downlevel elements");
             };
+
             let element_exprs = (0..length.get())
                 .map(|index| {
                     decode_expr(
@@ -556,13 +631,18 @@ fn decode_expr(
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
+
             format!("array({element_exprs})")
         }
+
         naga::TypeInner::Struct { .. } => {
             emit_type_decoder(module, layouter, handle, out, emitted);
+
             let name = module.types[handle].name.clone().expect("named struct");
+
             format!("dl_load_{name}_impl(t, base + {word}u)")
         }
+
         other => panic!("unsupported downlevel type {other:?}"),
     }
 }
@@ -572,6 +652,7 @@ fn scalar_kind(module: &naga::Module, handle: naga::Handle<naga::Type>) -> naga:
         naga::TypeInner::Matrix { scalar, .. }
         | naga::TypeInner::Vector { scalar, .. }
         | naga::TypeInner::Scalar(scalar) => scalar.kind,
+
         other => panic!("no scalar kind for {other:?}"),
     }
 }
@@ -591,30 +672,36 @@ fn write_interface(
     downlevel_layouts: &[BindingLayout<'_>],
 ) {
     let mut generated = String::from("// @generated by build.rs; do not edit.\n");
+
     writeln!(
         generated,
         "pub const DATA_TEXTURE_WIDTH: u32 = {DATA_TEXTURE_WIDTH};"
     )
     .unwrap();
+
     writeln!(
         generated,
         "pub const DOWNLEVEL_RANGE_BINDING: u32 = {DOWNLEVEL_RANGE_BINDING};"
     )
     .unwrap();
+
     for layout in layouts {
         validate_binding_layout(layout);
         write_bindings(&mut generated, layout);
     }
+
     for layout in downlevel_layouts {
         validate_binding_layout(layout);
         write_bindings(&mut generated, layout);
     }
+
     fs::write(out_dir.join("shader_interface.rs"), generated)
         .expect("failed to write generated shader interface");
 }
 
 fn validate_binding_layout(layout: &BindingLayout<'_>) {
     validate_with_current(layout.constant, layout.source);
+
     if matches!(layout.dialect, ReflectionDialect::Downlevel) {
         validate_with_floor(layout.constant, layout.source);
     }
@@ -627,6 +714,7 @@ fn write_bindings(generated: &mut String, layout: &BindingLayout<'_>) {
             layout.constant
         )
     });
+
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
@@ -638,7 +726,9 @@ fn write_bindings(generated: &mut String, layout: &BindingLayout<'_>) {
             layout.constant
         )
     });
+
     let mut layouter = naga::proc::Layouter::default();
+
     layouter
         .update(module.to_ctx())
         .unwrap_or_else(|error| panic!("failed to lay out {}: {error}", layout.constant));
@@ -648,10 +738,13 @@ fn write_bindings(generated: &mut String, layout: &BindingLayout<'_>) {
         .iter()
         .filter_map(|(handle, variable)| {
             let binding = variable.binding.as_ref()?;
+
             (binding.group == layout.group).then_some((handle, variable, binding.binding))
         })
         .collect::<Vec<_>>();
+
     bindings.sort_by_key(|(_, _, binding)| *binding);
+
     let mut seen = BTreeSet::new();
 
     writeln!(
@@ -660,6 +753,7 @@ fn write_bindings(generated: &mut String, layout: &BindingLayout<'_>) {
         layout.constant,
     )
     .unwrap();
+
     for (handle, variable, binding) in bindings {
         assert!(
             seen.insert(binding),
@@ -667,6 +761,7 @@ fn write_bindings(generated: &mut String, layout: &BindingLayout<'_>) {
             layout.group,
             layout.constant,
         );
+
         let visibility = module
             .entry_points
             .iter()
@@ -678,23 +773,28 @@ fn write_bindings(generated: &mut String, layout: &BindingLayout<'_>) {
                         naga::ShaderStage::Vertex => 1,
                         naga::ShaderStage::Fragment => 2,
                         naga::ShaderStage::Compute => 4,
+
                         stage => {
                             panic!("unsupported shader stage {stage:?} in {}", layout.constant)
                         }
                     }
             });
+
         assert_ne!(
             visibility, 0,
             "binding {}:{binding} is unused in {}",
             layout.group, layout.constant
         );
+
         let kind = binding_kind(&module, &layouter, variable, binding, layout.dialect);
+
         writeln!(
             generated,
             "    GeneratedBinding {{ binding: {binding}, visibility: {visibility}, kind: {kind} }},"
         )
         .unwrap();
     }
+
     generated.push_str("];\n");
 }
 
@@ -712,17 +812,20 @@ fn binding_kind(
         {
             "GeneratedBindingKind::RangeUniform".into()
         }
+
         naga::AddressSpace::Uniform => {
             format!(
                 "GeneratedBindingKind::Uniform({})",
                 layouter[variable.ty].size
             )
         }
+
         naga::AddressSpace::Storage { access } => {
             assert!(
                 !access.contains(naga::StorageAccess::STORE),
                 "writable shader storage is not supported by the generated interface"
             );
+
             let min_size = match module.types[variable.ty].inner {
                 // Naga reports the static portion of a runtime array as its layout size;
                 // wgpu requires room for one array element in a storage binding.
@@ -731,10 +834,13 @@ fn binding_kind(
                     stride,
                     ..
                 } => stride,
+
                 _ => layouter[variable.ty].size,
             };
+
             format!("GeneratedBindingKind::StorageRead({})", min_size)
         }
+
         naga::AddressSpace::Handle => match module.types[variable.ty].inner {
             naga::TypeInner::Image {
                 dim: naga::ImageDimension::D2,
@@ -745,6 +851,7 @@ fn binding_kind(
                         multi: false,
                     },
             } => "GeneratedBindingKind::Texture2dFloat".into(),
+
             naga::TypeInner::Image {
                 dim: naga::ImageDimension::D2,
                 arrayed: false,
@@ -756,11 +863,14 @@ fn binding_kind(
             } if matches!(dialect, ReflectionDialect::Downlevel) => {
                 "GeneratedBindingKind::DataTexture".into()
             }
+
             naga::TypeInner::Sampler { comparison: false } => {
                 "GeneratedBindingKind::FilteringSampler".into()
             }
+
             ref ty => panic!("unsupported shader resource type {ty:?}"),
         },
+
         space => panic!("unsupported shader resource address space {space:?}"),
     }
 }
@@ -874,17 +984,22 @@ fn write_native_shaders(out_dir: &std::path::Path) {
             requires_dual_source_lowering: false,
         },
     ];
+
     let mut generated = String::from("// @generated by build.rs; do not edit.\n");
+
     generated.push_str("pub const NATIVE_SHADERS: &[NativeShader] = &[\n");
 
     for module in modules {
         let pipeline = module.pipeline;
         let mut wgsl = shader_source(pipeline.label, module.source);
+
         if module.requires_dual_source_lowering {
             wgsl = native_dialect(&wgsl);
         }
+
         let legacy_module = naga_old::front::wgsl::parse_str(&wgsl)
             .unwrap_or_else(|error| panic!("failed to parse {}: {error}", pipeline.label));
+
         let legacy_info = naga_old::valid::Validator::new(
             naga_old::valid::ValidationFlags::all(),
             naga_old::valid::Capabilities::all(),
@@ -893,12 +1008,14 @@ fn write_native_shaders(out_dir: &std::path::Path) {
         .unwrap_or_else(|error| panic!("failed to validate {}: {error}", pipeline.label));
 
         let hlsl = write_hlsl(&legacy_module, &legacy_info, &wgsl, pipeline);
+
         let current_module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|error| {
             panic!(
                 "failed to parse {} with current Naga: {error}",
                 pipeline.label
             )
         });
+
         let current_info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -910,11 +1027,13 @@ fn write_native_shaders(out_dir: &std::path::Path) {
                 pipeline.label
             )
         });
+
         let msl = write_msl(&current_module, &current_info, pipeline.label);
         // GLSL 3.30 and GLES 3.00 cannot use storage buffers. Generate them from
         // the same data-texture dialect that backs WGPU's WebGL2 tier. Naga
         // validates that IR, then checks each requested GLSL target floor.
         let downlevel_wgsl = downlevel_dialect(pipeline.label, &wgsl);
+
         let downlevel_module =
             naga::front::wgsl::parse_str(&downlevel_wgsl).unwrap_or_else(|error| {
                 panic!(
@@ -922,6 +1041,7 @@ fn write_native_shaders(out_dir: &std::path::Path) {
                     pipeline.label
                 )
             });
+
         let downlevel_info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -933,6 +1053,7 @@ fn write_native_shaders(out_dir: &std::path::Path) {
                 pipeline.label
             )
         });
+
         let glsl_330_vertex = write_glsl(
             &downlevel_module,
             &downlevel_info,
@@ -941,6 +1062,7 @@ fn write_native_shaders(out_dir: &std::path::Path) {
             naga::ShaderStage::Vertex,
             pipeline.vertex_entry,
         );
+
         let glsl_330_fragment = write_glsl(
             &downlevel_module,
             &downlevel_info,
@@ -949,6 +1071,7 @@ fn write_native_shaders(out_dir: &std::path::Path) {
             naga::ShaderStage::Fragment,
             pipeline.fragment_entry,
         );
+
         let gles_300_vertex = write_glsl(
             &downlevel_module,
             &downlevel_info,
@@ -957,6 +1080,7 @@ fn write_native_shaders(out_dir: &std::path::Path) {
             naga::ShaderStage::Vertex,
             pipeline.vertex_entry,
         );
+
         let gles_300_fragment = write_glsl(
             &downlevel_module,
             &downlevel_info,
@@ -965,37 +1089,44 @@ fn write_native_shaders(out_dir: &std::path::Path) {
             naga::ShaderStage::Fragment,
             pipeline.fragment_entry,
         );
+
         let dx11_name = format!("{}.hlsl", pipeline.label);
         let msl_name = format!("{}.metal", pipeline.label);
         let glsl_330_vertex_name = format!("{}.330.vert.glsl", pipeline.label);
         let glsl_330_fragment_name = format!("{}.330.frag.glsl", pipeline.label);
         let gles_300_vertex_name = format!("{}.300es.vert.glsl", pipeline.label);
         let gles_300_fragment_name = format!("{}.300es.frag.glsl", pipeline.label);
+
         write_shader(out_dir, &dx11_name, &hlsl);
         write_shader(out_dir, &msl_name, &msl);
         write_shader(out_dir, &glsl_330_vertex_name, &glsl_330_vertex);
         write_shader(out_dir, &glsl_330_fragment_name, &glsl_330_fragment);
         write_shader(out_dir, &gles_300_vertex_name, &gles_300_vertex);
         write_shader(out_dir, &gles_300_fragment_name, &gles_300_fragment);
+
         let msl_path = format!("/{msl_name}");
         let glsl_330_vertex_path = format!("/{glsl_330_vertex_name}");
         let glsl_330_fragment_path = format!("/{glsl_330_fragment_name}");
         let gles_300_vertex_path = format!("/{gles_300_vertex_name}");
         let gles_300_fragment_path = format!("/{gles_300_fragment_name}");
+
         let dx11_artifact = write_dx11_bytecode(out_dir, pipeline.label, &hlsl, pipeline)
             .map(|bytecode| {
                 let draw_constants = match dx11_draw_constants_register(pipeline) {
                     Some(register) => {
                         format!("Some(Dx11DrawConstantsBinding {{ register: {register} }})")
                     }
+
                     None => "None".into(),
                 };
+
                 format!(
                     "Dx11Shader::Sm50(Dx11Bytecode {{ vertex: include_bytes!(concat!(env!(\"OUT_DIR\"), {:?})), fragment: include_bytes!(concat!(env!(\"OUT_DIR\"), {:?})), draw_constants: {draw_constants} }})",
                     bytecode.vertex_path, bytecode.fragment_path,
                 )
             })
             .unwrap_or_else(|| "Dx11Shader::NativeWindowsBuildRequired".into());
+
         writeln!(
             generated,
             r#"    NativeShader {{
@@ -1027,7 +1158,9 @@ fn write_native_shaders(out_dir: &std::path::Path) {
         )
         .unwrap();
     }
+
     generated.push_str("];\n");
+
     fs::write(out_dir.join("native_shaders.rs"), generated)
         .expect("failed to write generated native shader table");
 }
@@ -1056,6 +1189,7 @@ fn write_dx11_bytecode(
         let entry = CString::new(entry).expect("shader entry point contains NUL");
         let mut blob = None;
         let mut errors = None;
+
         unsafe {
             D3DCompile(
                 source.as_ptr().cast(),
@@ -1077,12 +1211,15 @@ fn write_dx11_bytecode(
                     .to_string_lossy()
                     .into_owned()
             });
+
             panic!(
                 "failed to compile generated HLSL for {label} ({entry:?}): {error}\n{}",
                 details.unwrap_or_default()
             )
         });
+
         let blob = blob.expect("D3DCompile returned no bytecode");
+
         unsafe {
             std::slice::from_raw_parts(blob.GetBufferPointer().cast(), blob.GetBufferSize())
                 .to_vec()
@@ -1091,16 +1228,19 @@ fn write_dx11_bytecode(
 
     let vertex_name = format!("{label}.vs_5_0.dxbc");
     let fragment_name = format!("{label}.ps_5_0.dxbc");
+
     write_bytes(
         out_dir,
         &vertex_name,
         &compile(source, label, pipeline.vertex_entry, b"vs_5_0\0"),
     );
+
     write_bytes(
         out_dir,
         &fragment_name,
         &compile(source, label, pipeline.fragment_entry, b"ps_5_0\0"),
     );
+
     Some(Dx11BytecodePaths {
         vertex_path: format!("/{vertex_name}"),
         fragment_path: format!("/{fragment_name}"),
@@ -1120,6 +1260,7 @@ fn write_dx11_bytecode(
     _pipeline: &shaders::interface::Pipeline,
 ) -> Option<Dx11BytecodePaths> {
     println!("cargo:rerun-if-env-changed={ALLOW_MISSING_DXBC}");
+
     if env::var_os("CARGO_CFG_TARGET_OS").as_deref() == Some(std::ffi::OsStr::new("windows"))
         && env::var_os(ALLOW_MISSING_DXBC).is_none()
     {
@@ -1129,6 +1270,7 @@ fn write_dx11_bytecode(
              {ALLOW_MISSING_DXBC}=1 for a check-only build"
         );
     }
+
     None
 }
 
@@ -1141,10 +1283,12 @@ fn write_glsl(
     entry_point: &str,
 ) -> String {
     let mut binding_map = naga::back::glsl::BindingMap::default();
+
     for (_, variable) in module.global_variables.iter() {
         let Some(binding) = variable.binding else {
             continue;
         };
+
         // A resource binding must be globally unique in legacy GLSL. This
         // mirrors WGPU's group-first allocation without coupling artifacts to
         // a particular GL context's final binding slots.
@@ -1154,20 +1298,25 @@ fn write_glsl(
             .and_then(|group| group.checked_add(binding.binding))
             .and_then(|slot| u8::try_from(slot).ok())
             .unwrap_or_else(|| panic!("GLSL binding out of range in {label}"));
+
         binding_map.insert(binding, slot);
     }
+
     let options = naga::back::glsl::Options {
         version,
         writer_flags: naga::back::glsl::WriterFlags::ADJUST_COORDINATE_SPACE,
         binding_map,
         zero_initialize_workgroup_memory: true,
     };
+
     let pipeline_options = naga::back::glsl::PipelineOptions {
         shader_stage,
         entry_point: entry_point.into(),
         multiview: None,
     };
+
     let mut output = String::new();
+
     let mut writer = naga::back::glsl::Writer::new(
         &mut output,
         module,
@@ -1179,9 +1328,11 @@ fn write_glsl(
     .unwrap_or_else(|error| {
         panic!("failed to initialize {version} GLSL for {label} ({entry_point}): {error}")
     });
+
     writer.write().unwrap_or_else(|error| {
         panic!("failed to generate {version} GLSL for {label} ({entry_point}): {error}")
     });
+
     // Naga's GLSL frontend intentionally does not accept all dialects its
     // backend emits (notably GLSL 330 resource-layout extensions), so a
     // parse-and-revalidate round trip would reject valid backend output. The
@@ -1192,10 +1343,12 @@ fn write_glsl(
         naga::back::glsl::Version::Desktop(version) => format!("#version {version} core"),
         naga::back::glsl::Version::Embedded { version, .. } => format!("#version {version} es"),
     };
+
     assert!(
         output.starts_with(&expected_version) && output.contains("void main()"),
         "Naga emitted an incomplete GLSL artifact for {label} ({entry_point})"
     );
+
     output
 }
 
@@ -1208,11 +1361,13 @@ fn write_glsl(
 /// instance from vertex zero and carry no such cbuffer.
 fn dx11_draw_constants_register(pipeline: &shaders::interface::Pipeline) -> Option<u32> {
     use shaders::interface::DataLayout;
+
     match pipeline.data_layout {
         DataLayout::Instances
         | DataLayout::TexturedInstances
         | DataLayout::MonochromeSprites
         | DataLayout::SubpixelSprites => Some(shaders::interface::DX11_DRAW_CONSTANTS_REGISTER),
+
         DataLayout::NativeOnly | DataLayout::Surface | DataLayout::Blur => None,
     }
 }
@@ -1225,6 +1380,7 @@ fn write_hlsl(
 ) -> String {
     let label = pipeline.label;
     let mut binding_map = naga_old::back::hlsl::BindingMap::default();
+
     for (_, variable) in module.global_variables.iter() {
         if let Some(binding) = &variable.binding {
             binding_map.insert(
@@ -1237,7 +1393,9 @@ fn write_hlsl(
             );
         }
     }
+
     let draw_constants_register = dx11_draw_constants_register(pipeline);
+
     let options = naga_old::back::hlsl::Options {
         shader_model: naga_old::back::hlsl::ShaderModel::V5_0,
         binding_map,
@@ -1251,17 +1409,22 @@ fn write_hlsl(
         }),
         ..Default::default()
     };
+
     let mut output = String::new();
+
     naga_old::back::hlsl::Writer::new(&mut output, &options)
         .write(module, info, None)
         .unwrap_or_else(|error| panic!("failed to generate HLSL for {label}: {error}"));
+
     match draw_constants_register {
         Some(register) => lower_draw_constants_to_sm50(output, wgsl, label, register),
+
         None => {
             assert!(
                 !wgsl.contains("instance_index"),
                 "{label} reads instance_index but has no DX11 draw constants"
             );
+
             output
         }
     }
@@ -1273,37 +1436,44 @@ fn write_hlsl(
 fn lower_draw_constants_to_sm50(hlsl: String, wgsl: &str, label: &str, register: u32) -> String {
     let declaration =
         format!("ConstantBuffer<NagaConstants> _NagaConstants: register(b{register});");
+
     assert_eq!(
         hlsl.matches(&declaration).count(),
         1,
         "{label}: expected exactly one Naga special-constants declaration"
     );
+
     assert_eq!(
         hlsl.matches(&format!("register(b{register})")).count(),
         1,
         "{label}: draw-constants register b{register} collides with another cbuffer"
     );
+
     let lowered = hlsl.replace(
         &declaration,
         &format!(
             "cbuffer DrawConstants : register(b{register}) {{ NagaConstants _NagaConstants; }}"
         ),
     );
+
     if wgsl.contains("instance_index") {
         assert!(
             lowered.contains("_NagaConstants.first_instance + "),
             "{label}: instance_index must be offset by the draw-constants base"
         );
     }
+
     lowered
 }
 
 fn write_msl(module: &naga::Module, info: &naga::valid::ModuleInfo, label: &str) -> String {
     let mut resources = naga::back::msl::BindingMap::default();
+
     for (_, variable) in module.global_variables.iter() {
         let Some(binding) = &variable.binding else {
             continue;
         };
+
         let target = match variable.space {
             naga::AddressSpace::Uniform | naga::AddressSpace::Storage { .. } => {
                 naga::back::msl::BindTarget {
@@ -1311,37 +1481,46 @@ fn write_msl(module: &naga::Module, info: &naga::valid::ModuleInfo, label: &str)
                     ..Default::default()
                 }
             }
+
             naga::AddressSpace::Handle => match module.types[variable.ty].inner {
                 naga::TypeInner::Image { .. } => naga::back::msl::BindTarget {
                     texture: Some(binding.binding.saturating_sub(1) as u8),
                     ..Default::default()
                 },
+
                 naga::TypeInner::Sampler { .. } => naga::back::msl::BindTarget {
                     sampler: Some(naga::back::msl::BindSamplerTarget::Resource(0)),
                     ..Default::default()
                 },
+
                 ref ty => panic!("unsupported MSL resource type {ty:?} in {label}"),
             },
+
             space => panic!("unsupported MSL resource space {space:?} in {label}"),
         };
+
         resources.insert(*binding, target);
     }
+
     let entry_resources = naga::back::msl::EntryPointResources {
         resources,
         sizes_buffer: Some(3),
         ..Default::default()
     };
+
     let per_entry_point_map = module
         .entry_points
         .iter()
         .map(|entry| (entry.name.clone(), entry_resources.clone()))
         .collect();
+
     let options = naga::back::msl::Options {
         lang_version: (2, 0),
         per_entry_point_map,
         fake_missing_bindings: false,
         ..Default::default()
     };
+
     naga::back::msl::write_string(
         module,
         info,

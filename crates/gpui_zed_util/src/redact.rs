@@ -15,6 +15,7 @@ pub fn should_redact(env_var_name: &str) -> bool {
         "CREDENTIALS",
         "LICENSE",
     ];
+
     REDACTED_SUFFIXES
         .iter()
         .any(|suffix| env_var_name.ends_with(suffix))
@@ -26,6 +27,7 @@ pub fn redact_command(command: &str) -> String {
         .replace_all(command, |caps: &regex::Captures| {
             let var_name = &caps[1];
             let value = &caps[2];
+
             if should_redact(var_name) {
                 format!(r#"{}="[REDACTED]""#, var_name)
             } else {
@@ -44,6 +46,7 @@ mod tests {
         let input = r#"failed to spawn command cd "/code/something" && ANTHROPIC_API_KEY="sk-ant-api03-WOOOO" COMMAND_MODE="unix2003" GEMINI_API_KEY="AIGEMINIFACE" HOME="/Users/foo""#;
         let result = redact_command(input);
         let expected = r#"failed to spawn command cd "/code/something" && ANTHROPIC_API_KEY="[REDACTED]" COMMAND_MODE="unix2003" GEMINI_API_KEY="[REDACTED]" HOME="/Users/foo""#;
+
         assert_eq!(result, expected);
     }
 }

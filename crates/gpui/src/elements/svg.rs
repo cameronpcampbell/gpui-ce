@@ -10,6 +10,7 @@ use crate::{
     Interactivity, IntoElement, LayoutId, Pixels, Point, Radians, SharedString, Size,
     StyleRefinement, Styled, TransformationMatrix, Window, point, px, radians, size,
 };
+
 use gpui_util::ResultExt;
 
 /// An SVG element.
@@ -17,16 +18,20 @@ use gpui_util::ResultExt;
 #[setters(generate = false)]
 pub struct Svg {
     interactivity: Interactivity,
+
     /// Transform the SVG element with the given transformation.
     /// This affects rendering only, without changing the hitbox or layout of the element.
     #[setters(generate, rename = "with_transformation", strip_option)]
     transformation: Option<Transformation>,
+
     /// Set the path to the SVG file for this element.
     #[setters(generate, strip_option, into)]
     path: Option<SharedString>,
+
     /// Set the path to the SVG file for this element.
     #[setters(generate, strip_option, into)]
     external_path: Option<SharedString>,
+
     data: Option<Arc<[u8]>>,
     data_path: Option<SharedString>,
 }
@@ -50,11 +55,15 @@ impl Svg {
     pub fn data(mut self, data: &[u8]) -> Self {
         // Generate a unique deterministic path based on the data hash for caching
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+
         data.hash(&mut hasher);
+
         let hash = hasher.finish();
         let path = SharedString::from(format!("__binary_svg__{}", hash));
+
         self.data = Some(Arc::from(data));
         self.data_path = Some(path);
+
         self
     }
 }
@@ -85,6 +94,7 @@ impl Element for Svg {
             cx,
             |style, window, cx| window.request_layout(style, None, cx),
         );
+
         (layout_id, ())
     }
 
@@ -149,6 +159,7 @@ impl Element for Svg {
                             )
                             .log_err();
                     }
+
                 } else if let Some((path, color)) =
                     self.external_path.as_ref().zip(style.text.color)
                 {
@@ -169,6 +180,7 @@ impl Element for Svg {
                             cx,
                         )
                         .log_err();
+
                 } else if let Some((path, color)) = self.path.as_ref().zip(style.text.color) {
                     window
                         .paint_svg(bounds, path.clone(), None, transformation, color, cx)
@@ -206,9 +218,11 @@ pub struct Transformation {
     /// Update the scaling factor of this transformation.
     #[setters(generate, rename = "with_scaling")]
     scale: Size<f32>,
+
     /// Update the translation value of this transformation.
     #[setters(generate, rename = "with_translation")]
     translate: Point<Pixels>,
+
     /// Update the rotation angle of this transformation.
     #[setters(generate, rename = "with_rotation", into)]
     rotate: Radians,
@@ -246,6 +260,7 @@ impl Transformation {
     /// Create a new Transformation with the specified rotation in radians.
     pub fn rotate(rotate: impl Into<Radians>) -> Self {
         let rotate = rotate.into();
+
         Self {
             scale: size(1.0, 1.0),
             translate: point(px(0.0), px(0.0)),
@@ -276,6 +291,7 @@ impl Asset for SvgAsset {
         async move {
             let bytes = fs::read(Path::new(source.as_ref())).map_err(|e| Arc::new(e))?;
             let bytes = Arc::from(bytes);
+
             Ok(bytes)
         }
     }

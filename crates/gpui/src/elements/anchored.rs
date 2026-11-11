@@ -17,19 +17,24 @@ pub struct AnchoredState {
 #[setters(generate = false)]
 pub struct Anchored {
     children: SmallVec<[AnyElement; 2]>,
+
     /// Sets which corner of the anchored element should be anchored to the current position.
     #[setters(generate)]
     anchor: Anchor,
+
     fit_mode: AnchoredFitMode,
+
     /// Sets the position in window coordinates.
     /// Otherwise, the location where the anchored element is rendered is used.
     #[setters(generate, rename = "position", strip_option)]
     anchor_position: Option<Point<Pixels>>,
+
     /// Sets the position mode for this anchored element. Local will have this
     /// interpret its [`Anchored::position`] as relative to the parent element.
     /// While Window will have it interpret the position as relative to the window.
     #[setters(generate)]
     position_mode: AnchoredPositionMode,
+
     /// Offset the final position by this amount.
     /// Useful when you want to anchor to an element but offset from it, such as in PopoverMenu.
     #[setters(generate, strip_option)]
@@ -53,12 +58,14 @@ impl Anchored {
     /// Snap to window edge instead of switching anchor corner when an overflow would occur.
     pub fn snap_to_window(mut self) -> Self {
         self.fit_mode = AnchoredFitMode::SnapToWindow;
+
         self
     }
 
     /// Snap to window edge and leave some margins.
     pub fn snap_to_window_with_margin(mut self, edges: impl Into<Edges<Pixels>>) -> Self {
         self.fit_mode = AnchoredFitMode::SnapToWindowWithMargin(edges.into());
+
         self
     }
 }
@@ -147,6 +154,7 @@ impl Element for Anchored {
                     origin,
                     children_bounds.size,
                 );
+
                 if !(switched.left() < limits.left() || switched.right() > limits.right()) {
                     anchor = anchor.other_side_along(Axis::Horizontal);
                     desired = switched
@@ -159,6 +167,7 @@ impl Element for Anchored {
                     origin,
                     children_bounds.size,
                 );
+
                 if !(switched.top() < limits.top() || switched.bottom() > limits.bottom()) {
                     desired = switched;
                 }
@@ -166,6 +175,7 @@ impl Element for Anchored {
         }
 
         let client_inset = window.client_inset.unwrap_or(px(0.));
+
         let edges = match self.fit_mode {
             AnchoredFitMode::SnapToWindowWithMargin(edges) => edges,
             _ => Edges::default(),
@@ -177,6 +187,7 @@ impl Element for Anchored {
         if desired.right() > limits.right() {
             desired.origin.x -= desired.right() - limits.right() + edges.right;
         }
+
         if desired.left() < limits.left() {
             desired.origin.x = limits.origin.x + edges.left;
         }
@@ -186,6 +197,7 @@ impl Element for Anchored {
         if desired.bottom() > limits.bottom() {
             desired.origin.y -= desired.bottom() - limits.bottom() + edges.bottom;
         }
+
         if desired.top() < limits.top() {
             desired.origin.y = limits.origin.y + edges.top;
         }
@@ -259,15 +271,19 @@ impl AnchoredPositionMode {
             AnchoredPositionMode::Window => {
                 let anchor_position = anchor_position.unwrap_or(bounds.origin);
                 let bounds = Bounds::from_anchor_and_size(anchor, anchor_position + offset, size);
+
                 (anchor_position, bounds)
             }
+
             AnchoredPositionMode::Local => {
                 let anchor_position = anchor_position.unwrap_or_default();
+
                 let bounds = Bounds::from_anchor_and_size(
                     anchor,
                     bounds.origin + anchor_position + offset,
                     size,
                 );
+
                 (anchor_position, bounds)
             }
         }
@@ -346,6 +362,7 @@ mod tests {
                     delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-1000.))),
                     ..Default::default()
                 };
+
                 window.dispatch_event(PlatformInput::ScrollWheel(event), cx);
             })
             .unwrap();

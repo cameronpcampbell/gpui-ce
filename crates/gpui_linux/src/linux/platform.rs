@@ -4,6 +4,7 @@ use std::{
     rc::Rc,
     sync::Arc,
 };
+
 #[cfg(any(feature = "wayland", feature = "x11"))]
 use std::{
     ffi::OsString,
@@ -23,6 +24,7 @@ use gpui_util::{ResultExt as _, new_std_command};
 use xkbcommon::xkb::{self, Keycode, Keysym, State};
 
 use crate::linux::{LinuxDispatcher, PriorityQueueCalloopReceiver};
+
 use gpui::{
     Action, AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle, DisplayId,
     ForegroundExecutor, Keymap, Menu, MenuItem, OwnedMenu, PathPromptOptions, Platform,
@@ -30,6 +32,7 @@ use gpui::{
     PlatformWindow, Result, RunnableVariant, SharedString, Task, ThermalState, WindowAppearance,
     WindowButtonLayout, WindowParams,
 };
+
 #[cfg(any(feature = "wayland", feature = "x11"))]
 use gpui::{Pixels, Point, px};
 
@@ -50,11 +53,16 @@ const FILE_PICKER_PORTAL_MISSING: &str =
 
 pub(crate) trait LinuxClient {
     fn compositor_name(&self) -> &'static str;
+
     fn with_common<R>(&self, f: impl FnOnce(&mut LinuxCommon) -> R) -> R;
+
     fn keyboard_layout(&self) -> Box<dyn PlatformKeyboardLayout>;
+
     fn displays(&self) -> Vec<Rc<dyn PlatformDisplay>>;
+
     #[allow(unused)]
     fn display(&self, id: DisplayId) -> Option<Rc<dyn PlatformDisplay>>;
+
     fn primary_display(&self) -> Option<Rc<dyn PlatformDisplay>>;
 
     fn open_window(
@@ -62,20 +70,33 @@ pub(crate) trait LinuxClient {
         handle: AnyWindowHandle,
         options: WindowParams,
     ) -> anyhow::Result<Box<dyn PlatformWindow>>;
+
     fn set_cursor_style(&self, style: CursorStyle);
+
     fn hide_cursor_until_mouse_moves(&self) {}
+
     fn is_cursor_visible(&self) -> bool {
         true
     }
+
     fn open_uri(&self, uri: &str);
+
     fn reveal_path(&self, path: PathBuf);
+
     fn write_to_primary(&self, item: ClipboardItem);
+
     fn write_to_clipboard(&self, item: ClipboardItem);
+
     fn read_from_primary(&self) -> Option<ClipboardItem>;
+
     fn read_from_clipboard(&self) -> Option<ClipboardItem>;
+
     fn active_window(&self) -> Option<AnyWindowHandle>;
+
     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>>;
+
     fn set_gpu_requirements(&self, _requirements: Box<dyn std::any::Any>) {}
+
     fn run(&self);
 
     #[cfg(any(feature = "wayland", feature = "x11"))]
@@ -111,11 +132,13 @@ pub(crate) struct LinuxCommon {
     pub(crate) keyring_label: SharedString,
     app_name: Option<String>,
     system_notifications: crate::linux::system_notifications::SystemNotificationState,
+
     #[cfg_attr(
         not(all(target_os = "linux", any(feature = "wayland", feature = "x11"))),
         allow(dead_code)
     )]
     wake_sender: Sender<()>,
+
     wake_listener_started: bool,
 }
 
@@ -145,6 +168,7 @@ impl LinuxCommon {
                 "Arial",
             ]),
         );
+
         #[cfg(not(any(feature = "wayland", feature = "x11")))]
         let text_system = Arc::new(gpui::NoopTextSystem::new());
 
@@ -180,6 +204,7 @@ impl LinuxCommon {
             #[cfg(all(target_os = "linux", any(feature = "wayland", feature = "x11")))]
             smol::spawn({
                 let wake_sender = self.wake_sender.clone();
+
                 async move {
                     if let Err(error) = listen_for_system_wake(wake_sender).await {
                         log::debug!("failed to listen for system wake events: {error:?}");
@@ -195,6 +220,7 @@ impl LinuxCommon {
     pub(crate) fn handle_system_wake(&mut self) {
         if let Some(mut callback) = self.callbacks.system_wake.take() {
             callback();
+
             self.callbacks.system_wake = Some(callback);
         }
     }
@@ -205,6 +231,7 @@ async fn listen_for_system_wake(wake_sender: Sender<()>) -> anyhow::Result<()> {
     use futures::StreamExt as _;
 
     let connection = ashpd::zbus::Connection::system().await?;
+
     let proxy = ashpd::zbus::Proxy::new(
         &connection,
         "org.freedesktop.login1",
@@ -212,10 +239,12 @@ async fn listen_for_system_wake(wake_sender: Sender<()>) -> anyhow::Result<()> {
         "org.freedesktop.login1.Manager",
     )
     .await?;
+
     let mut sleep_events = proxy.receive_signal("PrepareForSleep").await?;
 
     while let Some(message) = sleep_events.next().await {
         let sleeping = message.body().deserialize::<bool>()?;
+
         if !sleeping {
             wake_sender.send(()).ok();
         }
@@ -270,6 +299,7 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
         let quit = self
             .inner
             .with_common(|common| common.callbacks.quit.take());
+
         if let Some(mut fun) = quit {
             fun();
         }
@@ -288,14 +318,17 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
 
         // get the process id of the current process
         let app_pid = std::process::id().to_string();
+
         // get the path to the executable
         let app_path = if let Some(path) = binary_path {
             path
         } else {
             match self.app_path() {
                 Ok(path) => path,
+
                 Err(err) => {
                     log::error!("Failed to get app path: {:?}", err);
+
                     return;
                 }
             }
@@ -425,12 +458,15 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
                     .await
                 {
                     Ok(request) => request,
+
                     Err(err) => {
                         let result = match err {
                             ashpd::Error::PortalNotFound(_) => anyhow!(FILE_PICKER_PORTAL_MISSING),
                             err => err.into(),
                         };
+
                         let _ = done_tx.send(Err(result));
+
                         return;
                     }
                 };
@@ -444,12 +480,15 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
                             .filter_map(|uri: url::Url| uri.to_file_path().ok())
                             .collect::<Vec<_>>(),
                     )),
+
                     Err(ashpd::Error::Response(_)) => Ok(None),
                     Err(e) => Err(e.into()),
                 };
+
                 let _ = done_tx.send(result);
             })
             .detach();
+
         done_rx
     }
 
@@ -487,14 +526,18 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
 
                     let request = match request_builder.send().await {
                         Ok(request) => request,
+
                         Err(err) => {
                             let result = match err {
                                 ashpd::Error::PortalNotFound(_) => {
                                     anyhow!(FILE_PICKER_PORTAL_MISSING)
                                 }
+
                                 err => err.into(),
                             };
+
                             let _ = done_tx.send(Err(result));
+
                             return;
                         }
                     };
@@ -505,9 +548,11 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
                             .first()
                             .and_then(|uri: &ashpd::Uri| url::Url::parse(uri.as_str()).ok())
                             .and_then(|uri: url::Url| uri.to_file_path().ok())),
+
                         Err(ashpd::Error::Response(_)) => Ok(None),
                         Err(e) => Err(e.into()),
                     };
+
                     let _ = done_tx.send(result);
                 }
             })
@@ -527,6 +572,7 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
 
     fn open_with_system(&self, path: &Path) {
         let path = path.to_owned();
+
         self.background_executor()
             .spawn(async move {
                 #[allow(
@@ -557,6 +603,7 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
     fn on_system_wake(&self, callback: Box<dyn FnMut()>) {
         self.inner.with_common(|common| {
             common.callbacks.system_wake = Some(callback);
+
             common.start_wake_listener();
         });
     }
@@ -585,6 +632,7 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
     ) {
         self.inner.with_common(|common| {
             let executor = common.foreground_executor.clone();
+
             common.system_notifications.on_response(&executor, callback)
         });
     }
@@ -610,6 +658,7 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
     fn app_path(&self) -> Result<PathBuf> {
         // get the path of the executable of the current process
         let app_path = env::current_exe()?;
+
         Ok(app_path)
     }
 
@@ -653,12 +702,16 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
         let url = url.to_string();
         let username = username.to_string();
         let password = password.to_vec();
+
         let label = self
             .inner
             .with_common(|common| common.keyring_label.clone());
+
         self.background_executor().spawn(async move {
             let keyring = oo7::Keyring::new().await?;
+
             keyring.unlock().await?;
+
             keyring
                 .create_item(
                     &label,
@@ -667,17 +720,21 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
                     true,
                 )
                 .await?;
+
             Ok(())
         })
     }
 
     fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
         let url = url.to_string();
+
         let label = self
             .inner
             .with_common(|common| common.keyring_label.clone());
+
         self.background_executor().spawn(async move {
             let keyring = oo7::Keyring::new().await?;
+
             keyring.unlock().await?;
 
             let items = keyring.search_items(&vec![("url", &url)]).await?;
@@ -685,30 +742,38 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
             for item in items.into_iter() {
                 if item.label().await.is_ok_and(|l| l == label.as_ref()) {
                     let attributes = item.attributes().await?;
+
                     let username = attributes
                         .get("username")
                         .context("Cannot find username in stored credentials")?;
+
                     item.unlock().await?;
+
                     let secret = item.secret().await?;
 
                     // we lose the zeroizing capabilities at this boundary,
                     // a current limitation GPUI's credentials api
                     return Ok(Some((username.to_string(), secret.to_vec())));
+
                 } else {
                     continue;
                 }
             }
+
             Ok(None)
         })
     }
 
     fn delete_credentials(&self, url: &str) -> Task<Result<()>> {
         let url = url.to_string();
+
         let label = self
             .inner
             .with_common(|common| common.keyring_label.clone());
+
         self.background_executor().spawn(async move {
             let keyring = oo7::Keyring::new().await?;
+
             keyring.unlock().await?;
 
             let items = keyring.search_items(&vec![("url", &url)]).await?;
@@ -716,6 +781,7 @@ impl<P: LinuxClient + 'static> Platform for LinuxPlatform<P> {
             for item in items.into_iter() {
                 if item.label().await.is_ok_and(|l| l == label.as_ref()) {
                     item.delete().await?;
+
                     return Ok(());
                 }
             }
@@ -765,25 +831,34 @@ pub(super) fn open_uri_internal(
         executor
             .spawn(async move {
                 let mut xdg_open_failed = false;
+
                 for mut command in open::commands(uri.to_string()) {
                     if let Some(token) = activation_token.as_ref() {
                         command.env("XDG_ACTIVATION_TOKEN", token);
                     }
+
                     let program = format!("{:?}", command.get_program());
+
                     match smol::process::Command::from(command).spawn() {
                         Ok(mut cmd) => match cmd.status().await {
                             Ok(status) if status.success() => return,
+
                             Ok(status) => {
                                 log::error!("Command {} exited with status: {}", program, status);
+
                                 xdg_open_failed = true;
                             }
+
                             Err(e) => {
                                 log::error!("Failed to get status from {}: {}", program, e);
+
                                 xdg_open_failed = true;
                             }
                         },
+
                         Err(e) => {
                             log::error!("Failed to open with {}: {}", program, e);
+
                             xdg_open_failed = true;
                         }
                     }
@@ -798,6 +873,7 @@ pub(super) fn open_uri_internal(
                     {
                         Ok(()) => {}
                         Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)) => {}
+
                         Err(e) => {
                             log::error!("Failed to open with dbus: {}", e);
                         }
@@ -825,6 +901,7 @@ pub(super) fn reveal_path_internal(
                     Ok(_) => return,
                     Err(e) => log::error!("Failed to open with dbus: {}", e),
                 }
+
                 if path.is_dir() {
                     open::that_detached(path).log_err();
                 } else {
@@ -838,6 +915,7 @@ pub(super) fn reveal_path_internal(
 #[cfg(any(feature = "wayland", feature = "x11"))]
 pub(super) fn is_within_click_distance(a: Point<Pixels>, b: Point<Pixels>) -> bool {
     let diff = a - b;
+
     diff.x.abs() <= DOUBLE_CLICK_DISTANCE && diff.y.abs() <= DOUBLE_CLICK_DISTANCE
 }
 
@@ -852,17 +930,22 @@ fn validate_xkb_context(context: xkb::Context) -> anyhow::Result<xkb::Context> {
         !context.get_raw_ptr().is_null(),
         "libxkbcommon failed to create an XKB context"
     );
+
     Ok(context)
 }
 
 #[cfg(any(feature = "wayland", feature = "x11"))]
 pub(super) fn get_xkb_compose_state(cx: &xkb::Context) -> Option<xkb::compose::State> {
     let mut locales = Vec::default();
+
     if let Some(locale) = env::var_os("LC_CTYPE") {
         locales.push(locale);
     }
+
     locales.push(OsString::from("C"));
+
     let mut state: Option<xkb::compose::State> = None;
+
     for locale in locales {
         if let Ok(table) =
             xkb::compose::Table::new_from_locale(cx, &locale, xkb::compose::COMPILE_NO_FLAGS)
@@ -871,9 +954,11 @@ pub(super) fn get_xkb_compose_state(cx: &xkb::Context) -> Option<xkb::compose::S
                 &table,
                 xkb::compose::STATE_NO_FLAGS,
             ));
+
             break;
         }
     }
+
     state
 }
 
@@ -886,32 +971,41 @@ pub(super) fn read_fd_with_timeout(
     timeout: Duration,
 ) -> Result<Vec<u8>> {
     fd.set_non_blocking(true)?;
+
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 8192];
+
     loop {
         let mut poll_fds = [filedescriptor::pollfd {
             fd: fd.as_raw_fd(),
             events: filedescriptor::POLLIN,
             revents: 0,
         }];
+
         let ready = match filedescriptor::poll(&mut poll_fds, Some(timeout)) {
             Ok(ready) => ready,
+
             Err(filedescriptor::Error::Poll(err))
                 if err.kind() == std::io::ErrorKind::Interrupted =>
             {
                 continue;
             }
+
             Err(err) => return Err(err.into()),
         };
+
         if ready == 0 {
             anyhow::bail!("timed out waiting for data on pipe after {timeout:?}");
         }
+
         match fd.read(&mut chunk) {
             Ok(0) => return Ok(buffer),
             Ok(len) => buffer.extend_from_slice(&chunk[..len]),
+
             Err(err)
                 if err.kind() == std::io::ErrorKind::WouldBlock
                     || err.kind() == std::io::ErrorKind::Interrupted => {}
+
             Err(err) => return Err(err.into()),
         }
     }
@@ -937,6 +1031,7 @@ pub(super) fn cursor_style_to_icon_names(style: CursorStyle) -> &'static [&'stat
         CursorStyle::ResizeUp => &["n-resize", "top_side"],
         CursorStyle::ResizeDown => &["s-resize", "bottom_side"],
         CursorStyle::ResizeUpDown => &["sb_v_double_arrow", "ns-resize"],
+
         // Prefer CSS names, then common Xcursor aliases and diagonal fallbacks.
         CursorStyle::ResizeUpLeft => &[
             "nw-resize",
@@ -946,6 +1041,7 @@ pub(super) fn cursor_style_to_icon_names(style: CursorStyle) -> &'static [&'stat
             "bd_double_arrow",
             "nwse-resize",
         ],
+
         CursorStyle::ResizeUpRight => &[
             "ne-resize",
             "ne_resize",
@@ -954,6 +1050,7 @@ pub(super) fn cursor_style_to_icon_names(style: CursorStyle) -> &'static [&'stat
             "fd_double_arrow",
             "nesw-resize",
         ],
+
         CursorStyle::ResizeDownLeft => &[
             "sw-resize",
             "sw_resize",
@@ -962,6 +1059,7 @@ pub(super) fn cursor_style_to_icon_names(style: CursorStyle) -> &'static [&'stat
             "fd_double_arrow",
             "nesw-resize",
         ],
+
         CursorStyle::ResizeDownRight => &[
             "se-resize",
             "se_resize",
@@ -970,6 +1068,7 @@ pub(super) fn cursor_style_to_icon_names(style: CursorStyle) -> &'static [&'stat
             "bd_double_arrow",
             "nwse-resize",
         ],
+
         CursorStyle::ResizeUpLeftDownRight => &["size_fdiag", "bd_double_arrow", "nwse-resize"],
         CursorStyle::ResizeUpRightDownLeft => &["size_bdiag", "nesw-resize", "fd_double_arrow"],
         CursorStyle::ResizeColumn => &["col-resize", "sb_h_double_arrow"],
@@ -1127,6 +1226,7 @@ pub(super) fn keystroke_from_xkb(
 
         _ => {
             let name = xkb::keysym_get_name(key_sym).to_lowercase();
+
             if key_sym.is_keypad_key() {
                 name.replace("kp_", "")
             } else if let Some(key) = key_utf8.chars().next()
@@ -1138,15 +1238,18 @@ pub(super) fn keystroke_from_xkb(
                 // map ctrl-a to `a`
                 // ctrl-0..9 may emit control codes like ctrl-[, but
                 // we don't want to map them to `[`
+
                 } else if key_utf32 <= 0x1f
                     && !name.chars().next().is_some_and(|c| c.is_ascii_digit())
                 {
                     ((key_utf32 as u8 + 0x40) as char)
                         .to_ascii_lowercase()
                         .to_string()
+
                 } else {
                     name
                 }
+
             } else if let Some(key_en) = guess_ascii(keycode, modifiers.shift) {
                 String::from(key_en)
             } else {
@@ -1234,12 +1337,14 @@ pub fn keystroke_underlying_dead_key(keysym: Keysym) -> Option<String> {
         _ => None,
     }
 }
+
 #[cfg(any(feature = "wayland", feature = "x11"))]
 pub(super) fn modifiers_from_xkb(keymap_state: &State) -> gpui::Modifiers {
     let shift = keymap_state.mod_name_is_active(xkb::MOD_NAME_SHIFT, xkb::STATE_MODS_EFFECTIVE);
     let alt = keymap_state.mod_name_is_active(xkb::MOD_NAME_ALT, xkb::STATE_MODS_EFFECTIVE);
     let control = keymap_state.mod_name_is_active(xkb::MOD_NAME_CTRL, xkb::STATE_MODS_EFFECTIVE);
     let platform = keymap_state.mod_name_is_active(xkb::MOD_NAME_LOGO, xkb::STATE_MODS_EFFECTIVE);
+
     gpui::Modifiers {
         shift,
         alt,
@@ -1252,6 +1357,7 @@ pub(super) fn modifiers_from_xkb(keymap_state: &State) -> gpui::Modifiers {
 #[cfg(any(feature = "wayland", feature = "x11"))]
 pub(super) fn capslock_from_xkb(keymap_state: &State) -> gpui::Capslock {
     let on = keymap_state.mod_name_is_active(xkb::MOD_NAME_CAPS, xkb::STATE_MODS_EFFECTIVE);
+
     gpui::Capslock { on }
 }
 
@@ -1271,6 +1377,7 @@ pub(super) fn compositor_gpu_hint_from_dev_t(dev: u64) -> Option<gpui_wgpu::Comp
     fn read_sysfs_hex_id(path: &str) -> Option<u32> {
         let content = std::fs::read_to_string(path).ok()?;
         let trimmed = content.trim().strip_prefix("0x").unwrap_or(content.trim());
+
         u32::from_str_radix(trimmed, 16).ok()
     }
 
@@ -1307,6 +1414,7 @@ mod tests {
             // libxkbcommon permits unref on null, matching the value returned by Context::new on failure.
             xkb::Context::from_raw_ptr(std::ptr::null_mut())
         };
+
         let error = validate_xkb_context(context)
             .err()
             .expect("null XKB context should be rejected");
@@ -1320,15 +1428,19 @@ mod tests {
     #[test]
     fn test_is_within_click_distance() {
         let zero = Point::new(px(0.0), px(0.0));
+
         assert!(is_within_click_distance(zero, Point::new(px(5.0), px(5.0))));
+
         assert!(is_within_click_distance(
             zero,
             Point::new(px(-4.9), px(5.0))
         ));
+
         assert!(is_within_click_distance(
             Point::new(px(3.0), px(2.0)),
             Point::new(px(-2.0), px(-2.0))
         ));
+
         assert!(!is_within_click_distance(
             zero,
             Point::new(px(5.0), px(5.1))
@@ -1344,19 +1456,24 @@ mod tests {
         #[test]
         fn reads_data_written_before_close() {
             let mut pipe = filedescriptor::Pipe::new().unwrap();
+
             pipe.write.write_all(b"hello clipboard").unwrap();
+
             drop(pipe.write);
 
             let bytes = read_fd_with_timeout(pipe.read, PIPE_READ_TIMEOUT).unwrap();
+
             assert_eq!(bytes, b"hello clipboard");
         }
 
         #[test]
         fn returns_empty_when_writer_closes_without_writing() {
             let pipe = filedescriptor::Pipe::new().unwrap();
+
             drop(pipe.write);
 
             let bytes = read_fd_with_timeout(pipe.read, PIPE_READ_TIMEOUT).unwrap();
+
             assert!(bytes.is_empty());
         }
 
@@ -1371,20 +1488,25 @@ mod tests {
             let elapsed = started.elapsed();
 
             let err = result.unwrap_err();
+
             assert!(
                 err.to_string().contains("timed out"),
                 "unexpected error: {err}"
             );
+
             assert!(elapsed >= timeout, "returned before the timeout elapsed");
         }
 
         #[test]
         fn times_out_when_writer_stalls_after_partial_write() {
             let mut pipe = filedescriptor::Pipe::new().unwrap();
+
             pipe.write.write_all(b"partial").unwrap();
+
             let _open_writer = pipe.write;
 
             let err = read_fd_with_timeout(pipe.read, Duration::from_millis(50)).unwrap_err();
+
             assert!(
                 err.to_string().contains("timed out"),
                 "unexpected error: {err}"
@@ -1400,17 +1522,22 @@ mod tests {
 
             let writer = std::thread::spawn({
                 let mut write = pipe.write;
+
                 move || {
                     for _ in 0..chunks {
                         std::thread::sleep(gap);
+
                         write.write_all(&[b'x'; 1000]).unwrap();
                     }
                 }
             });
+
             // The total transfer (~480ms) exceeds the timeout; this only
             // passes because the timeout is re-armed per chunk.
             let bytes = read_fd_with_timeout(pipe.read, timeout).unwrap();
+
             writer.join().unwrap();
+
             assert_eq!(bytes, vec![b'x'; 1000 * chunks]);
         }
 
@@ -1423,10 +1550,14 @@ mod tests {
             let writer = std::thread::spawn({
                 let mut write = pipe.write;
                 let payload = payload.clone();
+
                 move || write.write_all(&payload).unwrap()
             });
+
             let bytes = read_fd_with_timeout(pipe.read, PIPE_READ_TIMEOUT).unwrap();
+
             writer.join().unwrap();
+
             assert_eq!(bytes, payload);
         }
     }

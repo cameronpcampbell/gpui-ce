@@ -4,6 +4,7 @@ use crate::{
     Pixels, PrepaintStateIndex, Render, RenderOnce, ResolvedDirection, Style, StyleRefinement,
     TextStyle, UnicodeBidi, WeakEntity,
 };
+
 use crate::{Empty, Window};
 use anyhow::Result;
 use collections::FxHashSet;
@@ -90,6 +91,7 @@ impl AnyView {
     pub fn downcast<T: 'static>(self) -> Result<Entity<T>, Self> {
         match self.entity.downcast() {
             Ok(entity) => Ok(entity),
+
             Err(entity) => Err(Self {
                 entity,
                 render: self.render,
@@ -158,6 +160,7 @@ impl AnyWeakView {
     /// Returns a strong [`AnyView`] if the view is still alive, or `None` if it has been dropped.
     pub fn upgrade(&self) -> Option<AnyView> {
         let entity = self.entity.upgrade()?;
+
         Some(AnyView {
             entity,
             render: self.render,
@@ -197,6 +200,7 @@ mod any_view {
         cx: &mut App,
     ) -> AnyElement {
         let view = view.clone().downcast::<V>().unwrap();
+
         // Record the view's Render type name so the accessibility debug dump can
         // attribute nodes to the view that produced them.
         #[cfg(debug_assertions)]
@@ -204,6 +208,7 @@ mod any_view {
             .a11y
             .view_type_names
             .insert(view.entity_id(), std::any::type_name::<V>());
+
         view.update(cx, |view, cx| {
             #[cfg(all(
                 feature = "hot-patching",
@@ -217,6 +222,7 @@ mod any_view {
                 not(target_family = "wasm")
             )))]
             let element = view.render(window, cx);
+
             element.into_any_element()
         })
     }
@@ -259,6 +265,7 @@ fn render_view<V: View>(view: V, window: &mut Window, cx: &mut App) -> AnyElemen
         not(target_family = "wasm")
     )))]
     let element = view.render(window, cx);
+
     element.into_any_element()
 }
 
@@ -282,6 +289,7 @@ impl<T: RenderOnce> View for T {
             not(target_family = "wasm")
         )))]
         let element = RenderOnce::render(self, window, cx);
+
         element
     }
 }
@@ -307,6 +315,7 @@ impl<T: Render> View for Entity<T> {
                 not(target_family = "wasm")
             )))]
             let element = Render::render(this, window, cx);
+
             element.into_any_element()
         })
     }
@@ -343,6 +352,7 @@ pub struct ViewElement<V: View> {
     view: Option<V>,
     entity_id: Option<EntityId>,
     cached_style: Option<StyleRefinement>,
+
     #[cfg(debug_assertions)]
     source: &'static core::panic::Location<'static>,
 }
@@ -352,6 +362,7 @@ impl<V: View> ViewElement<V> {
     #[track_caller]
     pub fn new(view: V) -> Self {
         let entity_id = view.entity_id();
+
         ViewElement {
             entity_id,
             cached_style: None,
@@ -372,6 +383,7 @@ impl<V: View> ViewElement<V> {
     /// entity-backed by construction.
     pub(crate) fn cached(mut self, style: StyleRefinement) -> Self {
         self.cached_style = Some(style);
+
         self
     }
 }
@@ -443,6 +455,7 @@ impl<V: View> Element for ViewElement<V> {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let entity_id = self.entity_id;
+
         let request_layout = |window: &mut Window| {
             let caching_disabled = window.is_inspector_picking(cx);
 
@@ -451,15 +464,20 @@ impl<V: View> Element for ViewElement<V> {
                 self.cached_style.as_ref().filter(|_| !caching_disabled),
             ) {
                 let mut root_style = Style::default();
+
                 root_style.refine(style);
+
                 let layout_id = window.request_layout(root_style, None, cx);
+
                 let (known, contribution) = window.with_element_state::<ViewDirectionState, _>(
                     global_id.unwrap(),
                     |state, _window| {
                         let state = state.unwrap_or_default();
+
                         ((state.known, state.contribution), state)
                     },
                 );
+
                 let should_probe =
                     !known || window.dirty_views.contains(&entity_id) || window.refreshing;
 
@@ -471,6 +489,7 @@ impl<V: View> Element for ViewElement<V> {
 
                             (element, detached_layout_id)
                         });
+
                     window.set_layout_logical_children(
                         layout_id,
                         std::slice::from_ref(&detached_layout_id),
@@ -525,11 +544,13 @@ impl<V: View> Element for ViewElement<V> {
         if let Some(entity_id) = self.entity_id {
             // Stateful path.
             window.set_view_id(entity_id);
+
             window.with_rendered_view(entity_id, |window| {
                 if request_layout.detached_layout_id.is_none()
                     && let Some(mut element) = request_layout.element.take()
                 {
                     element.prepaint(window, cx);
+
                     return Some(element);
                 }
 
@@ -551,10 +572,14 @@ impl<V: View> Element for ViewElement<V> {
                             && !window.refreshing
                         {
                             let prepaint_start = window.prepaint_index();
+
                             window.reuse_prepaint(element_state.prepaint_range.clone());
+
                             cx.entities
                                 .extend_accessed(&element_state.accessed_entities);
+
                             let prepaint_end = window.prepaint_index();
+
                             element_state.prepaint_range = prepaint_start..prepaint_end;
 
                             return (None, element_state);
@@ -562,22 +587,27 @@ impl<V: View> Element for ViewElement<V> {
 
                         let refreshing = mem::replace(&mut window.refreshing, true);
                         let prepaint_start = window.prepaint_index();
+
                         let mut accessed_entities =
                             mem::take(&mut request_layout.accessed_entities);
+
                         let (element, additional_entities) = cx.detect_accessed_entities(|cx| {
                             let mut element = request_layout.element.take().unwrap_or_else(|| {
                                 render_view(self.view.take().unwrap(), window, cx)
                             });
+
                             element.layout_as_root(bounds.size.into(), window, cx);
                             element.prepaint_at(bounds.origin, window, cx);
 
                             element
                         });
+
                         accessed_entities.extend(additional_entities);
 
                         if let Some(detached_layout_id) = request_layout.detached_layout_id.take() {
                             let contribution =
                                 window.layout_auto_direction_contribution(detached_layout_id);
+
                             window.with_element_state::<ViewDirectionState, _>(
                                 global_id.unwrap(),
                                 |_state, _window| {
@@ -593,6 +623,7 @@ impl<V: View> Element for ViewElement<V> {
                         }
 
                         let prepaint_end = window.prepaint_index();
+
                         window.refreshing = refreshing;
 
                         (
@@ -607,6 +638,7 @@ impl<V: View> Element for ViewElement<V> {
                     },
                 )
             })
+
         } else {
             // Stateless path: just prepaint the element.
             window.with_id(
@@ -619,6 +651,7 @@ impl<V: View> Element for ViewElement<V> {
                         .prepaint(window, cx);
                 },
             );
+
             Some(request_layout.element.take().unwrap())
         }
     }
@@ -637,6 +670,7 @@ impl<V: View> Element for ViewElement<V> {
             // Stateful path.
             window.with_rendered_view(entity_id, |window| {
                 let caching_disabled = window.is_inspector_picking(cx);
+
                 if self.cached_style.is_some() && !caching_disabled {
                     window.with_element_state::<ViewElementState, _>(
                         global_id.unwrap(),
@@ -647,22 +681,28 @@ impl<V: View> Element for ViewElement<V> {
 
                             if let Some(element) = element {
                                 let refreshing = mem::replace(&mut window.refreshing, true);
+
                                 element.paint(window, cx);
+
                                 window.refreshing = refreshing;
+
                             } else {
                                 window.reuse_paint(element_state.paint_range.clone());
                             }
 
                             let paint_end = window.paint_index();
+
                             element_state.paint_range = paint_start..paint_end;
 
                             ((), element_state)
                         },
                     )
+
                 } else {
                     element.as_mut().unwrap().paint(window, cx);
                 }
             });
+
         } else {
             // Stateless path: just paint the element.
             window.with_id(

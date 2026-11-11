@@ -1,8 +1,10 @@
 use anyhow::{Result, bail};
+
 use fontique::{
     Attributes, Blob, Collection, CollectionOptions, FontStyle, FontWeight, FontWidth, QueryFamily,
     QueryFont, QueryStatus, SourceCache,
 };
+
 use parley::{FontContext, FontFamilyName};
 
 /// Controls whether a Parley text system loads operating-system fonts.
@@ -61,6 +63,7 @@ pub(crate) fn family_names(context: &mut FontContext) -> Vec<String> {
         .family_names()
         .map(str::to_owned)
         .collect::<Vec<_>>();
+
     names.sort_unstable();
     names.dedup();
 
@@ -81,10 +84,12 @@ pub(crate) fn resolve_face(
     };
 
     let mut query = context.collection.query(&mut context.source_cache);
+
     query.set_families(families.iter().map(|family| match family {
         FontFamilyName::Named(name) => QueryFamily::Named(name.as_ref()),
         FontFamilyName::Generic(generic) => QueryFamily::Generic(*generic),
     }));
+
     query.set_attributes(Attributes::new(
         FontWidth::from_percentage(width.0),
         style,
@@ -92,6 +97,7 @@ pub(crate) fn resolve_face(
     ));
 
     let mut selected = None;
+
     query.matches_with(|font| {
         selected = Some(font.clone());
 
@@ -109,6 +115,7 @@ mod tests {
     #[test]
     fn registered_fonts_are_enumerated_and_resolved() {
         let mut context = new_font_context(SystemFonts::Skip);
+
         register_bytes(
             &mut context,
             &[
@@ -127,6 +134,7 @@ mod tests {
         );
 
         let families = [FontFamilyName::Named(IBM_PLEX.family.into())];
+
         let mut resolve = |weight, style| {
             resolve_face(
                 &mut context,
@@ -136,12 +144,15 @@ mod tests {
                 style,
             )
         };
+
         let latin = resolve(400.0, gpui::FontStyle::Normal).unwrap();
+
         assert_eq!(latin.blob.as_ref(), IBM_PLEX.data);
 
         assert_eq!(latin.index, 0);
 
         let semibold_italic = resolve(600.0, gpui::FontStyle::Italic).unwrap();
+
         assert_eq!(semibold_italic.blob.as_ref(), IBM_PLEX_SEMIBOLD_ITALIC.data);
 
         let families = [FontFamilyName::Named(WIDTH_REGULAR.family.into())];
@@ -166,13 +177,16 @@ mod tests {
     #[test]
     fn font_registration_is_atomic() {
         let mut context = new_font_context(SystemFonts::Skip);
+
         register_bytes(&mut context, &[LILEX.data]).unwrap();
+
         let families_before = family_names(&mut context);
 
         assert!(register_bytes(&mut context, &[IBM_PLEX.data, b"not a font"]).is_err());
         assert_eq!(family_names(&mut context), families_before);
 
         let families = [FontFamilyName::Named(IBM_PLEX.family.into())];
+
         assert!(
             resolve_face(
                 &mut context,

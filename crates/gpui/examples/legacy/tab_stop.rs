@@ -7,6 +7,7 @@ use gpui::{
     App, Bounds, Context, Div, ElementId, FocusHandle, KeyBinding, SharedString, Stateful, Window,
     WindowBounds, WindowOptions, actions, div, prelude::*, px, size,
 };
+
 use gpui_platform::application;
 use palette::WithAlpha;
 
@@ -29,6 +30,7 @@ impl Example {
         ];
 
         let focus_handle = cx.focus_handle();
+
         window.focus(&focus_handle, cx);
 
         Self {
@@ -40,11 +42,13 @@ impl Example {
 
     fn on_tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<Self>) {
         window.focus_next(cx);
+
         self.message = SharedString::from("You have pressed `Tab`.");
     }
 
     fn on_tab_prev(&mut self, _: &TabPrev, window: &mut Window, cx: &mut Context<Self>) {
         window.focus_prev(cx);
+
         self.message = SharedString::from("You have pressed `Shift-Tab`.");
     }
 }
@@ -108,6 +112,7 @@ impl Render for Example {
                                 true => this
                                     .hover_style(|this| this.bg(gpui::black().with_alpha(0.1)))
                                     .child(format!("tab_index: {}", item_handle.tab_index)),
+
                                 false => this.opacity(0.4).child("tab_stop: false"),
                             })
                     }),
@@ -124,6 +129,7 @@ impl Render for Example {
                             .child("Button 1")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.message = "You have clicked Button 1.".into();
+
                                 cx.notify();
                             })),
                     )
@@ -133,6 +139,7 @@ impl Render for Example {
                             .child("Button 2")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.message = "You have clicked Button 2.".into();
+
                                 cx.notify();
                             })),
                     ),
@@ -145,12 +152,14 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         cx.bind_keys([
             KeyBinding::new("tab", Tab, None),
             KeyBinding::new("shift-tab", TabPrev, None),
         ]);
 
         let bounds = Bounds::centered(None, size(px(800.), px(600.0)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| cx.new(|cx| Example::new(window, cx)),

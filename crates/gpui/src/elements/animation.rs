@@ -15,8 +15,10 @@ use smallvec::SmallVec;
 pub struct Animation {
     /// The timing, repetition, and easing applied to this animation.
     pub motion: Motion,
+
     /// Whether to derive the phase from a shared clock. See [`Animation::repeat_synced`].
     pub synced: bool,
+
     /// The maximum number of times per second this animation re-renders.
     /// When `None`, the animation re-renders on every frame.
     pub max_fps: Option<f32>,
@@ -37,6 +39,7 @@ impl Animation {
     /// Set the animation to loop when it finishes.
     pub fn repeat(mut self) -> Self {
         self.motion = self.motion.repeat_forever();
+
         self
     }
 
@@ -44,12 +47,14 @@ impl Animation {
     pub fn repeat_synced(mut self) -> Self {
         self.motion = self.motion.repeat_forever();
         self.synced = true;
+
         self
     }
 
     /// Sets easing without clamping the output, so curves may overshoot.
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
         self.motion = self.motion.with_easing(easing);
+
         self
     }
 
@@ -57,6 +62,7 @@ impl Animation {
     /// Non-finite and non-positive values are ignored.
     pub fn with_max_fps(mut self, max_fps: f32) -> Self {
         self.max_fps = Some(max_fps);
+
         self
     }
 }
@@ -129,7 +135,9 @@ pub trait AnimationExt {
             initial,
             playback,
         } = animation;
+
         let scalar_target = target.target();
+
         SpringAnimationElement {
             id: id.into(),
             element: Some(self),
@@ -180,6 +188,7 @@ impl<E> SpringAnimationElement<E> {
     /// to the element being animated.
     pub fn map_element(mut self, f: impl FnOnce(E) -> E) -> SpringAnimationElement<E> {
         self.element = self.element.map(f);
+
         self
     }
 }
@@ -207,6 +216,7 @@ impl<E> AnimationElement<E> {
     /// to the element being animated.
     pub fn map_element(mut self, f: impl FnOnce(E) -> E) -> AnimationElement<E> {
         self.element = self.element.map(f);
+
         self
     }
 }
@@ -222,6 +232,7 @@ impl<E: IntoElement + 'static> IntoElement for AnimationElement<E> {
 struct AnimationState {
     start: Instant,
     animation_ix: usize,
+
     /// Whether a throttled re-render (see [`Animation::with_max_fps`]) is
     /// already scheduled, so overlapping renders don't stack extra timers.
     delayed_frame_pending: Rc<Cell<bool>>,
@@ -260,6 +271,7 @@ impl<E: IntoElement + 'static> Element for SpringAnimationElement<E> {
             // tests and remains consistent with scheduled animation work.
             let now = cx.background_executor().now();
             let initial = self.initial.unwrap_or(self.target);
+
             let mut state = state.unwrap_or_else(|| SpringElementState {
                 spring: SpringState {
                     position: initial,
@@ -273,10 +285,12 @@ impl<E: IntoElement + 'static> Element for SpringAnimationElement<E> {
             });
 
             let elapsed = now.duration_since(state.updated_at).as_secs_f32();
+
             match state.playback {
                 SpringPlayback::Running => {
                     state.spring = state.config.step(state.spring, state.target, elapsed);
                 }
+
                 SpringPlayback::Paused
                 | SpringPlayback::Stopped
                 | SpringPlayback::Completed
@@ -293,42 +307,54 @@ impl<E: IntoElement + 'static> Element for SpringAnimationElement<E> {
                             position: state.target,
                             velocity: 0.0,
                         };
+
                         true
+
                     } else {
                         let done = state.config.is_settled(
                             state.spring,
                             state.target,
                             self.motion.epsilon,
                         );
+
                         if done {
                             state.spring = SpringState {
                                 position: state.target,
                                 velocity: 0.0,
                             };
                         }
+
                         done
                     }
                 }
+
                 SpringPlayback::Paused => true,
+
                 SpringPlayback::Stopped => {
                     state.spring.velocity = 0.0;
+
                     true
                 }
+
                 SpringPlayback::Completed => {
                     state.spring = SpringState {
                         position: state.target,
                         velocity: 0.0,
                     };
+
                     true
                 }
+
                 SpringPlayback::Cancelled => {
                     state.spring = SpringState {
                         position: state.initial,
                         velocity: 0.0,
                     };
+
                     true
                 }
             };
+
             state.playback = self.playback;
             state.updated_at = now;
 
@@ -391,33 +417,42 @@ impl<E: IntoElement + 'static> Element for AnimationElement<E> {
     ) -> (crate::LayoutId, Self::RequestLayoutState) {
         window.with_element_state(global_id.unwrap(), |state, window| {
             let now = cx.background_executor().now();
+
             let mut state = state.unwrap_or_else(|| AnimationState {
                 start: now,
                 animation_ix: 0,
                 delayed_frame_pending: Rc::new(Cell::new(false)),
             });
+
             let (animation_ix, delta, done) = if cx.reduce_motion() {
                 let animation_ix = self.animations.len() - 1;
+
                 let delta = self.animations[animation_ix]
                     .motion
                     .resting_progress()
                     .get();
+
                 (animation_ix, delta, true)
+
             } else {
                 let animation_ix = state.animation_ix;
                 let animation = &self.animations[animation_ix];
+
                 let elapsed = if animation.synced {
                     now - cx.synced_animation_epoch
                 } else {
                     now - state.start
                 };
+
                 let sample = animation.motion.sample(elapsed);
                 let mut done = !sample.is_active;
+
                 if done && animation_ix < self.animations.len() - 1 {
                     state.start = now;
                     state.animation_ix += 1;
                     done = false;
                 }
+
                 (animation_ix, sample.progress.get(), done)
             };
 
@@ -431,18 +466,22 @@ impl<E: IntoElement + 'static> Element for AnimationElement<E> {
                     Some(max_fps) if max_fps.is_finite() && max_fps > 0.0 => {
                         if !state.delayed_frame_pending.get() {
                             state.delayed_frame_pending.set(true);
+
                             let delayed_frame_pending = state.delayed_frame_pending.clone();
                             let view = window.current_view();
                             let interval = Duration::from_secs_f32(1.0 / max_fps);
+
                             window
                                 .spawn(cx, async move |cx| {
                                     cx.background_executor().timer(interval).await;
+
                                     delayed_frame_pending.set(false);
                                     cx.update(move |_, cx| cx.notify(view)).ok();
                                 })
                                 .detach();
                         }
                     }
+
                     _ => window.request_animation_frame(),
                 }
             }
@@ -496,6 +535,7 @@ mod easing {
             2.0 * delta * delta
         } else {
             let x = -2.0 * delta + 2.0;
+
             1.0 - x * x / 2.0
         }
     }
@@ -569,13 +609,16 @@ mod tests {
     impl Render for SpringAnimationTestView {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let rendered_values = self.rendered_values.clone();
+
             let mut animation = Motion::spring(SpringConfig::new(100.0, 2.0, 1.0))
                 .with_epsilon(0.01)
                 .to(self.target)
                 .playback(self.playback);
+
             if let Some(initial) = self.initial {
                 animation = animation.from(initial);
             }
+
             div().with_spring("spring-animation", animation, move |this, value| {
                 rendered_values.borrow_mut().push(value);
                 this.left(value)
@@ -588,9 +631,11 @@ mod tests {
             let record_deltas = |deltas: Rc<RefCell<Vec<f32>>>| {
                 move |this, delta| {
                     deltas.borrow_mut().push(delta);
+
                     this
                 }
             };
+
             div()
                 .size_full()
                 .child(div().with_animation(
@@ -614,16 +659,19 @@ mod tests {
             // The throttled variant syncs to the shared clock so the deltas
             // follow the test scheduler's clock rather than wall time.
             let mut animation = Animation::new(Motion::new(Duration::from_secs(1)));
+
             if let Some(max_fps) = self.max_fps {
                 animation = animation.repeat_synced().with_max_fps(max_fps);
             } else {
                 animation = animation.repeat();
             }
+
             div().size_full().child(div().with_animation(
                 "repeating-animation",
                 animation,
                 move |this, delta| {
                     rendered_deltas.borrow_mut().push(delta);
+
                     this
                 },
             ))
@@ -633,6 +681,7 @@ mod tests {
     impl Render for AnimationSequenceTestView {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let rendered_samples = self.rendered_samples.clone();
+
             div().with_animations(
                 "animation-sequence",
                 vec![
@@ -641,6 +690,7 @@ mod tests {
                 ],
                 move |this, animation_ix, delta| {
                     rendered_samples.borrow_mut().push((animation_ix, delta));
+
                     this
                 },
             )
@@ -658,14 +708,18 @@ mod tests {
         max_fps: Option<f32>,
     ) -> (Rc<RefCell<Vec<f32>>>, WindowHandle<AnimationTestView>) {
         let rendered_deltas = Rc::new(RefCell::new(Vec::new()));
+
         let window = cx.open_window(size(px(100.), px(100.)), {
             let rendered_deltas = rendered_deltas.clone();
+
             move |_, _| AnimationTestView {
                 rendered_deltas,
                 max_fps,
             }
         });
+
         cx.run_until_parked();
+
         (rendered_deltas, window)
     }
 
@@ -673,7 +727,9 @@ mod tests {
         let callback_count = window
             .update(cx, |_, window, cx| window.simulate_next_frame(cx))
             .unwrap();
+
         cx.run_until_parked();
+
         callback_count
     }
 
@@ -703,8 +759,10 @@ mod tests {
     #[gpui::test]
     fn test_spring_animation_preserves_velocity_when_retargeted(cx: &mut TestAppContext) {
         let rendered_values = Rc::new(RefCell::new(Vec::new()));
+
         let window = cx.open_window(size(px(100.0), px(100.0)), {
             let rendered_values = rendered_values.clone();
+
             move |_, _| SpringAnimationTestView {
                 target: px(0.0),
                 initial: None,
@@ -712,49 +770,65 @@ mod tests {
                 rendered_values,
             }
         });
+
         cx.run_until_parked();
+
         assert_eq!(*rendered_values.borrow(), vec![px(0.0)]);
 
         window
             .update(cx, |view, _, cx| {
                 view.target = px(100.0);
+
                 cx.notify();
             })
             .unwrap();
+
         cx.run_until_parked();
 
         cx.executor().advance_clock(Duration::from_millis(50));
+
         assert!(simulate_next_frame(&window, cx) > 0);
+
         // Delivering the frame callback only notifies the view. Explicitly
         // flush that invalidation so randomized test-scheduler ordering cannot
         // leave the assertion observing the pre-frame value.
         cx.refresh().unwrap();
         cx.run_until_parked();
+
         let value_before_retargeting = *rendered_values.borrow().last().unwrap();
+
         assert!(value_before_retargeting > px(0.0));
         assert!(value_before_retargeting < px(100.0));
 
         window
             .update(cx, |view, _, cx| {
                 view.target = px(0.0);
+
                 cx.notify();
             })
             .unwrap();
+
         cx.run_until_parked();
 
         cx.executor().advance_clock(Duration::from_millis(5));
+
         assert!(simulate_next_frame(&window, cx) > 0);
+
         cx.refresh().unwrap();
         cx.run_until_parked();
+
         let value_after_retargeting = *rendered_values.borrow().last().unwrap();
+
         assert!(value_after_retargeting > value_before_retargeting);
     }
 
     #[gpui::test]
     fn test_paused_spring_resumes_with_its_velocity(cx: &mut TestAppContext) {
         let rendered_values = Rc::new(RefCell::new(Vec::new()));
+
         let window = cx.open_window(size(px(100.0), px(100.0)), {
             let rendered_values = rendered_values.clone();
+
             move |_, _| SpringAnimationTestView {
                 target: px(0.0),
                 initial: None,
@@ -762,29 +836,37 @@ mod tests {
                 rendered_values,
             }
         });
+
         cx.run_until_parked();
 
         window
             .update(cx, |view, _, cx| {
                 view.target = px(100.0);
+
                 cx.notify();
             })
             .unwrap();
+
         cx.run_until_parked();
         cx.executor().advance_clock(Duration::from_millis(50));
+
         assert!(simulate_next_frame(&window, cx) > 0);
 
         window
             .update(cx, |view, _, cx| {
                 view.target = px(0.0);
                 view.playback = SpringPlayback::Paused;
+
                 cx.notify();
             })
             .unwrap();
+
         cx.run_until_parked();
+
         let paused_value = *rendered_values.borrow().last().unwrap();
 
         cx.executor().advance_clock(Duration::from_millis(500));
+
         assert!(simulate_next_frame(&window, cx) > 0);
         assert_eq!(*rendered_values.borrow().last().unwrap(), paused_value);
         assert_eq!(simulate_next_frame(&window, cx), 0);
@@ -792,11 +874,14 @@ mod tests {
         window
             .update(cx, |view, _, cx| {
                 view.playback = SpringPlayback::Running;
+
                 cx.notify();
             })
             .unwrap();
+
         cx.run_until_parked();
         cx.executor().advance_clock(Duration::from_millis(5));
+
         assert!(simulate_next_frame(&window, cx) > 0);
         assert!(*rendered_values.borrow().last().unwrap() > paused_value);
     }
@@ -804,8 +889,10 @@ mod tests {
     #[gpui::test]
     fn test_stopped_spring_resumes_without_velocity(cx: &mut TestAppContext) {
         let rendered_values = Rc::new(RefCell::new(Vec::new()));
+
         let window = cx.open_window(size(px(100.0), px(100.0)), {
             let rendered_values = rendered_values.clone();
+
             move |_, _| SpringAnimationTestView {
                 target: px(0.0),
                 initial: None,
@@ -813,29 +900,37 @@ mod tests {
                 rendered_values,
             }
         });
+
         cx.run_until_parked();
 
         window
             .update(cx, |view, _, cx| {
                 view.target = px(1_000_000.0);
+
                 cx.notify();
             })
             .unwrap();
+
         cx.run_until_parked();
         cx.executor().advance_clock(Duration::from_millis(50));
+
         assert!(simulate_next_frame(&window, cx) > 0);
 
         window
             .update(cx, |view, _, cx| {
                 view.target = px(0.0);
                 view.playback = SpringPlayback::Stopped;
+
                 cx.notify();
             })
             .unwrap();
+
         cx.run_until_parked();
+
         let stopped_value = *rendered_values.borrow().last().unwrap();
 
         cx.executor().advance_clock(Duration::from_millis(500));
+
         assert!(simulate_next_frame(&window, cx) > 0);
         assert_eq!(*rendered_values.borrow().last().unwrap(), stopped_value);
         assert_eq!(simulate_next_frame(&window, cx), 0);
@@ -844,10 +939,13 @@ mod tests {
             .update(cx, |view, _, cx| {
                 view.target = stopped_value;
                 view.playback = SpringPlayback::Running;
+
                 cx.notify();
             })
             .unwrap();
+
         cx.run_until_parked();
+
         assert_eq!(*rendered_values.borrow().last().unwrap(), stopped_value);
         assert_eq!(simulate_next_frame(&window, cx), 0);
     }
@@ -855,8 +953,10 @@ mod tests {
     #[gpui::test]
     fn test_cancelled_and_completed_springs_resolve_their_endpoints(cx: &mut TestAppContext) {
         let rendered_values = Rc::new(RefCell::new(Vec::new()));
+
         let window = cx.open_window(size(px(100.0), px(100.0)), {
             let rendered_values = rendered_values.clone();
+
             move |_, _| SpringAnimationTestView {
                 target: px(100.0),
                 initial: Some(px(20.0)),
@@ -864,20 +964,26 @@ mod tests {
                 rendered_values,
             }
         });
+
         cx.run_until_parked();
+
         assert_eq!(*rendered_values.borrow(), vec![px(20.0)]);
 
         cx.executor().advance_clock(Duration::from_millis(50));
+
         assert!(simulate_next_frame(&window, cx) > 0);
         assert!(*rendered_values.borrow().last().unwrap() > px(20.0));
 
         window
             .update(cx, |view, _, cx| {
                 view.playback = SpringPlayback::Cancelled;
+
                 cx.notify();
             })
             .unwrap();
+
         cx.run_until_parked();
+
         assert_eq!(*rendered_values.borrow().last().unwrap(), px(20.0));
         assert!(simulate_next_frame(&window, cx) > 0);
         assert_eq!(simulate_next_frame(&window, cx), 0);
@@ -885,10 +991,13 @@ mod tests {
         window
             .update(cx, |view, _, cx| {
                 view.playback = SpringPlayback::Completed;
+
                 cx.notify();
             })
             .unwrap();
+
         cx.run_until_parked();
+
         assert_eq!(*rendered_values.borrow().last().unwrap(), px(100.0));
         assert_eq!(simulate_next_frame(&window, cx), 0);
     }
@@ -896,9 +1005,12 @@ mod tests {
     #[gpui::test]
     fn test_animations_respect_reduced_motion(cx: &mut TestAppContext) {
         cx.update(|cx| cx.set_reduce_motion(true));
+
         let rendered_values = Rc::new(RefCell::new(Vec::new()));
+
         let window = cx.open_window(size(px(100.0), px(100.0)), {
             let rendered_values = rendered_values.clone();
+
             move |_, _| SpringAnimationTestView {
                 target: px(100.0),
                 initial: None,
@@ -906,12 +1018,14 @@ mod tests {
                 rendered_values,
             }
         });
+
         cx.run_until_parked();
 
         assert_eq!(*rendered_values.borrow(), vec![px(100.0)]);
         assert_eq!(simulate_next_frame(&window, cx), 0);
 
         let (rendered_deltas, window) = open_test_window(cx);
+
         assert_eq!(*rendered_deltas.borrow(), vec![0.0]);
         assert_eq!(simulate_next_frame(&window, cx), 0);
     }
@@ -919,10 +1033,13 @@ mod tests {
     #[gpui::test]
     fn test_zero_duration_animation_sequence_advances_without_nan(cx: &mut TestAppContext) {
         let rendered_samples = Rc::new(RefCell::new(Vec::new()));
+
         let window = cx.open_window(size(px(100.0), px(100.0)), {
             let rendered_samples = rendered_samples.clone();
+
             move |_, _| AnimationSequenceTestView { rendered_samples }
         });
+
         cx.run_until_parked();
 
         assert_eq!(*rendered_samples.borrow(), vec![(0, 1.0)]);
@@ -951,7 +1068,9 @@ mod tests {
         // so compare against expectations loosely.
         let assert_deltas_approx_eq = |expected: &[f32]| {
             let actual = rendered_deltas.borrow();
+
             assert_eq!(actual.len(), expected.len(), "deltas: {actual:?}");
+
             for (actual, expected) in actual.iter().zip(expected) {
                 assert!(
                     (actual - expected).abs() < 1e-2,
@@ -964,14 +1083,17 @@ mod tests {
 
         // No per-frame callback is scheduled; re-renders are timer-driven.
         assert_eq!(simulate_next_frame(&window, cx), 0);
+
         assert_deltas_approx_eq(&[0.0]);
 
         cx.executor().advance_clock(Duration::from_millis(105));
         cx.run_until_parked();
+
         assert_deltas_approx_eq(&[0.0, 0.105]);
 
         cx.executor().advance_clock(Duration::from_millis(105));
         cx.run_until_parked();
+
         assert_deltas_approx_eq(&[0.0, 0.105, 0.21]);
     }
 
@@ -979,21 +1101,26 @@ mod tests {
     fn test_synced_animations_share_phase_across_elements(cx: &mut TestAppContext) {
         let first_deltas = Rc::new(RefCell::new(Vec::new()));
         let second_deltas = Rc::new(RefCell::new(Vec::new()));
+
         let window = cx.open_window(size(px(100.), px(100.)), {
             let first_deltas = first_deltas.clone();
             let second_deltas = second_deltas.clone();
+
             move |_, _| SyncedAnimationTestView {
                 show_second: false,
                 first_deltas,
                 second_deltas,
             }
         });
+
         cx.run_until_parked();
 
         assert_eq!(*first_deltas.borrow(), vec![0.0]);
 
         cx.executor().advance_clock(Duration::from_millis(250));
+
         simulate_next_frame(&window, cx);
+
         assert_eq!(*first_deltas.borrow(), vec![0.0, 0.25]);
 
         // The second element mounts a quarter through the cycle, yet renders
@@ -1001,30 +1128,39 @@ mod tests {
         window
             .update(cx, |view, _, cx| {
                 view.show_second = true;
+
                 cx.notify();
             })
             .unwrap();
+
         cx.run_until_parked();
         cx.executor().advance_clock(Duration::from_millis(250));
+
         simulate_next_frame(&window, cx);
 
         assert_eq!(*second_deltas.borrow().last().unwrap(), 0.5);
+
         assert_eq!(
             *first_deltas.borrow().last().unwrap(),
             *second_deltas.borrow().last().unwrap()
         );
+
         assert!(second_deltas.borrow().iter().all(|delta| *delta > 0.0));
 
         // The phase wraps around each full cycle.
         cx.executor().advance_clock(Duration::from_millis(2250));
+
         simulate_next_frame(&window, cx);
+
         assert_eq!(*first_deltas.borrow().last().unwrap(), 0.75);
 
         // Sub-second precision survives months of uptime: converting the raw
         // elapsed time to f32 would round 0.25 away entirely.
         cx.executor()
             .advance_clock(Duration::from_secs(300 * 24 * 60 * 60) + Duration::from_millis(500));
+
         simulate_next_frame(&window, cx);
+
         assert_eq!(*first_deltas.borrow().last().unwrap(), 0.25);
     }
 }

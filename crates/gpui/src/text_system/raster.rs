@@ -15,8 +15,10 @@ pub enum ForegroundDependency {
 pub struct PreparedRasterStyle {
     /// The normalized render mode.
     pub mode: GlyphRenderMode,
+
     /// Any normalized color effect baked into coverage or color pixels.
     pub color_effect: RasterColorEffect,
+
     /// Which foreground channels can alter this raster or its fallback.
     pub foreground_dependency: ForegroundDependency,
 }

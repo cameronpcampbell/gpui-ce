@@ -9,6 +9,7 @@ use gpui::{
     App, Bounds, Context, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb,
     rgba, size,
 };
+
 use palette::WithAlpha;
 use slider::Slider;
 
@@ -88,6 +89,7 @@ impl Render for CornerSmoothingExample {
                                         .on_change(
                                             cx.processor(|this, smoothing, _window, cx| {
                                                 this.corner_smoothing = smoothing;
+
                                                 cx.notify();
                                             }),
                                         ),
@@ -103,6 +105,7 @@ impl Render for CornerSmoothingExample {
                                         .on_change(
                                             cx.processor(|this, radius, _window, cx| {
                                                 this.corner_radius = radius;
+
                                                 cx.notify();
                                             }),
                                         ),
@@ -123,6 +126,7 @@ impl Render for CornerSmoothingExample {
                                         .on_change(
                                             cx.processor(|this, width, _window, cx| {
                                                 this.width = width;
+
                                                 this.clamp_corner_radius();
                                                 cx.notify();
                                             }),
@@ -139,6 +143,7 @@ impl Render for CornerSmoothingExample {
                                         .on_change(
                                             cx.processor(|this, height, _window, cx| {
                                                 this.height = height;
+
                                                 this.clamp_corner_radius();
                                                 cx.notify();
                                             }),
@@ -153,6 +158,7 @@ impl Render for CornerSmoothingExample {
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(500.), px(650.)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| {
@@ -219,6 +225,7 @@ mod slider {
 
         pub fn display_value(mut self, value: impl Into<String>) -> Self {
             self.value_text = value.into();
+
             self
         }
 
@@ -227,6 +234,7 @@ mod slider {
             callback: impl Fn(f32, &mut Window, &mut App) + 'static,
         ) -> Self {
             self.on_change = Some(Rc::new(callback));
+
             self
         }
 
@@ -238,6 +246,7 @@ mod slider {
         ) -> f32 {
             let position = (position_x - bounds.left()).clamp(px(0.), bounds.size.width);
             let percentage = position / bounds.size.width;
+
             min + (max - min) * percentage
         }
     }
@@ -274,6 +283,7 @@ mod slider {
                 .on_drag(SliderDrag { id }, |drag, _, _, cx| cx.new(|_| drag.clone()))
                 .on_drag_move(move |event: &DragMoveEvent<SliderDrag>, window, cx| {
                     let is_active_slider = event.drag(cx).id == id;
+
                     if is_active_slider && let Some(handler) = &drag_handler {
                         handler(
                             Slider::value_from_position(

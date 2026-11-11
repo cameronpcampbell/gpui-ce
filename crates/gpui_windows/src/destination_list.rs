@@ -2,6 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use itertools::Itertools;
 use smallvec::SmallVec;
+
 use windows::{
     Win32::{
         Foundation::PROPERTYKEY,
@@ -54,6 +55,7 @@ impl DockMenuItem {
                 },
                 action,
             }),
+
             _ => anyhow::bail!("Only `MenuItem::Action` is supported for dock menu on Windows."),
         }
     }
@@ -66,9 +68,11 @@ pub(crate) fn update_jump_list(
     dock_menus: &[(SharedString, SharedString)],
 ) -> anyhow::Result<Vec<SmallVec<[PathBuf; 2]>>> {
     let (list, removed) = create_destination_list()?;
+
     add_recent_folders(&list, recent_workspaces, removed.as_ref())?;
     add_dock_menu(&list, dock_menus)?;
     unsafe { list.CommitList() }?;
+
     Ok(removed)
 }
 
@@ -88,21 +92,28 @@ fn create_destination_list() -> anyhow::Result<(ICustomDestinationList, Vec<Smal
     let user_removed: IObjectArray = unsafe { list.BeginList(&mut slots) }?;
 
     let count = unsafe { user_removed.GetCount() }?;
+
     if count == 0 {
         return Ok((list, Vec::new()));
     }
 
     let mut removed = Vec::with_capacity(count as usize);
+
     for i in 0..count {
         let shell_link: IShellLinkW = unsafe { user_removed.GetAt(i)? };
+
         let description = {
             // INFOTIPSIZE is the maximum size of the buffer
             // see https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishelllinkw-getdescription
             let mut buffer = [0u16; INFOTIPSIZE as usize];
+
             unsafe { shell_link.GetDescription(&mut buffer)? };
+
             let len = unsafe { u_strlen(buffer.as_ptr()) };
+
             String::from_utf16_lossy(&buffer[..len as usize])
         };
+
         let args = description.split('\n').map(PathBuf::from).collect();
 
         removed.push(args);
@@ -118,14 +129,18 @@ fn add_dock_menu(
     unsafe {
         let tasks: IObjectCollection =
             CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER)?;
+
         for (idx, (name, description)) in dock_menus.iter().enumerate() {
             let argument = HSTRING::from(format!("--dock-action {}", idx));
             let description = HSTRING::from(description.as_str());
             let display = name.as_str();
             let task = create_shell_link(argument, description, None, display)?;
+
             tasks.AddObject(&task)?;
         }
+
         list.AddUserTasks(&tasks)?;
+
         Ok(())
     }
 }
@@ -154,6 +169,7 @@ fn add_recent_folders(
                     .collect::<Vec<_>>()
                     .join("\n"),
             );
+
             // simulate folder icon
             // https://github.com/microsoft/vscode/blob/7a5dc239516a8953105da34f84bae152421a8886/src/vs/platform/workspaces/electron-main/workspacesHistoryMainService.ts#L380
             let icon = HSTRING::from("explorer.exe");
@@ -178,6 +194,7 @@ fn add_recent_folders(
         if tasks.GetCount().unwrap_or(0) > 0 {
             list.AppendCategory(&HSTRING::from("Recent Folders"), &tasks)?;
         }
+
         Ok(())
     }
 }
@@ -191,14 +208,18 @@ fn create_shell_link(
     unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
         let exe_path = HSTRING::from(std::env::current_exe()?.as_os_str());
+
         link.SetPath(&exe_path)?;
         link.SetArguments(&argument)?;
         link.SetDescription(&description)?;
+
         if let Some(icon) = icon {
             link.SetIconLocation(&icon, 0)?;
         }
+
         let store: IPropertyStore = link.cast()?;
         let title = PROPVARIANT::from(display);
+
         store.SetValue(&PKEY_TITLE, &title)?;
         store.Commit()?;
 

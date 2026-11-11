@@ -3,6 +3,7 @@ use calloop::{
     channel::{self, Sender},
     timer::TimeoutAction,
 };
+
 use gpui_util::ResultExt;
 
 use std::{mem::MaybeUninit, thread, time::Duration};
@@ -30,20 +31,25 @@ const MIN_THREADS: usize = 2;
 impl LinuxDispatcher {
     pub fn new(main_sender: PriorityQueueCalloopSender<RunnableVariant>) -> Self {
         let (background_sender, background_receiver) = PriorityQueueReceiver::new();
+
         let thread_count =
             std::thread::available_parallelism().map_or(MIN_THREADS, |i| i.get().max(MIN_THREADS));
 
         let mut background_threads = (0..thread_count)
             .map(|i| {
                 let receiver: PriorityQueueReceiver<RunnableVariant> = background_receiver.clone();
+
                 std::thread::Builder::new()
                     .name(format!("Worker-{i}"))
                     .spawn(move || {
                         for runnable in receiver.iter() {
                             let location = runnable.metadata().location;
                             let spawned = runnable.metadata().spawned;
+
                             profiler::update_running_task(spawned, location);
+
                             runnable.run();
+
                             profiler::save_task_timing();
                         }
                     })
@@ -52,6 +58,7 @@ impl LinuxDispatcher {
             .collect::<Vec<_>>();
 
         let (timer_sender, timer_channel) = calloop::channel::channel::<TimerAfter>();
+
         let timer_thread = std::thread::Builder::new()
             .name("Timer".to_owned())
             .spawn(move || {
@@ -60,10 +67,12 @@ impl LinuxDispatcher {
 
                 let handle = event_loop.handle();
                 let timer_handle = event_loop.handle();
+
                 handle
                     .insert_source(timer_channel, move |e, _, _| {
                         if let channel::Event::Msg(timer) = e {
                             let mut runnable = Some(timer.runnable);
+
                             timer_handle
                                 .insert_source(
                                     calloop::timer::Timer::from_duration(timer.duration),
@@ -71,10 +80,14 @@ impl LinuxDispatcher {
                                         if let Some(runnable) = runnable.take() {
                                             let location = runnable.metadata().location;
                                             let spawned = runnable.metadata().spawned;
+
                                             profiler::update_running_task(spawned, location);
+
                                             runnable.run();
+
                                             profiler::save_task_timing();
                                         }
+
                                         TimeoutAction::Drop
                                     },
                                 )
@@ -146,9 +159,12 @@ impl PlatformDispatcher for LinuxDispatcher {
             // SAFETY: all sched_param members are valid when initialized to zero.
             let mut sched_param =
                 unsafe { MaybeUninit::<libc::sched_param>::zeroed().assume_init() };
+
             sched_param.sched_priority = sched_priority;
+
             // SAFETY: sched_param is a valid initialized structure
             let result = unsafe { libc::pthread_setschedparam(thread_id, policy, &sched_param) };
+
             if result != 0 {
                 log::warn!("failed to set realtime thread priority");
             }
@@ -170,9 +186,11 @@ impl<T> PriorityQueueCalloopSender<T> {
 
     fn send(&self, priority: Priority, item: T) -> Result<(), gpui::queue::SendError<T>> {
         let res = self.sender.send(priority, item);
+
         if res.is_ok() {
             self.ping.ping();
         }
+
         res
     }
 }
@@ -249,12 +267,15 @@ impl<T> calloop::EventSource for PriorityQueueCalloopReceiver<T> {
                 let mut is_empty = true;
 
                 let receiver = self.receiver.clone();
+
                 for runnable in receiver.try_iter() {
                     match runnable {
                         Ok(r) => {
                             callback(Event::Msg(r), &mut ());
+
                             is_empty = false;
                         }
+
                         Err(_) => {
                             disconnected = true;
                         }
@@ -278,6 +299,7 @@ impl<T> calloop::EventSource for PriorityQueueCalloopReceiver<T> {
         } else {
             // Re-notify the ping source so we can try again.
             self.ping.ping();
+
             Ok(PostAction::Continue)
         }
     }
@@ -343,9 +365,11 @@ mod tests {
 
         assert!(!data.got_msg);
         assert!(!data.got_closed);
+
         // a message is send
 
         tx.send(Priority::Medium, ()).unwrap();
+
         event_loop
             .dispatch(Some(::std::time::Duration::ZERO), &mut data)
             .unwrap();
@@ -355,6 +379,7 @@ mod tests {
 
         // the sender is dropped
         drop(tx);
+
         event_loop
             .dispatch(Some(::std::time::Duration::ZERO), &mut data)
             .unwrap();

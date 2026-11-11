@@ -1,5 +1,6 @@
 use crate::{Instant, Priority, RunnableMeta, Scheduler, SessionId, Timer};
 use async_task::Runnable;
+
 use std::{
     any::Any,
     future::Future,
@@ -31,10 +32,12 @@ pub type DedicatedFn = Box<
 pub struct LocalExecutor {
     session_id: SessionId,
     scheduler: Arc<dyn Scheduler>,
+
     // Spawned tasks' schedule callbacks each hold an `Arc` clone of this
     // closure, so the destination it captures stays alive as long as work
     // could still land on it.
     dispatch: Arc<dyn Fn(Runnable<RunnableMeta>) + Send + Sync>,
+
     not_send: PhantomData<Rc<()>>,
 }
 
@@ -76,6 +79,7 @@ impl LocalExecutor {
     {
         let dispatch = self.dispatch.clone();
         let location = Location::caller();
+
         let (runnable, task) = spawn_local_with_source_location(
             future,
             move |runnable| dispatch(runnable),
@@ -84,7 +88,9 @@ impl LocalExecutor {
                 spawned: crate::SpawnTime(Instant::now()),
             },
         );
+
         runnable.schedule();
+
         Task(TaskState::Spawned(task))
     }
 
@@ -103,6 +109,7 @@ impl LocalExecutor {
         F::Output: 'static,
     {
         let location = Location::caller();
+
         let (runnable, task) = spawn_local_with_source_location(
             future,
             dispatch,
@@ -111,7 +118,9 @@ impl LocalExecutor {
                 spawned: crate::SpawnTime(Instant::now()),
             },
         );
+
         runnable.schedule();
+
         Task(TaskState::Spawned(task))
     }
 
@@ -120,9 +129,11 @@ impl LocalExecutor {
         use std::cell::Cell;
 
         let output = Cell::new(None);
+
         let future = async {
             output.set(Some(future.await));
         };
+
         let mut future = std::pin::pin!(future);
 
         self.scheduler
@@ -146,9 +157,11 @@ impl LocalExecutor {
 
         {
             let future_ref = &mut future;
+
             let wrapper = async {
                 output.set(Some(future_ref.await));
             };
+
             let mut wrapper = std::pin::pin!(wrapper);
 
             self.scheduler
@@ -234,6 +247,7 @@ impl BackgroundExecutor {
     {
         let scheduler = Arc::downgrade(&self.scheduler);
         let location = Location::caller();
+
         let (runnable, task) = async_task::Builder::new()
             .metadata(RunnableMeta {
                 location,
@@ -247,7 +261,9 @@ impl BackgroundExecutor {
                     }
                 },
             );
+
         runnable.schedule();
+
         Task(TaskState::Spawned(task))
     }
 
@@ -278,7 +294,9 @@ impl BackgroundExecutor {
                     let _ = tx.send(runnable);
                 },
             );
+
         runnable.schedule();
+
         Task(TaskState::Spawned(task))
     }
 
@@ -339,11 +357,13 @@ impl DedicatedExecutor {
     #[track_caller]
     pub fn new(executor: &BackgroundExecutor) -> Self {
         let (sender, receiver) = flume::unbounded::<Runnable<RunnableMeta>>();
+
         let session = executor.spawn_dedicated(move |_executor| async move {
             while let Ok(runnable) = receiver.recv_async().await {
                 runnable.run();
             }
         });
+
         Self {
             sender,
             _session: session,
@@ -362,6 +382,7 @@ impl DedicatedExecutor {
         F::Output: Send + 'static,
     {
         let sender = self.sender.clone();
+
         let (runnable, task) = async_task::Builder::new()
             .metadata(RunnableMeta::new_with_callers_location())
             .spawn(
@@ -370,7 +391,9 @@ impl DedicatedExecutor {
                     let _ = sender.send(runnable);
                 },
             );
+
         runnable.schedule();
+
         Task(TaskState::Spawned(task))
     }
 }
@@ -426,12 +449,16 @@ pub(crate) struct RendezvousReceiver<T> {
 impl<T> RendezvousReceiver<T> {
     fn poll_take(&self, cx: &mut Context) -> Poll<Task<T>> {
         let mut state = self.shared.lock();
+
         match std::mem::replace(&mut *state, RendezvousState::Taken) {
             RendezvousState::Delivered(task) => Poll::Ready(task),
+
             RendezvousState::Pending(_) => {
                 *state = RendezvousState::Pending(Some(cx.waker().clone()));
+
                 Poll::Pending
             }
+
             RendezvousState::Cancelled | RendezvousState::Detached | RendezvousState::Taken => {
                 unreachable!("a rendezvous task was polled after its receiver was consumed")
             }
@@ -447,14 +474,19 @@ impl<T> RendezvousReceiver<T> {
 
     fn detach(self) {
         let mut state = self.shared.lock();
+
         match std::mem::replace(&mut *state, RendezvousState::Detached) {
             RendezvousState::Delivered(task) => {
                 *state = RendezvousState::Taken;
+
                 drop(state);
+
                 task.detach();
             }
+
             // The producer applies the detached disposition on delivery.
             RendezvousState::Pending(_) => {}
+
             RendezvousState::Cancelled | RendezvousState::Detached | RendezvousState::Taken => {
                 unreachable!("a rendezvous task was detached after its receiver was consumed")
             }
@@ -465,13 +497,17 @@ impl<T> RendezvousReceiver<T> {
 impl<T> Drop for RendezvousReceiver<T> {
     fn drop(&mut self) {
         let mut state = self.shared.lock();
+
         match &*state {
             RendezvousState::Pending(_) => *state = RendezvousState::Cancelled,
+
             RendezvousState::Delivered(_) => {
                 let delivered = std::mem::replace(&mut *state, RendezvousState::Cancelled);
+
                 drop(state);
                 drop(delivered);
             }
+
             // `Taken`, `Detached`, and `Cancelled` record dispositions that
             // this drop must not overwrite: the receiver is also dropped as a
             // normal side effect of taking or detaching.
@@ -489,27 +525,35 @@ impl<T> RendezvousSender<T> {
     /// disposition if it was dropped or detached before delivery.
     pub(crate) fn deliver(self, task: Task<T>) {
         let mut state = self.shared.lock();
+
         match std::mem::replace(&mut *state, RendezvousState::Delivered(task)) {
             RendezvousState::Pending(waker) => {
                 drop(state);
+
                 if let Some(waker) = waker {
                     waker.wake();
                 }
             }
+
             RendezvousState::Cancelled => {
                 let delivered = std::mem::replace(&mut *state, RendezvousState::Cancelled);
+
                 drop(state);
                 drop(delivered);
             }
+
             RendezvousState::Detached => {
                 let RendezvousState::Delivered(task) =
                     std::mem::replace(&mut *state, RendezvousState::Detached)
                 else {
                     unreachable!("the delivered task was just stored");
                 };
+
                 drop(state);
+
                 task.detach();
             }
+
             RendezvousState::Delivered(_) | RendezvousState::Taken => {
                 unreachable!("a rendezvous task was delivered twice")
             }
@@ -529,6 +573,7 @@ impl<T> Task<T> {
     /// Dropping or detaching the task before delivery is honored on delivery.
     pub(crate) fn rendezvous() -> (Self, RendezvousSender<T>) {
         let shared = Arc::new(parking_lot::Mutex::new(RendezvousState::Pending(None)));
+
         (
             Task(TaskState::Rendezvous(RendezvousReceiver {
                 shared: shared.clone(),
@@ -566,10 +611,12 @@ impl<T> Task<T> {
         FallibleTask(match self.0 {
             TaskState::Ready(val) => FallibleTaskState::Ready(val),
             TaskState::Spawned(task) => FallibleTaskState::Spawned(task.fallible()),
+
             TaskState::Downcast { inner, .. } => FallibleTaskState::Downcast {
                 inner: Box::new(inner.fallible()),
                 marker: PhantomData,
             },
+
             TaskState::Rendezvous(receiver) => FallibleTaskState::Rendezvous(receiver),
         })
     }
@@ -597,9 +644,11 @@ impl<T> std::fmt::Debug for Task<T> {
         match &self.0 {
             TaskState::Ready(_) => f.debug_tuple("Task::Ready").finish(),
             TaskState::Spawned(task) => f.debug_tuple("Task::Spawned").field(task).finish(),
+
             TaskState::Downcast { inner, .. } => {
                 f.debug_tuple("Task::Downcast").field(inner).finish()
             }
+
             TaskState::Rendezvous(_) => f.debug_tuple("Task::Rendezvous").finish(),
         }
     }
@@ -648,10 +697,12 @@ impl<T: 'static> Future for FallibleTask<T> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
+
         loop {
             match &mut this.0 {
                 FallibleTaskState::Ready(val) => return Poll::Ready(val.take()),
                 FallibleTaskState::Spawned(task) => return Pin::new(task).poll(cx),
+
                 FallibleTaskState::Downcast { inner, .. } => {
                     return match Pin::new(inner.as_mut()).poll(cx) {
                         Poll::Ready(Some(boxed_any)) => Poll::Ready(Some(
@@ -659,15 +710,19 @@ impl<T: 'static> Future for FallibleTask<T> {
                                 .downcast::<T>()
                                 .expect("FallibleTask::poll: downcast type mismatch"),
                         )),
+
                         Poll::Ready(None) => Poll::Ready(None),
                         Poll::Pending => Poll::Pending,
                     };
                 }
+
                 FallibleTaskState::Rendezvous(receiver) => match receiver.poll_take(cx) {
                     Poll::Ready(task) => {
                         this.0 = task.fallible().0;
+
                         continue;
                     }
+
                     Poll::Pending => return Poll::Pending,
                 },
             }
@@ -679,13 +734,16 @@ impl<T> std::fmt::Debug for FallibleTask<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
             FallibleTaskState::Ready(_) => f.debug_tuple("FallibleTask::Ready").finish(),
+
             FallibleTaskState::Spawned(task) => {
                 f.debug_tuple("FallibleTask::Spawned").field(task).finish()
             }
+
             FallibleTaskState::Downcast { inner, .. } => f
                 .debug_tuple("FallibleTask::Downcast")
                 .field(inner)
                 .finish(),
+
             FallibleTaskState::Rendezvous(_) => f.debug_tuple("FallibleTask::Rendezvous").finish(),
         }
     }
@@ -696,10 +754,12 @@ impl<T: 'static> Future for Task<T> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
+
         loop {
             match &mut this.0 {
                 TaskState::Ready(val) => return Poll::Ready(val.take().unwrap()),
                 TaskState::Spawned(task) => return Pin::new(task).poll(cx),
+
                 TaskState::Downcast { inner, .. } => {
                     return match Pin::new(inner.as_mut()).poll(cx) {
                         Poll::Ready(boxed_any) => Poll::Ready(
@@ -707,14 +767,18 @@ impl<T: 'static> Future for Task<T> {
                                 .downcast::<T>()
                                 .expect("Task::poll: downcast type mismatch"),
                         ),
+
                         Poll::Pending => Poll::Pending,
                     };
                 }
+
                 TaskState::Rendezvous(receiver) => match receiver.poll_take(cx) {
                     Poll::Ready(task) => {
                         this.0 = task.0;
+
                         continue;
                     }
+
                     Poll::Pending => return Poll::Pending,
                 },
             }
@@ -742,6 +806,7 @@ where
         std::thread_local! {
             static ID: ThreadId = thread::current().id();
         }
+
         ID.try_with(|id| *id)
             .unwrap_or_else(|_| thread::current().id())
     }
@@ -760,6 +825,7 @@ where
                 "local task dropped by a thread that didn't spawn it. Task spawned at {}",
                 self.location
             );
+
             // SAFETY: `inner` is wrapped in `ManuallyDrop`, so this is the only
             // place it is dropped. The thread check above ensures local futures
             // are dropped on the thread that created them.
@@ -775,11 +841,13 @@ where
             // reference is only used to check metadata and to project the pin to
             // `inner` below.
             let this = unsafe { self.get_unchecked_mut() };
+
             assert!(
                 this.id == thread_id(),
                 "local task polled by a thread that didn't spawn it. Task spawned at {}",
                 this.location
             );
+
             // SAFETY: `inner` is structurally pinned by `Checked`; after
             // `Checked` is pinned, `inner` is never moved. The thread check
             // above ensures the local future is only polled by its spawning
@@ -797,6 +865,7 @@ where
     };
 
     let builder = async_task::Builder::new().metadata(metadata);
+
     // SAFETY: `Checked` enforces the invariants required by `spawn_unchecked`:
     // the non-`Send` future is only polled and dropped on the thread that
     // spawned it.

@@ -10,6 +10,7 @@ use gpui::{
     SystemNotificationAction, SystemNotificationResponse, Window, WindowBounds, WindowOptions, div,
     prelude::*, px, rgb, size,
 };
+
 use gpui_platform::application;
 
 const NOTIFICATION_TAG: &str = "gpui-system-notification-example";
@@ -41,7 +42,9 @@ impl Render for SystemNotificationExample {
                     .child(button("show", "Show or replace").on_click(cx.listener(
                         |this, _, _, cx| {
                             this.revision += 1;
+
                             let revision = this.revision;
+
                             cx.show_system_notification(SystemNotification {
                                 tag: NOTIFICATION_TAG.into(),
                                 title: format!("Example notification {revision}").into(),
@@ -57,14 +60,18 @@ impl Render for SystemNotificationExample {
                                     },
                                 ],
                             });
+
                             this.status = format!("Posted notification revision {revision}").into();
+
                             cx.notify();
                         },
                     )))
                     .child(
                         button("dismiss", "Dismiss").on_click(cx.listener(|this, _, _, cx| {
                             cx.dismiss_system_notification(NOTIFICATION_TAG);
+
                             this.status = "Dismissed the notification".into();
+
                             cx.notify();
                         })),
                     ),
@@ -103,29 +110,36 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         cx.set_app_identity("dev.zed.gpui.system-notifications", "GPUI Notifications");
 
         let view = cx.new(|_| SystemNotificationExample {
             revision: 0,
             status: "No notification posted yet".into(),
         });
+
         cx.on_system_notification_response({
             let view = view.clone();
+
             move |response, cx| {
                 let SystemNotificationResponse { tag, action_id } = response;
+
                 view.update(cx, |this, cx| {
                     this.status = match action_id {
                         Some(action_id) => {
                             format!("Received action '{action_id}' for tag '{tag}'").into()
                         }
+
                         None => format!("Notification body clicked for tag '{tag}'").into(),
                     };
+
                     cx.notify();
                 });
             }
         });
 
         let bounds = Bounds::centered(None, size(px(560.), px(360.)), cx);
+
         cx.open_window(
             WindowOptions::new()
                 .window_bounds(Some(WindowBounds::Windowed(bounds)))
@@ -136,6 +150,7 @@ fn run_example() {
             move |_, _| view,
         )
         .expect("failed to open system notifications example window");
+
         cx.activate(true);
     });
 }

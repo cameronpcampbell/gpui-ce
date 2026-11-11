@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
+
 use syn::{
     Token, Visibility, braced,
     parse::{Parse, ParseStream, Result},
@@ -21,13 +22,16 @@ impl Parse for StyleableMacroInput {
         }
 
         let content;
+
         braced!(content in input);
 
         let mut method_visibility = None;
 
         let ident: syn::Ident = content.parse()?;
+
         if ident == "visibility" {
             let _colon: Token![:] = content.parse()?;
+
             method_visibility = Some(content.parse()?);
         }
 
@@ -40,6 +44,7 @@ impl Parse for StyleableMacroInput {
 pub fn style_helpers(input: TokenStream) -> TokenStream {
     let _ = parse_macro_input!(input as StyleableMacroInput);
     let methods = generate_methods();
+
     let output = quote! {
         #(#methods)*
     };
@@ -101,6 +106,7 @@ impl StyleTransitionField {
             "inset.left" => StyleTransitionFieldKind::InsetLeft,
             _ => StyleTransitionFieldKind::Required,
         };
+
         Self { path, kind }
     }
 
@@ -129,16 +135,20 @@ fn canonical_style_transition_fields(
 
     for field in specs.iter().flat_map(|spec| &spec.fields) {
         let key = style_transition_key(&field.path);
+
         if let Some(index) = field_indices.get(&key).copied() {
             let canonical = &fields[index];
+
             if canonical.kind != field.kind {
                 panic!("style transition field `{key}` has conflicting metadata");
             }
+
             continue;
         }
 
         let config_name = style_transition_config_name(&key);
         let config_name_string = config_name.to_string();
+
         if let Some(existing_key) = config_names.insert(config_name_string.clone(), key.clone())
             && existing_key != key
         {
@@ -148,6 +158,7 @@ fn canonical_style_transition_fields(
         }
 
         field_indices.insert(key.clone(), fields.len());
+
         fields.push(CanonicalStyleTransitionField {
             config_name,
             path: field.path.clone(),
@@ -165,6 +176,7 @@ pub fn style_transitions(input: TokenStream) -> TokenStream {
 
     let config_fields = canonical_fields.iter().map(|field| {
         let name = &field.config_name;
+
         quote! {
             #name: Option<crate::AnyMotion>
         }
@@ -172,10 +184,12 @@ pub fn style_transitions(input: TokenStream) -> TokenStream {
 
     let builders = specs.iter().map(|spec| {
         let name = format_ident!("{}", spec.name);
+
         let config_names = spec
             .fields
             .iter()
             .map(|field| style_transition_config_name(&style_transition_key(&field.path)));
+
         quote! {
             #[doc = concat!("Transitions changes made by [`Styled::", stringify!(#name), "`].")]
             pub fn #name(mut self, motion: impl Into<crate::AnyMotion>) -> Self {
@@ -238,6 +252,7 @@ fn generate_transition_application(field: &CanonicalStyleTransitionField) -> Tok
                 reduce_motion,
             );
         },
+
         StyleTransitionFieldKind::Optional => quote! {
             in_progress |= apply_optional(
                 &mut state.#path,
@@ -247,6 +262,7 @@ fn generate_transition_application(field: &CanonicalStyleTransitionField) -> Tok
                 reduce_motion,
             );
         },
+
         StyleTransitionFieldKind::InsetTop
         | StyleTransitionFieldKind::InsetRight
         | StyleTransitionFieldKind::InsetBottom
@@ -258,6 +274,7 @@ fn generate_transition_application(field: &CanonicalStyleTransitionField) -> Tok
                 StyleTransitionFieldKind::InsetLeft => quote! { StyleTransitionEdge::Left },
                 _ => unreachable!(),
             };
+
             quote! {
             in_progress |= apply_inset(
                 &mut state.#path,
@@ -270,6 +287,7 @@ fn generate_transition_application(field: &CanonicalStyleTransitionField) -> Tok
             );
             }
         }
+
         StyleTransitionFieldKind::AutoSizeWidth => quote! {
             in_progress |= apply_auto_size(
                 &mut state.#path,
@@ -281,6 +299,7 @@ fn generate_transition_application(field: &CanonicalStyleTransitionField) -> Tok
                 reduce_motion,
             );
         },
+
         StyleTransitionFieldKind::AutoSizeHeight => quote! {
             in_progress |= apply_auto_size(
                 &mut state.#path,
@@ -292,6 +311,7 @@ fn generate_transition_application(field: &CanonicalStyleTransitionField) -> Tok
                 reduce_motion,
             );
         },
+
         StyleTransitionFieldKind::CornerRadius => quote! {
             let target = context.bounds.map(|bounds| {
                 let max_corner_radius = std::cmp::min(
@@ -453,6 +473,7 @@ fn style_transition_specs() -> Vec<StyleTransitionSpec> {
 pub fn visibility_style_methods(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as StyleableMacroInput);
     let visibility = input.method_visibility;
+
     let output = quote! {
         /// Sets the visibility of the element to `visible`.
         /// [Docs](https://tailwindcss.com/docs/visibility)
@@ -474,11 +495,13 @@ pub fn visibility_style_methods(input: TokenStream) -> TokenStream {
 
 pub fn margin_style_methods(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as StyleableMacroInput);
+
     let methods = generate_box_style_methods(
         margin_box_style_prefixes(),
         box_style_suffixes(),
         input.method_visibility,
     );
+
     let output = quote! {
         #(#methods)*
     };
@@ -488,11 +511,13 @@ pub fn margin_style_methods(input: TokenStream) -> TokenStream {
 
 pub fn padding_style_methods(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as StyleableMacroInput);
+
     let methods = generate_box_style_methods(
         padding_box_style_prefixes(),
         box_style_suffixes(),
         input.method_visibility,
     );
+
     let output = quote! {
         #(#methods)*
     };
@@ -503,11 +528,13 @@ pub fn padding_style_methods(input: TokenStream) -> TokenStream {
 pub fn position_style_methods(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as StyleableMacroInput);
     let visibility = input.method_visibility;
+
     let methods = generate_box_style_methods(
         position_box_style_prefixes(),
         box_style_suffixes(),
         visibility.clone(),
     );
+
     let output = quote! {
         /// Sets the position of the element to `relative`.
         /// [Docs](https://tailwindcss.com/docs/position)
@@ -532,6 +559,7 @@ pub fn position_style_methods(input: TokenStream) -> TokenStream {
 pub fn overflow_style_methods(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as StyleableMacroInput);
     let visibility = input.method_visibility;
+
     let output = quote! {
         /// Sets the behavior of content that overflows the container to be hidden.
         /// [Docs](https://tailwindcss.com/docs/overflow#hiding-content-that-overflows)
@@ -562,6 +590,7 @@ pub fn overflow_style_methods(input: TokenStream) -> TokenStream {
 pub fn cursor_style_methods(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as StyleableMacroInput);
     let visibility = input.method_visibility;
+
     let output = quote! {
         /// Set the cursor style when hovering over this element
         #visibility fn cursor(mut self, cursor: CursorStyle) -> Self {
@@ -811,16 +840,19 @@ pub fn border_style_methods(input: TokenStream) -> TokenStream {
 pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as StyleableMacroInput);
     let visibility = input.method_visibility;
+
     let ring_width_methods = border_suffixes()
         .into_iter()
         .filter(|suffix| matches!(suffix.suffix, "0" | "1" | "2" | "4" | "8"))
         .flat_map(|suffix| {
             let visibility = visibility.clone();
+
             ["ring", "inset_ring"].map(move |prefix| {
                 let visibility = visibility.clone();
                 let width = suffix.width_tokens.clone();
                 let method = format_ident!("{}_{}", prefix, suffix.suffix);
                 let field = format_ident!("{}", prefix);
+
                 quote! {
                     #[doc = concat!("Sets the ", #prefix, " width to ", stringify!(#width), ".")]
                     /// [Docs](https://tailwindcss.com/docs/box-shadow)
@@ -1081,6 +1113,7 @@ fn generate_box_style_methods(
 
 fn generate_methods() -> Vec<TokenStream2> {
     let visibility = Visibility::Inherited;
+
     let mut methods =
         generate_box_style_methods(box_prefixes(), box_style_suffixes(), visibility.clone());
 
@@ -1188,6 +1221,7 @@ fn generate_custom_value_setter(
 
     let mut iter = fields.iter();
     let last = iter.next_back().unwrap();
+
     let field_assignments = iter
         .map(|field_tokens| {
             quote! {

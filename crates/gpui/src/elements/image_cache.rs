@@ -24,6 +24,7 @@ pub fn image_cache(image_cache_provider: impl ImageCacheProvider) -> ImageCacheE
 #[derive(Clone)]
 pub struct AnyImageCache {
     image_cache: AnyEntity,
+
     load_fn: fn(
         image_cache: &AnyEntity,
         resource: &Resource,
@@ -64,6 +65,7 @@ mod any_image_cache {
         cx: &mut App,
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
         let image_cache = image_cache.clone().downcast::<I>().unwrap();
+
         image_cache.update(cx, |image_cache, cx| image_cache.load(resource, window, cx))
     }
 }
@@ -115,15 +117,20 @@ impl Element for ImageCacheElement {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let image_cache = self.image_cache_provider.provide(window, cx);
+
         window.with_image_cache(Some(image_cache), |window| {
             let child_layout_ids = self
                 .children
                 .iter_mut()
                 .map(|child| child.request_layout(window, cx))
                 .collect::<SmallVec<_>>();
+
             let mut style = Style::default();
+
             style.refine(&self.style);
+
             let layout_id = window.request_layout(style, child_layout_ids.iter().copied(), cx);
+
             (layout_id, child_layout_ids)
         })
     }
@@ -153,6 +160,7 @@ impl Element for ImageCacheElement {
         cx: &mut App,
     ) {
         let image_cache = self.image_cache_provider.provide(window, cx);
+
         window.with_image_cache(Some(image_cache), |window| {
             for child in &mut self.children {
                 child.paint(window, cx);
@@ -178,6 +186,7 @@ impl std::fmt::Debug for ImageCacheItem {
             ImageCacheItem::Loading(_) => &"Loading...".to_string(),
             ImageCacheItem::Loaded(render_image) => &format!("{:?}", render_image),
         };
+
         f.debug_struct("ImageCacheItem")
             .field("status", status)
             .finish()
@@ -190,9 +199,12 @@ impl ImageCacheItem {
         match self {
             ImageCacheItem::Loading(task) => {
                 let res = task.now_or_never()?;
+
                 *self = ImageCacheItem::Loaded(res.clone());
+
                 Some(res)
             }
+
             ImageCacheItem::Loaded(res) => Some(res.clone()),
         }
     }
@@ -240,6 +252,7 @@ impl RetainAllImageCache {
     #[inline]
     pub fn new(cx: &mut App) -> Entity<Self> {
         let e = cx.new(|_cx| RetainAllImageCache(HashMap::new()));
+
         cx.observe_release(&e, |image_cache, cx| {
             for (_, mut item) in std::mem::replace(&mut image_cache.0, HashMap::new()) {
                 if let Some(Ok(image)) = item.get() {
@@ -248,6 +261,7 @@ impl RetainAllImageCache {
             }
         })
         .detach();
+
         e
     }
 
@@ -268,13 +282,16 @@ impl RetainAllImageCache {
 
         let fut = AssetLogger::<ImageAssetLoader>::load(source.clone(), cx);
         let task = cx.background_executor().spawn(fut).shared();
+
         self.0.insert(hash, ImageCacheItem::Loading(task.clone()));
 
         let entity = window.current_view();
+
         window
             .spawn(cx, {
                 async move |cx| {
                     _ = task.await;
+
                     cx.on_next_frame(move |_, cx| {
                         cx.notify(entity);
                     });
@@ -297,6 +314,7 @@ impl RetainAllImageCache {
     /// Remove the image from the cache by the given source.
     pub fn remove(&mut self, source: &Resource, window: &mut Window, cx: &mut App) {
         let hash = hash(source);
+
         if let Some(mut item) = self.0.remove(&hash)
             && let Some(Ok(image)) = item.get()
         {
@@ -344,6 +362,7 @@ impl ImageCacheProvider for RetainAllImageCacheProvider {
                     global_id,
                     |cache, _window| {
                         let mut cache = cache.unwrap_or_else(|| RetainAllImageCache::new(cx));
+
                         (cache.clone(), cache)
                     },
                 )

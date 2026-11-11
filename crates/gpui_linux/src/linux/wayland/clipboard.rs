@@ -14,11 +14,13 @@ use crate::linux::{
     WaylandClientStatePtr,
     platform::{PIPE_READ_TIMEOUT, read_fd_with_timeout},
 };
+
 use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
 
 /// Text mime types that we'll offer to other programs.
 pub(crate) const TEXT_MIME_TYPES: [&str; 3] =
     ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
+
 pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
 
 /// Text mime types that we'll accept from other programs.
@@ -31,10 +33,12 @@ pub(crate) struct Clipboard {
 
     // Internal clipboard
     contents: Option<ClipboardItem>,
+
     primary_contents: Option<ClipboardItem>,
 
     // External clipboard
     cached_read: Option<ClipboardItem>,
+
     current_offer: Option<DataOffer<WlDataOffer>>,
     cached_primary_read: Option<ClipboardItem>,
     current_primary_offer: Option<DataOffer<ZwpPrimarySelectionOfferV1>>,
@@ -81,18 +85,23 @@ impl<T: ReceiveData> DataOffer<T> {
 
     fn read_bytes(&self, connection: &Connection, mime_type: &str) -> Option<Vec<u8>> {
         let pipe = Pipe::new().unwrap();
+
         self.inner.receive_data(mime_type.to_string(), unsafe {
             BorrowedFd::borrow_raw(pipe.write.as_raw_fd())
         });
+
         let fd = pipe.read;
+
         drop(pipe.write);
 
         connection.flush().unwrap();
 
         match read_fd_with_timeout(fd, PIPE_READ_TIMEOUT) {
             Ok(bytes) => Some(bytes),
+
             Err(err) => {
                 log::error!("error reading clipboard pipe: {err:?}");
+
                 None
             }
         }
@@ -104,11 +113,15 @@ impl<T: ReceiveData> DataOffer<T> {
                 .iter()
                 .any(|&allowed| allowed == mime_type)
         })?;
+
         let bytes = self.read_bytes(connection, mime_type)?;
+
         let text_content = match String::from_utf8(bytes) {
             Ok(content) => content,
+
             Err(e) => {
                 log::error!("Failed to convert clipboard content to UTF-8: {}", e);
+
                 return None;
             }
         };
@@ -117,23 +130,27 @@ impl<T: ReceiveData> DataOffer<T> {
         // copying from eg: firefox inserts a lot of blank
         // lines, and that is super annoying.
         let result = text_content.replace("\r\n", "\n");
+
         Some(ClipboardItem::new_string(result))
     }
 
     fn read_image(&self, connection: &Connection) -> Option<ClipboardItem> {
         for format in ImageFormat::iter() {
             let mime_type = format.mime_type();
+
             if !self.has_mime_type(mime_type) {
                 continue;
             }
 
             if let Some(bytes) = self.read_bytes(connection, mime_type) {
                 let id = hash(&bytes);
+
                 return Some(ClipboardItem {
                     entries: vec![ClipboardEntry::Image(Image { format, bytes, id })],
                 });
             }
         }
+
         None
     }
 }
@@ -198,6 +215,7 @@ impl Clipboard {
 
     pub fn read(&mut self) -> Option<ClipboardItem> {
         let offer = self.current_offer.as_ref()?;
+
         if let Some(cached) = self.cached_read.clone() {
             return Some(cached);
         }
@@ -211,11 +229,13 @@ impl Clipboard {
             .or_else(|| offer.read_image(&self.connection))?;
 
         self.cached_read = Some(item.clone());
+
         Some(item)
     }
 
     pub fn read_primary(&mut self) -> Option<ClipboardItem> {
         let offer = self.current_primary_offer.as_ref()?;
+
         if let Some(cached) = self.cached_primary_read.clone() {
             return Some(cached);
         }
@@ -229,11 +249,13 @@ impl Clipboard {
             .or_else(|| offer.read_image(&self.connection))?;
 
         self.cached_primary_read = Some(item.clone());
+
         Some(item)
     }
 
     pub fn send_bytes(&self, fd: OwnedFd, bytes: Vec<u8>) {
         let mut written = 0;
+
         self.loop_handle
             .insert_source(
                 calloop::generic::Generic::new(
@@ -243,16 +265,21 @@ impl Clipboard {
                 ),
                 move |_, file, _| {
                     let file = unsafe { file.get_mut() };
+
                     loop {
                         match file.write(&bytes[written..]) {
                             Ok(n) if written + n == bytes.len() => {
                                 written += n;
+
                                 break Ok(PostAction::Remove);
                             }
+
                             Ok(n) => written += n,
+
                             Err(err) if err.kind() == ErrorKind::WouldBlock => {
                                 break Ok(PostAction::Continue);
                             }
+
                             Err(_) => break Ok(PostAction::Remove),
                         }
                     }

@@ -88,10 +88,13 @@ impl PathStyle {
 
     pub fn join(self, left: impl AsRef<Path>, right: impl AsRef<Path>) -> Option<String> {
         let right = right.as_ref().to_str()?;
+
         if is_absolute(right, self) {
             return None;
         }
+
         let left = left.as_ref().to_str()?;
+
         if left.is_empty() {
             Some(right.into())
         } else {
@@ -115,13 +118,17 @@ impl PathStyle {
             .as_ref()
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Path contains invalid UTF-8"))?;
+
         let right = right.as_ref();
+
         let right_string = right
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Path contains invalid UTF-8"))?;
+
         let joined = self
             .join(left, right_string)
             .ok_or_else(|| anyhow::anyhow!("Path must be relative: {right:?}"))?;
+
         Ok(PathBuf::from(self.normalize(&joined)))
     }
 
@@ -134,13 +141,17 @@ impl PathStyle {
             .as_ref()
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Path contains invalid UTF-8"))?;
+
         let right = right.as_ref();
+
         let right_string = right
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Path contains invalid UTF-8"))?;
+
         let joined = self
             .join(left, right_string)
             .ok_or_else(|| anyhow::anyhow!("Path must be relative: {right:?}"))?;
+
         Ok(PathBuf::from(&joined))
     }
 
@@ -149,11 +160,13 @@ impl PathStyle {
             PathStyle::Windows => {
                 let drive_and_remainder = path_like.split_once(':').filter(|(drive, _)| {
                     let mut characters = drive.chars();
+
                     characters
                         .next()
                         .is_some_and(|character| character.is_ascii_alphabetic())
                         && characters.next().is_none()
                 });
+
                 let unc_remainder = path_like
                     .strip_prefix("\\\\")
                     .or_else(|| path_like.strip_prefix("//"));
@@ -167,16 +180,20 @@ impl PathStyle {
                     } else {
                         (format!("{drive}:"), remainder)
                     }
+
                 } else if let Some(remainder) = unc_remainder {
                     let (server, remainder) = match remainder.split_once(['\\', '/']) {
                         Some(parts) => parts,
                         None => return path_like.to_string(),
                     };
+
                     let (share, remainder) = match remainder.split_once(['\\', '/']) {
                         Some(parts) => parts,
                         None => return format!("\\\\{server}\\{remainder}"),
                     };
+
                     (format!("\\\\{server}\\{share}\\"), remainder)
+
                 } else if let Some(remainder) = path_like
                     .strip_prefix('\\')
                     .or_else(|| path_like.strip_prefix('/'))
@@ -187,9 +204,11 @@ impl PathStyle {
                 };
 
                 let mut components: Vec<&str> = Vec::new();
+
                 for component in remainder.split(['\\', '/']) {
                     match component {
                         "" | "." => {}
+
                         ".." => {
                             if components.last().is_some_and(|c| *c != "..") {
                                 components.pop();
@@ -197,19 +216,23 @@ impl PathStyle {
                                 components.push(component);
                             }
                         }
+
                         component => components.push(component),
                     }
                 }
 
                 let normalized = components.join("\\");
+
                 if prefix.is_empty() {
                     normalized
                 } else {
                     format!("{prefix}{normalized}")
                 }
             }
+
             PathStyle::Unix => {
                 let is_absolute = path_like.starts_with('/');
+
                 let remainder = if is_absolute {
                     path_like.trim_start_matches('/')
                 } else {
@@ -217,9 +240,11 @@ impl PathStyle {
                 };
 
                 let mut components = Vec::new();
+
                 for component in remainder.split(self.separators_ch()) {
                     match component {
                         "" | "." => {}
+
                         ".." => {
                             if components
                                 .last()
@@ -230,11 +255,13 @@ impl PathStyle {
                                 components.push(component);
                             }
                         }
+
                         component => components.push(component),
                     }
                 }
 
                 let normalized = components.join(self.primary_separator());
+
                 if is_absolute && normalized.is_empty() {
                     "/".to_string()
                 } else if is_absolute {
@@ -250,7 +277,9 @@ impl PathStyle {
         let Some(pos) = path_like.rfind(self.primary_separator()) else {
             return (None, path_like);
         };
+
         let filename_start = pos + self.primary_separator().len();
+
         (
             Some(&path_like[..filename_start]),
             &path_like[filename_start..],
@@ -261,10 +290,12 @@ impl PathStyle {
         if self == PathStyle::local() {
             return path.file_name().and_then(|n| n.to_str());
         }
+
         let path_string = path.to_str()?;
         let parent_length = self.parent(path)?.to_str()?.len();
         let remainder = path_string.get(parent_length..)?;
         let is_verbatim = self.is_windows() && path_string.as_bytes().starts_with(br"\\?\");
+
         let is_body_separator = |character: char| {
             if is_verbatim {
                 character == '\\'
@@ -276,6 +307,7 @@ impl PathStyle {
         let component = remainder
             .rsplit(is_body_separator)
             .find(|component| !component.is_empty() && (is_verbatim || *component != "."))?;
+
         if matches!(component, "." | "..") {
             None
         } else {
@@ -287,6 +319,7 @@ impl PathStyle {
         if self == PathStyle::local() {
             return path.parent();
         }
+
         let path = path.to_str()?;
         let path_bytes = path.as_bytes();
         let is_windows = self.is_windows();
@@ -299,9 +332,11 @@ impl PathStyle {
 
         let is_separator = |byte: u8| byte == b'/' || is_windows && byte == b'\\';
         let is_verbatim = is_windows && path_bytes.starts_with(VERBATIM_PREFIX);
+
         let has_unc_prefix = path_bytes
             .get(..UNC_PREFIX_LENGTH)
             .is_some_and(|prefix| prefix.iter().all(|byte| is_separator(*byte)));
+
         // Verbatim paths treat '/' as a literal character, so only '\' separates body components.
         let is_body_separator = |byte: u8| {
             if is_verbatim {
@@ -327,14 +362,17 @@ impl PathStyle {
             } else if path_bytes.starts_with(VERBATIM_UNC_PREFIX) {
                 let server_end = component_end(VERBATIM_UNC_PREFIX.len());
                 let share_start = server_end.saturating_add(1).min(path_bytes.len());
+
                 if share_start < path_bytes.len() {
                     component_end(share_start)
                 } else {
                     server_end
                 }
+
             } else if is_verbatim {
                 let drive_start = VERBATIM_PREFIX.len();
                 let drive_end = drive_start + DRIVE_PREFIX_LENGTH;
+
                 let has_drive_prefix = path_bytes
                     .get(drive_start)
                     .is_some_and(u8::is_ascii_alphabetic)
@@ -351,12 +389,14 @@ impl PathStyle {
                 } else {
                     component_end(drive_start)
                 }
+
             } else if path_bytes.starts_with(DEVICE_PREFIX) {
                 component_end(DEVICE_PREFIX.len())
             } else if has_unc_prefix {
                 let server_end = component_end(UNC_PREFIX_LENGTH);
                 let share_start = server_end.saturating_add(1).min(path_bytes.len());
                 let share_end = component_end(share_start);
+
                 // A UNC prefix requires a share name; `\\server` without one is treated as a
                 // relative path, so its prefix is empty.
                 if server_end > UNC_PREFIX_LENGTH && share_end > share_start {
@@ -364,6 +404,7 @@ impl PathStyle {
                 } else {
                     0
                 }
+
             } else if path_bytes.first().is_some_and(u8::is_ascii_alphabetic)
                 && path_bytes.get(1) == Some(&b':')
             {
@@ -379,11 +420,13 @@ impl PathStyle {
         let has_root = path_bytes
             .get(prefix_end)
             .is_some_and(|byte| is_separator(*byte));
+
         // The leading `.`/`./` is absorbed into the body (e.g. `./a` → parent `.`).
         let starts_with_current_directory = prefix_end == 0
             && !has_root
             && path_bytes.first() == Some(&b'.')
             && (path_bytes.len() == 1 || path_bytes.get(1).is_some_and(|byte| is_separator(*byte)));
+
         let body_start =
             prefix_end + usize::from(has_root) + usize::from(starts_with_current_directory);
 
@@ -404,6 +447,7 @@ impl PathStyle {
                             .checked_sub(2)
                             .and_then(|index| path_bytes.get(index))
                             .is_some_and(|byte| is_body_separator(*byte)));
+
                 if is_trailing_current_directory {
                     end -= 1;
                 } else {
@@ -413,6 +457,7 @@ impl PathStyle {
         };
 
         let body_end = trim_trailing(path_bytes.len());
+
         // An empty body means the path is root- or prefix-only and has no parent; only a
         // bare current-directory component (`.`/`./`) has `""` as its parent.
         if body_end == body_start {
@@ -434,14 +479,17 @@ impl PathStyle {
         parent: &'a Path,
     ) -> Option<std::borrow::Cow<'a, RelPath>> {
         let parent = parent.to_str()?;
+
         if parent.is_empty() {
             return RelPath::new(child, *self).ok();
         }
+
         let parent = self
             .separators()
             .iter()
             .find_map(|sep| parent.strip_suffix(sep))
             .unwrap_or(parent);
+
         let child = child.to_str()?;
 
         // Match behavior of std::path::Path, which is case-insensitive for drive letters (e.g., "C:" == "c:")
@@ -454,6 +502,7 @@ impl PathStyle {
         } else {
             child.strip_prefix(parent)?
         };
+
         if let Some(relative) = self
             .separators()
             .iter()
@@ -485,10 +534,14 @@ fn is_absolute(path_like: &str, path_style: PathStyle) -> bool {
 /// requiring the path to exist on disk (unlike `canonicalize`).
 pub fn normalize_path(path: &Path) -> PathBuf {
     use std::path::Component;
+
     let mut components = path.components().peekable();
+
     let mut ret = if let Some(c @ Component::Prefix(..)) = components.peek().cloned() {
         components.next();
+
         PathBuf::from(c.as_os_str())
+
     } else {
         PathBuf::new()
     };
@@ -496,18 +549,23 @@ pub fn normalize_path(path: &Path) -> PathBuf {
     for component in components {
         match component {
             Component::Prefix(..) => unreachable!(),
+
             Component::RootDir => {
                 ret.push(component.as_os_str());
             }
+
             Component::CurDir => {}
+
             Component::ParentDir => {
                 ret.pop();
             }
+
             Component::Normal(c) => {
                 ret.push(c);
             }
         }
     }
+
     ret
 }
 
@@ -521,11 +579,13 @@ mod tests {
         let posix_path = PathStyle::Unix
             .join_path(Path::new("/home/user/dev"), "worktrees")
             .unwrap();
+
         let windows_path = PathStyle::Windows
             .join_path(Path::new("C:\\Users\\user\\dev"), "worktrees")
             .unwrap();
 
         assert_eq!(posix_path, PathBuf::from("/home/user/dev/worktrees"));
+
         assert_eq!(
             windows_path.to_string_lossy(),
             "C:\\Users\\user\\dev\\worktrees"
@@ -537,11 +597,13 @@ mod tests {
         let posix_path = PathStyle::Unix
             .join_path_preserving_components(Path::new("/home/user/symlink"), "../worktrees")
             .unwrap();
+
         let windows_path = PathStyle::Windows
             .join_path_preserving_components(Path::new(r"C:\Users\user\symlink"), r"..\worktrees")
             .unwrap();
 
         assert_eq!(posix_path, PathBuf::from("/home/user/symlink/../worktrees"));
+
         assert_eq!(
             windows_path.to_string_lossy(),
             r"C:\Users\user\symlink\..\worktrees"
@@ -554,6 +616,7 @@ mod tests {
             PathStyle::Unix.normalize("/home/user/dev/../worktrees/./zed"),
             "/home/user/worktrees/zed"
         );
+
         assert_eq!(
             PathStyle::Windows.normalize("C:\\Users\\user\\dev\\worktrees"),
             "C:\\Users\\user\\dev\\worktrees"
@@ -566,42 +629,52 @@ mod tests {
             PathStyle::Windows.normalize(r"C:\Users\user\dev\..\worktrees"),
             r"C:\Users\user\worktrees"
         );
+
         assert_eq!(
             PathStyle::Windows.normalize(r"C:\Users\.\worktrees"),
             r"C:\Users\worktrees"
         );
+
         assert_eq!(
             PathStyle::Windows.normalize(r"C:\Users\user\dev\sub\..\..\worktrees"),
             r"C:\Users\user\worktrees"
         );
+
         assert_eq!(
             PathStyle::Windows.normalize("C:/Users/user/dev/../worktrees"),
             r"C:\Users\user\worktrees"
         );
+
         assert_eq!(
             PathStyle::Windows.normalize(r"C:/Users\user/dev\..\worktrees"),
             r"C:\Users\user\worktrees"
         );
+
         assert_eq!(
             PathStyle::Windows.normalize(r"C:\Users/user\.\worktrees"),
             r"C:\Users\user\worktrees"
         );
+
         assert_eq!(
             PathStyle::Windows.normalize(r"\\server\share\dev\..\worktrees"),
             r"\\server\share\worktrees"
         );
+
         assert_eq!(
             PathStyle::Windows.normalize(r"//server\share/dev\..\worktrees"),
             r"\\server\share\worktrees"
         );
+
         assert_eq!(
             PathStyle::Windows.normalize(r"\dev\..\worktrees"),
             r"\worktrees"
         );
+
         assert_eq!(
             PathStyle::Windows.normalize(r"dev\..\worktrees"),
             r"worktrees"
         );
+
         assert_eq!(
             PathStyle::Windows.normalize(r"C:\..\worktrees"),
             r"C:\worktrees"
@@ -678,6 +751,7 @@ mod tests {
                 Some(rel_path("c").to_arc()),
             ),
         ];
+
         let actual = expected.clone().map(|(style, child, parent, _)| {
             (
                 style,
@@ -688,6 +762,7 @@ mod tests {
                     .map(|rel_path| rel_path.to_arc()),
             )
         });
+
         pretty_assertions::assert_eq!(actual, expected);
     }
 
@@ -823,14 +898,18 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
 
         let path = Path::new(OsStr::from_bytes(b"/home/user/\xff\xfe/repo/file.txt"));
+
         assert_eq!(PathStyle::Unix.file_name(path), Some("file.txt"));
+
         assert_eq!(
             PathStyle::Unix.parent(path),
             Some(Path::new(OsStr::from_bytes(b"/home/user/\xff\xfe/repo")))
         );
 
         let invalid_filename_path = Path::new(OsStr::from_bytes(b"/home/user/repo/\xff\xfe.txt"));
+
         assert_eq!(PathStyle::Unix.file_name(invalid_filename_path), None);
+
         assert_eq!(
             PathStyle::Unix.parent(invalid_filename_path),
             Some(Path::new("/home/user/repo"))
@@ -848,11 +927,14 @@ mod tests {
             .chain(Some(0xD800))
             .chain(r"\repo\file.txt".encode_utf16())
             .collect();
+
         let os_str = OsString::from_wide(&wide);
         let path = Path::new(&os_str);
 
         assert_eq!(PathStyle::Windows.file_name(path), Some("file.txt"));
+
         let parent = PathStyle::Windows.parent(path).unwrap();
+
         assert_eq!(PathStyle::Windows.file_name(parent), Some("repo"));
     }
 }

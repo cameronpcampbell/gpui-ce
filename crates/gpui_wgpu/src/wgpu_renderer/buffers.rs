@@ -3,6 +3,7 @@ use gpui::AtlasTextureId;
 use gpui_render::InstanceRange;
 use gpui_render::artifacts::DATA_TEXTURE_WIDTH;
 use gpui_render::shaders::interface::{self as shader_interface, BufferData};
+
 use std::{
     cell::{Cell, RefCell},
     marker::PhantomData,
@@ -48,9 +49,12 @@ pub(super) struct InstanceSlice<T> {
     /// arena; downlevel draws always start at instance zero and carry the base in
     /// their range-uniform slot instead.
     instances: InstanceRange,
+
     transport: InstanceTransport,
+
     /// Byte offset of this batch's range-uniform slot; downlevel transport only.
     range_offset: u32,
+
     value: PhantomData<T>,
 }
 
@@ -69,6 +73,7 @@ impl<T> InstanceSlice<T> {
             InstanceTransport::StorageBuffer => {
                 pass.set_bind_group(shader_interface::DATA_BIND_GROUP, bind_group, &[])
             }
+
             InstanceTransport::DataTexture => pass.set_bind_group(
                 shader_interface::DATA_BIND_GROUP,
                 bind_group,
@@ -84,8 +89,10 @@ pub(super) struct InstanceUpload {
     cursor: u64,
     size: u64,
     transport: InstanceTransport,
+
     /// Downlevel only: mapped `DATA_RANGE` region and its slot allocator.
     range_upload: Option<RangeUpload>,
+
     /// Downlevel only: staging-to-texture copy recorded at finish.
     texture_copy: Option<TextureCopy>,
 }
@@ -95,17 +102,21 @@ impl InstanceUpload {
         if values.is_empty() {
             return Some(self.empty_batch());
         }
+
         let stride = std::mem::size_of::<T>() as u64;
         let data = shader_interface::slice_as_bytes(values);
         let count = u32::try_from(values.len()).ok()?;
         let (offset, range_offset) = self.allocate_batch(data.len() as u64, stride, count)?;
+
         let staging = self
             .staging
             .as_mut()
             .expect("non-empty frame uploads have mapped staging memory");
+
         staging
             .slice(offset as usize..(offset + data.len() as u64) as usize)
             .copy_from_slice(data);
+
         Some(self.batch(offset, stride, count, range_offset))
     }
 
@@ -117,6 +128,7 @@ impl InstanceUpload {
         if count == 0 {
             return Some(self.empty_batch());
         }
+
         let count = u32::try_from(count).ok()?;
         let stride = std::mem::size_of::<T>() as u64;
         let size = stride.checked_mul(count as u64)?;
@@ -124,16 +136,20 @@ impl InstanceUpload {
         let staging = self.staging.as_mut()?;
         let mut destination = staging.slice(offset as usize..(offset + size) as usize);
         let mut values = values.into_iter();
+
         for index in 0..count {
             let value = values.next()?;
             let index = index as u64;
+
             destination
                 .slice((index * stride) as usize..((index + 1) * stride) as usize)
                 .copy_from_slice(shader_interface::bytes_of(&value));
         }
+
         if values.next().is_some() {
             return None;
         }
+
         Some(self.batch(offset, stride, count, range_offset))
     }
 
@@ -141,17 +157,23 @@ impl InstanceUpload {
     fn allocate_batch(&mut self, size: u64, stride: u64, elements: u32) -> Option<(u64, u32)> {
         let align = self.transport.batch_alignment(stride);
         let offset = self.cursor.next_multiple_of(align);
+
         if offset + size > self.size {
             return None;
         }
+
         self.cursor = offset + size;
+
         let range_offset = match self.transport {
             InstanceTransport::StorageBuffer => 0,
+
             InstanceTransport::DataTexture => {
                 let base_texel = u32::try_from(offset / TEXEL_BYTES).ok()?;
+
                 self.range_upload.as_mut()?.write(base_texel, elements)?
             }
         };
+
         Some((offset, range_offset))
     }
 
@@ -176,8 +198,10 @@ impl InstanceUpload {
             InstanceTransport::StorageBuffer => {
                 usize::try_from(offset / stride).expect("batch offsets are stride-aligned")
             }
+
             InstanceTransport::DataTexture => 0,
         };
+
         InstanceSlice {
             instances: InstanceRange::new(first..first + count as usize)
                 .expect("arena capacity is bounded by the 32-bit instance index"),
@@ -191,10 +215,13 @@ impl InstanceUpload {
         // Dropping the mapped views schedules queue writes before the next submission.
         self.staging.take();
         self.range_upload.take();
+
         if let Some(copy) = &self.texture_copy {
             let used_texels = self.cursor.div_ceil(TEXEL_BYTES);
+
             if used_texels > 0 {
                 let height = used_texels.div_ceil(u64::from(DATA_TEXTURE_WIDTH));
+
                 encoder.copy_buffer_to_texture(
                     wgpu::TexelCopyBufferInfo {
                         buffer: &copy.staging,
@@ -230,17 +257,23 @@ struct RangeUpload {
 impl RangeUpload {
     fn write(&mut self, base_texel: u32, elements: u32) -> Option<u32> {
         let slot = self.next_slot;
+
         if slot >= self.slots {
             return None;
         }
+
         self.next_slot += 1;
+
         let offset = slot * self.stride;
         let mut bytes = [0u8; 16];
+
         bytes[..4].copy_from_slice(&base_texel.to_le_bytes());
         bytes[4..8].copy_from_slice(&elements.to_le_bytes());
+
         self.staging
             .slice(offset as usize..(offset + 16) as usize)
             .copy_from_slice(&bytes);
+
         u32::try_from(offset).ok()
     }
 }
@@ -271,12 +304,14 @@ impl<T: BufferData> DynamicUniformBuffer<T> {
         uniform_alignment: u64,
     ) -> Self {
         let stride = (std::mem::size_of::<T>() as u64).next_multiple_of(uniform_alignment);
+
         let buffer = create_buffer(
             device,
             label,
             stride * initial_capacity,
             wgpu::BufferUsages::UNIFORM,
         );
+
         Self {
             buffer,
             label,
@@ -300,9 +335,11 @@ impl<T: BufferData> DynamicUniformBuffer<T> {
         }
 
         let new_capacity = required_capacity.next_power_of_two();
+
         let Some(new_size) = self.stride.checked_mul(new_capacity) else {
             return false;
         };
+
         if new_size > maximum_buffer_size || new_size > u32::MAX as u64 {
             return false;
         }
@@ -310,6 +347,7 @@ impl<T: BufferData> DynamicUniformBuffer<T> {
         self.buffer = create_buffer(device, self.label, new_size, wgpu::BufferUsages::UNIFORM);
         self.capacity = new_capacity;
         self.generation = self.generation.wrapping_add(1);
+
         true
     }
 
@@ -317,16 +355,22 @@ impl<T: BufferData> DynamicUniformBuffer<T> {
         if required_capacity > self.capacity {
             return false;
         }
+
         self.next_slot.set(0);
+
         let Some(size) = NonZeroU64::new(self.stride * required_capacity) else {
             self.staging.take();
+
             return true;
         };
+
         let Some(mut staging) = queue.write_buffer_with(&self.buffer, 0, size) else {
             return false;
         };
+
         staging.slice(..).fill(0);
         self.staging.replace(Some(staging));
+
         true
     }
 
@@ -340,20 +384,25 @@ impl<T: BufferData> DynamicUniformBuffer<T> {
 
     pub(super) fn write(&self, value: &T) -> u32 {
         let slot = self.next_slot.get();
+
         assert!(
             slot < self.capacity,
             "{} capacity must be ensured before rendering",
             self.label
         );
+
         self.next_slot.set(slot + 1);
+
         let offset = slot * self.stride;
         let bytes = shader_interface::bytes_of(value);
+
         self.staging
             .borrow_mut()
             .as_mut()
             .expect("uniform uploads must begin before rendering")
             .slice(offset as usize..offset as usize + bytes.len())
             .copy_from_slice(bytes);
+
         u32::try_from(offset).expect("dynamic uniform offsets are limited to u32")
     }
 }
@@ -398,6 +447,7 @@ impl RangeUniformArena {
         // The whole-buffer limit constrains slot count, not the binding-size limit.
         let maximum = device.limits().max_buffer_size / stride;
         let capacity = Self::INITIAL_CAPACITY.min(maximum);
+
         Self {
             buffer: create_buffer(
                 device,
@@ -415,16 +465,20 @@ impl RangeUniformArena {
         if required_slots <= self.capacity {
             return true;
         }
+
         if required_slots > self.maximum {
             return false;
         }
+
         self.capacity = required_slots.next_power_of_two().min(self.maximum);
+
         self.buffer = create_buffer(
             device,
             "downlevel_range_uniforms",
             self.capacity * self.stride,
             wgpu::BufferUsages::UNIFORM,
         );
+
         true
     }
 
@@ -444,6 +498,7 @@ struct TexturedBindGroups {
         (shader_interface::DataLayout, AtlasTextureId),
         (WgpuTextureIdentity, wgpu::BindGroup),
     >,
+
     path: FxHashMap<shader_interface::DataLayout, wgpu::BindGroup>,
 }
 
@@ -457,19 +512,24 @@ impl InstanceBufferArena {
         tier: RendererTier,
     ) -> Self {
         let transport = InstanceTransport::from_tier(tier);
+
         let maximum_size = match transport {
             InstanceTransport::StorageBuffer => device
                 .limits()
                 .max_buffer_size
                 .min(device.limits().max_storage_buffer_binding_size),
+
             InstanceTransport::DataTexture => {
                 let texels = u64::from(DATA_TEXTURE_WIDTH)
                     * u64::from(device.limits().max_texture_dimension_2d);
+
                 (texels * TEXEL_BYTES).min(device.limits().max_buffer_size) / TEXEL_BYTES
                     * TEXEL_BYTES
             }
         };
+
         let capacity = Self::INITIAL_CAPACITY.min(maximum_size);
+
         let storage = match transport {
             InstanceTransport::StorageBuffer => InstanceStorage::Buffer(create_buffer(
                 device,
@@ -477,9 +537,11 @@ impl InstanceBufferArena {
                 capacity,
                 wgpu::BufferUsages::STORAGE,
             )),
+
             InstanceTransport::DataTexture => {
                 let texture = create_data_texture(device, capacity / TEXEL_BYTES);
                 let view = view_of(&texture);
+
                 InstanceStorage::DataTexture {
                     texture,
                     view,
@@ -493,7 +555,9 @@ impl InstanceBufferArena {
                 }
             }
         };
+
         let bind_group = instance_bind_group(device, layouts, &storage);
+
         Self {
             transport,
             storage,
@@ -522,29 +586,36 @@ impl InstanceBufferArena {
                      range uniform limit of {} slots",
                     ranges.maximum
                 );
+
                 return false;
             }
         }
+
         let storage_grew = match &self.storage {
             InstanceStorage::Buffer(_) => required > self.capacity,
+
             InstanceStorage::DataTexture { ranges, .. } => {
                 required > self.capacity || required_range_slots > ranges.capacity
             }
         };
+
         if !storage_grew {
             return true;
         }
+
         if required > self.maximum_size {
             log::error!(
                 "scene requires {required} storage bytes, exceeding the GPU limit of {}",
                 self.maximum_size
             );
+
             return false;
         }
 
         match &mut self.storage {
             InstanceStorage::Buffer(buffer) => {
                 self.capacity = required.next_power_of_two().min(self.maximum_size);
+
                 *buffer = create_buffer(
                     device,
                     "instance_buffer",
@@ -552,6 +623,7 @@ impl InstanceBufferArena {
                     wgpu::BufferUsages::STORAGE,
                 );
             }
+
             InstanceStorage::DataTexture {
                 texture,
                 view,
@@ -562,6 +634,7 @@ impl InstanceBufferArena {
                     self.capacity = required.next_power_of_two().min(self.maximum_size);
                     *texture = create_data_texture(device, self.capacity / TEXEL_BYTES);
                     *view = view_of(texture);
+
                     *staging = create_buffer(
                         device,
                         "instance_staging",
@@ -569,12 +642,16 @@ impl InstanceBufferArena {
                         wgpu::BufferUsages::COPY_SRC,
                     );
                 }
+
                 ranges.ensure_capacity(device, required_range_slots);
             }
         }
+
         self.bind_group = instance_bind_group(device, layouts, &self.storage);
         *self.textured_bind_groups.get_mut() = TexturedBindGroups::default();
+
         log::info!("increased instance buffer size to {}", self.capacity);
+
         true
     }
 
@@ -587,16 +664,20 @@ impl InstanceBufferArena {
         if required > self.capacity {
             return None;
         }
+
         let staging = if let Some(size) = NonZeroU64::new(required) {
             Some(match &self.storage {
                 InstanceStorage::Buffer(buffer) => queue.write_buffer_with(buffer, 0, size)?,
+
                 InstanceStorage::DataTexture { staging, .. } => {
                     queue.write_buffer_with(staging, 0, size)?
                 }
             })
+
         } else {
             None
         };
+
         let range_upload = match &self.storage {
             InstanceStorage::DataTexture { ranges, .. } if required_range_slots > 0 => {
                 Some(RangeUpload {
@@ -610,8 +691,10 @@ impl InstanceBufferArena {
                     next_slot: 0,
                 })
             }
+
             _ => None,
         };
+
         Some(InstanceUpload {
             staging,
             cursor: 0,
@@ -625,6 +708,7 @@ impl InstanceBufferArena {
                     staging: staging.clone(),
                     texture: texture.clone(),
                 }),
+
                 InstanceStorage::Buffer(_) => None,
             },
         })
@@ -646,6 +730,7 @@ impl InstanceBufferArena {
     ) -> wgpu::BindGroup {
         let mut cache = self.textured_bind_groups.borrow_mut();
         let key = (data_layout, texture_id);
+
         if let Some((identity, bind_group)) = cache.groups.get(&key)
             && *identity == texture_identity
         {
@@ -659,9 +744,11 @@ impl InstanceBufferArena {
             texture,
             sampler,
         );
+
         cache
             .groups
             .insert(key, (texture_identity, bind_group.clone()));
+
         bind_group
     }
 
@@ -674,6 +761,7 @@ impl InstanceBufferArena {
         sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
         let mut cache = self.textured_bind_groups.borrow_mut();
+
         cache
             .path
             .entry(data_layout)
@@ -692,6 +780,7 @@ impl InstanceBufferArena {
     pub(super) fn binding_source(&self) -> InstanceBindingSource<'_> {
         match &self.storage {
             InstanceStorage::Buffer(buffer) => InstanceBindingSource::Buffer(whole_buffer(buffer)),
+
             InstanceStorage::DataTexture { view, ranges, .. } => {
                 InstanceBindingSource::DataTexture {
                     texture: view,
@@ -714,11 +803,13 @@ fn instance_bind_group(
 ) -> wgpu::BindGroup {
     let source = match storage {
         InstanceStorage::Buffer(buffer) => InstanceBindingSource::Buffer(whole_buffer(buffer)),
+
         InstanceStorage::DataTexture { view, ranges, .. } => InstanceBindingSource::DataTexture {
             texture: view,
             range_uniforms: ranges.binding(),
         },
     };
+
     layouts.create_instances(device, source)
 }
 

@@ -78,18 +78,24 @@ pub struct LayerShellOptions {
     /// The namespace for the surface, mostly used by compositors to apply rules, can not be
     /// changed after the surface is created.
     pub namespace: String,
+
     /// The layer the surface is rendered on.
     pub layer: Layer,
+
     /// The anchor point of the surface.
     pub anchor: Anchor,
+
     /// Requests that the compositor avoids occluding an area with other surfaces.
     pub exclusive_zone: Option<Pixels>,
+
     /// The anchor point of the exclusive zone, will be determined using the anchor if left
     /// unspecified.
     pub exclusive_edge: Option<Anchor>,
+
     /// Margins between the surface and its anchor point(s).
     /// Specified in CSS order: top, right, bottom, left.
     pub margin: Option<(Pixels, Pixels, Pixels, Pixels)>,
+
     /// How keyboard events should be delivered to the surface.
     pub keyboard_interactivity: KeyboardInteractivity,
 }

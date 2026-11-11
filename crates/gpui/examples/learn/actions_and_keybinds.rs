@@ -4,6 +4,7 @@
 #![cfg_attr(target_family = "wasm", no_main)]
 
 use gpui::colors::Colors;
+
 use gpui::{
     App, Bounds, Context, FocusHandle, KeyBinding, Window, WindowBounds, WindowOptions, actions,
     div, prelude::*, px, size,
@@ -31,6 +32,7 @@ struct ActionsExample {
 impl ActionsExample {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
+
         window.focus(&focus_handle, cx);
 
         Self {
@@ -41,11 +43,13 @@ impl ActionsExample {
 
     fn increment(&mut self, _action: &Increment, _window: &mut Window, cx: &mut Context<Self>) {
         self.count += 1;
+
         cx.notify();
     }
 
     fn reset(&mut self, _action: &Reset, _window: &mut Window, cx: &mut Context<Self>) {
         self.count = 0;
+
         cx.notify();
     }
 }
@@ -82,6 +86,7 @@ fn run_example() {
         register_keybinds(cx);
 
         let bounds = Bounds::centered(None, size(px(480.0), px(240.0)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| cx.new(|cx| ActionsExample::new(window, cx)),

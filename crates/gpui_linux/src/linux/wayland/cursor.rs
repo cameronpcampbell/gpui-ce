@@ -40,7 +40,9 @@ impl Cursor {
             shm: globals.shm.clone(),
             connection: connection.clone(),
         };
+
         this.set_theme_internal(None);
+
         this
     }
 
@@ -51,6 +53,7 @@ impl Cursor {
         {
             return;
         }
+
         let result = if let Some(theme_name) = theme_name.as_ref() {
             CursorTheme::load_from_name(
                 &self.connection,
@@ -58,9 +61,11 @@ impl Cursor {
                 theme_name,
                 self.scaled_size,
             )
+
         } else {
             CursorTheme::load(&self.connection, self.shm.clone(), self.scaled_size)
         };
+
         if let Some(theme) = result
             .context("Wayland: Failed to load cursor theme")
             .log_err()
@@ -79,15 +84,18 @@ impl Cursor {
 
     fn set_scaled_size(&mut self, scaled_size: u32) {
         self.scaled_size = scaled_size;
+
         let theme_name = self
             .loaded_theme
             .as_ref()
             .and_then(|loaded_theme| loaded_theme.name.clone());
+
         self.set_theme_internal(theme_name);
     }
 
     pub fn set_size(&mut self, size: u32) {
         self.size = size;
+
         self.set_scaled_size(size);
     }
 
@@ -102,33 +110,40 @@ impl Cursor {
 
         let Some(loaded_theme) = &mut self.loaded_theme else {
             log::warn!("Wayland: Unable to load cursor themes");
+
             return;
         };
+
         let theme = &mut loaded_theme.theme;
 
         let buffer: &CursorImageBuffer;
+
         'outer: {
             for cursor_icon_name in cursor_icon_names {
                 if let Some(cursor) = theme.get_cursor(cursor_icon_name) {
                     buffer = &cursor[0];
+
                     break 'outer;
                 }
             }
 
             if let Some(cursor) = theme.get_cursor(DEFAULT_CURSOR_ICON_NAME) {
                 buffer = &cursor[0];
+
                 log_cursor_icon_warning(anyhow!(
                     "wayland: Unable to get cursor icon {:?}. \
                     Using default cursor icon: '{}'",
                     cursor_icon_names,
                     DEFAULT_CURSOR_ICON_NAME
                 ));
+
             } else {
                 log_cursor_icon_warning(anyhow!(
                     "wayland: Unable to fallback on default cursor icon '{}' for theme '{}'",
                     DEFAULT_CURSOR_ICON_NAME,
                     loaded_theme.name.as_deref().unwrap_or("default")
                 ));
+
                 return;
             }
         }

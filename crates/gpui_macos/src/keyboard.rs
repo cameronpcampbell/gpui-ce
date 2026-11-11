@@ -43,6 +43,7 @@ impl PlatformKeyboardMapper for MacKeyboardMapper {
                 keystroke.key = key.to_string();
             }
         }
+
         KeybindingKeystroke::from_keystroke(keystroke)
     }
 
@@ -55,8 +56,10 @@ impl MacKeyboardLayout {
     pub(crate) fn new() -> Self {
         unsafe {
             let current_keyboard = TISCopyCurrentKeyboardLayoutInputSource();
+
             if current_keyboard.is_null() {
                 log::warn!("macOS did not provide a keyboard input source");
+
                 return Self {
                     id: String::new(),
                     name: String::new(),
@@ -68,6 +71,7 @@ impl MacKeyboardLayout {
                 kTISPropertyInputSourceID as *const c_void,
             )
             .cast();
+
             let id = id.as_ref().map_or_else(String::new, NSString::to_string);
 
             let name: *const NSString = TISGetInputSourceProperty(
@@ -75,6 +79,7 @@ impl MacKeyboardLayout {
                 kTISPropertyLocalizedName as *const c_void,
             )
             .cast();
+
             let name = name.as_ref().map_or_else(String::new, NSString::to_string);
 
             CFRelease(current_keyboard.cast());
@@ -156,6 +161,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', '*'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.ABC-QWERTZ" => &[
             ('"', '`'),
             ('#', '§'),
@@ -181,6 +187,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ä'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Albanian" => &[
             ('"', '\''),
             (':', 'Ç'),
@@ -194,6 +201,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('|', 'Ë'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Austrian" => &[
             ('"', '`'),
             ('#', '§'),
@@ -219,6 +227,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ä'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Azeri" => &[
             ('"', 'Ə'),
             (',', 'ç'),
@@ -238,6 +247,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('|', '/'),
             ('}', 'Ğ'),
         ],
+
         "com.apple.keylayout.Belgian" => &[
             ('!', '1'),
             ('"', '%'),
@@ -276,6 +286,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', '*'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Brazilian-ABNT2" => &[
             ('"', '`'),
             ('/', 'ç'),
@@ -287,8 +298,10 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('|', '^'),
             ('~', '"'),
         ],
+
         "com.apple.keylayout.Brazilian-Pro" => &[('^', 'ˆ'), ('~', '˜')],
         "com.apple.keylayout.British" => &[('#', '£')],
+
         "com.apple.keylayout.Canadian-CSA" => &[
             ('"', 'È'),
             ('/', 'é'),
@@ -305,6 +318,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ç'),
             ('~', 'Ù'),
         ],
+
         "com.apple.keylayout.Croatian" => &[
             ('"', 'Ć'),
             ('&', '\''),
@@ -328,6 +342,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Đ'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Croatian-PC" => &[
             ('"', 'Ć'),
             ('&', '/'),
@@ -352,6 +367,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Đ'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Czech" => &[
             ('!', '1'),
             ('"', '!'),
@@ -389,6 +405,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', '('),
             ('~', '`'),
         ],
+
         "com.apple.keylayout.Czech-QWERTY" => &[
             ('!', '1'),
             ('"', '!'),
@@ -426,6 +443,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', '('),
             ('~', '`'),
         ],
+
         "com.apple.keylayout.Danish" => &[
             ('"', '^'),
             ('$', '€'),
@@ -451,6 +469,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ø'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Faroese" => &[
             ('"', 'Ø'),
             ('$', '€'),
@@ -476,6 +495,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ð'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Finnish" => &[
             ('"', '^'),
             ('$', '€'),
@@ -501,6 +521,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ä'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.FinnishExtended" => &[
             ('"', 'ˆ'),
             ('$', '€'),
@@ -526,6 +547,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ä'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.FinnishSami-PC" => &[
             ('"', 'ˆ'),
             ('&', '/'),
@@ -550,6 +572,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ä'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.French" => &[
             ('!', '1'),
             ('"', '%'),
@@ -588,6 +611,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', '*'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.French-PC" => &[
             ('!', '1'),
             ('"', '%'),
@@ -628,6 +652,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', '£'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.French-numerical" => &[
             ('!', '1'),
             ('"', '%'),
@@ -666,6 +691,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', '*'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.German" => &[
             ('"', '`'),
             ('#', '§'),
@@ -691,6 +717,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ä'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.German-DIN-2137" => &[
             ('"', '`'),
             ('#', '§'),
@@ -716,7 +743,9 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ä'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Hawaiian" => &[('\'', 'ʻ')],
+
         "com.apple.keylayout.Hungarian" => &[
             ('!', '\''),
             ('"', 'Á'),
@@ -746,6 +775,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ú'),
             ('~', 'Í'),
         ],
+
         "com.apple.keylayout.Hungarian-QWERTY" => &[
             ('!', '\''),
             ('"', 'Á'),
@@ -775,6 +805,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ú'),
             ('~', 'Í'),
         ],
+
         "com.apple.keylayout.Icelandic" => &[
             ('"', 'Ö'),
             ('&', '/'),
@@ -799,8 +830,10 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', '´'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Irish" => &[('#', '£')],
         "com.apple.keylayout.IrishExtended" => &[('#', '£')],
+
         "com.apple.keylayout.Italian" => &[
             ('!', '1'),
             ('"', '%'),
@@ -840,6 +873,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', '*'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Italian-Pro" => &[
             ('"', '^'),
             ('#', '£'),
@@ -865,6 +899,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', '°'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.LatinAmerican" => &[
             ('"', '¨'),
             ('&', '/'),
@@ -889,6 +924,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', ']'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Lithuanian" => &[
             ('!', 'Ą'),
             ('#', 'Ę'),
@@ -909,6 +945,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('@', 'Č'),
             ('^', 'Š'),
         ],
+
         "com.apple.keylayout.Maltese" => &[
             ('#', '£'),
             ('[', 'ġ'),
@@ -918,6 +955,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ħ'),
             ('~', 'Ż'),
         ],
+
         "com.apple.keylayout.NorthernSami" => &[
             ('"', 'Ŋ'),
             ('&', '/'),
@@ -948,6 +986,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Æ'),
             ('~', 'Ž'),
         ],
+
         "com.apple.keylayout.Norwegian" => &[
             ('"', '^'),
             ('&', '/'),
@@ -972,6 +1011,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Æ'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.NorwegianExtended" => &[
             ('"', 'ˆ'),
             ('&', '/'),
@@ -992,6 +1032,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Æ'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.NorwegianSami-PC" => &[
             ('"', 'ˆ'),
             ('&', '/'),
@@ -1016,6 +1057,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Æ'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Polish" => &[
             ('!', '§'),
             ('"', 'ę'),
@@ -1049,6 +1091,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', ')'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Portuguese" => &[
             ('"', '`'),
             ('&', '/'),
@@ -1071,6 +1114,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', '^'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Sami-PC" => &[
             ('"', 'Ŋ'),
             ('&', '/'),
@@ -1101,6 +1145,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Æ'),
             ('~', 'Ž'),
         ],
+
         "com.apple.keylayout.Serbian-Latin" => &[
             ('"', 'Ć'),
             ('&', '\''),
@@ -1124,6 +1169,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Đ'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Slovak" => &[
             ('!', '1'),
             ('"', '!'),
@@ -1161,6 +1207,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ä'),
             ('~', 'Ň'),
         ],
+
         "com.apple.keylayout.Slovak-QWERTY" => &[
             ('!', '1'),
             ('"', '!'),
@@ -1198,6 +1245,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ä'),
             ('~', 'Ň'),
         ],
+
         "com.apple.keylayout.Slovenian" => &[
             ('"', 'Ć'),
             ('&', '\''),
@@ -1221,6 +1269,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Đ'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Spanish" => &[
             ('!', '¡'),
             ('"', '¨'),
@@ -1242,6 +1291,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', ':'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Spanish-ISO" => &[
             ('"', '¨'),
             ('#', '·'),
@@ -1267,6 +1317,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', '`'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Swedish" => &[
             ('"', '^'),
             ('$', '€'),
@@ -1292,6 +1343,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ä'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Swedish-Pro" => &[
             ('"', '^'),
             ('$', '€'),
@@ -1317,6 +1369,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ä'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.SwedishSami-PC" => &[
             ('"', 'ˆ'),
             ('&', '/'),
@@ -1341,6 +1394,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ä'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.SwissFrench" => &[
             ('!', '+'),
             ('"', '`'),
@@ -1369,6 +1423,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'ä'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.SwissGerman" => &[
             ('!', '+'),
             ('"', '`'),
@@ -1397,6 +1452,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'à'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Turkish" => &[
             ('"', '-'),
             ('#', '"'),
@@ -1426,6 +1482,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'I'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Turkish-QWERTY-PC" => &[
             ('"', 'I'),
             ('#', '^'),
@@ -1455,6 +1512,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ü'),
             ('~', '>'),
         ],
+
         "com.apple.keylayout.Turkish-Standard" => &[
             ('"', 'Ş'),
             ('#', '^'),
@@ -1481,6 +1539,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'I'),
             ('~', 'Ö'),
         ],
+
         "com.apple.keylayout.Turkmen" => &[
             ('C', 'Ç'),
             ('Q', 'Ä'),
@@ -1500,6 +1559,7 @@ fn get_key_equivalents(layout_id: &str) -> Option<HashMap<char, char>> {
             ('}', 'Ö'),
             ('~', 'Ž'),
         ],
+
         "com.apple.keylayout.USInternational-PC" => &[('^', 'ˆ'), ('~', '˜')],
         "com.apple.keylayout.Welsh" => &[('#', '£')],
 

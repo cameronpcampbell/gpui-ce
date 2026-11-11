@@ -9,6 +9,7 @@ use crate::{
     LMGetKbdType, TISCopyCurrentKeyboardLayoutInputSource, TISGetInputSourceProperty,
     UCKeyTranslate, kTISPropertyUnicodeKeyLayoutData,
 };
+
 use core_foundation::data::{CFDataGetBytePtr, CFDataRef};
 use core_foundation_sys::base::CFRelease;
 use core_graphics::event::CGKeyCode;
@@ -75,6 +76,7 @@ pub fn key_to_native(key: &str) -> Cow<'_, str> {
         "f35" => NSF35FunctionKey,
         _ => return Cow::Borrowed(key),
     };
+
     Cow::Owned(
         char::from_u32(code)
             .expect("AppKit function key is a Unicode scalar")
@@ -113,6 +115,7 @@ pub(crate) unsafe fn platform_input_from_native(
             0 | 21 | 32 | 33 | 35 | 36 | 37 => {
                 return None;
             }
+
             _ => {}
         }
 
@@ -127,14 +130,17 @@ pub(crate) unsafe fn platform_input_from_native(
                     },
                 }))
             }
+
             NSEventType::KeyDown => Some(PlatformInput::KeyDown(KeyDownEvent {
                 keystroke: parse_keystroke(native_event),
                 is_held: native_event.isARepeat(),
                 prefer_character_input: false,
             })),
+
             NSEventType::KeyUp => Some(PlatformInput::KeyUp(KeyUpEvent {
                 keystroke: parse_keystroke(native_event),
             })),
+
             NSEventType::LeftMouseDown
             | NSEventType::RightMouseDown
             | NSEventType::OtherMouseDown => {
@@ -147,6 +153,7 @@ pub(crate) unsafe fn platform_input_from_native(
                     // Other mouse buttons aren't tracked currently
                     _ => return None,
                 };
+
                 window_height.map(|window_height| {
                     PlatformInput::MouseDown(MouseDownEvent {
                         button,
@@ -161,6 +168,7 @@ pub(crate) unsafe fn platform_input_from_native(
                     })
                 })
             }
+
             NSEventType::LeftMouseUp | NSEventType::RightMouseUp | NSEventType::OtherMouseUp => {
                 let button = match native_event.buttonNumber() {
                     0 => MouseButton::Left,
@@ -184,6 +192,7 @@ pub(crate) unsafe fn platform_input_from_native(
                     })
                 })
             }
+
             NSEventType::Pressure => {
                 let stage = native_event.stage();
                 let pressure = native_event.pressure();
@@ -204,6 +213,7 @@ pub(crate) unsafe fn platform_input_from_native(
                     })
                 })
             }
+
             // Some mice (like Logitech MX Master) send navigation buttons as swipe events
             NSEventType::Swipe => {
                 let navigation_direction = match native_event.phase() {
@@ -212,6 +222,7 @@ pub(crate) unsafe fn platform_input_from_native(
                         x if x < 0.0 => Some(NavigationDirection::Forward),
                         _ => return None,
                     },
+
                     _ => return None,
                 };
 
@@ -228,9 +239,11 @@ pub(crate) unsafe fn platform_input_from_native(
                             first_mouse: false,
                         })
                     }),
+
                     _ => None,
                 }
             }
+
             NSEventType::Magnify => window_height.map(|window_height| {
                 let phase = match native_event.phase() {
                     NSEventPhase::MayBegin | NSEventPhase::Began => TouchPhase::Started,
@@ -250,6 +263,7 @@ pub(crate) unsafe fn platform_input_from_native(
                     phase,
                 })
             }),
+
             NSEventType::ScrollWheel => window_height.map(|window_height| {
                 let phase = match native_event.phase() {
                     NSEventPhase::MayBegin | NSEventPhase::Began => TouchPhase::Started,
@@ -278,6 +292,7 @@ pub(crate) unsafe fn platform_input_from_native(
                     modifiers: read_modifiers(native_event),
                 })
             }),
+
             NSEventType::LeftMouseDragged
             | NSEventType::RightMouseDragged
             | NSEventType::OtherMouseDragged => {
@@ -302,6 +317,7 @@ pub(crate) unsafe fn platform_input_from_native(
                     })
                 })
             }
+
             NSEventType::MouseMoved => window_height.map(|window_height| {
                 PlatformInput::MouseMove(MouseMoveEvent {
                     position: point(
@@ -312,6 +328,7 @@ pub(crate) unsafe fn platform_input_from_native(
                     modifiers: read_modifiers(native_event),
                 })
             }),
+
             NSEventType::MouseExited => window_height.map(|window_height| {
                 PlatformInput::MouseExited(MouseExitEvent {
                     position: point(
@@ -323,6 +340,7 @@ pub(crate) unsafe fn platform_input_from_native(
                     modifiers: read_modifiers(native_event),
                 })
             }),
+
             _ => None,
         }
     }
@@ -334,6 +352,7 @@ fn parse_keystroke(native_event: &NSEvent) -> Keystroke {
             .charactersIgnoringModifiers()
             .map(|characters| characters.to_string())
             .unwrap_or_default();
+
         let mut key_char = None;
         let first_char = characters.chars().next().map(|ch| ch as u32);
         let modifiers = native_event.modifierFlags();
@@ -342,6 +361,7 @@ fn parse_keystroke(native_event: &NSEvent) -> Keystroke {
         let alt = modifiers.contains(NSEventModifierFlags::Option);
         let mut shift = modifiers.contains(NSEventModifierFlags::Shift);
         let command = modifiers.contains(NSEventModifierFlags::Command);
+
         let function = modifiers.contains(NSEventModifierFlags::Function)
             && first_char
                 .is_none_or(|ch| !(NSUpArrowFunctionKey..=NSModeSwitchFunctionKey).contains(&ch));
@@ -350,16 +370,22 @@ fn parse_keystroke(native_event: &NSEvent) -> Keystroke {
         let key = match first_char {
             Some(SPACE_KEY) => {
                 key_char = Some(" ".to_string());
+
                 "space".to_string()
             }
+
             Some(TAB_KEY) => {
                 key_char = Some("\t".to_string());
+
                 "tab".to_string()
             }
+
             Some(ENTER_KEY) | Some(NUMPAD_ENTER_KEY) => {
                 key_char = Some("\n".to_string());
+
                 "enter".to_string()
             }
+
             Some(BACKSPACE_KEY) => "backspace".to_string(),
             Some(ESCAPE_KEY) => "escape".to_string(),
             Some(SHIFT_TAB_KEY) => "tab".to_string(),
@@ -409,6 +435,7 @@ fn parse_keystroke(native_event: &NSEvent) -> Keystroke {
             Some(NSF33FunctionKey) => "f33".to_string(),
             Some(NSF34FunctionKey) => "f34".to_string(),
             Some(NSF35FunctionKey) => "f35".to_string(),
+
             _ => {
                 // Cases to test when modifying this:
                 //
@@ -423,13 +450,16 @@ fn parse_keystroke(native_event: &NSEvent) -> Keystroke {
                 //
                 let mut chars_ignoring_modifiers =
                     chars_for_modified_key(native_event.keyCode(), NO_MOD);
+
                 let mut chars_with_shift =
                     chars_for_modified_key(native_event.keyCode(), SHIFT_MOD);
+
                 let always_use_cmd_layout = always_use_command_layout();
 
                 // Handle Dvorak+QWERTY / Russian / Armenian
                 if command || always_use_cmd_layout {
                     let chars_with_cmd = chars_for_modified_key(native_event.keyCode(), CMD_MOD);
+
                     let chars_with_both =
                         chars_for_modified_key(native_event.keyCode(), CMD_MOD | SHIFT_MOD);
 
@@ -440,17 +470,21 @@ fn parse_keystroke(native_event: &NSEvent) -> Keystroke {
 
                     // Handle edge-case where cmd-shift-s reports cmd-s instead of
                     // cmd-shift-s (Ukrainian, etc.)
+
                     } else if chars_with_cmd.to_ascii_uppercase() != chars_with_cmd {
                         chars_with_shift = chars_with_cmd.to_ascii_uppercase();
                     }
+
                     chars_ignoring_modifiers = chars_with_cmd;
                 }
 
                 if !control && !command && !function {
                     let mut mods = NO_MOD;
+
                     if shift {
                         mods |= SHIFT_MOD;
                     }
+
                     if alt {
                         mods |= OPTION_MOD;
                     }
@@ -466,7 +500,9 @@ fn parse_keystroke(native_event: &NSEvent) -> Keystroke {
                     chars_ignoring_modifiers
                 } else if shift {
                     shift = false;
+
                     chars_with_shift
+
                 } else {
                     chars_ignoring_modifiers
                 }
@@ -511,23 +547,30 @@ fn chars_for_modified_key(code: CGKeyCode, modifiers: u32) -> String {
     const kUCKeyTranslateNoDeadKeysMask: u32 = 0;
 
     let keyboard_type = unsafe { LMGetKbdType() as u32 };
+
     const BUFFER_SIZE: usize = 4;
+
     let mut dead_key_state = 0;
     let mut buffer: [u16; BUFFER_SIZE] = [0; BUFFER_SIZE];
     let mut buffer_size: usize = 0;
 
     let keyboard = unsafe { TISCopyCurrentKeyboardLayoutInputSource() };
+
     if keyboard.is_null() {
         return "".to_string();
     }
+
     let layout_data = unsafe {
         TISGetInputSourceProperty(keyboard, kTISPropertyUnicodeKeyLayoutData as *const c_void)
             as CFDataRef
     };
+
     if layout_data.is_null() {
         unsafe { CFRelease(keyboard.cast()) };
+
         return "".to_string();
     }
+
     let keyboard_layout = unsafe { CFDataGetBytePtr(layout_data) };
 
     unsafe {
@@ -543,6 +586,7 @@ fn chars_for_modified_key(code: CGKeyCode, modifiers: u32) -> String {
             &mut buffer_size as *mut usize,
             &mut buffer as *mut u16,
         );
+
         if dead_key_state != 0 {
             UCKeyTranslate(
                 keyboard_layout as *const c_void,
@@ -557,7 +601,9 @@ fn chars_for_modified_key(code: CGKeyCode, modifiers: u32) -> String {
                 &mut buffer as *mut u16,
             );
         }
+
         CFRelease(keyboard.cast());
     }
+
     String::from_utf16(&buffer[..buffer_size]).unwrap_or_default()
 }

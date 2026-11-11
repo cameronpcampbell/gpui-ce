@@ -4,6 +4,7 @@ pub struct InspectorElementId {
     /// Stable part of the ID.
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub path: std::rc::Rc<InspectorElementPath>,
+
     /// Disambiguates elements that have the same path.
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub instance_id: usize,
@@ -31,6 +32,7 @@ mod conditional {
         /// The path to the nearest ancestor element that has an `ElementId`.
         #[cfg(any(feature = "inspector", debug_assertions))]
         pub global_id: crate::GlobalElementId,
+
         /// Source location where this element was constructed.
         #[cfg(any(feature = "inspector", debug_assertions))]
         pub source_location: &'static std::panic::Location<'static>,
@@ -86,12 +88,14 @@ mod conditional {
 
         pub(crate) fn select(&mut self, id: InspectorElementId, window: &mut Window) {
             self.set_active_element_id(id, window);
+
             self.pick_depth = None;
         }
 
         pub(crate) fn hover(&mut self, id: InspectorElementId, window: &mut Window) {
             if self.is_picking() {
                 let changed = self.set_active_element_id(id, window);
+
                 if changed {
                     self.pick_depth = Some(0.0);
                 }
@@ -104,10 +108,13 @@ mod conditional {
             window: &mut Window,
         ) -> bool {
             let changed = Some(&id) != self.active_element_id();
+
             if changed {
                 self.active_element = Some(InspectedElement::new(id));
+
                 window.refresh();
             }
+
             changed
         }
 
@@ -126,6 +133,7 @@ mod conditional {
             };
 
             let type_id = TypeId::of::<T>();
+
             let mut inspector_state = active_element
                 .states
                 .remove(&type_id)
@@ -159,6 +167,7 @@ mod conditional {
             cx: &mut Context<Self>,
         ) -> Vec<AnyElement> {
             let mut elements = Vec::new();
+
             if let Some(active_element) = self.active_element.take() {
                 for (type_id, state) in &active_element.states {
                     if let Some(render_inspector) = cx
@@ -172,7 +181,9 @@ mod conditional {
                             window,
                             cx,
                         );
+
                         elements.push(element);
+
                         cx.inspector_element_registry
                             .renderers_by_type_id
                             .insert(*type_id, render_inspector);
@@ -190,8 +201,11 @@ mod conditional {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             if let Some(inspector_renderer) = cx.inspector_renderer.take() {
                 let result = inspector_renderer(self, window, cx);
+
                 cx.inspector_renderer = Some(inspector_renderer);
+
                 result
+
             } else {
                 Empty.into_any_element()
             }
@@ -215,6 +229,7 @@ mod conditional {
                 TypeId::of::<T>(),
                 Box::new(move |id, value, window, cx| {
                     let value = value.downcast_ref().unwrap();
+
                     f(id, value, window, cx).into_any_element()
                 }),
             );
@@ -233,10 +248,13 @@ pub mod inspector_reflection {
     pub struct FunctionReflection<T> {
         /// The name of the function
         pub name: &'static str,
+
         /// The method
         pub function: fn(Box<dyn Any>) -> Box<dyn Any>,
+
         /// Documentation for the function
         pub documentation: Option<&'static str>,
+
         /// `PhantomData` for the type of the argument and result
         pub _type: std::marker::PhantomData<T>,
     }
@@ -246,6 +264,7 @@ pub mod inspector_reflection {
         pub fn invoke(&self, value: T) -> T {
             let boxed = Box::new(value) as Box<dyn Any>;
             let result = (self.function)(boxed);
+
             *result
                 .downcast::<T>()
                 .expect("Type mismatch in reflection invoke")

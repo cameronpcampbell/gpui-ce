@@ -3,12 +3,15 @@ use async_task::Runnable;
 use chrono::{DateTime, Utc};
 use futures::channel::oneshot;
 use scheduler::Instant;
+
 use scheduler::{
     Clock, LocalExecutor, Priority, Scheduler, SessionId, Task, TestScheduler, Timer,
     spawn_dedicated_thread,
 };
+
 #[cfg(not(target_family = "wasm"))]
 use std::task::{Context, Poll};
+
 use std::{
     any::Any,
     future::Future,
@@ -28,6 +31,7 @@ pub struct PlatformScheduler {
     dispatcher: Arc<dyn PlatformDispatcher>,
     clock: Arc<PlatformClock>,
     next_session_id: AtomicU16,
+
     #[cfg(feature = "profiler")]
     foreground_runnables: crate::profiler::journal::ForegroundRunnableCounter,
 }
@@ -46,6 +50,7 @@ impl PlatformScheduler {
     pub fn foreground_executor(self: &Arc<Self>) -> LocalExecutor {
         let session_id = self.next_session_id();
         let scheduler = Arc::downgrade(self);
+
         LocalExecutor::new(session_id, self.clone(), move |runnable| {
             if let Some(scheduler) = scheduler.upgrade() {
                 scheduler.schedule_local(session_id, runnable);
@@ -74,13 +79,17 @@ impl Scheduler for PlatformScheduler {
         timeout: Option<Duration>,
     ) -> bool {
         use waker_fn::waker_fn;
+
         let deadline = timeout.map(|t| Instant::now() + t);
         let parker = parking::Parker::new();
         let unparker = parker.unparker();
+
         let waker = waker_fn(move || {
             unparker.unpark();
         });
+
         let mut cx = Context::from_waker(&waker);
+
         if let Poll::Ready(()) = future.as_mut().poll(&mut cx) {
             return true;
         }
@@ -89,6 +98,7 @@ impl Scheduler for PlatformScheduler {
             // Timer expirations are only delivered every ~15.6 milliseconds by default on Windows.
             // We increase the resolution during this wait so that short timeouts stay reasonably short.
             let _timer_guard = self.dispatcher.increase_timer_resolution();
+
             parker.park_deadline(deadline)
         };
 
@@ -97,9 +107,11 @@ impl Scheduler for PlatformScheduler {
                 Some(deadline) if !park_deadline(deadline) && deadline <= Instant::now() => {
                     return false;
                 }
+
                 Some(_) => (),
                 None => parker.park(),
             }
+
             if let Poll::Ready(()) = future.as_mut().poll(&mut cx) {
                 break true;
             }
@@ -109,6 +121,7 @@ impl Scheduler for PlatformScheduler {
     fn schedule_local(&self, _session_id: SessionId, runnable: Runnable<RunnableMeta>) {
         #[cfg(feature = "profiler")]
         self.foreground_runnables.queued();
+
         self.dispatcher
             .dispatch_on_main_thread(runnable, Priority::default());
     }
@@ -132,6 +145,7 @@ impl Scheduler for PlatformScheduler {
 
         // Create a runnable that will send the completion signal
         let location = std::panic::Location::caller();
+
         let (runnable, _task) = async_task::Builder::new()
             .metadata(RunnableMeta {
                 location,
@@ -145,6 +159,7 @@ impl Scheduler for PlatformScheduler {
                     dispatcher.dispatch_after(duration, runnable);
                 },
             );
+
         runnable.schedule();
 
         Timer::new(rx)
@@ -166,6 +181,7 @@ impl Scheduler for PlatformScheduler {
         >,
     ) -> Task<Box<dyn Any + Send + Sync>> {
         let session_id = self.next_session_id();
+
         spawn_dedicated_thread(session_id, self, move |executor| f(executor))
     }
 
@@ -204,15 +220,19 @@ mod tests {
         fn is_main_thread(&self) -> bool {
             false
         }
+
         fn dispatch(&self, _runnable: RunnableVariant, _priority: Priority) {
             panic!("SmokeDispatcher should not be asked to dispatch in this test");
         }
+
         fn dispatch_on_main_thread(&self, _runnable: RunnableVariant, _priority: Priority) {
             panic!("SmokeDispatcher does not implement a main thread");
         }
+
         fn dispatch_after(&self, _duration: Duration, _runnable: RunnableVariant) {
             panic!("SmokeDispatcher does not implement timers");
         }
+
         fn spawn_realtime(&self, _f: Box<dyn FnOnce() + Send>) {
             panic!("SmokeDispatcher does not implement realtime");
         }
@@ -222,6 +242,7 @@ mod tests {
     fn dedicated_executor_tasks_share_one_thread() {
         let background =
             BackgroundExecutor::new(Arc::new(PlatformScheduler::new(Arc::new(SmokeDispatcher))));
+
         let dedicated = scheduler::DedicatedExecutor::new(&background);
 
         let first = dedicated.spawn(async { std::thread::current().id() });
@@ -231,6 +252,7 @@ mod tests {
         let second = futures::executor::block_on(second);
 
         assert_eq!(first, second, "tasks must share the dedicated thread");
+
         assert_ne!(
             first,
             std::thread::current().id(),
@@ -242,25 +264,35 @@ mod tests {
     fn spawn_dedicated_runs_on_a_real_separate_thread() {
         let background =
             BackgroundExecutor::new(Arc::new(PlatformScheduler::new(Arc::new(SmokeDispatcher))));
+
         let started = StdInstant::now();
+
         let task = background.spawn_dedicated(|_executor| async move {
             // A genuine blocking syscall on the dedicated thread. If
             // `spawn_dedicated` were running the future on any shared
             // executor, this would stall that executor.
             let thread_id_before = std::thread::current().id();
+
             std::thread::sleep(Duration::from_millis(50));
+
             let thread_id_after = std::thread::current().id();
+
             assert_eq!(thread_id_before, thread_id_after);
+
             (thread_id_before, "slept")
         });
+
         let (dedicated_thread_id, message) = futures::executor::block_on(task);
         let elapsed = started.elapsed();
+
         assert_eq!(message, "slept");
+
         assert_ne!(
             dedicated_thread_id,
             std::thread::current().id(),
             "dedicated future ran on the test thread"
         );
+
         assert!(
             elapsed >= Duration::from_millis(40),
             "expected the dedicated thread to genuinely sleep, elapsed = {:?}",
@@ -278,14 +310,19 @@ mod tests {
 
         let background =
             BackgroundExecutor::new(Arc::new(PlatformScheduler::new(Arc::new(SmokeDispatcher))));
+
         let task = background.spawn_dedicated(|_executor| async move {
             let state = Rc::new(RefCell::new(0_i32));
+
             for _ in 0..3 {
                 *state.borrow_mut() += 1;
             }
+
             *state.borrow()
         });
+
         let output = futures::executor::block_on(task);
+
         assert_eq!(output, 3);
     }
 
@@ -303,15 +340,19 @@ mod tests {
 
         let task = {
             let observed_post_await_write = observed_post_await_write.clone();
+
             background.spawn_dedicated(move |_executor| async move {
                 // Announce that the future is live on the dedicated thread.
                 started_tx
                     .send(())
                     .expect("started signal must be received");
+
                 // Park forever. Dropping the `Task` must cancel us here so
                 // the code below this `await` never runs.
                 futures::future::pending::<()>().await;
+
                 *observed_post_await_write.lock() = true;
+
                 after_park_tx
                     .send(())
                     .expect("after-park signal must be received");
@@ -334,6 +375,7 @@ mod tests {
                 .is_err(),
             "dedicated future advanced past the await after its Task was dropped"
         );
+
         assert!(
             !*observed_post_await_write.lock(),
             "dedicated future ran code past the cancellation point"
@@ -349,6 +391,7 @@ mod tests {
         struct DropSignal {
             tx: Option<mpsc::Sender<std::thread::ThreadId>>,
         }
+
         impl Drop for DropSignal {
             fn drop(&mut self) {
                 if let Some(tx) = self.tx.take() {
@@ -359,6 +402,7 @@ mod tests {
 
         let background =
             BackgroundExecutor::new(Arc::new(PlatformScheduler::new(Arc::new(SmokeDispatcher))));
+
         let (started_tx, started_rx) = mpsc::channel::<std::thread::ThreadId>();
         let (drop_tx, drop_rx) = mpsc::channel::<std::thread::ThreadId>();
 
@@ -367,6 +411,7 @@ mod tests {
             // its state is dropped on the dedicated thread, this guard's
             // `Drop` fires and reports the thread id it ran on.
             let _guard = DropSignal { tx: Some(drop_tx) };
+
             started_tx
                 .send(std::thread::current().id())
                 .expect("started signal must be received");
@@ -377,6 +422,7 @@ mod tests {
         let dedicated_thread_id = started_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("dedicated future failed to start");
+
         assert_ne!(
             dedicated_thread_id,
             std::thread::current().id(),
@@ -392,6 +438,7 @@ mod tests {
         let drop_thread_id = drop_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("dedicated future's captured state was not dropped after task completion");
+
         assert_eq!(
             drop_thread_id, dedicated_thread_id,
             "dedicated future's captured state must be dropped on the dedicated thread, not elsewhere"
@@ -421,6 +468,7 @@ mod tests {
                     gate_rx
                         .recv()
                         .expect("gate sender dropped before child resumed");
+
                     child_done_tx
                         .send(std::thread::current().id())
                         .expect("child_done receiver dropped");
@@ -448,6 +496,7 @@ mod tests {
         let child_thread_id = child_done_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("detached child failed to complete after gate was released");
+
         assert_ne!(
             child_thread_id,
             std::thread::current().id(),

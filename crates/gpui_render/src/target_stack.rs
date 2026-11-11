@@ -54,6 +54,7 @@ impl<Target> TargetStack<Target> {
             .parents
             .pop()
             .expect("render plan ended an isolated filter without beginning one");
+
         let filtered = std::mem::replace(&mut self.current, parent);
 
         (filtered, &self.current)
@@ -75,22 +76,29 @@ mod tests {
     #[test]
     fn nested_groups_inherit_backdrops_until_a_content_filter_and_restore_parents() {
         let mut targets = TargetStack::new("root");
+
         targets.enter("opacity", true);
+
         assert!(targets.inherits_backdrop());
+
         assert_eq!(
             targets.backdrop_layers().copied().collect::<Vec<_>>(),
             ["root", "opacity"]
         );
 
         targets.enter("content", false);
+
         assert!(!targets.inherits_backdrop());
+
         assert_eq!(
             targets.backdrop_layers().copied().collect::<Vec<_>>(),
             ["content"]
         );
 
         targets.enter("nested", true);
+
         assert!(targets.inherits_backdrop());
+
         assert_eq!(
             targets.backdrop_layers().copied().collect::<Vec<_>>(),
             ["content", "nested"]
@@ -99,6 +107,7 @@ mod tests {
         assert_eq!(targets.exit(), ("nested", &"content"));
         assert_eq!(targets.exit(), ("content", &"opacity"));
         assert!(targets.inherits_backdrop());
+
         assert_eq!(
             targets.backdrop_layers().copied().collect::<Vec<_>>(),
             ["root", "opacity"]
@@ -106,10 +115,12 @@ mod tests {
 
         assert_eq!(targets.exit(), ("opacity", &"root"));
         assert!(!targets.inherits_backdrop());
+
         assert_eq!(
             targets.backdrop_layers().copied().collect::<Vec<_>>(),
             ["root"]
         );
+
         targets.assert_balanced();
     }
 }

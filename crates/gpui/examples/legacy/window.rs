@@ -7,6 +7,7 @@ use gpui::{
     App, Bounds, Context, KeyBinding, PromptButton, PromptLevel, Window, WindowBounds, WindowKind,
     WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
+
 use gpui_platform::application;
 
 struct SubWindow {
@@ -180,6 +181,7 @@ impl Render for WindowDemo {
                 window
                     .spawn(cx, async move |cx| {
                         smol::Timer::after(std::time::Duration::from_secs(3)).await;
+
                         cx.update(|_, cx| {
                             cx.activate(false);
                         })
@@ -188,6 +190,7 @@ impl Render for WindowDemo {
             }))
             .child(button("Resize", |window, _| {
                 let content_size = window.bounds().size;
+
                 window.resize(size(content_size.height, content_size.width));
             }))
             .child(button("Prompt", |window, cx| {
@@ -236,6 +239,7 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         let bounds = Bounds::centered(None, size(px(800.0), px(600.0)), cx);
 
         cx.open_window(

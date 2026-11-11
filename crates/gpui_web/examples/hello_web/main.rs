@@ -1,6 +1,7 @@
 use std::{borrow::Cow, cell::RefCell};
 
 use gpui::prelude::*;
+
 use gpui::{
     App, ApplicationHandle, Bounds, Context, ElementId, SharedString, Task, Window, WindowBounds,
     WindowOptions, div, px, rgb, size,
@@ -18,29 +19,37 @@ fn is_prime(n: u64) -> bool {
     if n < 2 {
         return false;
     }
+
     if n < 4 {
         return true;
     }
+
     if n % 2 == 0 || n % 3 == 0 {
         return false;
     }
+
     let mut i = 5;
+
     while i * i <= n {
         if n % i == 0 || n % (i + 2) == 0 {
             return false;
         }
+
         i += 6;
     }
+
     true
 }
 
 fn count_primes_in_range(start: u64, end: u64) -> u64 {
     let mut count = 0;
+
     for n in start..end {
         if is_prime(n) {
             count += 1;
         }
     }
+
     count
 }
 
@@ -121,6 +130,7 @@ impl HelloWeb {
             total: None,
             elapsed: None,
         });
+
         self._tasks.clear();
         cx.notify();
 
@@ -128,6 +138,7 @@ impl HelloWeb {
 
         for i in 0..NUM_CHUNKS {
             let range_start = i * chunk_size;
+
             let range_end = if i == NUM_CHUNKS - 1 {
                 limit
             } else {
@@ -142,13 +153,16 @@ impl HelloWeb {
                 this.update(cx, |this, cx| {
                     if let Some(run) = &mut this.current_run {
                         run.chunk_results.push(ChunkResult { count });
+
                         run.chunks_done += 1;
 
                         if run.chunks_done == NUM_CHUNKS {
                             let total: u64 = run.chunk_results.iter().map(|r| r.count).sum();
                             let elapsed_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+
                             run.total = Some(total);
                             run.elapsed = Some(elapsed_ms);
+
                             this.history.push(
                                 format!(
                                     "π({}) = {} ({:.0} ms, {} chunks)",
@@ -160,6 +174,7 @@ impl HelloWeb {
                                 .into(),
                             );
                         }
+
                         cx.notify();
                     }
                 })
@@ -174,12 +189,15 @@ impl HelloWeb {
 fn format_number(n: u64) -> String {
     let s = n.to_string();
     let mut result = String::new();
+
     for (i, ch) in s.chars().rev().enumerate() {
         if i > 0 && i % 3 == 0 {
             result.push(',');
         }
+
         result.push(ch);
     }
+
     result.chars().rev().collect()
 }
 
@@ -207,11 +225,13 @@ impl Render for HelloWeb {
             div().flex().flex_row().gap_2(),
             |row, (index, &preset)| {
                 let is_selected = preset == self.selected_preset;
+
                 let (bg, text_color) = if is_selected {
                     (ACCENT_BLUE, BG_BASE)
                 } else {
                     (BG_OVERLAY, TEXT_SECONDARY)
                 };
+
                 row.child(
                     div()
                         .id(ElementId::NamedInteger("preset".into(), index as u64))
@@ -238,6 +258,7 @@ impl Render for HelloWeb {
         } else {
             (ACCENT_GREEN, BG_BASE, "Count Primes")
         };
+
         let go_button = div()
             .id("go")
             .px_4()
@@ -266,6 +287,7 @@ impl Render for HelloWeb {
                     run.elapsed.unwrap_or(0.0),
                 )
                 .into()
+
             } else {
                 format!(
                     "Searching up to {} … {}/{} chunks  ({}%)",
@@ -287,6 +309,7 @@ impl Render for HelloWeb {
                 (0..NUM_CHUNKS as usize).fold(div().flex().flex_row().gap_1().mt_2(), |row, i| {
                     let done = i < run.chunks_done as usize;
                     let color = if done { ACCENT_MAUVE } else { BG_OVERLAY };
+
                     row.child(div().size(px(10.)).rounded_sm().bg(rgb(color)))
                 });
 
@@ -311,6 +334,7 @@ impl Render for HelloWeb {
                         ),
                 )
                 .child(chunk_dots)
+
         } else {
             div().flex().flex_col().w_full().child(
                 div()
@@ -415,6 +439,7 @@ fn requested_backend() -> gpui_platform::WebBackendPreference {
     let search = web_sys::window()
         .and_then(|window| window.location().search().ok())
         .unwrap_or_default();
+
     if search
         .trim_start_matches('?')
         .split('&')
@@ -434,7 +459,9 @@ fn requested_backend() -> gpui_platform::WebBackendPreference {
 
 fn main() {
     gpui_platform::web_init();
+
     let application = gpui_platform::application_with_web_backend(requested_backend());
+
     let application_handle = application.run(|cx: &mut App| {
         if let Err(error) = cx
             .text_system()
@@ -443,14 +470,18 @@ fn main() {
             web_sys::console::error_1(
                 &format!("failed to load application fonts: {error:#}").into(),
             );
+
             return;
         }
+
         let bounds = Bounds::centered(None, size(px(640.), px(560.)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(HelloWeb::new),
         )
         .expect("failed to open window");
+
         cx.activate(true);
     });
 

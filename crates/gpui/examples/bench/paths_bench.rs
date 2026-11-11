@@ -8,6 +8,7 @@ use gpui::{
     Window, WindowBounds, WindowOptions, canvas, div, linear_color_stop, linear_gradient, point,
     prelude::*, px, rgb, size,
 };
+
 use gpui_platform::application;
 
 const DEFAULT_WINDOW_WIDTH: Pixels = px(1024.0);
@@ -26,6 +27,7 @@ impl PaintingViewer {
         for _ in 0..2000 {
             // draw a ⭐
             let mut builder = PathBuilder::fill();
+
             builder.move_to(point(px(350.), px(100.)));
             builder.line_to(point(px(370.), px(160.)));
             builder.line_to(point(px(430.), px(160.)));
@@ -37,7 +39,9 @@ impl PaintingViewer {
             builder.line_to(point(px(270.), px(160.)));
             builder.line_to(point(px(330.), px(160.)));
             builder.line_to(point(px(350.), px(100.)));
+
             let path = builder.build().unwrap();
+
             lines.push((
                 path,
                 linear_gradient(
@@ -59,7 +63,9 @@ impl PaintingViewer {
 impl Render for PaintingViewer {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         window.request_animation_frame();
+
         let lines = self.default_lines.clone();
+
         div().size_full().child(
             canvas(
                 move |_, _, _| {},
@@ -79,6 +85,7 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         cx.open_window(
             WindowOptions::new()
                 .titlebar(Some(TitlebarOptions {
@@ -94,6 +101,7 @@ fn run_example() {
             |window, cx| cx.new(|cx| PaintingViewer::new(window, cx)),
         )
         .unwrap();
+
         cx.activate(true);
     });
 }

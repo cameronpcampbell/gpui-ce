@@ -2,6 +2,7 @@ use crate::{
     InlineLayout, InlineLayoutRequest, LineLayout, LineLayoutCache, LineLayoutIndex, Pixels,
     Result, ShapedLine, ShapedText, SharedString, TextLayoutOptions, TextRun, TextSystem,
 };
+
 use derive_more::Deref;
 use std::{ops::Range, sync::Arc};
 
@@ -9,6 +10,7 @@ use std::{ops::Range, sync::Arc};
 #[derive(Deref)]
 pub struct WindowTextSystem {
     line_layout_cache: LineLayoutCache,
+
     #[deref]
     text_system: Arc<TextSystem>,
 }
@@ -95,6 +97,7 @@ impl WindowTextSystem {
         options: TextLayoutOptions,
     ) -> Result<ShapedText> {
         let text = text.into();
+
         let layout = self
             .line_layout_cache
             .layout_text_with_options(&text, font_size, runs, options);

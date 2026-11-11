@@ -42,6 +42,7 @@ struct TabStopNode {
     /// The final node in the list is a leaf node corresponding to an actual focus handle,
     /// all other nodes are group nodes
     path: TabStopPath,
+
     /// index into the backing array of nodes. Corresponds to insertion order
     node_insertion_index: usize,
 
@@ -78,13 +79,17 @@ impl TabStopMap {
     pub fn insert(&mut self, focus_handle: &FocusHandle) {
         self.insertion_history
             .push(TabStopOperation::Insert(focus_handle.clone()));
+
         let mut path = self.current_path.clone();
+
         path.0.push(focus_handle.tab_index);
+
         let order = TabStopNode {
             node_insertion_index: self.insertion_history.len() - 1,
             tab_stop: focus_handle.tab_stop,
             path,
         };
+
         self.by_id.insert(focus_handle.id, order.clone());
         self.order.insert_or_replace(order, ());
     }
@@ -92,6 +97,7 @@ impl TabStopMap {
     pub fn begin_group(&mut self, tab_index: isize) {
         self.insertion_history
             .push(TabStopOperation::Group(tab_index));
+
         self.current_path.0.push(tab_index);
     }
 
@@ -102,15 +108,18 @@ impl TabStopMap {
 
     pub fn clear(&mut self) {
         *self = Self::default();
+
         self.current_path.0.clear();
         self.insertion_history.clear();
         self.by_id.clear();
+
         self.order = SumTree::new(());
     }
 
     pub fn next(&self, focused_id: Option<&FocusId>) -> Option<FocusHandle> {
         let Some(focused_id) = focused_id else {
             let first = self.order.first()?;
+
             if first.tab_stop {
                 return self.focus_handle_for_order(first);
             } else {
@@ -123,6 +132,7 @@ impl TabStopMap {
         let Some(node) = self.tab_node_for_focus_id(focused_id) else {
             return self.next(None);
         };
+
         let item = self.next_inner(node);
 
         if let Some(item) = item {
@@ -134,8 +144,10 @@ impl TabStopMap {
 
     fn next_inner(&self, node: &TabStopNode) -> Option<&TabStopNode> {
         let mut cursor = self.order.cursor::<TabStopNode>(());
+
         cursor.seek(&node, Bias::Left);
         cursor.next();
+
         while let Some(item) = cursor.item()
             && !item.tab_stop
         {
@@ -148,6 +160,7 @@ impl TabStopMap {
     pub fn prev(&self, focused_id: Option<&FocusId>) -> Option<FocusHandle> {
         let Some(focused_id) = focused_id else {
             let last = self.order.last()?;
+
             if last.tab_stop {
                 return self.focus_handle_for_order(last);
             } else {
@@ -160,6 +173,7 @@ impl TabStopMap {
         let Some(node) = self.tab_node_for_focus_id(focused_id) else {
             return self.prev(None);
         };
+
         let item = self.prev_inner(node);
 
         if let Some(item) = item {
@@ -171,8 +185,10 @@ impl TabStopMap {
 
     fn prev_inner(&self, node: &TabStopNode) -> Option<&TabStopNode> {
         let mut cursor = self.order.cursor::<TabStopNode>(());
+
         cursor.seek(&node, Bias::Left);
         cursor.prev();
+
         while let Some(item) = cursor.item()
             && !item.tab_stop
         {
@@ -202,10 +218,12 @@ impl TabStopMap {
 
     fn focus_handle_for_order(&self, order: &TabStopNode) -> Option<FocusHandle> {
         let handle = self.insertion_history[order.node_insertion_index].focus_handle();
+
         debug_assert!(
             handle.is_some(),
             "The order node did not correspond to an element, this is a GPUI bug"
         );
+
         handle.cloned()
     }
 
@@ -213,6 +231,7 @@ impl TabStopMap {
         let Some(order) = self.by_id.get(focused_id) else {
             return None;
         };
+
         Some(order)
     }
 }
@@ -337,6 +356,7 @@ mod tests {
         for handle in focus_handles.iter() {
             tab_index_map.insert(handle);
         }
+
         let expected = [
             focus_handles[0].clone(),
             focus_handles[5].clone(),
@@ -347,9 +367,12 @@ mod tests {
 
         let mut prev = None;
         let mut found = vec![];
+
         for _ in 0..expected.len() {
             let handle = tab_index_map.next(prev.as_ref()).unwrap();
+
             prev = Some(handle.id);
+
             found.push(handle.id);
         }
 
@@ -367,18 +390,22 @@ mod tests {
             tab_index_map.next(Some(&expected[0].id)),
             Some(expected[1].clone())
         );
+
         assert_eq!(
             tab_index_map.next(Some(&expected[1].id)),
             Some(expected[2].clone())
         );
+
         assert_eq!(
             tab_index_map.next(Some(&expected[2].id)),
             Some(expected[3].clone())
         );
+
         assert_eq!(
             tab_index_map.next(Some(&expected[3].id)),
             Some(expected[4].clone())
         );
+
         assert_eq!(
             tab_index_map.next(Some(&expected[4].id)),
             Some(expected[0].clone())
@@ -386,22 +413,27 @@ mod tests {
 
         // prev
         assert_eq!(tab_index_map.prev(None), Some(expected[4].clone()));
+
         assert_eq!(
             tab_index_map.prev(Some(&expected[0].id)),
             Some(expected[4].clone())
         );
+
         assert_eq!(
             tab_index_map.prev(Some(&expected[1].id)),
             Some(expected[0].clone())
         );
+
         assert_eq!(
             tab_index_map.prev(Some(&expected[2].id)),
             Some(expected[1].clone())
         );
+
         assert_eq!(
             tab_index_map.prev(Some(&expected[3].id)),
             Some(expected[2].clone())
         );
+
         assert_eq!(
             tab_index_map.prev(Some(&expected[4].id)),
             Some(expected[3].clone())
@@ -416,17 +448,23 @@ mod tests {
         // Check that we can query next from a non-stop tab
         let tab_non_stop_1 = FocusHandle::new(&focus_map).tab_stop(false).tab_index(1);
         let tab_stop_2 = FocusHandle::new(&focus_map).tab_stop(true).tab_index(2);
+
         tab_index_map.insert(&tab_non_stop_1);
         tab_index_map.insert(&tab_stop_2);
+
         let result = tab_index_map.next(Some(&tab_non_stop_1.id)).unwrap();
+
         assert_eq!(result.id, tab_stop_2.id);
 
         // Check that we skip over non-stop tabs
         let tab_stop_0 = FocusHandle::new(&focus_map).tab_stop(true).tab_index(0);
         let tab_non_stop_0 = FocusHandle::new(&focus_map).tab_stop(false).tab_index(0);
+
         tab_index_map.insert(&tab_stop_0);
         tab_index_map.insert(&tab_non_stop_0);
+
         let result = tab_index_map.next(Some(&tab_stop_0.id)).unwrap();
+
         assert_eq!(result.id, tab_stop_2.id);
     }
 
@@ -452,7 +490,9 @@ mod tests {
             let handle = FocusHandle::new(&self.focus_map)
                 .tab_stop(false)
                 .tab_index(index);
+
             self.tab_map.insert(&handle);
+
             self
         }
 
@@ -461,17 +501,22 @@ mod tests {
             let handle = FocusHandle::new(&self.focus_map)
                 .tab_stop(true)
                 .tab_index(index);
+
             self.tab_map.insert(&handle);
             self.expected.push((expected, handle.id));
             self.expected.sort_by_key(|(expected, _)| *expected);
+
             self
         }
 
         #[must_use]
         fn tab_group(mut self, tab_index: isize, children: impl FnOnce(Self) -> Self) -> Self {
             self.tab_map.begin_group(tab_index);
+
             self = children(self);
+
             self.tab_map.end_group();
+
             self
         }
 
@@ -481,11 +526,15 @@ mod tests {
         ) -> Vec<FocusId> {
             let mut last_focus_id = None;
             let mut found = vec![];
+
             for _ in 0..self.expected.len() {
                 let handle = traverse(&self.tab_map, last_focus_id.as_ref()).unwrap();
+
                 last_focus_id = Some(handle.id);
+
                 found.push(handle.id);
             }
+
             found
         }
 
@@ -494,6 +543,7 @@ mod tests {
 
             // Check next order
             let forward_found = self.traverse_tab_map(|tab_map, prev| tab_map.next(prev));
+
             assert_eq!(forward_found, expected);
 
             // Test overflow. Last to first
@@ -506,7 +556,9 @@ mod tests {
 
             // Check previous order
             let reversed_found = self.traverse_tab_map(|tab_map, prev| tab_map.prev(prev));
+
             expected.reverse();
+
             assert_eq!(reversed_found, expected);
 
             // Test overflow. First to last

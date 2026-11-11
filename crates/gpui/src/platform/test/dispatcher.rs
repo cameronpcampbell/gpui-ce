@@ -1,6 +1,7 @@
 use crate::{PlatformDispatcher, Priority, RunnableVariant};
 use scheduler::Instant;
 use scheduler::{Clock, Scheduler, SessionId, TestScheduler, TestSchedulerConfig, Yield};
+
 use std::{
     sync::{
         Arc,
@@ -30,6 +31,7 @@ impl TestDispatcher {
                 .map_or(false, |var| var == "1" || var == "true"),
             timeout_ticks: 0..=1000,
         }));
+
         Self::from_scheduler(scheduler)
     }
 
@@ -103,6 +105,7 @@ impl TestDispatcher {
 impl Clone for TestDispatcher {
     fn clone(&self) -> Self {
         let session_id = self.scheduler.allocate_session_id();
+
         Self {
             session_id,
             scheduler: self.scheduler.clone(),

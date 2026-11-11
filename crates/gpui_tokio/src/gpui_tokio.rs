@@ -18,6 +18,7 @@ pub fn init(cx: &mut App) {
         .expect("Failed to initialize Tokio");
 
     let handle = runtime.handle().clone();
+
     cx.set_global(GlobalTokio {
         owned_runtime: Some(runtime),
         handle,
@@ -61,12 +62,16 @@ impl Tokio {
         cx.read_global(|tokio: &GlobalTokio, cx| {
             let join_handle = tokio.handle.spawn(f);
             let abort_handle = join_handle.abort_handle();
+
             let cancel = defer(move || {
                 abort_handle.abort();
             });
+
             cx.background_spawn(async move {
                 let result = join_handle.await;
+
                 drop(cancel);
+
                 result
             })
         })
@@ -83,12 +88,16 @@ impl Tokio {
         cx.read_global(|tokio: &GlobalTokio, cx| {
             let join_handle = tokio.handle.spawn(f);
             let abort_handle = join_handle.abort_handle();
+
             let cancel = defer(move || {
                 abort_handle.abort();
             });
+
             cx.background_spawn(async move {
                 let result = join_handle.await?;
+
                 drop(cancel);
+
                 result
             })
         })

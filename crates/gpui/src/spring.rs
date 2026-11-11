@@ -13,8 +13,10 @@ pub(crate) const DEFAULT_SPRING_EPSILON: f32 = 0.001;
 pub struct SpringConfig {
     /// The spring stiffness, conventionally written as $k$.
     pub stiffness: f32,
+
     /// The viscous damping coefficient, conventionally written as $c$.
     pub damping: f32,
+
     /// The moving mass, conventionally written as $m$.
     pub mass: f32,
 }
@@ -38,6 +40,7 @@ impl SpringConfig {
     pub fn canonical(&self) -> (f32, f32) {
         let natural_frequency = (self.stiffness / self.mass).sqrt();
         let damping_ratio = self.damping / (2.0 * (self.stiffness * self.mass).sqrt());
+
         (natural_frequency, damping_ratio)
     }
 
@@ -109,6 +112,7 @@ impl SpringConfig {
                     exponential * (cosine - decay * sine_over_frequency),
                 ],
             ]
+
         } else if damping_ratio > 1.0 + CRITICAL_DAMPING_TOLERANCE {
             let root = (damping_ratio * damping_ratio - 1.0).sqrt();
             let root_sum = damping_ratio + root;
@@ -128,6 +132,7 @@ impl SpringConfig {
                     (slow_root * slow_exponential - fast_root * fast_exponential) / denominator,
                 ],
             ]
+
         } else {
             let exponential = (-natural_frequency * delta_time).exp();
 
@@ -150,6 +155,7 @@ impl SpringConfig {
     /// corresponding animated-units-per-second scale.
     pub fn is_settled(&self, state: SpringState, target: f32, epsilon: f32) -> bool {
         let (natural_frequency, _) = self.canonical();
+
         epsilon.is_finite()
             && epsilon >= 0.0
             && (state.position - target).abs() <= epsilon
@@ -162,11 +168,13 @@ impl SpringConfig {
     /// [`Duration::MAX`].
     pub fn settle_time(&self, state: SpringState, target: f32, epsilon: f32) -> Duration {
         let displacement = state.position - target;
+
         if displacement == 0.0 && state.velocity == 0.0 {
             return Duration::ZERO;
         }
 
         let (natural_frequency, damping_ratio) = self.canonical();
+
         if !natural_frequency.is_finite()
             || natural_frequency <= 0.0
             || !damping_ratio.is_finite()
@@ -195,12 +203,14 @@ impl SpringConfig {
                 natural_frequency,
                 move |time| {
                     let exponential = (-decay * time).exp();
+
                     (
                         position_envelope * exponential,
                         velocity_envelope * exponential,
                     )
                 },
             )
+
         } else if damping_ratio > 1.0 + CRITICAL_DAMPING_TOLERANCE {
             let root = (damping_ratio * damping_ratio - 1.0).sqrt();
             let root_sum = damping_ratio + root;
@@ -218,20 +228,24 @@ impl SpringConfig {
                 move |time| {
                     let slow_term = slow_coefficient.abs() * (slow_root * time).exp();
                     let fast_term = fast_coefficient.abs() * (fast_root * time).exp();
+
                     (
                         slow_term + fast_term,
                         slow_root.abs() * slow_term + fast_root.abs() * fast_term,
                     )
                 },
             )
+
         } else {
             let linear_coefficient = state.velocity + natural_frequency * displacement;
             let position_constant = displacement.abs();
             let position_linear = linear_coefficient.abs();
             let velocity_constant = (linear_coefficient - natural_frequency * displacement).abs();
             let velocity_linear = natural_frequency * linear_coefficient.abs();
+
             let position_decay_start =
                 envelope_decay_start(position_constant, position_linear, natural_frequency);
+
             let velocity_decay_start =
                 envelope_decay_start(velocity_constant, velocity_linear, natural_frequency);
 
@@ -242,6 +256,7 @@ impl SpringConfig {
                 natural_frequency,
                 move |time| {
                     let exponential = (-natural_frequency * time).exp();
+
                     (
                         (position_constant + position_linear * time) * exponential,
                         (velocity_constant + velocity_linear * time) * exponential,
@@ -257,6 +272,7 @@ impl SpringConfig {
 pub struct SpringState {
     /// The current value in the animated unit.
     pub position: f32,
+
     /// The current value's change per second.
     pub velocity: f32,
 }
@@ -339,6 +355,7 @@ impl AnimationPhase {
     /// Restricts this phase to the bounds of a range.
     pub fn clamp(self, range: RangeInclusive<f32>) -> Self {
         let (first, second) = range.into_inner();
+
         Self(self.0.clamp(first.min(second), first.max(second)))
     }
 
@@ -360,11 +377,13 @@ impl AnimationPhase {
         to: T,
     ) -> T {
         let (start, end) = range.into_inner();
+
         let phase = if start == end {
             if self.0 < start { 0.0 } else { 1.0 }
         } else {
             (self.0 - start) / (end - start)
         };
+
         T::interpolate(from, to, phase)
     }
 
@@ -376,11 +395,13 @@ impl AnimationPhase {
         to: T,
     ) -> T {
         let (start, end) = range.into_inner();
+
         let phase = if start == end {
             if self.0 < start { 0.0 } else { 1.0 }
         } else {
             ((self.0 - start) / (end - start)).clamp(0.0, 1.0)
         };
+
         T::interpolate(from, to, phase)
     }
 }
@@ -447,9 +468,11 @@ impl Interpolate for Rgba {
 impl Interpolate for Hsla {
     fn interpolate(from: Self, to: Self, phase: f32) -> Self {
         use palette::RgbHue;
+
         let from_h = from.color.hue.into_degrees() / 360.0;
         let to_h = to.color.hue.into_degrees() / 360.0;
         let hue_delta = (to_h - from_h + 0.5).rem_euclid(1.0) - 0.5;
+
         Self::new(
             RgbHue::from_degrees((from_h + hue_delta * phase).rem_euclid(1.0) * 360.0),
             f32::interpolate(from.color.saturation, to.color.saturation, phase),
@@ -503,6 +526,7 @@ impl SpringAnimation<()> {
             initial,
             playback,
         } = self;
+
         SpringAnimation {
             motion,
             target,
@@ -516,12 +540,14 @@ impl<T> SpringAnimation<T> {
     /// Sets the settling tolerance in the target's scalar coordinate space.
     pub fn with_epsilon(mut self, epsilon: f32) -> Self {
         self.motion = self.motion.with_epsilon(epsilon);
+
         self
     }
 
     /// Sets how the spring advances or resolves its current value.
     pub fn playback(mut self, playback: SpringPlayback) -> Self {
         self.playback = playback;
+
         self
     }
 }
@@ -530,6 +556,7 @@ impl<T: SpringTarget> SpringAnimation<T> {
     /// Sets the coordinate used when this element has no prior spring state.
     pub fn from(mut self, initial: T) -> Self {
         self.initial = Some(initial.target());
+
         self
     }
 }
@@ -544,6 +571,7 @@ pub fn sampled_easing(config: SpringConfig, epsilon: f32) -> (Duration, impl Fn(
         position: 0.0,
         velocity: 0.0,
     };
+
     let duration = config.settle_time(initial_state, 1.0, epsilon);
     let duration_seconds = duration.as_secs_f32();
 
@@ -577,6 +605,7 @@ fn find_settle_time(
 ) -> Duration {
     let is_below_threshold = |time| {
         let (position, velocity) = envelope(time);
+
         position <= position_threshold && velocity <= velocity_threshold
     };
 
@@ -586,9 +615,11 @@ fn find_settle_time(
 
     let mut lower_bound = decay_start;
     let mut upper_bound = decay_start.max(natural_frequency.recip());
+
     while !is_below_threshold(upper_bound) {
         lower_bound = upper_bound;
         upper_bound *= 2.0;
+
         if !upper_bound.is_finite() {
             return Duration::MAX;
         }
@@ -596,6 +627,7 @@ fn find_settle_time(
 
     for _ in 0..32 {
         let midpoint = (lower_bound + upper_bound) / 2.0;
+
         if is_below_threshold(midpoint) {
             upper_bound = midpoint;
         } else {
@@ -636,11 +668,14 @@ mod tests {
     #[test]
     fn animation_phases_interpolate_over_arbitrary_ranges() {
         let phase = AnimationPhase(1.5);
+
         assert_eq!(phase.interpolate_between(1.0..=2.0, 10.0, 20.0), 15.0);
+
         assert_eq!(
             phase.interpolate_between_clamped(2.0..=3.0, 10.0, 20.0),
             10.0
         );
+
         assert_eq!(
             AnimationPhase(3.5).interpolate_between(2.0..=3.0, 10.0, 20.0),
             25.0
@@ -654,6 +689,7 @@ mod tests {
         let result = AnimationPhase(0.5).interpolate(from, to);
 
         let h = result.color.hue.into_degrees() / 360.0;
+
         assert!(h < EPSILON || (1.0 - h) < EPSILON);
         assert!((result.color.saturation - 0.75).abs() < EPSILON);
         assert!((result.color.lightness - 0.625).abs() < EPSILON);
@@ -664,11 +700,13 @@ mod tests {
     fn propagators_compose_and_have_expected_determinant() {
         for damping_ratio in [0.4, 1.0, 1.5] {
             let natural_frequency = 12.0;
+
             let config = SpringConfig::new(
                 natural_frequency * natural_frequency,
                 2.0 * damping_ratio * natural_frequency,
                 1.0,
             );
+
             let first = config.propagator(0.013);
             let second = config.propagator(0.021);
             let combined = multiply(second, first);
@@ -685,6 +723,7 @@ mod tests {
 
             let determinant = direct[0][0] * direct[1][1] - direct[0][1] * direct[1][0];
             let expected = (-2.0 * damping_ratio * natural_frequency * 0.034).exp();
+
             assert!((determinant - expected).abs() < 2e-4);
         }
     }
@@ -695,6 +734,7 @@ mod tests {
             position: -3.0,
             velocity: 5.0,
         };
+
         for damping in [4.0, 20.0, 40.0] {
             let config = SpringConfig::new(100.0, damping, 1.0);
             let stepped = config.step(config.step(state, 7.0, 0.013), 7.0, 0.021);
@@ -710,16 +750,20 @@ mod tests {
         let natural_frequency = 10.0;
         let damping_ratio = 0.8;
         let target_velocity = 3.0;
+
         let config = SpringConfig::new(
             natural_frequency * natural_frequency,
             2.0 * damping_ratio * natural_frequency,
             1.0,
         );
+
         let lag = -2.0 * damping_ratio * target_velocity / natural_frequency;
+
         let state = SpringState {
             position: lag,
             velocity: target_velocity,
         };
+
         let next = config.step_ramp(state, 0.0, target_velocity, 0.25);
 
         assert!((next.position - (target_velocity * 0.25 + lag)).abs() < EPSILON);
@@ -729,6 +773,7 @@ mod tests {
     #[test]
     fn settling_requires_low_velocity() {
         let config = SpringConfig::new(100.0, 10.0, 1.0);
+
         assert!(!config.is_settled(
             SpringState {
                 position: 1.0,
@@ -737,6 +782,7 @@ mod tests {
             1.0,
             0.01,
         ));
+
         assert!(config.is_settled(
             SpringState {
                 position: 1.005,
@@ -753,14 +799,17 @@ mod tests {
             position: -2.0,
             velocity: 4.0,
         };
+
         for damping in [4.0, 20.0, 40.0] {
             let config = SpringConfig::new(100.0, damping, 1.0);
             let duration = config.settle_time(initial_state, 3.0, 0.001);
+
             assert_ne!(duration, Duration::MAX);
 
             for additional_time in [0.0, 0.1, 1.0] {
                 let state =
                     config.step(initial_state, 3.0, duration.as_secs_f32() + additional_time);
+
                 assert!(
                     config.is_settled(state, 3.0, 0.001),
                     "{damping}: {duration:?} produced {state:?}"
@@ -772,13 +821,16 @@ mod tests {
     #[test]
     fn settle_time_accounts_for_motion_outside_an_instantaneous_tolerance() {
         let config = SpringConfig::new(100.0, 2.0, 1.0);
+
         let state = SpringState {
             position: 1.125,
             velocity: 1.25,
         };
+
         assert!(config.is_settled(state, 1.0, 0.125));
 
         let duration = config.settle_time(state, 1.0, 0.125);
+
         assert!(duration > Duration::ZERO);
         assert!(config.is_settled(config.step(state, 1.0, duration.as_secs_f32()), 1.0, 0.125,));
     }
@@ -786,6 +838,7 @@ mod tests {
     #[test]
     fn undamped_spring_never_settles() {
         let config = SpringConfig::new(100.0, 0.0, 1.0);
+
         assert_eq!(
             config.settle_time(
                 SpringState {

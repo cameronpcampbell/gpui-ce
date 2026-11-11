@@ -1,11 +1,13 @@
 use anyhow::{Context as _, Result, bail, ensure};
 use fontique::{Blob, Synthesis};
+
 use gpui::{
     Bounds, FontId, FontMetrics, ForegroundDependency, GlyphId, GlyphRenderMode,
     PreparedRasterStyle, RasterStyleRequest, RasterizedGlyph, RasterizedGlyphFormat,
     RenderGlyphParams, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, Size, TextRenderingMode, point,
     size,
 };
+
 use skrifa::{
     FontRef, MetadataProvider as _, Tag,
     bitmap::{BitmapFormat, BitmapStrikes},
@@ -16,7 +18,9 @@ use skrifa::{
         tables::{colr::Colr, svg::SVGDocumentRecord},
     },
 };
+
 use std::collections::{HashMap, hash_map::Entry};
+
 use swash::{
     CacheKey as SwashCacheKey, FontRef as SwashFontRef,
     scale::{Render, ScaleContext, Source, StrikeWith},
@@ -30,6 +34,7 @@ const CANONICAL_FONT_ID_BIT: usize = 1 << (usize::BITS - 1);
 pub struct FontVariation {
     /// OpenType variation-axis tag.
     pub tag: Tag,
+
     /// Design-space value consumed by native font APIs.
     pub value: f32,
 }
@@ -49,6 +54,7 @@ impl FontVariation {
 pub struct FontSynthesis {
     /// Whether the rasterizer should synthesize a heavier outline.
     pub embolden: bool,
+
     /// Synthetic clockwise skew in degrees.
     pub skew_degrees: Option<f32>,
 }
@@ -67,18 +73,25 @@ impl From<Synthesis> for FontSynthesis {
 pub struct RasterFace<'a> {
     /// Canonical identity of the full face, variation, and synthesis combination.
     pub font_id: FontId,
+
     /// Stable identity shared by every face and instance backed by the same source bytes.
     pub source_id: u64,
+
     /// Owning handle for the original font or collection bytes.
     pub source: &'a Blob<u8>,
+
     /// Face index within a TTC or OTC collection.
     pub face_index: u32,
+
     /// Normalized variation coordinates in axis order.
     pub normalized_coords: &'a [NormalizedCoord],
+
     /// Design-space variation coordinates.
     pub variations: &'a [FontVariation],
+
     /// Synthetic styling selected by Fontique.
     pub synthesis: FontSynthesis,
+
     /// Whether the face advertises an OpenType color glyph table.
     pub has_color_glyphs: bool,
 }
@@ -100,6 +113,7 @@ impl RasterFace<'_> {
     fn requires_portable_bitmap_rasterization(&self) -> Result<bool> {
         let font = FontRef::from_index(self.data(), self.face_index)
             .context("cannot inspect color tables in the selected face")?;
+
         let has_table = |tag| font.table_data(Tag::new(tag)).is_some();
 
         Ok(has_table(b"CBDT")
@@ -191,14 +205,19 @@ struct FontKey {
 pub(crate) struct LoadedFont {
     /// Immutable bytes containing the selected face.
     pub(crate) data: Blob<u8>,
+
     /// Face index within the font collection.
     pub(crate) index: u32,
+
     /// Normalized variation coordinates in axis order.
     pub(crate) normalized_coords: Vec<NormalizedCoord>,
+
     /// Design-space coordinates for native font APIs.
     pub(crate) variations: Vec<FontVariation>,
+
     /// Synthetic styling requested for the selected face.
     pub(crate) synthesis: Synthesis,
+
     /// Whether this face advertises color glyph data.
     pub(crate) has_color_glyphs: bool,
 }
@@ -237,10 +256,12 @@ impl ColorGlyphClassifier<'_> {
         glyph_id: GlyphId,
     ) -> impl Iterator<Item = ColorGlyphKind> {
         let skrifa_id = skrifa::GlyphId::new(glyph_id.0);
+
         let has_colr_v1 = self.colr.as_ref().is_some_and(|colr| {
             colr.v1_base_glyph(skrifa_id)
                 .is_ok_and(|glyph| glyph.is_some())
         });
+
         let has_colr_v0 = self.colr.as_ref().is_some_and(|colr| {
             colr.v0_base_glyph(skrifa_id)
                 .is_ok_and(|glyph| glyph.is_some())
@@ -250,10 +271,12 @@ impl ColorGlyphClassifier<'_> {
             .sbix
             .as_ref()
             .is_some_and(|sbix| sbix_has_glyph(sbix, skrifa_id));
+
         let has_cbdt_bitmap = self
             .cbdt_strikes
             .as_ref()
             .is_some_and(|strikes| strikes.iter().any(|strike| strike.get(skrifa_id).is_some()));
+
         let has_svg = self.svg_records.iter().any(|record| {
             let start = record.start_glyph_id().to_u32();
             let end = record.end_glyph_id().to_u32();
@@ -284,9 +307,11 @@ impl ColorGlyphClassifier<'_> {
 
         match kind {
             ColorGlyphKind::Cbdt | ColorGlyphKind::Sbix => ForegroundDependency::AlphaOnly,
+
             ColorGlyphKind::ColrV0 if self.colr_v0_has_fixed_palette(glyph_id) => {
                 ForegroundDependency::AlphaOnly
             }
+
             _ => ForegroundDependency::Full,
         }
     }
@@ -338,6 +363,7 @@ impl LoadedFont {
     /// Builds a glyph-level view of the face's color artwork.
     pub(crate) fn color_glyphs(&self) -> Result<ColorGlyphClassifier<'_>> {
         let font = self.skrifa_ref()?;
+
         Ok(ColorGlyphClassifier::new(font))
     }
 
@@ -415,9 +441,11 @@ impl LoadedFont {
     /// Returns the glyph's control bounds in font units.
     pub(crate) fn glyph_bounds(&self, glyph_id: GlyphId) -> Result<Bounds<f32>> {
         let font = self.skrifa_ref()?;
+
         let bounds = font
             .glyph_metrics(SkrifaSize::unscaled(), self.normalized_coords.as_slice())
             .bounds(skrifa::GlyphId::new(glyph_id.0));
+
         let Some(bounds) = bounds else {
             return Ok(Bounds::default());
         };
@@ -447,6 +475,7 @@ impl FontStore {
         let normalized_coords = {
             let font = FontRef::from_index(data.as_ref(), index)
                 .context("cannot intern a font face Skrifa cannot parse")?;
+
             font.axes()
                 .location(synthesis.variation_settings().iter().copied())
                 .coords()
@@ -467,15 +496,21 @@ impl FontStore {
     ) -> Result<FontId> {
         let font = FontRef::from_index(data.as_ref(), index)
             .context("cannot intern a font face Skrifa cannot parse")?;
+
         let axis_count = font.axes().len();
+
         ensure!(
             normalized_coords.len() <= axis_count,
             "shaped location has more coordinates than the selected face"
         );
+
         let mut canonical_coords = normalized_coords.to_vec();
+
         canonical_coords.resize(axis_count, NormalizedCoord::default());
+
         let variations =
             verified_design_variations(&font, &canonical_coords, synthesis, shaping_variations)?;
+
         let key = FontKey {
             source_id: data.id(),
             face_index: index,
@@ -492,9 +527,11 @@ impl FontStore {
         }
 
         let id = FontId(CANONICAL_FONT_ID_BIT | self.fonts.len());
+
         let has_color_glyphs = [*b"CBDT", *b"sbix", *b"COLR", *b"SVG "]
             .into_iter()
             .any(|tag| font.table_data(Tag::new(&tag)).is_some());
+
         self.fonts.push(LoadedFont {
             data,
             index,
@@ -505,6 +542,7 @@ impl FontStore {
         });
 
         self.ids_by_key.insert(key, id);
+
         Ok(id)
     }
 
@@ -603,6 +641,7 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
     ) -> Result<RasterizedGlyph> {
         let format = params.raster_style.mode.rasterized_format();
         let rendered = self.render_glyph_image(&face, params)?;
+
         let Some(mut image) = rendered else {
             if glyph_is_intentionally_empty(&face, params.glyph_id)? {
                 return Ok(RasterizedGlyph::empty(format));
@@ -623,6 +662,7 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
         let (format, pixels) = match image.content {
             swash::scale::image::Content::Color => {
                 let premultiplied = matches!(image.source, Source::ColorOutline(_));
+
                 for pixel in image.data.chunks_exact_mut(4) {
                     if premultiplied {
                         gpui::swap_rgba_pa_to_bgra(pixel);
@@ -633,11 +673,13 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
 
                 (RasterizedGlyphFormat::BgraColor, image.data)
             }
+
             swash::scale::image::Content::SubpixelMask => {
                 convert_subpixel_mask_to_bgra(&mut image.data);
 
                 (RasterizedGlyphFormat::BgraSubpixelMask, image.data)
             }
+
             swash::scale::image::Content::Mask
                 if params.raster_style.mode == GlyphRenderMode::Subpixel =>
             {
@@ -650,6 +692,7 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
                         .collect(),
                 )
             }
+
             swash::scale::image::Content::Mask
                 if params.raster_style.mode == GlyphRenderMode::Color
                     && params.raster_style.foreground_dependency
@@ -658,6 +701,7 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
                 let [red, green, blue, foreground_alpha] = match params.raster_style.color_effect {
                     gpui::RasterColorEffect::Preblend(color) => color.into(),
                     gpui::RasterColorEffect::Independent => [0, 0, 0, 255],
+
                     gpui::RasterColorEffect::Dilation(_) => {
                         bail!("color glyph rasterization cannot use a dilation style")
                     }
@@ -669,11 +713,14 @@ impl GlyphRasterizer for SwashGlyphRasterizer {
                     .flat_map(|coverage| {
                         let alpha =
                             ((u16::from(coverage) * u16::from(foreground_alpha) + 127) / 255) as u8;
+
                         [blue, green, red, alpha]
                     })
                     .collect();
+
                 (RasterizedGlyphFormat::BgraColor, pixels)
             }
+
             swash::scale::image::Content::Mask => (RasterizedGlyphFormat::AlphaMask, image.data),
         };
 
@@ -772,11 +819,13 @@ impl OutlinePen for DrawablePathPen {
 fn glyph_is_intentionally_empty(face: &RasterFace<'_>, glyph_id: GlyphId) -> Result<bool> {
     let font = FontRef::from_index(face.data(), face.face_index)
         .context("cannot inspect a glyph in the selected face")?;
+
     let glyph_count = u32::from(
         font.maxp()
             .context("cannot read the selected face's glyph count")?
             .num_glyphs(),
     );
+
     ensure!(
         glyph_id.0 < glyph_count,
         "glyph ID {} is outside the selected face's {glyph_count} glyphs",
@@ -790,7 +839,9 @@ fn glyph_is_intentionally_empty(face: &RasterFace<'_>, glyph_id: GlyphId) -> Res
         let outline = outlines
             .get(skrifa_id)
             .context("cannot parse the selected glyph's outline")?;
+
         let mut pen = DrawablePathPen::default();
+
         outline
             .draw(
                 DrawSettings::unhinted(SkrifaSize::unscaled(), face.normalized_coords),
@@ -814,15 +865,18 @@ fn glyph_is_intentionally_empty(face: &RasterFace<'_>, glyph_id: GlyphId) -> Res
     for format in [BitmapFormat::Sbix, BitmapFormat::Cbdt, BitmapFormat::Ebdt] {
         let has_tables = match format {
             BitmapFormat::Sbix => font.table_data(Tag::new(b"sbix")).is_some(),
+
             BitmapFormat::Cbdt => {
                 font.table_data(Tag::new(b"CBDT")).is_some()
                     || font.table_data(Tag::new(b"CBLC")).is_some()
             }
+
             BitmapFormat::Ebdt => {
                 font.table_data(Tag::new(b"EBDT")).is_some()
                     || font.table_data(Tag::new(b"EBLC")).is_some()
             }
         };
+
         let Some(strikes) = BitmapStrikes::with_format(&font, format) else {
             ensure!(
                 !has_tables,
@@ -854,14 +908,19 @@ impl SwashGlyphRasterizer {
             params.scale_factor.is_finite() && params.scale_factor > 0.0,
             "invalid raster scale factor"
         );
+
         let cache_key = *self
             .cache_keys
             .entry(face.font_id)
             .or_insert_with(SwashCacheKey::new);
+
         let mut font_ref = SwashFontRef::from_index(face.data(), face.face_index as usize)
             .context("Swash could not parse the stored font face")?;
+
         font_ref.key = cache_key;
+
         let subpixel_offset = subpixel_offset(params);
+
         let mut scaler = self
             .scale_context
             .builder(font_ref)
@@ -873,12 +932,14 @@ impl SwashGlyphRasterizer {
             )
             .hint(true)
             .build();
+
         let sources: &[Source] = if params.raster_style.mode == GlyphRenderMode::Color {
             &[
                 Source::ColorOutline(0),
                 Source::ColorBitmap(StrikeWith::BestFit),
                 Source::Outline,
             ]
+
         } else {
             &[Source::Bitmap(StrikeWith::ExactSize), Source::Outline]
         };
@@ -909,6 +970,7 @@ impl SwashGlyphRasterizer {
         }
 
         let glyph_id: u16 = params.glyph_id.0.try_into()?;
+
         Ok(renderer.render(&mut scaler, glyph_id))
     }
 }
@@ -963,6 +1025,7 @@ mod tests {
     fn bitmap_fallback_routes_complete_cbdt_faces_and_preserves_native_faces() {
         let cbdt_source = Blob::from(NOTO_COLOR_EMOJI.data.to_vec());
         let cbdt_font = FontRef::new(cbdt_source.as_ref()).unwrap();
+
         let cbdt_face = RasterFace {
             font_id: FontId(1),
             source_id: cbdt_source.id(),
@@ -973,6 +1036,7 @@ mod tests {
             synthesis: FontSynthesis::default(),
             has_color_glyphs: true,
         };
+
         let mut rasterizer =
             BitmapFallbackGlyphRasterizer::new(RecordingNativeRasterizer::default());
 
@@ -981,12 +1045,14 @@ mod tests {
         assert!(!rasterizer.supports_color_glyph(ColorGlyphKind::Sbix));
 
         let emoji = GlyphId(cbdt_font.charmap().map('😀').unwrap().to_u32());
+
         assert_eq!(
             cbdt_face
                 .supported_color_glyph_kind(emoji, |kind| { rasterizer.supports_color_glyph(kind) })
                 .unwrap(),
             Some(ColorGlyphKind::Cbdt)
         );
+
         let params = |glyph_id| RenderGlyphParams {
             font_id: cbdt_face.font_id,
             glyph_id,
@@ -995,19 +1061,24 @@ mod tests {
             scale_factor: 1.0,
             raster_style: PreparedRasterStyle::independent(GlyphRenderMode::Color),
         };
+
         rasterizer.rasterize(cbdt_face, &params(emoji)).unwrap();
 
         let space = GlyphId(cbdt_font.charmap().map(' ').unwrap().to_u32());
+
         rasterizer.rasterize(cbdt_face, &params(space)).unwrap();
+
         assert_eq!(rasterizer.native.raster_calls, 0);
 
         let native_source = Blob::from(SOURCE_SERIF.data.to_vec());
         let native_font = FontRef::new(native_source.as_ref()).unwrap();
+
         let normalized_coords = native_font
             .axes()
             .location(std::iter::empty::<(Tag, f32)>())
             .coords()
             .to_vec();
+
         let native_face = RasterFace {
             font_id: FontId(2),
             source_id: native_source.id(),
@@ -1018,7 +1089,9 @@ mod tests {
             synthesis: FontSynthesis::default(),
             has_color_glyphs: false,
         };
+
         let letter = GlyphId(native_font.charmap().map('A').unwrap().to_u32());
+
         let native_params = RenderGlyphParams {
             font_id: native_face.font_id,
             glyph_id: letter,
@@ -1027,25 +1100,31 @@ mod tests {
             scale_factor: 1.0,
             raster_style: PreparedRasterStyle::independent(GlyphRenderMode::Grayscale),
         };
+
         rasterizer.rasterize(native_face, &native_params).unwrap();
+
         assert_eq!(rasterizer.native.raster_calls, 1);
     }
 
     fn steep_avar_font_data() -> Vec<u8> {
         let mut data = SOURCE_SERIF.data.to_vec();
         let table_count = u16::from_be_bytes(data[4..6].try_into().unwrap()) as usize;
+
         let avar_offset = (0..table_count)
             .find_map(|table_idx| {
                 let record = 12 + table_idx * 16;
+
                 (&data[record..record + 4] == b"avar").then(|| {
                     u32::from_be_bytes(data[record + 8..record + 12].try_into().unwrap()) as usize
                 })
             })
             .unwrap();
+
         assert_eq!(
             &data[avar_offset + 14..avar_offset + 18],
             &[0xe0, 0x00, 0xd7, 0x8e]
         );
+
         data[avar_offset + 16..avar_offset + 18].copy_from_slice(&(-15_565i16).to_be_bytes());
 
         data
@@ -1055,10 +1134,12 @@ mod tests {
     fn design_variations_preserve_original_coordinates_and_reject_mismatches() {
         let steep_data = steep_avar_font_data();
         let weight = [FontVariation::new(*b"wght", 340.0)];
+
         let weight_and_size = [
             FontVariation::new(*b"wght", 340.0),
             FontVariation::new(*b"opsz", 48.0),
         ];
+
         let mismatch = [FontVariation::new(*b"wght", 341.0)];
 
         for (name, data, shaped, requested, valid) in [
@@ -1088,13 +1169,16 @@ mod tests {
         ] {
             let font = FontRef::new(data).unwrap();
             let axes = font.axes();
+
             let target = axes.location(
                 shaped
                     .iter()
                     .map(|variation| (variation.tag, variation.value)),
             );
+
             let result =
                 verified_design_variations(&font, target.coords(), Synthesis::default(), requested);
+
             assert_eq!(result.is_ok(), valid, "{name}: {result:?}");
 
             if !valid {
@@ -1102,11 +1186,13 @@ mod tests {
             }
 
             let variations = result.unwrap();
+
             let actual = axes.location(
                 variations
                     .iter()
                     .map(|variation| (variation.tag, variation.value)),
             );
+
             assert_eq!(actual.coords(), target.coords(), "{name}");
 
             for setting in requested {
@@ -1126,16 +1212,20 @@ mod tests {
     fn interning_deduplicates_only_equivalent_font_instances() {
         let data = Blob::from(SOURCE_SERIF.data.to_vec());
         let mut store = FontStore::default();
+
         let first = store
             .intern_synthesized(data.clone(), 0, Synthesis::default())
             .unwrap();
+
         let duplicate = store
             .intern_synthesized(data.clone(), 0, Synthesis::default())
             .unwrap();
+
         assert_eq!(first, duplicate);
 
         let font = FontRef::new(data.as_ref()).unwrap();
         let explicit_defaults = vec![NormalizedCoord::default(); font.axes().len()];
+
         let equivalent = store
             .intern(
                 data.clone(),
@@ -1145,7 +1235,9 @@ mod tests {
                 &[],
             )
             .unwrap();
+
         assert_eq!(first, equivalent);
+
         assert!(
             store
                 .intern(
@@ -1159,11 +1251,13 @@ mod tests {
         );
 
         let varied_settings = [FontVariation::new(*b"wght", 700.0)];
+
         let varied_location = font.axes().location(
             varied_settings
                 .iter()
                 .map(|variation| (variation.tag, variation.value)),
         );
+
         let varied = store
             .intern(
                 data.clone(),
@@ -1173,6 +1267,7 @@ mod tests {
                 &varied_settings,
             )
             .unwrap();
+
         assert_ne!(first, varied);
 
         let copied_source = store
@@ -1182,6 +1277,7 @@ mod tests {
                 Synthesis::default(),
             )
             .unwrap();
+
         assert_ne!(first, copied_source);
         assert!(store.get(first).is_some());
         assert!(store.get(FontId(0)).is_none());
@@ -1190,6 +1286,7 @@ mod tests {
     #[test]
     fn portable_rasterization_preserves_current_color_and_legacy_subpixel_offsets() {
         let rasterizer = SwashGlyphRasterizer::default();
+
         let style = rasterizer.prepare_style(RasterStyleRequest {
             font_id: FontId(1),
             glyph_id: GlyphId(1),
@@ -1199,6 +1296,7 @@ mod tests {
         });
 
         assert_eq!(style.mode, GlyphRenderMode::Color);
+
         assert_eq!(
             style.color_effect,
             RasterColorEffect::Preblend(Rgba8::new(224, 32, 16, 204))
@@ -1227,15 +1325,19 @@ mod tests {
         let font = FontRef::new(source.as_ref()).unwrap();
         let default_coords = vec![NormalizedCoord::default(); font.axes().len()];
         let mut optical_coords = default_coords.clone();
+
         let optical_idx = font
             .axes()
             .iter()
             .position(|axis| axis.tag() == Tag::new(b"opsz"))
             .unwrap();
+
         optical_coords[optical_idx] =
             font.axes().location([(Tag::new(b"opsz"), 72.0)]).coords()[optical_idx];
+
         let variations =
             verified_design_variations(&font, &default_coords, Synthesis::default(), &[]).unwrap();
+
         let default_face = RasterFace {
             font_id: FontId(1),
             source_id: source.id(),
@@ -1246,12 +1348,15 @@ mod tests {
             synthesis: FontSynthesis::default(),
             has_color_glyphs: false,
         };
+
         let optical_face = RasterFace {
             font_id: FontId(2),
             normalized_coords: &optical_coords,
             ..default_face
         };
+
         let glyph_id = GlyphId(font.charmap().map('A').unwrap().to_u32());
+
         let params = RenderGlyphParams {
             font_id: default_face.font_id,
             glyph_id,
@@ -1260,8 +1365,10 @@ mod tests {
             scale_factor: 1.0,
             raster_style: PreparedRasterStyle::independent(GlyphRenderMode::Grayscale),
         };
+
         let mut rasterizer = SwashGlyphRasterizer::default();
         let default = rasterizer.rasterize(default_face, &params).unwrap();
+
         let optical = rasterizer
             .rasterize(
                 optical_face,
@@ -1279,14 +1386,17 @@ mod tests {
     fn portable_color_outline_fallback_returns_a_tintable_mask() {
         let source = Blob::from(SOURCE_SERIF.data.to_vec());
         let font = FontRef::new(source.as_ref()).unwrap();
+
         let normalized_coords = font
             .axes()
             .location(std::iter::empty::<(Tag, f32)>())
             .coords()
             .to_vec();
+
         let variations =
             verified_design_variations(&font, &normalized_coords, Synthesis::default(), &[])
                 .unwrap();
+
         let face = RasterFace {
             font_id: FontId(1),
             source_id: source.id(),
@@ -1297,7 +1407,9 @@ mod tests {
             synthesis: FontSynthesis::default(),
             has_color_glyphs: false,
         };
+
         let glyph_id = GlyphId(font.charmap().map('A').unwrap().to_u32());
+
         let raster_style = PreparedRasterStyle::preblend(RasterStyleRequest {
             font_id: face.font_id,
             glyph_id,
@@ -1305,6 +1417,7 @@ mod tests {
             requested_mode: GlyphRenderMode::Color,
             foreground_dependency: ForegroundDependency::AlphaOnly,
         });
+
         let params = RenderGlyphParams {
             font_id: face.font_id,
             glyph_id,
@@ -1317,6 +1430,7 @@ mod tests {
         let raster = SwashGlyphRasterizer::default()
             .rasterize(face, &params)
             .unwrap();
+
         assert_eq!(raster.format, RasterizedGlyphFormat::AlphaMask);
         assert!(raster.pixels.iter().any(|coverage| *coverage != 0));
     }
@@ -1341,14 +1455,17 @@ mod tests {
         ] {
             let source = Blob::from(data.to_vec());
             let font = FontRef::new(source.as_ref()).unwrap();
+
             let normalized_coords = font
                 .axes()
                 .location(std::iter::empty::<(Tag, f32)>())
                 .coords()
                 .to_vec();
+
             let variations =
                 verified_design_variations(&font, &normalized_coords, Synthesis::default(), &[])
                     .unwrap();
+
             let face = RasterFace {
                 font_id: FontId(1),
                 source_id: source.id(),
@@ -1359,6 +1476,7 @@ mod tests {
                 synthesis: FontSynthesis::default(),
                 has_color_glyphs: mode == GlyphRenderMode::Color,
             };
+
             let params = |glyph_id| RenderGlyphParams {
                 font_id: face.font_id,
                 glyph_id,
@@ -1367,17 +1485,21 @@ mod tests {
                 scale_factor: 1.0,
                 raster_style: PreparedRasterStyle::independent(mode),
             };
+
             let mut rasterizer = SwashGlyphRasterizer::default();
             let space = GlyphId(font.charmap().map(' ').unwrap().to_u32());
             let empty = rasterizer.rasterize(face, &params(space)).unwrap();
+
             assert_eq!(empty.size, Size::default(), "{name}");
             assert_eq!(empty.format, expected_format, "{name}");
             assert!(empty.pixels.is_empty(), "{name}");
 
             let glyph_count = u32::from(font.maxp().unwrap().num_glyphs());
+
             let error = rasterizer
                 .rasterize(face, &params(GlyphId(glyph_count)))
                 .unwrap_err();
+
             assert!(
                 error.to_string().contains("outside the selected face"),
                 "{name}: {error}"
@@ -1411,6 +1533,7 @@ mod tests {
     #[test]
     fn colr_v0_foreground_dependency_checks_every_layer() {
         let mut table = Vec::new();
+
         table.extend_from_slice(&0u16.to_be_bytes());
         table.extend_from_slice(&3u16.to_be_bytes());
         table.extend_from_slice(&14u32.to_be_bytes());
@@ -1431,6 +1554,7 @@ mod tests {
         let colr =
             <Colr<'_> as skrifa::raw::FontRead<'_>>::read(skrifa::raw::FontData::new(&table))
                 .unwrap();
+
         let classifier = ColorGlyphClassifier {
             colr: Some(colr),
             sbix: None,
@@ -1448,6 +1572,7 @@ mod tests {
     fn sbix_records_are_artwork_even_when_their_payload_is_a_native_reference() {
         for graphic_type in [*b"flip", *b"dupe"] {
             let mut table = Vec::new();
+
             table.extend_from_slice(&1u16.to_be_bytes());
             table.extend_from_slice(&1u16.to_be_bytes());
             table.extend_from_slice(&1u32.to_be_bytes());
@@ -1473,6 +1598,7 @@ mod tests {
     #[test]
     fn subpixel_coverage_is_converted_from_swash_to_atlas_channel_order() {
         let mut pixels = vec![204, 127, 51, 0];
+
         convert_subpixel_mask_to_bgra(&mut pixels);
 
         assert_eq!(pixels, [51, 127, 204, 0]);

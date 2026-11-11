@@ -7,6 +7,7 @@ use gpui::{
 struct Card {
     #[style]
     style: StyleRefinement,
+
     #[children]
     children: Vec<AnyElement>,
 }
@@ -33,8 +34,11 @@ mod tests {
         };
 
         let style: &mut StyleRefinement = card.style();
+
         style.opacity = Some(0.5);
+
         card.extend([Empty.into_any_element()]);
+
         assert_eq!(card.children.len(), 1);
 
         let mut control = Control {
@@ -42,6 +46,7 @@ mod tests {
         };
 
         let interactivity: &mut Interactivity = requires_stateful(&mut control);
+
         assert!(std::ptr::eq(interactivity, &control.interactivity));
     }
 }

@@ -17,9 +17,12 @@ pub fn replace_subschema<T: JsonSchema>(
 ) -> schemars::Schema {
     let schema_name = T::schema_name();
     let definitions = generator.definitions_mut();
+
     assert!(!definitions.contains_key(&format!("{schema_name}2")));
     assert!(definitions.contains_key(schema_name.as_ref()));
+
     definitions.insert(schema_name.to_string(), schema().to_value());
+
     schemars::Schema::new_ref(format!("{DEFS_PATH}{schema_name}"))
 }
 
@@ -31,7 +34,9 @@ pub fn add_new_subschema(
     schema: serde_json::Value,
 ) -> schemars::Schema {
     let old_definition = generator.definitions_mut().insert(name.to_string(), schema);
+
     assert_eq!(old_definition, None);
+
     schemars::Schema::new_ref(format!("{DEFS_PATH}{name}"))
 }
 
@@ -50,6 +55,7 @@ impl schemars::transform::Transform for DefaultDenyUnknownFields {
         {
             object.insert("additionalProperties".to_string(), false.into());
         }
+
         transform_subschemas(self, schema);
     }
 }

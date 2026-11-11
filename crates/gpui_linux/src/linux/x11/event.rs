@@ -83,9 +83,11 @@ pub(crate) fn get_valuator_axis_index(
 /// Returns the number of 1 bits in `bit_vec` for all bits where `i < bit_index`.
 fn popcount_upto_bit_index(bit_vec: &Vec<u32>, bit_index: u16) -> u32 {
     let array_index = bit_index as usize / 32;
+
     let popcount: u32 = bit_vec
         .get(array_index)
         .map_or(0, |bits| keep_bits_upto(*bits, bit_index % 32).count_ones());
+
     if array_index == 0 {
         popcount
     } else {
@@ -96,12 +98,14 @@ fn popcount_upto_bit_index(bit_vec: &Vec<u32>, bit_index: u16) -> u32 {
             .take(array_index)
             .map(|bits| bits.count_ones())
             .sum();
+
         popcount + leading_popcount
     }
 }
 
 fn bit_is_set_in_vec(bit_vec: &Vec<u32>, bit_index: u16) -> bool {
     let array_index = bit_index as usize / 32;
+
     bit_vec
         .get(array_index)
         .is_some_and(|bits| bit_is_set(*bits, bit_index % 32))

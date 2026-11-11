@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 
 use gpui_util::ResultExt;
+
 use windows::{
     UI::{
         Color,
@@ -15,8 +16,11 @@ use gpui::*;
 
 pub(crate) trait HiLoWord {
     fn hiword(&self) -> u16;
+
     fn loword(&self) -> u16;
+
     fn signed_hiword(&self) -> i16;
+
     fn signed_loword(&self) -> i16;
 }
 
@@ -61,6 +65,7 @@ pub(crate) unsafe fn get_window_long(hwnd: HWND, nindex: WINDOW_LONG_PTR_INDEX) 
     unsafe {
         GetWindowLongPtrW(hwnd, nindex)
     }
+
     #[cfg(target_pointer_width = "32")]
     unsafe {
         GetWindowLongW(hwnd, nindex) as isize
@@ -76,6 +81,7 @@ pub(crate) unsafe fn set_window_long(
     unsafe {
         SetWindowLongPtrW(hwnd, nindex, dwnewlong)
     }
+
     #[cfg(target_pointer_width = "32")]
     unsafe {
         SetWindowLongW(hwnd, nindex, dwnewlong as i32) as isize
@@ -96,18 +102,22 @@ pub(crate) fn load_cursor(style: CursorStyle) -> Option<HCURSOR> {
     static SIZENWSE: OnceLock<SafeCursor> = OnceLock::new();
     static SIZENESW: OnceLock<SafeCursor> = OnceLock::new();
     static NO: OnceLock<SafeCursor> = OnceLock::new();
+
     let (lock, name) = match style {
         CursorStyle::IBeam | CursorStyle::IBeamCursorForVerticalLayout => (&IBEAM, IDC_IBEAM),
         CursorStyle::Crosshair => (&CROSS, IDC_CROSS),
         CursorStyle::PointingHand | CursorStyle::DragLink => (&HAND, IDC_HAND),
+
         CursorStyle::ResizeLeft
         | CursorStyle::ResizeRight
         | CursorStyle::ResizeLeftRight
         | CursorStyle::ResizeColumn => (&SIZEWE, IDC_SIZEWE),
+
         CursorStyle::ResizeUp
         | CursorStyle::ResizeDown
         | CursorStyle::ResizeUpDown
         | CursorStyle::ResizeRow => (&SIZENS, IDC_SIZENS),
+
         CursorStyle::ResizeUpLeftDownRight => (&SIZENWSE, IDC_SIZENWSE),
         CursorStyle::ResizeUpRightDownLeft => (&SIZENESW, IDC_SIZENESW),
         CursorStyle::ResizeUpLeft | CursorStyle::ResizeDownRight => (&SIZENWSE, IDC_SIZENWSE),
@@ -115,6 +125,7 @@ pub(crate) fn load_cursor(style: CursorStyle) -> Option<HCURSOR> {
         CursorStyle::OperationNotAllowed => (&NO, IDC_NO),
         _ => (&ARROW, IDC_ARROW),
     };
+
     Some(
         *(*lock.get_or_init(|| {
             HCURSOR(
@@ -134,6 +145,7 @@ pub(crate) fn configure_dwm_dark_mode(hwnd: HWND, appearance: WindowAppearance) 
         WindowAppearance::Dark | WindowAppearance::VibrantDark => true.into(),
         WindowAppearance::Light | WindowAppearance::VibrantLight => false.into(),
     };
+
     unsafe {
         DwmSetWindowAttribute(
             hwnd,
@@ -158,6 +170,7 @@ pub(crate) fn logical_point(x: f32, y: f32, scale_factor: f32) -> Point<Pixels> 
 pub(crate) fn system_appearance() -> Result<WindowAppearance> {
     let ui_settings = UISettings::new()?;
     let foreground_color = ui_settings.GetColorValue(UIColorType::Foreground)?;
+
     // If the foreground is light, then is_color_light will evaluate to true,
     // meaning Dark mode is enabled.
     if is_color_light(&foreground_color) {

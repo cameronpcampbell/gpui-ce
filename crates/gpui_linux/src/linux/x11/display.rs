@@ -22,6 +22,7 @@ impl X11Display {
             .roots
             .get(x_screen_index)
             .with_context(|| format!("No screen found with index {x_screen_index}"))?;
+
         Ok(Self {
             x_screen_index,
             bounds: Bounds {

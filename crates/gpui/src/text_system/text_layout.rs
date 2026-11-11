@@ -28,14 +28,19 @@ impl From<ResolvedDirection> for ParagraphDirection {
 pub struct TextLayoutOptions {
     /// Optional soft-wrap width.
     pub wrap_width: Option<Pixels>,
+
     /// Optional maximum number of visual rows.
     pub line_clamp: Option<usize>,
+
     /// Width used for horizontal alignment, independently of wrapping.
     pub alignment_width: Option<Pixels>,
+
     /// Horizontal text alignment.
     pub text_align: TextAlign,
+
     /// Paragraph base-direction policy.
     pub direction: ParagraphDirection,
+
     /// Bidirectional behavior applied to the complete document.
     pub unicode_bidi: UnicodeBidi,
 }
@@ -45,10 +50,13 @@ pub struct TextLayoutOptions {
 pub struct TextLayoutRequest<'a> {
     /// UTF-8 source text.
     pub text: &'a str,
+
     /// Font size shared by all style runs.
     pub font_size: Pixels,
+
     /// Complete shaping and paint styles covering `text`.
     pub runs: &'a [TextRun],
+
     /// Wrapping, alignment, and bidirectional layout options.
     pub options: TextLayoutOptions,
 }

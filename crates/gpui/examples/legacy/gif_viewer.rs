@@ -33,6 +33,7 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         let gif_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("examples/legacy/image/black-cat-typing.gif");
 
@@ -40,6 +41,7 @@ fn run_example() {
             cx.new(|_| GifViewer::new(gif_path))
         })
         .unwrap();
+
         cx.activate(true);
     });
 }

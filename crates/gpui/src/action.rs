@@ -3,6 +3,7 @@ use collections::{HashMap, TypeIdHashMap};
 pub use gpui_macros::Action;
 pub use no_action::{NoAction, Unbind, is_no_action, is_unbind};
 use serde_json::json;
+
 use std::{
     any::{Any, TypeId},
     fmt::Display,
@@ -254,6 +255,7 @@ pub enum ActionBuildError {
     BuildError {
         /// The name of the action that failed to build.
         name: String,
+
         /// The error from building the action.
         error: anyhow::Error,
     },
@@ -274,6 +276,7 @@ impl Display for ActionBuildError {
             ActionBuildError::NotFound { name } => {
                 write!(f, "Didn't find an action named \"{name}\"")
             }
+
             ActionBuildError::BuildError { name, error } => {
                 write!(f, "Error while building action \"{name}\": {error}")
             }
@@ -340,18 +343,21 @@ impl ActionRegistry {
     pub(crate) fn load_actions(&mut self) {
         for builder in inventory::iter::<MacroActionBuilder> {
             let action = builder.0();
+
             self.insert_action(action);
         }
     }
 
     fn insert_action(&mut self, action: MacroActionData) {
         let name = action.name;
+
         if self.by_name.contains_key(name) {
             panic!(
                 "Action with name `{name}` already registered \
                 (might be registered in `#[action(deprecated_aliases = [...])]`."
             );
         }
+
         self.by_name.insert(
             name,
             ActionData {
@@ -359,6 +365,7 @@ impl ActionRegistry {
                 json_schema: action.json_schema,
             },
         );
+
         for &alias in action.deprecated_aliases {
             if self.by_name.contains_key(alias) {
                 panic!(
@@ -366,6 +373,7 @@ impl ActionRegistry {
                     `{alias}` is specified in `#[action(deprecated_aliases = [...])]` for action `{name}`."
                 );
             }
+
             self.by_name.insert(
                 alias,
                 ActionData {
@@ -373,14 +381,18 @@ impl ActionRegistry {
                     json_schema: action.json_schema,
                 },
             );
+
             self.deprecated_aliases.insert(alias, name);
             self.all_names.push(alias);
         }
+
         self.names_by_type_id.insert(action.type_id, name);
         self.all_names.push(name);
+
         if let Some(deprecation_msg) = action.deprecation_message {
             self.deprecation_messages.insert(name, deprecation_msg);
         }
+
         if let Some(documentation) = action.documentation {
             self.documentation.insert(name, documentation);
         }
@@ -414,6 +426,7 @@ impl ActionRegistry {
                 name: name.to_owned(),
             })?
             .build;
+
         (build_action)(params.unwrap_or_else(|| json!({}))).map_err(|e| {
             ActionBuildError::BuildError {
                 name: name.to_owned(),
@@ -440,6 +453,7 @@ impl ActionRegistry {
                     .by_name
                     .get(name)
                     .expect("All actions in all_names should be registered");
+
                 (*name, (action_data.json_schema)(generator))
             })
             .collect::<Vec<_>>()

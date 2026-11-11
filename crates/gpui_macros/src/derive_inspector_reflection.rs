@@ -5,6 +5,7 @@ use heck::ToSnakeCase as _;
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
+
 use syn::{
     Attribute, Expr, FnArg, Ident, Item, ItemTrait, Lit, Meta, Path, ReturnType, TraitItem, Type,
     parse_macro_input, parse_quote,
@@ -18,8 +19,10 @@ pub fn derive_inspector_reflection(_args: TokenStream, input: TokenStream) -> To
     match &mut item {
         Item::Trait(trait_item) => {
             let mut expander = MacroExpander;
+
             expander.visit_item_trait_mut(trait_item);
         }
+
         _ => {
             return syn::Error::new_spanned(
                 quote!(#item),
@@ -43,6 +46,7 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> TokenStream {
 
     // Determine if we're being called from within the gpui crate
     let call_site = Span::call_site();
+
     let inspector_reflection_path = if is_called_from_gpui_crate(call_site) {
         quote! { crate::inspector_reflection }
     } else {
@@ -68,6 +72,7 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> TokenStream {
                 ReturnType::Type(_, ty) => {
                     matches!(**ty, Type::Path(ref path) if path.path.is_ident("Self"))
                 }
+
                 ReturnType::Default => false,
             };
 
@@ -80,6 +85,7 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> TokenStream {
                 // Extract documentation and cfg attributes
                 let doc = extract_doc_comment(&method.attrs);
                 let cfg_attrs = extract_cfg_attributes(&method.attrs);
+
                 method_infos.push((method_name.clone(), doc, cfg_attrs));
             }
         }
@@ -98,6 +104,7 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> TokenStream {
             &format!("__wrapper_{}", method_name),
             method_name.span(),
         );
+
         quote! {
             #(#cfg_attrs)*
             fn #wrapper_name<T: #trait_name + 'static>(value: Box<dyn std::any::Any>) -> Box<dyn std::any::Any> {
@@ -114,10 +121,12 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> TokenStream {
     let method_info_entries = method_infos.iter().map(|(method_name, doc, cfg_attrs)| {
         let method_name_str = method_name.to_string();
         let wrapper_name = Ident::new(&format!("__wrapper_{}", method_name), method_name.span());
+
         let doc_expr = match doc {
             Some(doc_str) => quote! { Some(#doc_str) },
             None => quote! { None },
         };
+
         quote! {
             #(#cfg_attrs)*
             #inspector_reflection_path::FunctionReflection {
@@ -167,6 +176,7 @@ fn extract_doc_comment(attrs: &[Attribute]) -> Option<String> {
         {
             let line = lit_str.value();
             let line = line.strip_prefix(' ').unwrap_or(&line);
+
             doc_lines.push(line.to_string());
         }
     }
@@ -210,6 +220,7 @@ impl VisitMut for MacroExpander {
                         items_to_keep.push(TraitItem::Macro(macro_item));
                     }
                 }
+
                 other => {
                     items_to_keep.push(other);
                 }
@@ -218,6 +229,7 @@ impl VisitMut for MacroExpander {
 
         // Rebuild the items list with expanded content first, then original items
         trait_item.items = expanded_items;
+
         trait_item.items.extend(items_to_keep);
 
         // Continue visiting
@@ -236,48 +248,66 @@ fn try_expand_macro(macro_item: &syn::TraitItemMacro) -> Option<Vec<TraitItem>> 
         "gpui_macros::style_helpers" | "style_helpers" => {
             let tokens = macro_item.mac.tokens.clone();
             let expanded = crate::styles::style_helpers(TokenStream::from(tokens));
+
             parse_expanded_items(expanded)
         }
+
         "gpui_macros::visibility_style_methods" | "visibility_style_methods" => {
             let tokens = macro_item.mac.tokens.clone();
             let expanded = crate::styles::visibility_style_methods(TokenStream::from(tokens));
+
             parse_expanded_items(expanded)
         }
+
         "gpui_macros::margin_style_methods" | "margin_style_methods" => {
             let tokens = macro_item.mac.tokens.clone();
             let expanded = crate::styles::margin_style_methods(TokenStream::from(tokens));
+
             parse_expanded_items(expanded)
         }
+
         "gpui_macros::padding_style_methods" | "padding_style_methods" => {
             let tokens = macro_item.mac.tokens.clone();
             let expanded = crate::styles::padding_style_methods(TokenStream::from(tokens));
+
             parse_expanded_items(expanded)
         }
+
         "gpui_macros::position_style_methods" | "position_style_methods" => {
             let tokens = macro_item.mac.tokens.clone();
             let expanded = crate::styles::position_style_methods(TokenStream::from(tokens));
+
             parse_expanded_items(expanded)
         }
+
         "gpui_macros::overflow_style_methods" | "overflow_style_methods" => {
             let tokens = macro_item.mac.tokens.clone();
             let expanded = crate::styles::overflow_style_methods(TokenStream::from(tokens));
+
             parse_expanded_items(expanded)
         }
+
         "gpui_macros::cursor_style_methods" | "cursor_style_methods" => {
             let tokens = macro_item.mac.tokens.clone();
             let expanded = crate::styles::cursor_style_methods(TokenStream::from(tokens));
+
             parse_expanded_items(expanded)
         }
+
         "gpui_macros::border_style_methods" | "border_style_methods" => {
             let tokens = macro_item.mac.tokens.clone();
             let expanded = crate::styles::border_style_methods(TokenStream::from(tokens));
+
             parse_expanded_items(expanded)
         }
+
         "gpui_macros::box_shadow_style_methods" | "box_shadow_style_methods" => {
             let tokens = macro_item.mac.tokens.clone();
             let expanded = crate::styles::box_shadow_style_methods(TokenStream::from(tokens));
+
             parse_expanded_items(expanded)
         }
+
         _ => None,
     }
 }

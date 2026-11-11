@@ -1,5 +1,6 @@
 use derive_more::{Add, FromStr, Sub};
 use serde::{Deserialize, Serialize};
+
 use std::{
     fmt::{Debug, Display},
     hash::{Hash, Hasher},
@@ -79,6 +80,7 @@ impl schemars::JsonSchema for FontWeight {
 
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
         use schemars::json_schema;
+
         json_schema!({
             "type": "number",
             "minimum": Self::THIN,

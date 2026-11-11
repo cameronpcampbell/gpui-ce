@@ -19,6 +19,7 @@ pub mod quad {
         pub corner_smoothing: f32,
         pub padding: u32,
     }
+
     storage!(group(1), binding(0), QUADS: RuntimeArray<Quad>);
 
     pub const DEFINITELY_OUTSIDE_INNER_BORDER: f32 = -1.0;
@@ -67,6 +68,7 @@ pub mod quad {
         let corner_radius = pick_corner_radius(center_to_point, quad.corner_radii);
         let corner_to_point = abs(center_to_point) - half_size;
         let corner_center_to_point = corner_to_point + corner_radius;
+
         let border = vec2f(
             select(
                 quad.border_widths.right,
@@ -79,10 +81,12 @@ pub mod quad {
                 center_to_point.y < 0.0,
             ),
         );
+
         let reduced_border = vec2f(
             select(border.x, -PIXEL_ANTIALIAS_RADIUS, border.x == 0.0),
             select(border.y, -PIXEL_ANTIALIAS_RADIUS, border.y == 0.0),
         );
+
         QuadGeometry {
             point,
             center_to_point,
@@ -108,11 +112,13 @@ pub mod quad {
                 geometry.straight_border_inner_corner_to_point.y,
             );
         }
+
         if geometry.straight_border_inner_corner_to_point.x > 0.0
             || geometry.straight_border_inner_corner_to_point.y > 0.0
         {
             return DEFINITELY_OUTSIDE_INNER_BORDER;
         }
+
         if geometry.reduced_border.x == geometry.reduced_border.y {
             return -(outer_signed_distance + geometry.reduced_border.x);
         }
@@ -121,6 +127,7 @@ pub mod quad {
             vec2f(0.0, 0.0),
             geometry.corner_radius - geometry.reduced_border,
         );
+
         quarter_ellipse_signed_distance(geometry.corner_center_to_point, ellipse_radii)
     }
 
@@ -129,6 +136,7 @@ pub mod quad {
             geometry.corner_center_to_point,
             geometry.corner_radius,
         );
+
         BorderDistances {
             outer,
             inner: inner_border_signed_distance(geometry, outer),
@@ -149,11 +157,13 @@ pub mod quad {
 
     pub fn straight_dash_position(quad: Quad, geometry: QuadGeometry) -> DashPosition {
         let horizontal = geometry.corner_center_to_point.x < geometry.corner_center_to_point.y;
+
         let border_width = select(
             max(quad.border_widths.right, quad.border_widths.left),
             max(quad.border_widths.bottom, quad.border_widths.top),
             horizontal,
         );
+
         let velocity = dash_velocity(border_width, dash_period_per_border_width(quad));
 
         DashPosition {
@@ -192,6 +202,7 @@ pub mod quad {
 
     pub fn corner_dash_lengths(radii: Corners, velocities: Corners) -> Corners {
         let quarter_turn = PI / 2.0;
+
         Corners {
             top_left: radii.top_left * quarter_turn * velocities.top_left,
             top_right: radii.top_right * quarter_turn * velocities.top_right,
@@ -203,8 +214,10 @@ pub mod quad {
     pub fn rounded_dash_layout(quad: Quad) -> RoundedDashLayout {
         let side_velocities =
             side_dash_velocities(quad.border_widths, dash_period_per_border_width(quad));
+
         let side_lengths =
             straight_side_dash_lengths(quad.bounds, quad.corner_radii, side_velocities);
+
         let corner_velocities = corner_dash_velocities(side_velocities);
         let corner_lengths = corner_dash_lengths(quad.corner_radii, corner_velocities);
 
@@ -246,24 +259,28 @@ pub mod quad {
         }
 
         let radii = corner_values(quad.corner_radii);
+
         let top_left = figma_corner_length(figma_corner_params(
             radii.x,
             prepared.horizontal_reaches.x,
             prepared.vertical_reaches.x,
             prepared.smoothing_factors,
         ));
+
         let top_right = figma_corner_length(figma_corner_params(
             radii.y,
             prepared.horizontal_reaches.y,
             prepared.vertical_reaches.y,
             prepared.smoothing_factors,
         ));
+
         let bottom_right = figma_corner_length(figma_corner_params(
             radii.z,
             prepared.horizontal_reaches.z,
             prepared.vertical_reaches.z,
             prepared.smoothing_factors,
         ));
+
         let bottom_left = figma_corner_length(figma_corner_params(
             radii.w,
             prepared.horizontal_reaches.w,
@@ -281,6 +298,7 @@ pub mod quad {
     ) -> RoundedDashLayout {
         let side_velocities =
             side_dash_velocities(quad.border_widths, dash_period_per_border_width(quad));
+
         let side_lengths = Edges {
             top: (quad.bounds.size.x
                 - prepared.horizontal_reaches.x
@@ -295,6 +313,7 @@ pub mod quad {
             left: (quad.bounds.size.y - prepared.vertical_reaches.w - prepared.vertical_reaches.x)
                 * side_velocities.left,
         };
+
         let corner_velocities = corner_dash_velocities(side_velocities);
 
         perimeter_dash_layout(
@@ -330,40 +349,49 @@ pub mod quad {
             let corner_idx = rectangle_sample.corner;
             let radii = corner_values(quad.corner_radii);
             let corner_length = corner_lengths[corner_idx];
+
             let params = figma_corner_params(
                 radii[corner_idx],
                 prepared.horizontal_reaches[corner_idx],
                 prepared.vertical_reaches[corner_idx],
                 prepared.smoothing_factors,
             );
+
             let progress =
                 figma_corner_progress(params, rectangle_sample.signed_distance, corner_length);
 
             match corner_idx {
                 0u32 => {
                     dash_velocity = dash_layout.corner_velocities.top_left;
+
                     dash_position =
                         dash_layout.top_left_start + (corner_length - progress) * dash_velocity;
                 }
+
                 1u32 => {
                     dash_velocity = dash_layout.corner_velocities.top_right;
                     dash_position = dash_layout.right_start + progress * dash_velocity;
                 }
+
                 2u32 => {
                     dash_velocity = dash_layout.corner_velocities.bottom_right;
+
                     dash_position =
                         dash_layout.bottom_right_start + (corner_length - progress) * dash_velocity;
                 }
+
                 _ => {
                     dash_velocity = dash_layout.corner_velocities.bottom_left;
                     dash_position = dash_layout.bottom_left_start + progress * dash_velocity;
                 }
             }
+
         } else {
             let mut horizontal =
                 straight_border_inner_corner_to_point.x < straight_border_inner_corner_to_point.y;
 
             let mut straight_width = select(border.x, border.y, horizontal);
+
             if straight_width <= 0.0 {
                 horizontal = !horizontal;
                 straight_width = select(border.x, border.y, horizontal);
@@ -372,19 +400,26 @@ pub mod quad {
             if horizontal {
                 if geometry.center_to_point.y < 0.0 {
                     dash_velocity = dash_layout.side_velocities.top;
+
                     dash_position =
                         (geometry.point.x - prepared.horizontal_reaches.x) * dash_velocity;
+
                 } else {
                     dash_velocity = dash_layout.side_velocities.bottom;
+
                     dash_position = dash_layout.bottom_left_start
                         - (geometry.point.x - prepared.horizontal_reaches.w) * dash_velocity;
                 }
+
             } else if geometry.center_to_point.x < 0.0 {
                 dash_velocity = dash_layout.side_velocities.left;
+
                 dash_position = dash_layout.top_left_start
                     - (geometry.point.y - prepared.vertical_reaches.x) * dash_velocity;
+
             } else {
                 dash_velocity = dash_layout.side_velocities.right;
+
                 dash_position = dash_layout.right_start
                     + (geometry.point.y - prepared.vertical_reaches.y) * dash_velocity;
             }
@@ -394,7 +429,9 @@ pub mod quad {
 
         if dash_layout.perimeter >= 1.0 {
             let period = dash_layout.perimeter / floor(dash_layout.perimeter);
+
             dash_coverage(dash_position, period, dash_length, dash_velocity)
+
         } else {
             1.0
         }
@@ -408,25 +445,32 @@ pub mod quad {
         let on_bottom = geometry.center_to_point.y >= 0.0;
 
         let top_position = (geometry.point.x - radii.top_left) * dash_layout.side_velocities.top;
+
         let right_position = dash_layout.right_start
             + (geometry.point.y - radii.top_right) * dash_layout.side_velocities.right;
+
         let bottom_position = dash_layout.bottom_left_start
             - (geometry.point.x - radii.bottom_left) * dash_layout.side_velocities.bottom;
+
         let left_position = dash_layout.top_left_start
             - (geometry.point.y - radii.top_left) * dash_layout.side_velocities.left;
+
         let horizontal_position = select(top_position, bottom_position, on_bottom);
         let vertical_position = select(left_position, right_position, on_right);
         let side_position = select(vertical_position, horizontal_position, horizontal);
+
         let horizontal_velocity = select(
             dash_layout.side_velocities.top,
             dash_layout.side_velocities.bottom,
             on_bottom,
         );
+
         let vertical_velocity = select(
             dash_layout.side_velocities.left,
             dash_layout.side_velocities.right,
             on_right,
         );
+
         let side_velocity = select(vertical_velocity, horizontal_velocity, horizontal);
 
         if geometry.near_rounded_corner {
@@ -434,27 +478,35 @@ pub mod quad {
                 geometry.corner_center_to_point.y,
                 geometry.corner_center_to_point.x,
             ) * geometry.corner_radius;
+
             let top_right_position =
                 dash_layout.right_start - corner_position * dash_layout.corner_velocities.top_right;
+
             let bottom_right_position = dash_layout.bottom_right_start
                 + corner_position * dash_layout.corner_velocities.bottom_right;
+
             let bottom_left_position = dash_layout.left_start
                 - corner_position * dash_layout.corner_velocities.bottom_left;
+
             let top_left_position = dash_layout.top_left_start
                 + corner_position * dash_layout.corner_velocities.top_left;
+
             let right_position = select(top_right_position, bottom_right_position, on_bottom);
             let left_position = select(top_left_position, bottom_left_position, on_bottom);
             let position = select(left_position, right_position, on_right);
+
             let right_velocity = select(
                 dash_layout.corner_velocities.top_right,
                 dash_layout.corner_velocities.bottom_right,
                 on_bottom,
             );
+
             let left_velocity = select(
                 dash_layout.corner_velocities.top_left,
                 dash_layout.corner_velocities.bottom_left,
                 on_bottom,
             );
+
             return DashPosition {
                 position,
                 perimeter: dash_layout.perimeter,
@@ -493,7 +545,9 @@ pub mod quad {
 
         if perimeter >= 1.0 {
             let period = perimeter / floor(perimeter);
+
             dash_coverage(dash.position, period, dash_length, dash.velocity)
+
         } else if geometry.unrounded && perimeter > dash_length {
             dash_coverage(dash.position, perimeter, dash_length, dash.velocity)
         } else {
@@ -512,6 +566,7 @@ pub mod quad {
 
     pub fn prepare_quad_vertex(vertex_id: u32, instance_id: u32, quad: Quad) -> QuadVertexData {
         let vertex = rectangle_vertex(vertex_id, quad.bounds);
+
         QuadVertexData {
             position: vertex.clip_position,
             border: prepare_paint(Paint::new(quad.border_color, quad.bounds)),
@@ -525,26 +580,34 @@ pub mod quad {
     pub struct QuadVarying {
         #[builtin(position)]
         pub position: Vec4f,
+
         #[location(0)]
         #[interpolate(flat)]
         pub border_solid: Vec4f,
+
         #[location(1)]
         #[interpolate(flat)]
         pub quad_id: u32,
+
         #[location(2)]
         pub clip_distances: Vec4f,
+
         #[location(3)]
         #[interpolate(flat)]
         pub fill_solid: Vec4f,
+
         #[location(4)]
         #[interpolate(flat)]
         pub fill_color0: Vec4f,
+
         #[location(5)]
         #[interpolate(flat)]
         pub fill_color1: Vec4f,
+
         #[location(6)]
         #[interpolate(flat)]
         pub border_color0: Vec4f,
+
         #[location(7)]
         #[interpolate(flat)]
         pub border_color1: Vec4f,
@@ -557,6 +620,7 @@ pub mod quad {
     ) -> QuadVarying {
         let quad = get!(QUADS)[instance_id as usize];
         let vertex = prepare_quad_vertex(vertex_id, instance_id, quad);
+
         QuadVarying {
             position: vertex.position,
             border_solid: vertex.border.solid,
@@ -575,41 +639,50 @@ pub mod quad {
         if is_clipped(input.clip_distances) {
             return transparent();
         }
+
         let quad = get!(QUADS)[input.quad_id as usize];
         let fade = ContentMask::alpha(quad.content_mask, input.position.xy());
+
         let fill_color = paint_color(
             Paint::new(quad.background, quad.bounds),
             input.position.xy(),
             PreparedPaint::new(input.fill_solid, input.fill_color0, input.fill_color1),
         );
+
         if Edges::is_zero(quad.border_widths) && Corners::is_zero(quad.corner_radii) {
             return blend_color(fill_color, fade);
         }
 
         let geometry = quad_geometry(quad, input.position.xy());
+
         if is_unaffected_background(geometry) {
             return blend_color(fill_color, fade);
         }
 
         let distances = border_distances(geometry);
         let mut color = fill_color;
+
         if max(distances.inner, distances.outer) < PIXEL_ANTIALIAS_RADIUS {
             let mut border_color = paint_color(
                 Paint::new(quad.border_color, quad.bounds),
                 input.position.xy(),
                 PreparedPaint::new(input.border_solid, input.border_color0, input.border_color1),
             );
+
             if quad.border_style == BorderStyle::Dashed {
                 border_color.w *= dashed_border_alpha(quad, geometry);
             }
+
             let blended_border = over(fill_color, border_color);
             let factor = antialiased_coverage(distances.inner);
+
             color = mix(
                 fill_color,
                 blended_border,
                 vec4f(factor, factor, factor, factor),
             );
         }
+
         blend_color(color, antialiased_coverage(distances.outer) * fade)
     }
 
@@ -617,41 +690,54 @@ pub mod quad {
     pub struct SmoothedQuadVarying {
         #[builtin(position)]
         pub position: Vec4f,
+
         #[location(0)]
         #[interpolate(flat)]
         pub border_solid: Vec4f,
+
         #[location(1)]
         #[interpolate(flat)]
         pub quad_id: u32,
+
         #[location(2)]
         pub clip_distances: Vec4f,
+
         #[location(3)]
         #[interpolate(flat)]
         pub fill_solid: Vec4f,
+
         #[location(4)]
         #[interpolate(flat)]
         pub fill_color0: Vec4f,
+
         #[location(5)]
         #[interpolate(flat)]
         pub fill_color1: Vec4f,
+
         #[location(6)]
         #[interpolate(flat)]
         pub horizontal_corner_reaches: Vec4f,
+
         #[location(7)]
         #[interpolate(flat)]
         pub vertical_corner_reaches: Vec4f,
+
         #[location(8)]
         #[interpolate(flat)]
         pub corner_lengths: Vec4f,
+
         #[location(9)]
         #[interpolate(flat)]
         pub smoothing_factors: Vec4f,
+
         #[location(10)]
         #[interpolate(flat)]
         pub superellipse_power: f32,
+
         #[location(11)]
         #[interpolate(flat)]
         pub border_color0: Vec4f,
+
         #[location(12)]
         #[interpolate(flat)]
         pub border_color1: Vec4f,
@@ -664,6 +750,7 @@ pub mod quad {
     ) -> SmoothedQuadVarying {
         let quad = get!(QUADS)[instance_id as usize];
         let vertex = prepare_quad_vertex(vertex_id, instance_id, quad);
+
         let prepared = prepare_corners(
             quad.bounds.size,
             quad.corner_radii,
@@ -694,13 +781,16 @@ pub mod quad {
         if is_clipped(input.clip_distances) {
             return transparent();
         }
+
         let quad = get!(QUADS)[input.quad_id as usize];
         let fade = ContentMask::alpha(quad.content_mask, input.position.xy());
+
         let fill_color = paint_color(
             Paint::new(quad.background, quad.bounds),
             input.position.xy(),
             PreparedPaint::new(input.fill_solid, input.fill_color0, input.fill_color1),
         );
+
         let prepared = PreparedCorners {
             horizontal_reaches: input.horizontal_corner_reaches,
             vertical_reaches: input.vertical_corner_reaches,
@@ -721,6 +811,7 @@ pub mod quad {
         }
 
         let geometry = quad_geometry(quad, input.position.xy());
+
         let rectangle_sample = figma_smooth_rectangle_sample(
             input.position.xy(),
             quad.bounds,
@@ -729,6 +820,7 @@ pub mod quad {
             prepared.vertical_reaches,
             prepared.smoothing_factors,
         );
+
         let mut border = vec2f(
             select(
                 quad.border_widths.right,
@@ -746,15 +838,19 @@ pub mod quad {
             0u32 => {
                 border = vec2f(quad.border_widths.left, quad.border_widths.top);
             }
+
             1u32 => {
                 border = vec2f(quad.border_widths.right, quad.border_widths.top);
             }
+
             2u32 => {
                 border = vec2f(quad.border_widths.right, quad.border_widths.bottom);
             }
+
             3u32 => {
                 border = vec2f(quad.border_widths.left, quad.border_widths.bottom);
             }
+
             _ => {}
         }
 
@@ -762,6 +858,7 @@ pub mod quad {
             select(border.x, -PIXEL_ANTIALIAS_RADIUS, border.x == 0.0),
             select(border.y, -PIXEL_ANTIALIAS_RADIUS, border.y == 0.0),
         );
+
         let half_size = Bounds::half_size(quad.bounds);
         let corner_to_point = abs(geometry.center_to_point) - half_size;
         let straight_border_inner_corner_to_point = corner_to_point + reduced_border;
@@ -779,13 +876,17 @@ pub mod quad {
 
         if near_curve {
             let normal = abs(rectangle_sample.signed_distance.normal);
+
             let active_sides = vec2f(
                 select(0.0, 1.0, border.x > 0.0),
                 select(0.0, 1.0, border.y > 0.0),
             );
+
             let effective_width = length(border * normal)
                 - PIXEL_ANTIALIAS_RADIUS * (1.0 - length(active_sides * normal));
+
             inner = -(outer + effective_width);
+
         } else {
             inner = -max(
                 straight_border_inner_corner_to_point.x,
@@ -801,6 +902,7 @@ pub mod quad {
                 input.position.xy(),
                 PreparedPaint::new(input.border_solid, input.border_color0, input.border_color1),
             );
+
             if quad.border_style == BorderStyle::Dashed {
                 border_color.w *= smoothed_dashed_border_alpha(
                     quad,

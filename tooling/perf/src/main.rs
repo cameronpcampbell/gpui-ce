@@ -97,17 +97,22 @@ impl OutputKind<'_> {
     fn log(&self, output: &Output, t_bin: &str) {
         match self {
             OutputKind::Markdown => println!("{output}"),
+
             OutputKind::Json(ident) => {
                 // We're going to be in tooling/perf/$whatever.
                 let wspace_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
                     .join("..")
                     .join("..");
+
                 let runs_dir = PathBuf::from(&wspace_dir).join(consts::RUNS_DIR);
+
                 std::fs::create_dir_all(&runs_dir).unwrap();
+
                 assert!(
                     !ident.to_string_lossy().is_empty(),
                     "FATAL: Empty filename specified!"
                 );
+
                 // Get the test binary's crate's name; a path like
                 // target/release-fast/deps/gpui-061ff76c9b7af5d7
                 // would be reduced to just "gpui".
@@ -119,19 +124,24 @@ impl OutputKind<'_> {
                     .rsplit_once('-')
                     .unwrap()
                     .0;
+
                 let mut file_path = runs_dir.join(ident);
+
                 file_path
                     .as_mut_os_string()
                     .push(format!(".{test_bin_stripped}.json"));
+
                 let mut out_file = OpenOptions::new()
                     .write(true)
                     .create(true)
                     .truncate(true)
                     .open(&file_path)
                     .unwrap();
+
                 out_file
                     .write_all(&serde_json::to_vec(&output).unwrap())
                     .unwrap();
+
                 if !QUIET.load(Ordering::Relaxed) {
                     eprintln!("JSON output written to {}", file_path.display());
                 }
@@ -144,21 +154,27 @@ impl OutputKind<'_> {
 /// output into a `TestMdata`.
 fn parse_mdata(t_bin: &str, mdata_fn: &str) -> Result<TestMdata, FailKind> {
     let mut cmd = Command::new(t_bin);
+
     cmd.args([mdata_fn, "--exact", "--nocapture"]);
+
     let out = cmd
         .output()
         .expect("FATAL: Could not run test binary {t_bin}");
+
     assert!(out.status.success());
+
     let stdout = String::from_utf8_lossy(&out.stdout);
     let mut version = None;
     let mut iterations = None;
     let mut importance = Importance::default();
     let mut weight = consts::WEIGHT_DEFAULT;
+
     for line in stdout
         .lines()
         .filter_map(|l| l.strip_prefix(consts::MDATA_LINE_PREF))
     {
         let mut items = line.split_whitespace();
+
         // For v0, we know the ident always comes first, then one field.
         match items.next().ok_or(FailKind::BadMetadata)? {
             consts::VERSION_LINE_NAME => {
@@ -167,11 +183,14 @@ fn parse_mdata(t_bin: &str, mdata_fn: &str) -> Result<TestMdata, FailKind> {
                     .ok_or(FailKind::BadMetadata)?
                     .parse::<u32>()
                     .map_err(|_| FailKind::BadMetadata)?;
+
                 if v > consts::MDATA_VER {
                     return Err(FailKind::VersionMismatch);
                 }
+
                 version = Some(v);
             }
+
             consts::ITER_COUNT_LINE_NAME => {
                 // This should never be zero!
                 iterations = Some(
@@ -184,6 +203,7 @@ fn parse_mdata(t_bin: &str, mdata_fn: &str) -> Result<TestMdata, FailKind> {
                         .map_err(|_| FailKind::BadMetadata)?,
                 );
             }
+
             consts::IMPORTANCE_LINE_NAME => {
                 importance = match items.next().ok_or(FailKind::BadMetadata)? {
                     "critical" => Importance::Critical,
@@ -194,6 +214,7 @@ fn parse_mdata(t_bin: &str, mdata_fn: &str) -> Result<TestMdata, FailKind> {
                     _ => return Err(FailKind::BadMetadata),
                 };
             }
+
             consts::WEIGHT_LINE_NAME => {
                 weight = items
                     .next()
@@ -201,6 +222,7 @@ fn parse_mdata(t_bin: &str, mdata_fn: &str) -> Result<TestMdata, FailKind> {
                     .parse::<u8>()
                     .map_err(|_| FailKind::BadMetadata)?;
             }
+
             _ => unreachable!(),
         }
     }
@@ -222,22 +244,28 @@ fn parse_mdata(t_bin: &str, mdata_fn: &str) -> Result<TestMdata, FailKind> {
 fn compare_profiles(args: &[String]) {
     let mut save_to = None;
     let mut ident_idx = 0;
+
     args.first().inspect(|a| {
         if a.starts_with("--save") {
             save_to = Some(
                 a.strip_prefix("--save=")
                     .expect("FATAL: save param formatted incorrectly"),
             );
+
             ident_idx = 1;
         }
     });
+
     let ident_new = args
         .get(ident_idx)
         .expect("FATAL: missing identifier for new run");
+
     let ident_old = args
         .get(ident_idx + 1)
         .expect("FATAL: missing identifier for old run");
+
     let wspace_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
     let runs_dir = PathBuf::from(&wspace_dir)
         .join("..")
         .join("..")
@@ -251,9 +279,11 @@ fn compare_profiles(args: &[String]) {
         let Ok(entry) = e else {
             continue;
         };
+
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
+
         if metadata.is_file() {
             let Ok(name) = entry.file_name().into_string() else {
                 continue;
@@ -264,16 +294,21 @@ fn compare_profiles(args: &[String]) {
             let read_into = |output: &mut Output| {
                 let mut elems = name.split('.').skip(1);
                 let prefix = elems.next().unwrap();
+
                 assert_eq!("json", elems.next().unwrap());
                 assert!(elems.next().is_none());
+
                 let mut buffer = Vec::new();
+
                 let _ = OpenOptions::new()
                     .read(true)
                     .open(entry.path())
                     .unwrap()
                     .read_to_end(&mut buffer)
                     .unwrap();
+
                 let o_other: Output = serde_json::from_slice(&buffer).unwrap();
+
                 output.merge(o_other, prefix);
             };
 
@@ -286,6 +321,7 @@ fn compare_profiles(args: &[String]) {
     }
 
     let res = outputs_new.compare_perf(outputs_old);
+
     if let Some(filename) = save_to {
         let mut file = std::fs::OpenOptions::new()
             .create(true)
@@ -293,7 +329,9 @@ fn compare_profiles(args: &[String]) {
             .truncate(true)
             .open(filename)
             .expect("FATAL: couldn't save run results to file");
+
         file.write_all(format!("{res}").as_bytes()).unwrap();
+
     } else {
         println!("{res}");
     }
@@ -305,26 +343,33 @@ fn compare_profiles(args: &[String]) {
 /// The output of this is an iterator over `test_fn_name, test_mdata_name`.
 fn get_tests(t_bin: &str) -> impl ExactSizeIterator<Item = (String, String)> {
     let mut cmd = Command::new(t_bin);
+
     // --format=json is nightly-only :(
     cmd.args(["--list", "--format=terse"]);
+
     let out = cmd
         .output()
         .expect("FATAL: Could not run test binary {t_bin}");
+
     assert!(
         out.status.success(),
         "FATAL: Cannot do perf check - test binary {t_bin} returned an error"
     );
+
     if !QUIET.load(Ordering::Relaxed) {
         eprintln!("Test binary ran successfully; starting profile...");
     }
+
     // Parse the test harness output to look for tests we care about.
     let stdout = String::from_utf8_lossy(&out.stdout);
+
     let mut test_list: Vec<_> = stdout
         .lines()
         .filter_map(|line| {
             // This should split only in two; e.g.,
             // "app::test::test_arena: test" => "app::test::test_arena:", "test"
             let line: Vec<_> = line.split_whitespace().collect();
+
             match line[..] {
                 // Final byte of t_name is ":", which we need to ignore.
                 [t_name, kind] => (kind == "test").then(|| &t_name[..t_name.len() - 1]),
@@ -361,6 +406,7 @@ fn get_tests(t_bin: &str) -> impl ExactSizeIterator<Item = (String, String)> {
             }
         })
         .collect::<Vec<_>>();
+
     out.into_iter()
 }
 
@@ -369,16 +415,19 @@ fn get_tests(t_bin: &str) -> impl ExactSizeIterator<Item = (String, String)> {
 #[inline]
 fn spawn_and_iterate(t_bin: &str, t_name: &str, count: NonZero<usize>) -> Option<Duration> {
     let mut cmd = Command::new(t_bin);
+
     cmd.args([t_name, "--exact"]);
     cmd.env(consts::ITER_ENV_VAR, format!("{count}"));
     // Don't let the child muck up our stdin/out/err.
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::null());
+
     let pre = Instant::now();
     // Discard the output beyond ensuring success.
     let out = cmd.spawn().unwrap().wait();
     let post = Instant::now();
+
     out.iter().find_map(|s| s.success().then_some(post - pre))
 }
 
@@ -401,16 +450,21 @@ fn triage_test(
     // It's possible that the first loop of a test might be an outlier (e.g. it's
     // doing some caching), in which case we want to skip it.
     let duration_once = spawn_and_iterate(t_bin, t_name, NonZero::new(1).unwrap())?;
+
     loop {
         let duration = spawn_and_iterate(t_bin, t_name, iter_count)?;
+
         if duration.saturating_sub(duration_once) > thresh {
             break Some(iter_count);
         }
+
         let new = step(iter_count)?;
+
         assert!(
             new > iter_count,
             "FATAL: step must be monotonically increasing"
         );
+
         iter_count = new;
     }
 }
@@ -419,12 +473,14 @@ fn triage_test(
 fn hyp_binary() -> Option<Command> {
     const HYP_PATH: &str = "hyperfine";
     const HYP_HOME: &str = "~/.cargo/bin/hyperfine";
+
     if Command::new(HYP_PATH).output().is_err() {
         if Command::new(HYP_HOME).output().is_err() {
             None
         } else {
             Some(Command::new(HYP_HOME))
         }
+
     } else {
         Some(Command::new(HYP_PATH))
     }
@@ -448,8 +504,11 @@ fn hyp_profile(t_bin: &str, t_name: &str, iterations: NonZero<usize>) -> Option<
         "millisecond",
         &format!("{t_bin} --exact {t_name}"),
     ]);
+
     perf_cmd.env(consts::ITER_ENV_VAR, format!("{iterations}"));
+
     let p_out = perf_cmd.output().unwrap();
+
     if !p_out.status.success() {
         return None;
     }
@@ -469,6 +528,7 @@ fn hyp_profile(t_bin: &str, t_name: &str, iterations: NonZero<usize>) -> Option<
 
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
+
     // We get passed the test we need to run as the 1st argument after our own name.
     let t_bin = args
         .get(1)
@@ -477,6 +537,7 @@ fn main() {
     // We're being asked to compare two results, not run the profiler.
     if t_bin == "compare" {
         compare_profiles(&args[2..]);
+
         return;
     }
 
@@ -493,15 +554,18 @@ fn main() {
             "--iffy" => thresh = Importance::Iffy,
             "--fluff" => thresh = Importance::Fluff,
             "--quiet" => QUIET.store(true, Ordering::Relaxed),
+
             s if s.starts_with("--json") => {
                 out_kind = OutputKind::Json(Path::new(
                     s.strip_prefix("--json=")
                         .expect("FATAL: Invalid json parameter; pass --json=ident"),
                 ));
             }
+
             _ => (),
         }
     }
+
     if !QUIET.load(Ordering::Relaxed) {
         eprintln!("Starting perf check");
     }
@@ -513,10 +577,12 @@ fn main() {
     // know the list is sorted.
     let i = get_tests(t_bin);
     let len = i.len();
+
     for (idx, (ref t_name, ref t_mdata)) in i.enumerate() {
         if !QUIET.load(Ordering::Relaxed) {
             eprint!("\rProfiling test {}/{}", idx + 1, len);
         }
+
         // Pretty-printable stripped name for the test.
         let t_name_pretty = t_name.replace(consts::SUF_NORMAL, "");
 
@@ -542,6 +608,7 @@ fn main() {
                     eprintln!(
                         "WARNING: Ran nearly usize::MAX iterations of test {t_name_pretty}; skipping"
                     );
+
                     None
                 }
             })
@@ -565,6 +632,7 @@ fn main() {
             );
         }
     }
+
     if !QUIET.load(Ordering::Relaxed) {
         if output.is_empty() {
             eprintln!("Nothing to do.");

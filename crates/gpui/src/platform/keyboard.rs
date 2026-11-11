@@ -6,6 +6,7 @@ use crate::{KeybindingKeystroke, Keystroke};
 pub trait PlatformKeyboardLayout {
     /// Get the keyboard layout ID, which should be unique to the layout
     fn id(&self) -> &str;
+
     /// Get the keyboard layout display name
     fn name(&self) -> &str;
 }
@@ -18,6 +19,7 @@ pub trait PlatformKeyboardMapper {
         keystroke: Keystroke,
         use_key_equivalents: bool,
     ) -> KeybindingKeystroke;
+
     /// Get the key equivalents for the current keyboard layout,
     /// only used on macOS
     fn get_key_equivalents(&self) -> Option<&HashMap<char, char>>;

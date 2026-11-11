@@ -2,6 +2,7 @@ use crate::{
     App, Bounds, ClipboardItem, Context, Entity, InputHandler, Pixels, TextInputConfiguration,
     UTF16Selection, Window,
 };
+
 use std::ops::Range;
 
 /// Converts a UTF-8 byte offset into a UTF-16 code-unit offset.
@@ -21,12 +22,15 @@ pub fn utf8_to_utf16_offset(text: &str, utf8_offset: usize) -> usize {
 /// snaps to the end of the corresponding character.
 pub fn utf16_to_utf8_offset(text: &str, utf16_offset: usize) -> usize {
     let mut consumed_utf16 = 0;
+
     for (utf8_offset, character) in text.char_indices() {
         if consumed_utf16 >= utf16_offset {
             return utf8_offset;
         }
+
         consumed_utf16 += character.len_utf16();
     }
+
     text.len()
 }
 
@@ -312,6 +316,7 @@ impl<V: EntityInputHandler> InputHandler for ElementInputHandler<V> {
 #[cfg(test)]
 mod configuration_tests {
     use super::*;
+
     use crate::{
         AnyWindowHandle, AppContext as _, FocusHandle, InteractiveElement as _, IntoElement,
         ParentElement as _, Render, Styled as _, TestAppContext, TextInputAction,
@@ -325,16 +330,20 @@ mod configuration_tests {
             input_action: TextInputAction::Send,
             ..Default::default()
         };
+
         let window = cx.add_window({
             let custom = custom.clone();
+
             move |_, cx| ConfigurationTestView {
                 focus_handle: cx.focus_handle(),
                 configuration: custom,
             }
         });
+
         let view = window.root(cx).unwrap();
         let test_window = cx.test_window(window.into());
         let window = AnyWindowHandle::from(window);
+
         let draw = |cx: &mut TestAppContext| {
             cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
                 .unwrap();
@@ -342,23 +351,29 @@ mod configuration_tests {
 
         // Nothing is focused, so the platform learns the default configuration.
         draw(cx);
+
         assert_eq!(
             test_window.text_input_configurations(),
             vec![TextInputConfiguration::default()]
         );
+
         assert!(test_window.text_input_state_changes().is_empty());
 
         // Focusing the view routes its configuration to the platform.
         cx.update_window(window, |_, window, cx| {
             let focus_handle = view.read(cx).focus_handle.clone();
+
             window.focus(&focus_handle, cx);
         })
         .unwrap();
+
         draw(cx);
+
         assert_eq!(
             test_window.text_input_configurations(),
             vec![TextInputConfiguration::default(), custom.clone()]
         );
+
         assert_eq!(
             test_window.text_input_state_changes(),
             vec![TextInputStateChange::FocusGained]
@@ -366,6 +381,7 @@ mod configuration_tests {
 
         // Redrawing without a change forwards nothing.
         draw(cx);
+
         assert_eq!(test_window.text_input_configurations().len(), 2);
         assert_eq!(test_window.text_input_state_changes().len(), 1);
 
@@ -374,30 +390,40 @@ mod configuration_tests {
             suggestions: true,
             ..custom
         };
+
         view.update(cx, {
             let updated = updated.clone();
+
             |view, cx| {
                 view.configuration = updated;
+
                 cx.notify();
             }
         });
+
         draw(cx);
+
         assert_eq!(
             test_window.text_input_configurations().last(),
             Some(&updated)
         );
+
         assert_eq!(test_window.text_input_configurations().len(), 3);
         assert_eq!(test_window.text_input_state_changes().len(), 1);
 
         // Losing focus reverts the platform to the default configuration.
         cx.update_window(window, |_, window, cx| window.blur(cx))
             .unwrap();
+
         draw(cx);
+
         assert_eq!(
             test_window.text_input_configurations().last(),
             Some(&TextInputConfiguration::default())
         );
+
         assert_eq!(test_window.text_input_configurations().len(), 4);
+
         assert_eq!(
             test_window.text_input_state_changes(),
             vec![
@@ -416,6 +442,7 @@ mod configuration_tests {
         fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let view = cx.entity();
             let focus_handle = self.focus_handle.clone();
+
             div().size_full().track_focus(&self.focus_handle).child(
                 canvas(
                     |_, _, _| {},
@@ -535,10 +562,12 @@ mod tests {
                 utf8_to_utf16_offset(text, usize::MAX),
                 text.encode_utf16().count()
             );
+
             assert_eq!(utf16_to_utf8_offset(text, usize::MAX), text.len());
         }
 
         let text = "A😀B";
+
         assert_eq!(utf16_to_utf8_offset(text, 2), 5);
         assert_eq!(utf8_to_utf16_offset(text, 2), 3);
     }

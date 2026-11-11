@@ -2,11 +2,13 @@ use anyhow::{Context as _, Result};
 use collections::FxHashMap;
 use derive_more::{Deref, DerefMut};
 use etagere::BucketedAtlasAllocator;
+
 use gpui::{
     AtlasKey, AtlasTextureId, AtlasTextureKind, AtlasTextureList, AtlasTile, Bounds, DevicePixels,
     GlyphAtlasCache, GlyphAtlasEntry, PlatformAtlas, Point, RenderGlyphParams, Size,
     ValidatedRasterizedGlyph,
 };
+
 use metal::Device;
 use parking_lot::Mutex;
 use std::borrow::Cow;
@@ -46,6 +48,7 @@ impl PlatformAtlas for MetalAtlas {
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>> {
         let mut lock = self.0.lock();
+
         if let Some(tile) = lock.tiles_by_key.get(key) {
             return Ok(Some(*tile));
         }
@@ -53,6 +56,7 @@ impl PlatformAtlas for MetalAtlas {
         let Some((size, bytes)) = build()? else {
             return Ok(None);
         };
+
         let tile = lock.insert_tile(key.clone(), size, &bytes)?;
 
         Ok(Some(tile))
@@ -64,27 +68,33 @@ impl PlatformAtlas for MetalAtlas {
         build: &mut dyn FnMut() -> Result<ValidatedRasterizedGlyph>,
     ) -> Result<GlyphAtlasEntry> {
         let mut lock = self.0.lock();
+
         if let Some(entry) = lock.glyph_cache.get(params) {
             return Ok(entry);
         }
 
         let glyph = build()?;
+
         let tile = if glyph.size == Size::default() {
             None
         } else {
             let key = AtlasKey::from((params.clone(), glyph.format));
+
             Some(lock.insert_tile(key, glyph.size, &glyph.pixels)?)
         };
+
         Ok(lock.glyph_cache.insert(params, &glyph, tile))
     }
 
     fn remove(&self, key: &AtlasKey) {
         let mut lock = self.0.lock();
+
         lock.glyph_cache.remove(key);
 
         let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
         };
+
         let id = tile.texture_id;
 
         let textures = match id.kind {
@@ -104,6 +114,7 @@ impl PlatformAtlas for MetalAtlas {
         if let Some(mut texture) = texture_slot.take() {
             texture.allocator.deallocate(tile.tile_id.into());
             texture.decrement_ref_count();
+
             if texture.is_unreferenced() {
                 textures.free_list.push(id.index as usize);
             } else {
@@ -123,6 +134,7 @@ impl MetalAtlasState {
         let tile = self
             .allocate(size, key.texture_kind())
             .context("failed to allocate")?;
+
         self.texture(tile.texture_id).upload(tile.bounds, bytes);
         self.tiles_by_key.insert(key, tile);
 
@@ -151,6 +163,7 @@ impl MetalAtlasState {
         }
 
         let texture = self.push_texture(size, texture_kind);
+
         texture.allocate(size)
     }
 
@@ -163,17 +176,22 @@ impl MetalAtlasState {
             width: DevicePixels(1024),
             height: DevicePixels(1024),
         };
+
         // Max texture size on all modern Apple GPUs. Anything bigger than that crashes in validateWithDevice.
         const MAX_ATLAS_SIZE: Size<DevicePixels> = Size {
             width: DevicePixels(16384),
             height: DevicePixels(16384),
         };
+
         let size = min_size.min(&MAX_ATLAS_SIZE).max(&DEFAULT_ATLAS_SIZE);
         let texture_descriptor = metal::TextureDescriptor::new();
+
         texture_descriptor.set_width(size.width.into());
         texture_descriptor.set_height(size.height.into());
+
         let pixel_format;
         let usage;
+
         match kind {
             AtlasTextureKind::Monochrome => {
                 // Shared shaders read coverage from red, like WGPU's R8 atlas; A8 samples
@@ -181,14 +199,18 @@ impl MetalAtlasState {
                 pixel_format = metal::MTLPixelFormat::R8Unorm;
                 usage = metal::MTLTextureUsage::ShaderRead;
             }
+
             AtlasTextureKind::Polychrome => {
                 pixel_format = metal::MTLPixelFormat::BGRA8Unorm;
                 usage = metal::MTLTextureUsage::ShaderRead;
             }
+
             AtlasTextureKind::Subpixel => unreachable!(),
         }
+
         texture_descriptor.set_pixel_format(pixel_format);
         texture_descriptor.set_usage(usage);
+
         // Shared memory mode can be used only on Apple GPU families
         // https://developer.apple.com/documentation/metal/mtlresourceoptions/storagemodeshared
         texture_descriptor.set_storage_mode(if self.is_apple_gpu {
@@ -196,6 +218,7 @@ impl MetalAtlasState {
         } else {
             metal::MTLStorageMode::Managed
         });
+
         let metal_texture = self.device.new_texture(&texture_descriptor);
 
         let texture_list = match kind {
@@ -218,7 +241,9 @@ impl MetalAtlasState {
 
         if let Some(ix) = index {
             texture_list.textures[ix] = Some(atlas_texture);
+
             texture_list.textures.get_mut(ix)
+
         } else {
             texture_list.textures.push(Some(atlas_texture));
             texture_list.textures.last_mut()
@@ -234,6 +259,7 @@ impl MetalAtlasState {
             AtlasTextureKind::Polychrome => &self.polychrome_textures,
             AtlasTextureKind::Subpixel => unreachable!(),
         };
+
         textures[id.index as usize].as_ref().unwrap()
     }
 }
@@ -248,6 +274,7 @@ struct MetalAtlasTexture {
 impl MetalAtlasTexture {
     fn allocate(&mut self, size: Size<DevicePixels>) -> Option<AtlasTile> {
         let allocation = self.allocator.allocate(size_to_etagere(size))?;
+
         let tile = AtlasTile {
             texture_id: self.id,
             tile_id: allocation.id.into(),
@@ -257,7 +284,9 @@ impl MetalAtlasTexture {
             },
             padding: 0,
         };
+
         self.live_atlas_keys += 1;
+
         Some(tile)
     }
 
@@ -268,6 +297,7 @@ impl MetalAtlasTexture {
             bounds.size.width.into(),
             bounds.size.height.into(),
         );
+
         self.metal_texture.replace_region(
             region,
             0,
@@ -278,6 +308,7 @@ impl MetalAtlasTexture {
 
     fn bytes_per_pixel(&self) -> u8 {
         use metal::MTLPixelFormat::*;
+
         match self.metal_texture.pixel_format() {
             A8Unorm | R8Unorm => 1,
             RGBA8Unorm | BGRA8Unorm => 4,
@@ -318,6 +349,7 @@ mod tests {
 
     fn create_atlas() -> Option<MetalAtlas> {
         let device = metal::Device::system_default()?;
+
         Some(MetalAtlas::new(device, true))
     }
 
@@ -332,6 +364,7 @@ mod tests {
         atlas
             .get_or_insert_with(key, &mut || {
                 let byte_count = (size.width.0 as usize) * (size.height.0 as usize) * 4;
+
                 Ok(Some((size, Cow::Owned(vec![0u8; byte_count]))))
             })
             .expect("allocation should succeed")
@@ -388,6 +421,7 @@ mod tests {
             width: DevicePixels(64),
             height: DevicePixels(64),
         };
+
         let big = Size {
             width: DevicePixels(700),
             height: DevicePixels(700),
@@ -399,10 +433,13 @@ mod tests {
 
         let keeper_tile = insert_tile(&atlas, &keeper_key, small);
         let tile_a = insert_tile(&atlas, &big_key_a, big);
+
         assert_eq!(keeper_tile.texture_id, tile_a.texture_id);
 
         atlas.remove(&big_key_a);
+
         let tile_b = insert_tile(&atlas, &big_key_b, big);
+
         assert_eq!(tile_b.texture_id, keeper_tile.texture_id);
     }
 
@@ -411,7 +448,9 @@ mod tests {
         let Some(atlas) = create_atlas() else {
             return;
         };
+
         let key = make_image_key(999, 0);
+
         atlas.remove(&key);
     }
 
@@ -420,6 +459,7 @@ mod tests {
         let Some(atlas) = create_atlas() else {
             return;
         };
+
         let key = AtlasKey::Svg(gpui::RenderSvgParams {
             path: "monochrome-format-test".into(),
             size: Size {
@@ -427,6 +467,7 @@ mod tests {
                 height: DevicePixels(8),
             },
         });
+
         let tile = atlas
             .get_or_insert_with(&key, &mut || {
                 Ok(Some((

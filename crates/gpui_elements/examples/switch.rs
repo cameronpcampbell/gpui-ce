@@ -1,6 +1,7 @@
 use gpui::{
     App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
+
 use gpui_ce_elements::switch::{BaseSwitch, BaseSwitchThumb};
 
 struct SwitchExample {
@@ -38,6 +39,7 @@ impl Render for SwitchExample {
                             .checked(self.notifications)
                             .on_change(cx.listener(|this, checked, _window, cx| {
                                 this.notifications = *checked;
+
                                 cx.notify();
                             })),
                     ))
@@ -48,6 +50,7 @@ impl Render for SwitchExample {
                             .checked(self.automatic_updates)
                             .on_change(cx.listener(|this, checked, _window, cx| {
                                 this.automatic_updates = *checked;
+
                                 cx.notify();
                             })),
                     ))

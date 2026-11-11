@@ -1,6 +1,7 @@
 use dispatch2::{DispatchQueue, DispatchQueueGlobalPriority, DispatchTime, GlobalQueueIdentifier};
 use gpui::{PlatformDispatcher, Priority, RunnableMeta, RunnableVariant};
 use gpui_util::ResultExt;
+
 use mach2::{
     kern_return::KERN_SUCCESS,
     mach_time::mach_timebase_info_data_t,
@@ -36,6 +37,7 @@ impl PlatformDispatcher for MacDispatcher {
             Priority::RealtimeAudio => {
                 panic!("RealtimeAudio priority should use spawn_realtime, not dispatch")
             }
+
             Priority::High => DispatchQueueGlobalPriority::High,
             Priority::Medium => DispatchQueueGlobalPriority::Default,
             Priority::Low => DispatchQueueGlobalPriority::Low,
@@ -49,6 +51,7 @@ impl PlatformDispatcher for MacDispatcher {
 
     fn dispatch_on_main_thread(&self, runnable: RunnableVariant, _priority: Priority) {
         let context = runnable.into_raw().as_ptr() as *mut c_void;
+
         unsafe {
             DispatchQueue::main().exec_async_f(context, trampoline);
         }
@@ -56,10 +59,13 @@ impl PlatformDispatcher for MacDispatcher {
 
     fn dispatch_after(&self, duration: Duration, runnable: RunnableVariant) {
         let context = runnable.into_raw().as_ptr() as *mut c_void;
+
         let queue = DispatchQueue::global_queue(GlobalQueueIdentifier::Priority(
             DispatchQueueGlobalPriority::High,
         ));
+
         let when = DispatchTime::NOW.time(duration.as_nanos() as i64);
+
         unsafe {
             DispatchQueue::exec_after_f(when, &queue, context, trampoline);
         }
@@ -68,6 +74,7 @@ impl PlatformDispatcher for MacDispatcher {
     fn spawn_realtime(&self, f: Box<dyn FnOnce() + Send>) {
         std::thread::spawn(move || {
             set_audio_thread_priority().log_err();
+
             f();
         });
     }
@@ -128,6 +135,7 @@ fn set_audio_thread_priority() -> anyhow::Result<()> {
     const MAX_TIME_ALLOWED: f32 = MAX_AUDIO_DUTY_CYCLE * TIME_QUANTUM;
 
     let mut timebase_info = mach_timebase_info_data_t { numer: 0, denom: 0 };
+
     // SAFETY: timebase_info is a valid pointer to a mach_timebase_info_data_t struct
     unsafe { mach2::mach_time::mach_timebase_info(&mut timebase_info) };
 
@@ -164,7 +172,10 @@ extern "C" fn trampoline(context: *mut c_void) {
 
     let location = runnable.metadata().location;
     let spawned = runnable.metadata().spawned;
+
     gpui::profiler::update_running_task(spawned, location);
+
     runnable.run();
+
     gpui::profiler::save_task_timing();
 }

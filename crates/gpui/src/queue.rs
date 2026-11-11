@@ -41,8 +41,11 @@ impl<T> PriorityQueueState<T> {
         }
 
         let mut queues = self.queues.lock();
+
         Self::push(&mut queues, priority, item);
+
         self.condvar.notify_one();
+
         Ok(())
     }
 
@@ -59,10 +62,14 @@ impl<T> PriorityQueueState<T> {
             if let Some(guard) = self.queues.try_lock() {
                 break guard;
             }
+
             std::hint::spin_loop();
         };
+
         Self::push(&mut queues, priority, item);
+
         self.condvar.notify_one();
+
         Ok(())
     }
 
@@ -71,6 +78,7 @@ impl<T> PriorityQueueState<T> {
             Priority::RealtimeAudio => unreachable!(
                 "Realtime audio priority runs on a dedicated thread and is never queued"
             ),
+
             Priority::High => queues.high_priority.push_back(item),
             Priority::Medium => queues.medium_priority.push_back(item),
             Priority::Low => queues.low_priority.push_back(item),
@@ -81,6 +89,7 @@ impl<T> PriorityQueueState<T> {
         let mut queues = self.queues.lock();
 
         let sender_count = self.sender_count.load(std::sync::atomic::Ordering::Relaxed);
+
         if queues.is_empty() && sender_count == 0 {
             return Err(crate::queue::RecvError);
         }
@@ -98,6 +107,7 @@ impl<T> PriorityQueueState<T> {
         let mut queues = self.queues.lock();
 
         let sender_count = self.sender_count.load(std::sync::atomic::Ordering::Relaxed);
+
         if queues.is_empty() && sender_count == 0 {
             return Err(crate::queue::RecvError);
         }
@@ -116,10 +126,12 @@ impl<T> PriorityQueueState<T> {
             if let Some(guard) = self.queues.try_lock() {
                 break guard;
             }
+
             std::hint::spin_loop();
         };
 
         let sender_count = self.sender_count.load(std::sync::atomic::Ordering::Relaxed);
+
         if queues.is_empty() && sender_count == 0 {
             return Err(crate::queue::RecvError);
         }
@@ -144,11 +156,13 @@ impl<T> PriorityQueueSender<T> {
 
     pub fn send(&self, priority: Priority, item: T) -> Result<(), SendError<T>> {
         self.state.send(priority, item)?;
+
         Ok(())
     }
 
     pub fn spin_send(&self, priority: Priority, item: T) -> Result<(), SendError<T>> {
         self.state.spin_send(priority, item)?;
+
         Ok(())
     }
 }
@@ -173,6 +187,7 @@ impl<T> Clone for PriorityQueueReceiver<T> {
         self.state
             .receiver_count
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+
         Self {
             state: Arc::clone(&self.state),
             rand: SmallRng::seed_from_u64(0),
@@ -207,6 +222,7 @@ impl<T> PriorityQueueReceiver<T> {
             receiver_count: AtomicUsize::new(1),
             sender_count: AtomicUsize::new(1),
         };
+
         let state = Arc::new(state);
 
         let sender = PriorityQueueSender::new(Arc::clone(&state));
@@ -228,6 +244,7 @@ impl<T> PriorityQueueReceiver<T> {
     /// Returns the number of queued elements across all priorities.
     pub(crate) fn len(&self) -> usize {
         let queues = self.state.queues.lock();
+
         queues.high_priority.len() + queues.medium_priority.len() + queues.low_priority.len()
     }
 
@@ -259,22 +276,27 @@ impl<T> PriorityQueueReceiver<T> {
 
         if !queues.high_priority.is_empty() {
             let flip = self.rand.random_ratio(P::High.weight(), mass);
+
             if flip {
                 return Ok(queues.high_priority.pop_front());
             }
+
             mass -= P::High.weight();
         }
 
         if !queues.medium_priority.is_empty() {
             let flip = self.rand.random_ratio(P::Medium.weight(), mass);
+
             if flip {
                 return Ok(queues.medium_priority.pop_front());
             }
+
             mass -= P::Medium.weight();
         }
 
         if !queues.low_priority.is_empty() {
             let flip = self.rand.random_ratio(P::Low.weight(), mass);
+
             if flip {
                 return Ok(queues.low_priority.pop_front());
             }
@@ -320,7 +342,9 @@ impl<T> PriorityQueueReceiver<T> {
             let Some(queues) = self.state.try_recv()? else {
                 return Ok(None);
             };
+
             queues
+
         } else {
             self.state.recv()?
         };
@@ -332,22 +356,27 @@ impl<T> PriorityQueueReceiver<T> {
 
         if !queues.high_priority.is_empty() {
             let flip = self.rand.random_ratio(P::High.weight(), mass);
+
             if flip {
                 return Ok(queues.high_priority.pop_front());
             }
+
             mass -= P::High.weight();
         }
 
         if !queues.medium_priority.is_empty() {
             let flip = self.rand.random_ratio(P::Medium.weight(), mass);
+
             if flip {
                 return Ok(queues.medium_priority.pop_front());
             }
+
             mass -= P::Medium.weight();
         }
 
         if !queues.low_priority.is_empty() {
             let flip = self.rand.random_ratio(P::Low.weight(), mass);
+
             if flip {
                 return Ok(queues.low_priority.pop_front());
             }
@@ -367,6 +396,7 @@ impl<T> Drop for PriorityQueueReceiver<T> {
 
 #[doc(hidden)]
 pub struct Iter<T>(PriorityQueueReceiver<T>);
+
 impl<T> Iterator for Iter<T> {
     type Item = T;
 
@@ -374,6 +404,7 @@ impl<T> Iterator for Iter<T> {
         self.0.pop().ok()
     }
 }
+
 impl<T> FusedIterator for Iter<T> {}
 
 #[doc(hidden)]
@@ -381,6 +412,7 @@ pub struct TryIter<T> {
     receiver: PriorityQueueReceiver<T>,
     ended: bool,
 }
+
 impl<T> Iterator for TryIter<T> {
     type Item = Result<T, RecvError>;
 
@@ -390,11 +422,13 @@ impl<T> Iterator for TryIter<T> {
         }
 
         let res = self.receiver.try_pop();
+
         self.ended = res.is_err();
 
         res.transpose()
     }
 }
+
 impl<T> FusedIterator for TryIter<T> {}
 
 #[cfg(test)]
@@ -406,6 +440,7 @@ mod tests {
     #[test]
     fn all_tasks_get_yielded() {
         let (tx, mut rx) = PriorityQueueReceiver::new();
+
         tx.send(Priority::Medium, 20).unwrap();
         tx.send(Priority::High, 30).unwrap();
         tx.send(Priority::Low, 10).unwrap();
@@ -423,12 +458,15 @@ mod tests {
     #[test]
     fn new_high_prio_task_get_scheduled_quickly() {
         let (tx, mut rx) = PriorityQueueReceiver::new();
+
         for _ in 0..100 {
             tx.send(Priority::Low, 1).unwrap();
         }
 
         assert_eq!(rx.pop().unwrap(), 1);
+
         tx.send(Priority::High, 3).unwrap();
+
         assert_eq!(rx.pop().unwrap(), 3);
         assert_eq!(rx.pop().unwrap(), 1);
     }

@@ -3,9 +3,11 @@ use crate::{
     FocusHandle, FocusOutEvent, Focusable, Global, KeystrokeObserver, Priority, Reservation,
     SubscriberSet, Subscription, Task, WeakEntity, WeakFocusHandle, Window, WindowHandle,
 };
+
 use anyhow::Result;
 use futures::FutureExt;
 use gpui_util::Deferred;
+
 use std::{
     any::{Any, TypeId},
     borrow::{Borrow, BorrowMut},
@@ -153,10 +155,13 @@ impl<'a, T: 'static> Context<'a, T> {
         W: 'static,
     {
         let this = self.weak_entity();
+
         self.app.observe_internal(entity, move |e, cx| {
             if let Some(this) = this.upgrade() {
                 this.update(cx, |this, cx| on_notify(this, e, cx));
+
                 true
+
             } else {
                 false
             }
@@ -175,6 +180,7 @@ impl<'a, T: 'static> Context<'a, T> {
         T: 'static,
     {
         let this = self.entity();
+
         self.app.observe(&this, move |this, cx| {
             this.update(cx, |this, cx| on_event(this, cx))
         })
@@ -239,10 +245,13 @@ impl<'a, T: 'static> Context<'a, T> {
         Evt: 'static,
     {
         let this = self.weak_entity();
+
         self.app.subscribe_internal(entity, move |e, event, cx| {
             if let Some(this) = this.upgrade() {
                 this.update(cx, |this, cx| on_event(this, e, event, cx));
+
                 true
+
             } else {
                 false
             }
@@ -262,6 +271,7 @@ impl<'a, T: 'static> Context<'a, T> {
         Evt: 'static,
     {
         let this = self.entity();
+
         self.app.subscribe(&this, move |this, evt, cx| {
             this.update(cx, |this, cx| on_event(this, evt, cx))
         })
@@ -284,10 +294,13 @@ impl<'a, T: 'static> Context<'a, T> {
             self.entity_state.entity_id,
             Box::new(move |this, cx| {
                 let this = this.downcast_mut().expect("invalid entity type");
+
                 on_release(this, cx);
             }),
         );
+
         activate();
+
         subscription
     }
 
@@ -307,16 +320,20 @@ impl<'a, T: 'static> Context<'a, T> {
     {
         let entity_id = entity.entity_id();
         let this = self.weak_entity();
+
         let (subscription, activate) = self.app.release_listeners.insert(
             entity_id,
             Box::new(move |entity, cx| {
                 let entity = entity.downcast_mut().expect("invalid entity type");
+
                 if let Some(this) = this.upgrade() {
                     this.update(cx, |this, cx| on_release(this, entity, cx));
                 }
             }),
         );
+
         activate();
+
         subscription
     }
 
@@ -333,11 +350,14 @@ impl<'a, T: 'static> Context<'a, T> {
         T: 'static,
     {
         let handle = self.weak_entity();
+
         let (subscription, activate) = self.global_observers.insert(
             TypeId::of::<G>(),
             Box::new(move |cx| handle.update(cx, |view, cx| f(view, cx)).is_ok()),
         );
+
         self.defer(move |_| activate());
+
         subscription
     }
 
@@ -353,6 +373,7 @@ impl<'a, T: 'static> Context<'a, T> {
         T: 'static,
     {
         let handle = self.weak_entity();
+
         self.app.on_app_restart(move |cx| {
             handle.update(cx, |entity, cx| on_restart(entity, cx)).ok();
         })
@@ -372,8 +393,10 @@ impl<'a, T: 'static> Context<'a, T> {
         T: 'static,
     {
         let handle = self.weak_entity();
+
         self.app.on_app_quit(move |cx| {
             let future = handle.update(cx, |entity, cx| on_quit(entity, cx)).ok();
+
             async move {
                 if let Some(future) = future {
                     future.await;
@@ -472,6 +495,7 @@ impl<'a, T: 'static> Context<'a, T> {
         R: 'static,
     {
         let this = self.weak_entity();
+
         self.app.spawn(async move |cx| f(this, cx).await)
     }
 
@@ -521,6 +545,7 @@ impl<'a, T: 'static> Context<'a, T> {
         f: impl Fn(&mut T, &E, &mut Window, &mut Context<T>) + 'static,
     ) -> impl Fn(&E, &mut Window, &mut App) + 'static {
         let view = self.entity().downgrade();
+
         move |e: &E, window: &mut Window, cx: &mut App| {
             view.update(cx, |view, cx| f(view, e, window, cx)).ok();
         }
@@ -536,6 +561,7 @@ impl<'a, T: 'static> Context<'a, T> {
         f: impl Fn(&mut T, E, &mut Window, &mut Context<T>) -> R + 'static,
     ) -> impl Fn(E, &mut Window, &mut App) -> R + 'static {
         let view = self.entity();
+
         move |e: E, window: &mut Window, cx: &mut App| {
             view.update(cx, |view, cx| f(view, e, window, cx))
         }
@@ -556,6 +582,7 @@ impl<'a, T: 'static> Context<'a, T> {
     ) -> Deferred<impl FnOnce()> {
         let this = self.weak_entity();
         let mut cx = self.to_async();
+
         gpui_util::defer(move || {
             this.update(&mut cx, f).ok();
         })
@@ -579,6 +606,7 @@ impl<'a, T: 'static> Context<'a, T> {
         T: 'static,
     {
         let view = self.entity();
+
         window.on_next_frame(move |window, cx| view.update(cx, |view, cx| f(view, window, cx)));
     }
 
@@ -594,7 +622,9 @@ impl<'a, T: 'static> Context<'a, T> {
     ) {
         let view = self.weak_entity();
         let entity_id = self.entity_id();
+
         self.ensure_window(entity_id, window.handle.id);
+
         self.app.defer(move |cx| {
             cx.with_window(entity_id, |window, cx| {
                 view.update(cx, |view, cx| f(view, window, cx)).ok();
@@ -620,18 +650,22 @@ impl<'a, T: 'static> Context<'a, T> {
         let observed = observed.downgrade();
         let observer = self.weak_entity();
         let observer_id = self.entity_id();
+
         self.ensure_window(observer_id, window.handle.id);
+
         self.new_observer(
             observed_id,
             Box::new(move |cx| {
                 let Some((observer, observed)) = observer.upgrade().zip(observed.upgrade()) else {
                     return false;
                 };
+
                 cx.with_window(observer_id, |window, cx| {
                     observer.update(cx, |observer, cx| {
                         on_notify(observer, observed, window, cx);
                     });
                 });
+
                 true
             }),
         )
@@ -654,7 +688,9 @@ impl<'a, T: 'static> Context<'a, T> {
         let emitter = emitter.downgrade();
         let subscriber = self.weak_entity();
         let subscriber_id = self.entity_id();
+
         self.ensure_window(subscriber_id, window.handle.id);
+
         self.new_subscription(
             emitter.entity_id(),
             (
@@ -664,12 +700,15 @@ impl<'a, T: 'static> Context<'a, T> {
                     else {
                         return false;
                     };
+
                     let event = event.downcast_ref().expect("invalid event type");
+
                     cx.with_window(subscriber_id, |window, cx| {
                         subscriber.update(cx, |subscriber, cx| {
                             on_event(subscriber, &emitter, event, window, cx);
                         });
                     });
+
                     true
                 }),
             ),
@@ -685,6 +724,7 @@ impl<'a, T: 'static> Context<'a, T> {
         on_release: impl FnOnce(&mut T, &mut Window, &mut App) + 'static,
     ) -> Subscription {
         let entity = self.entity();
+
         self.app.observe_release_in(&entity, window, on_release)
     }
 
@@ -702,6 +742,7 @@ impl<'a, T: 'static> Context<'a, T> {
         T2: 'static,
     {
         let observer = self.weak_entity();
+
         self.app
             .observe_release_in(observed, window, move |observed, window, cx| {
                 observer
@@ -722,6 +763,7 @@ impl<'a, T: 'static> Context<'a, T> {
         mut callback: impl FnMut(&mut T, &mut Window, &mut Context<T>) + 'static,
     ) -> Subscription {
         let view = self.weak_entity();
+
         let (subscription, activate) = window.bounds_observers.insert(
             (),
             Box::new(move |window, cx| {
@@ -729,7 +771,9 @@ impl<'a, T: 'static> Context<'a, T> {
                     .is_ok()
             }),
         );
+
         activate();
+
         subscription
     }
 
@@ -743,6 +787,7 @@ impl<'a, T: 'static> Context<'a, T> {
         mut callback: impl FnMut(&mut T, &mut Window, &mut Context<T>) + 'static,
     ) -> Subscription {
         let view = self.weak_entity();
+
         let (subscription, activate) = window.activation_observers.insert(
             (),
             Box::new(move |window, cx| {
@@ -750,7 +795,9 @@ impl<'a, T: 'static> Context<'a, T> {
                     .is_ok()
             }),
         );
+
         activate();
+
         subscription
     }
 
@@ -764,6 +811,7 @@ impl<'a, T: 'static> Context<'a, T> {
         mut callback: impl FnMut(&mut T, &mut Window, &mut Context<T>) + 'static,
     ) -> Subscription {
         let view = self.weak_entity();
+
         let (subscription, activate) = window.appearance_observers.insert(
             (),
             Box::new(move |window, cx| {
@@ -771,7 +819,9 @@ impl<'a, T: 'static> Context<'a, T> {
                     .is_ok()
             }),
         );
+
         activate();
+
         subscription
     }
 
@@ -785,6 +835,7 @@ impl<'a, T: 'static> Context<'a, T> {
         mut callback: impl FnMut(&mut T, &mut Window, &mut Context<T>) + 'static,
     ) -> Subscription {
         let view = self.weak_entity();
+
         let (subscription, activate) = window.button_layout_observers.insert(
             (),
             Box::new(move |window, cx| {
@@ -792,7 +843,9 @@ impl<'a, T: 'static> Context<'a, T> {
                     .is_ok()
             }),
         );
+
         activate();
+
         subscription
     }
 
@@ -811,17 +864,22 @@ impl<'a, T: 'static> Context<'a, T> {
             handler: KeystrokeObserver,
         ) -> Subscription {
             let (subscription, activate) = keystroke_observers.insert((), handler);
+
             activate();
+
             subscription
         }
 
         let view = self.weak_entity();
+
         inner(
             &self.keystroke_observers,
             Box::new(move |event, window, cx| {
                 if let Some(view) = view.upgrade() {
                     view.update(cx, |view, cx| f(view, event, window, cx));
+
                     true
+
                 } else {
                     false
                 }
@@ -840,6 +898,7 @@ impl<'a, T: 'static> Context<'a, T> {
         mut callback: impl FnMut(&mut T, &mut Window, &mut Context<T>) + 'static,
     ) -> Subscription {
         let view = self.weak_entity();
+
         let (subscription, activate) = window.pending_input_observers.insert(
             (),
             Box::new(move |window, cx| {
@@ -847,7 +906,9 @@ impl<'a, T: 'static> Context<'a, T> {
                     .is_ok()
             }),
         );
+
         activate();
+
         subscription
     }
 
@@ -864,6 +925,7 @@ impl<'a, T: 'static> Context<'a, T> {
     ) -> Subscription {
         let view = self.weak_entity();
         let focus_id = handle.id;
+
         let (subscription, activate) =
             window.new_focus_listener(Box::new(move |event, window, cx| {
                 view.update(cx, |view, cx| {
@@ -875,7 +937,9 @@ impl<'a, T: 'static> Context<'a, T> {
                 })
                 .is_ok()
             }));
+
         self.defer(|_| activate());
+
         subscription
     }
 
@@ -891,6 +955,7 @@ impl<'a, T: 'static> Context<'a, T> {
     ) -> Subscription {
         let view = self.weak_entity();
         let focus_id = handle.id;
+
         let (subscription, activate) =
             window.new_focus_listener(Box::new(move |event, window, cx| {
                 view.update(cx, |view, cx| {
@@ -900,7 +965,9 @@ impl<'a, T: 'static> Context<'a, T> {
                 })
                 .is_ok()
             }));
+
         self.defer(|_| activate());
+
         subscription
     }
 
@@ -918,6 +985,7 @@ impl<'a, T: 'static> Context<'a, T> {
     ) -> Subscription {
         let view = self.weak_entity();
         let focus_id = handle.id;
+
         let (subscription, activate) =
             window.new_focus_listener(Box::new(move |event, window, cx| {
                 view.update(cx, |view, cx| {
@@ -929,7 +997,9 @@ impl<'a, T: 'static> Context<'a, T> {
                 })
                 .is_ok()
             }));
+
         self.defer(|_| activate());
+
         subscription
     }
 
@@ -943,6 +1013,7 @@ impl<'a, T: 'static> Context<'a, T> {
         mut listener: impl FnMut(&mut T, &mut Window, &mut Context<T>) + 'static,
     ) -> Subscription {
         let view = self.weak_entity();
+
         let (subscription, activate) = window.focus_lost_listeners.insert(
             (),
             Box::new(move |window, cx| {
@@ -950,7 +1021,9 @@ impl<'a, T: 'static> Context<'a, T> {
                     .is_ok()
             }),
         );
+
         self.defer(|_| activate());
+
         subscription
     }
 
@@ -966,6 +1039,7 @@ impl<'a, T: 'static> Context<'a, T> {
     ) -> Subscription {
         let view = self.weak_entity();
         let focus_id = handle.id;
+
         let (subscription, activate) =
             window.new_focus_listener(Box::new(move |event, window, cx| {
                 view.update(cx, |view, cx| {
@@ -978,12 +1052,15 @@ impl<'a, T: 'static> Context<'a, T> {
                                 handles: Arc::downgrade(&cx.focus_handles),
                             },
                         };
+
                         listener(view, event, window, cx)
                     }
                 })
                 .is_ok()
             }));
+
         self.defer(|_| activate());
+
         subscription
     }
 
@@ -1002,6 +1079,7 @@ impl<'a, T: 'static> Context<'a, T> {
         AsyncFn: AsyncFnOnce(WeakEntity<T>, &mut AsyncWindowContext) -> R + 'static,
     {
         let view = self.weak_entity();
+
         window.spawn(self, async move |cx| f(view, cx).await)
     }
 
@@ -1021,6 +1099,7 @@ impl<'a, T: 'static> Context<'a, T> {
         AsyncFn: AsyncFnOnce(WeakEntity<T>, &mut AsyncWindowContext) -> R + 'static,
     {
         let view = self.weak_entity();
+
         window.spawn_with_priority(priority, self, async move |cx| f(view, cx).await)
     }
 
@@ -1036,6 +1115,7 @@ impl<'a, T: 'static> Context<'a, T> {
     ) -> Subscription {
         let window_handle = window.handle;
         let view = self.weak_entity();
+
         let (subscription, activate) = self.global_observers.insert(
             TypeId::of::<G>(),
             Box::new(move |cx| {
@@ -1043,6 +1123,7 @@ impl<'a, T: 'static> Context<'a, T> {
                 if view.upgrade().is_none() {
                     return false;
                 }
+
                 // If the window is unavailable (e.g. temporarily taken during a
                 // nested update, or already closed), skip this notification but
                 // keep the observer alive so it can fire on future changes.
@@ -1051,10 +1132,13 @@ impl<'a, T: 'static> Context<'a, T> {
                 }) else {
                     return true;
                 };
+
                 entity_alive
             }),
         );
+
         self.defer(move |_| activate());
+
         subscription
     }
 
@@ -1073,6 +1157,7 @@ impl<'a, T: 'static> Context<'a, T> {
         listener: impl Fn(&mut T, &dyn Any, DispatchPhase, &mut Window, &mut Context<T>) + 'static,
     ) {
         let handle = self.weak_entity();
+
         window.on_action(action_type, move |action, phase, window, cx| {
             handle
                 .update(cx, |view, cx| {
@@ -1091,6 +1176,7 @@ impl<'a, T: 'static> Context<'a, T> {
         T: Focusable,
     {
         let view = self.entity();
+
         window.defer(self, move |window, cx| {
             view.read(cx).focus_handle(cx).focus(window, cx)
         })

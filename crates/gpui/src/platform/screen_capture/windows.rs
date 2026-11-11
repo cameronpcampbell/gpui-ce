@@ -6,9 +6,11 @@ pub(super) fn screen_sources(
     foreground_executor: &ForegroundExecutor,
 ) -> oneshot::Receiver<Result<Vec<Rc<dyn ScreenCaptureSource>>>> {
     let (sources_tx, sources_rx) = oneshot::channel();
+
     std::thread::spawn(|| {
         let sources = Monitor::enumerate().map(|monitors| {
             let primary = Monitor::primary().ok();
+
             monitors
                 .into_iter()
                 .enumerate()
@@ -16,18 +18,23 @@ pub(super) fn screen_sources(
                     |(index, monitor)| match CaptureSource::new(monitor, index) {
                         Ok(mut source) => {
                             source.metadata.is_main = primary.map(|primary| primary == monitor);
+
                             Some(source)
                         }
+
                         Err(error) => {
                             log::warn!("ignoring an unavailable Windows monitor: {error}");
+
                             None
                         }
                     },
                 )
                 .collect()
         });
+
         sources_tx.send(sources.map_err(anyhow::Error::from)).ok();
     });
+
     to_dyn_screen_capture_sources(sources_rx, foreground_executor)
 }
 
@@ -43,11 +50,13 @@ impl CaptureSource {
     ) -> std::result::Result<Self, windows_capture::monitor::Error> {
         let width = monitor.width()?;
         let height = monitor.height()?;
+
         let label = monitor
             .name()
             .or_else(|_| monitor.device_name())
             .ok()
             .map(Into::into);
+
         Ok(Self {
             monitor,
             metadata: SourceMetadata {
@@ -94,6 +103,7 @@ fn capture_monitor(
     };
 
     let (stream_tx, stream_rx) = oneshot::channel();
+
     let settings = Settings::new(
         monitor,
         CursorCaptureSettings::WithCursor,
@@ -104,13 +114,16 @@ fn capture_monitor(
         ColorFormat::Bgra8,
         frame_callback,
     );
+
     let stream = CaptureHandler::start_free_threaded(settings)
         .map(|capture| CaptureStream {
             capture: Some(capture),
             metadata: metadata.clone(),
         })
         .map_err(anyhow::Error::from);
+
     stream_tx.send(stream).ok();
+
     to_dyn_screen_capture_stream(stream_rx, foreground_executor)
 }
 
@@ -136,6 +149,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for CaptureHandler {
         _control: windows_capture::graphics_capture_api::InternalCaptureControl,
     ) -> std::result::Result<(), Self::Error> {
         let texture = unsafe { frame.as_raw_texture() }.clone();
+
         let frame = WindowsScreenCaptureFrame::new(
             texture,
             crate::size(
@@ -144,6 +158,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for CaptureHandler {
             ),
             frame.timestamp().Duration.max(0) as u64,
         );
+
         (self.frame_callback)(ScreenCaptureFrame(frame));
         Ok(())
     }

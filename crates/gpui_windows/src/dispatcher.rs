@@ -8,6 +8,7 @@ use std::{
 
 use anyhow::Context;
 use gpui_util::ResultExt;
+
 use windows::Win32::{
     Foundation::{FILETIME, LPARAM, WPARAM},
     Media::{timeBeginPeriod, timeEndPeriod},
@@ -21,6 +22,7 @@ use windows::Win32::{
 };
 
 use crate::{HWND, SafeHwnd, WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD};
+
 use gpui::{
     PlatformDispatcher, Priority, PriorityQueueSender, RunnableVariant, TimerResolutionGuard,
 };
@@ -79,10 +81,12 @@ impl WindowsDispatcher {
                 // Negative FILETIME expresses a relative delay in 100ns ticks
                 let ticks = (duration.as_nanos() / 100).min(i64::MAX as u128) as i64;
                 let due = (-ticks) as u64;
+
                 let due_time = FILETIME {
                     dwLowDateTime: due as u32,
                     dwHighDateTime: (due >> 32) as u32,
                 };
+
                 SetThreadpoolTimer(timer, Some(&due_time), 0, None);
             }
         }
@@ -92,8 +96,11 @@ impl WindowsDispatcher {
     pub(crate) fn execute_runnable(runnable: RunnableVariant) {
         let location = runnable.metadata().location;
         let spawned = runnable.metadata().spawned;
+
         gpui::profiler::update_running_task(spawned, location);
+
         runnable.run();
+
         gpui::profiler::save_task_timing();
     }
 }
@@ -108,10 +115,12 @@ impl PlatformDispatcher for WindowsDispatcher {
             Priority::RealtimeAudio => {
                 panic!("RealtimeAudio priority should use spawn_realtime, not dispatch")
             }
+
             Priority::High => TP_CALLBACK_PRIORITY_HIGH,
             Priority::Medium => TP_CALLBACK_PRIORITY_NORMAL,
             Priority::Low => TP_CALLBACK_PRIORITY_LOW,
         };
+
         self.dispatch_on_threadpool(priority, runnable);
     }
 
@@ -130,6 +139,7 @@ impl PlatformDispatcher for WindowsDispatcher {
                     }
                 }
             }
+
             Err(runnable) => {
                 // NOTE: Runnable may wrap a Future that is !Send.
                 //
@@ -166,6 +176,7 @@ impl PlatformDispatcher for WindowsDispatcher {
         unsafe {
             timeBeginPeriod(1);
         }
+
         gpui_util::defer(Box::new(|| unsafe {
             timeEndPeriod(1);
         }))
@@ -177,6 +188,7 @@ unsafe extern "system" fn run_work_callback(
     context: *mut c_void,
 ) {
     let runnable = unsafe { RunnableVariant::from_raw(NonNull::new_unchecked(context as *mut ())) };
+
     WindowsDispatcher::execute_runnable(runnable);
 }
 
@@ -186,6 +198,8 @@ unsafe extern "system" fn run_timer_callback(
     timer: PTP_TIMER,
 ) {
     let runnable = unsafe { RunnableVariant::from_raw(NonNull::new_unchecked(context as *mut ())) };
+
     WindowsDispatcher::execute_runnable(runnable);
+
     unsafe { CloseThreadpoolTimer(timer) };
 }

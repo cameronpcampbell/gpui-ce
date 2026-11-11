@@ -26,6 +26,7 @@ impl StyleTransitionContext {
         containing_bounds: Option<Bounds<Pixels>>,
     ) -> Self {
         self.containing_bounds = containing_bounds;
+
         self
     }
 }
@@ -212,19 +213,23 @@ fn apply_auto_size(
 ) -> bool {
     let Some(motion) = motion else {
         *state = None;
+
         return false;
     };
 
     let authored_goal = *value;
     let state = state.get_or_insert_with(Default::default);
+
     let bounds_value = context.bounds.map(|bounds| match axis {
         StyleTransitionAxis::Width => bounds.size.width,
         StyleTransitionAxis::Height => bounds.size.height,
     });
+
     let endpoint = match authored_goal {
         Length::Definite(DefiniteLength::Absolute(length)) => {
             Some(length.to_pixels(context.rem_size))
         }
+
         Length::Definite(DefiniteLength::Relative(_)) => None,
         Length::Auto => state.resolved_auto,
     };
@@ -234,18 +239,23 @@ fn apply_auto_size(
             if let Some(bounds_value) = bounds_value {
                 state.resolved_auto = Some(bounds_value);
                 state.pending_auto_capture = false;
+
                 match state.animated.as_mut() {
                     Some(animated) => animated.jump_to(bounds_value),
                     None => state.animated = Some(Animated::new(bounds_value, motion.clone())),
                 }
+
             } else {
                 state.pending_auto_capture = true;
             }
+
         } else {
             state.animated = None;
             state.pending_auto_capture = false;
         }
+
         state.authored_goal = Some(authored_goal);
+
         return false;
     };
 
@@ -253,12 +263,15 @@ fn apply_auto_size(
         if let Some(bounds_value) = bounds_value {
             state.resolved_auto = Some(bounds_value);
             state.pending_auto_capture = false;
+
             match state.animated.as_mut() {
                 Some(animated) => animated.jump_to(bounds_value),
                 None => state.animated = Some(Animated::new(bounds_value, motion.clone())),
             }
         }
+
         state.authored_goal = Some(authored_goal);
+
         return false;
     }
 
@@ -273,20 +286,25 @@ fn apply_auto_size(
     }
 
     let evaluation = StyleTransitionEvaluation::from_sample(animated.sample(now));
+
     state.authored_goal = Some(authored_goal);
 
     if !evaluation.presents_authored_target() {
         let sampled_value = evaluation
             .value
             .expect("an Animated sample always contains a value");
+
         *value = Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Pixels(
             sampled_value,
         )));
+
     } else if authored_goal == Length::Auto
         && let Some(bounds_value) = bounds_value
     {
         state.resolved_auto = Some(bounds_value);
+
         animated.jump_to(bounds_value);
+
     } else {
         animated.adopt_completed_target();
     }
@@ -320,6 +338,7 @@ where
     T: Lerp + Clone + PartialEq,
 {
     let target = value.clone();
+
     apply_required_target(state, value, Some(target), motion, now, reduce_motion)
 }
 
@@ -336,18 +355,22 @@ where
 {
     let Some(motion) = motion else {
         *state = None;
+
         return false;
     };
+
     let Some(target) = target else {
         return false;
     };
 
     let evaluation = evaluate(state, Some(target), motion, now, reduce_motion);
+
     if !evaluation.presents_authored_target()
         && let Some(evaluated_value) = evaluation.value
     {
         *value = evaluated_value;
     }
+
     evaluation.is_active
 }
 
@@ -363,14 +386,17 @@ where
 {
     let Some(motion) = motion else {
         *state = None;
+
         return false;
     };
 
     let target = value.clone().unwrap_or_default();
     let evaluation = evaluate(state, Some(target), motion, now, reduce_motion);
+
     if !evaluation.presents_authored_target() {
         *value = evaluation.value;
     }
+
     evaluation.is_active
 }
 
@@ -385,6 +411,7 @@ fn apply_inset(
 ) -> bool {
     let Some(motion) = motion else {
         *state = None;
+
         return false;
     };
 
@@ -400,15 +427,20 @@ fn apply_inset(
         if authored_goal == Length::Auto && !state.active {
             let resolved_auto = match edge {
                 StyleTransitionEdge::Top => bounds.origin.y - containing_bounds.origin.y,
+
                 StyleTransitionEdge::Right => {
                     containing_bounds.bottom_right().x - bounds.bottom_right().x
                 }
+
                 StyleTransitionEdge::Bottom => {
                     containing_bounds.bottom_right().y - bounds.bottom_right().y
                 }
+
                 StyleTransitionEdge::Left => bounds.origin.x - containing_bounds.origin.x,
             };
+
             state.resolved_auto = Some(resolved_auto);
+
             if let Some(animated) = state.animated.as_mut() {
                 animated.jump_to(resolved_auto);
             }
@@ -417,8 +449,10 @@ fn apply_inset(
 
     let endpoint = match authored_goal {
         Length::Auto => state.resolved_auto,
+
         Length::Definite(length) => match length {
             DefiniteLength::Absolute(length) => Some(length.to_pixels(context.rem_size)),
+
             DefiniteLength::Relative(_) => state.containing_size.map(|containing_size| {
                 length.to_pixels(AbsoluteLength::Pixels(containing_size), context.rem_size)
             }),
@@ -429,10 +463,12 @@ fn apply_inset(
         state.authored_goal = Some(authored_goal);
         state.active = false;
         state.animated = None;
+
         return false;
     };
 
     let previous_goal = state.authored_goal;
+
     let animated = state.animated.get_or_insert_with(|| {
         Animated::new(
             if previous_goal == Some(Length::Auto) {
@@ -455,6 +491,7 @@ fn apply_inset(
     }
 
     let evaluation = StyleTransitionEvaluation::from_sample(animated.sample(now));
+
     state.authored_goal = Some(authored_goal);
     state.active = evaluation.is_active;
 
@@ -462,9 +499,11 @@ fn apply_inset(
         let sampled_value = evaluation
             .value
             .expect("an Animated sample always contains a value");
+
         *value = Length::Definite(DefiniteLength::Absolute(AbsoluteLength::Pixels(
             sampled_value,
         )));
+
     } else {
         animated.adopt_completed_target();
     }
@@ -485,9 +524,11 @@ where
     fn jump_to(&mut self, goal: Option<T>, motion: &AnyMotion) {
         match (self.animated.as_mut(), goal) {
             (Some(animated), Some(goal)) => animated.jump_to(goal),
+
             (_, Some(goal)) => {
                 self.animated = Some(Animated::new(goal, motion.clone()));
             }
+
             (_, None) => self.animated = None,
         }
     }
@@ -501,6 +542,7 @@ where
     ) -> StyleTransitionEvaluation<T> {
         if reduce_motion {
             self.jump_to(goal, motion);
+
             return StyleTransitionEvaluation::at_target(
                 self.animated
                     .as_ref()
@@ -510,19 +552,24 @@ where
 
         let Some(goal) = goal else {
             self.animated = None;
+
             return StyleTransitionEvaluation::at_target(None);
         };
 
         let Some(animated) = self.animated.as_mut() else {
             self.animated = Some(Animated::new(goal.clone(), motion.clone()));
+
             return StyleTransitionEvaluation::at_target(Some(goal));
         };
 
         animated.set(goal, motion, now);
+
         let evaluation = StyleTransitionEvaluation::from_sample(animated.sample(now));
+
         if evaluation.presents_authored_target() {
             animated.adopt_completed_target();
         }
+
         evaluation
     }
 }
@@ -536,6 +583,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
     use crate::{
         AbsoluteLength, AnyWindowHandle, Bounds, Corners, DefiniteLength, Edges, FocusHandle,
         InputEvent as _, Length, Motion, MotionDurationExt, MouseButton, MouseDownEvent,
@@ -549,6 +597,7 @@ mod tests {
     impl Lerp for EndpointBiased {
         fn lerp(&self, to: &Self, delta: f32) -> Self {
             let interpolated = self.0 + (to.0 - self.0) * delta;
+
             Self(if delta == 1.0 {
                 interpolated + 0.25
             } else {
@@ -563,6 +612,7 @@ mod tests {
 
     fn corners(value: f32) -> Corners<AbsoluteLength> {
         let value = AbsoluteLength::Pixels(px(value));
+
         Corners {
             top_left: value,
             top_right: value,
@@ -574,18 +624,22 @@ mod tests {
     fn size_transition_after(transitions: StyleTransitions, elapsed: Duration) -> (bool, Style) {
         let started_at = Instant::now();
         let mut state = StyleTransitionState::default();
+
         let mut style = Style {
             size: size(length(10.0), length(10.0)),
             ..Style::default()
         };
 
         let context = StyleTransitionContext::new(None, px(16.0));
+
         assert!(!transitions.apply(&mut style, &mut state, context, started_at, false));
 
         style.size = size(length(20.0), length(20.0));
+
         assert!(transitions.apply(&mut style, &mut state, context, started_at, false));
 
         style.size = size(length(20.0), length(20.0));
+
         let in_progress =
             transitions.apply(&mut style, &mut state, context, started_at + elapsed, false);
 
@@ -595,15 +649,19 @@ mod tests {
     #[test]
     fn alternating_style_motion_keeps_its_origin_after_completion() {
         let started_at = Instant::now();
+
         let motion = Motion::new(Duration::from_secs(1))
             .with_delay(Duration::from_millis(500))
             .iterations(2)
             .alternate();
+
         let transitions = StyleTransitions::new()
             .flex_grow(motion.clone())
             .opacity(motion);
+
         let context = StyleTransitionContext::new(None, px(16.0));
         let mut state = StyleTransitionState::default();
+
         let mut style = Style {
             flex_grow: 4.0,
             opacity: Some(1.0),
@@ -626,6 +684,7 @@ mod tests {
                 opacity: None,
                 ..Style::default()
             };
+
             assert_eq!(
                 transitions.apply(
                     &mut style,
@@ -636,6 +695,7 @@ mod tests {
                 ),
                 active
             );
+
             assert_eq!(style.flex_grow, expected_grow);
             assert_eq!(style.opacity, expected_opacity);
         }
@@ -645,6 +705,7 @@ mod tests {
             opacity: None,
             ..Style::default()
         };
+
         assert!(!transitions.apply(
             &mut style,
             &mut state,
@@ -652,6 +713,7 @@ mod tests {
             started_at + Duration::from_millis(3_100),
             true,
         ));
+
         assert_eq!((style.flex_grow, style.opacity), (20.0, None));
 
         assert!(!transitions.apply(
@@ -661,6 +723,7 @@ mod tests {
             started_at + Duration::from_millis(3_200),
             false,
         ));
+
         assert_eq!((style.flex_grow, style.opacity), (20.0, None));
     }
 
@@ -680,6 +743,7 @@ mod tests {
         ));
 
         value = EndpointBiased(20.0);
+
         assert!(apply_required(
             &mut state,
             &mut value,
@@ -687,9 +751,11 @@ mod tests {
             started_at,
             false,
         ));
+
         assert_eq!(value, EndpointBiased(10.0));
 
         value = EndpointBiased(20.0);
+
         assert!(apply_required(
             &mut state,
             &mut value,
@@ -697,9 +763,11 @@ mod tests {
             started_at + Duration::from_millis(500),
             false,
         ));
+
         assert_eq!(value, EndpointBiased(15.0));
 
         value = EndpointBiased(20.0);
+
         assert!(!apply_required(
             &mut state,
             &mut value,
@@ -707,9 +775,11 @@ mod tests {
             started_at + Duration::from_secs(1),
             false,
         ));
+
         assert_eq!(value, EndpointBiased(20.0));
 
         value = EndpointBiased(30.0);
+
         assert!(apply_required(
             &mut state,
             &mut value,
@@ -717,9 +787,11 @@ mod tests {
             started_at + Duration::from_secs(2),
             false,
         ));
+
         assert_eq!(value, EndpointBiased(20.0));
 
         value = EndpointBiased(30.0);
+
         assert!(apply_required(
             &mut state,
             &mut value,
@@ -727,13 +799,16 @@ mod tests {
             started_at + Duration::from_millis(2_500),
             false,
         ));
+
         assert_eq!(value, EndpointBiased(25.0));
 
         let nonstandard_endpoint: AnyMotion = Motion::new(Duration::from_secs(1))
             .with_easing(|_| 0.5)
             .into();
+
         let mut state = None;
         let mut value = 10.0_f32;
+
         assert!(!apply_required(
             &mut state,
             &mut value,
@@ -743,6 +818,7 @@ mod tests {
         ));
 
         value = 20.0;
+
         assert!(apply_required(
             &mut state,
             &mut value,
@@ -750,9 +826,11 @@ mod tests {
             started_at,
             false,
         ));
+
         assert_eq!(value, 15.0);
 
         value = 20.0;
+
         assert!(!apply_required(
             &mut state,
             &mut value,
@@ -760,6 +838,7 @@ mod tests {
             started_at + Duration::from_secs(1),
             false,
         ));
+
         assert_eq!(value, 15.0);
     }
 
@@ -779,6 +858,7 @@ mod tests {
         ));
 
         value = None;
+
         assert!(apply_optional(
             &mut state,
             &mut value,
@@ -786,9 +866,11 @@ mod tests {
             started_at,
             false,
         ));
+
         assert_eq!(value, Some(EndpointBiased(10.0)));
 
         value = None;
+
         assert!(!apply_optional(
             &mut state,
             &mut value,
@@ -796,9 +878,11 @@ mod tests {
             started_at + Duration::from_secs(1),
             false,
         ));
+
         assert_eq!(value, None);
 
         value = None;
+
         assert!(!apply_optional(
             &mut state,
             &mut value,
@@ -806,13 +890,16 @@ mod tests {
             started_at + Duration::from_secs(2),
             false,
         ));
+
         assert_eq!(value, None);
 
         let nonstandard_endpoint: AnyMotion = Motion::new(Duration::from_secs(1))
             .with_easing(|_| 0.5)
             .into();
+
         let mut state = None;
         let mut value = Some(10.0_f32);
+
         assert!(!apply_optional(
             &mut state,
             &mut value,
@@ -822,6 +909,7 @@ mod tests {
         ));
 
         value = None;
+
         assert!(apply_optional(
             &mut state,
             &mut value,
@@ -829,9 +917,11 @@ mod tests {
             started_at,
             false,
         ));
+
         assert_eq!(value, Some(5.0));
 
         value = None;
+
         assert!(!apply_optional(
             &mut state,
             &mut value,
@@ -839,6 +929,7 @@ mod tests {
             started_at + Duration::from_secs(1),
             false,
         ));
+
         assert_eq!(value, Some(5.0));
     }
 
@@ -858,6 +949,7 @@ mod tests {
         ));
 
         value = Some(EndpointBiased(20.0));
+
         assert!(apply_optional(
             &mut state,
             &mut value,
@@ -865,9 +957,11 @@ mod tests {
             started_at,
             false,
         ));
+
         assert_eq!(value, Some(EndpointBiased(10.0)));
 
         value = Some(EndpointBiased(20.0));
+
         assert!(!apply_optional(
             &mut state,
             &mut value,
@@ -875,9 +969,11 @@ mod tests {
             started_at + Duration::from_secs(1),
             false,
         ));
+
         assert_eq!(value, Some(EndpointBiased(20.0)));
 
         value = Some(EndpointBiased(30.0));
+
         assert!(apply_optional(
             &mut state,
             &mut value,
@@ -885,17 +981,21 @@ mod tests {
             started_at + Duration::from_secs(2),
             false,
         ));
+
         assert_eq!(value, Some(EndpointBiased(20.0)));
     }
 
     #[test]
     fn alternating_auto_size_and_inset_keep_resolved_origins() {
         let started_at = Instant::now();
+
         let motion = Motion::new(Duration::from_secs(1))
             .iterations(2)
             .alternate();
+
         let transitions = StyleTransitions::new().w(motion.clone()).top(motion);
         let layout_context = StyleTransitionContext::new(None, px(16.0));
+
         let prepaint_context = StyleTransitionContext::new(
             Some(Bounds {
                 origin: point(px(0.0), px(15.0)),
@@ -907,6 +1007,7 @@ mod tests {
             origin: point(px(0.0), px(0.0)),
             size: size(px(300.0), px(200.0)),
         }));
+
         let mut state = StyleTransitionState::default();
         let mut style = Style::default();
 
@@ -920,8 +1021,10 @@ mod tests {
             (Duration::from_secs(3), 100.0, 15.0, false),
         ] {
             let mut style = Style::default();
+
             style.size.width = length(200.0);
             style.inset.top = length(5.0);
+
             assert_eq!(
                 transitions.apply(
                     &mut style,
@@ -932,13 +1035,16 @@ mod tests {
                 ),
                 active
             );
+
             assert_eq!(style.size.width, length(expected_width));
             assert_eq!(style.inset.top, length(expected_top));
         }
 
         let mut style = Style::default();
+
         style.size.width = length(240.0);
         style.inset.top = length(8.0);
+
         assert!(!transitions.apply(
             &mut style,
             &mut state,
@@ -946,6 +1052,7 @@ mod tests {
             started_at + Duration::from_millis(3_100),
             true,
         ));
+
         assert_eq!(style.size.width, length(240.0));
         assert_eq!(style.inset.top, length(8.0));
     }
@@ -953,9 +1060,11 @@ mod tests {
     #[test]
     fn spring_style_transitions_overshoot_retarget_and_settle() {
         let config = SpringConfig::new(100.0, 6.0, 1.0);
+
         let transitions = StyleTransitions::new()
             .flex_grow(config)
             .opacity(Motion::spring(config).with_epsilon(0.01));
+
         let context = StyleTransitionContext::new(None, px(16.0));
         let started_at = Instant::now();
         let mut state = StyleTransitionState::default();
@@ -965,23 +1074,29 @@ mod tests {
 
         style.flex_grow = 10.0;
         style.opacity = Some(1.0);
+
         assert!(transitions.apply(&mut style, &mut state, context, started_at, false));
         assert_eq!(style.flex_grow, 0.0);
 
         let overshoot_at = started_at + Duration::from_millis(350);
+
         style.flex_grow = 10.0;
         style.opacity = Some(1.0);
+
         assert!(transitions.apply(&mut style, &mut state, context, overshoot_at, false));
         assert!(style.flex_grow > 10.0);
+
         let overshoot = style.flex_grow;
 
         style.flex_grow = 20.0;
         style.opacity = Some(1.0);
+
         assert!(transitions.apply(&mut style, &mut state, context, overshoot_at, false));
         assert_eq!(style.flex_grow, overshoot);
 
         style.flex_grow = 20.0;
         style.opacity = Some(1.0);
+
         assert!(!transitions.apply(
             &mut style,
             &mut state,
@@ -989,6 +1104,7 @@ mod tests {
             overshoot_at + Duration::from_secs(5),
             false,
         ));
+
         assert_eq!(style.flex_grow, 20.0);
         assert_eq!(style.opacity, Some(1.0));
     }
@@ -997,9 +1113,11 @@ mod tests {
     fn style_transitions_follow_a_complete_lifecycle() {
         let started_at = Instant::now();
         let duration = Duration::from_secs(1);
+
         let transitions = StyleTransitions::new()
             .flex_grow(duration)
             .opacity(duration);
+
         let context = StyleTransitionContext::new(None, px(16.0));
         let mut state = StyleTransitionState::default();
         let mut style = Style::default();
@@ -1009,11 +1127,13 @@ mod tests {
 
         style.flex_grow = 10.0;
         style.opacity = Some(1.0);
+
         assert!(transitions.apply(&mut style, &mut state, context, started_at, false));
         assert_eq!((style.flex_grow, style.opacity), (0.0, Some(0.0)));
 
         style.flex_grow = 10.0;
         style.opacity = Some(1.0);
+
         assert!(transitions.apply(
             &mut style,
             &mut state,
@@ -1021,10 +1141,12 @@ mod tests {
             started_at + duration / 2,
             false,
         ));
+
         assert_eq!((style.flex_grow, style.opacity), (5.0, Some(0.5)));
 
         style.flex_grow = 20.0;
         style.opacity = None;
+
         assert!(transitions.apply(
             &mut style,
             &mut state,
@@ -1032,10 +1154,12 @@ mod tests {
             started_at + duration / 2,
             false,
         ));
+
         assert_eq!((style.flex_grow, style.opacity), (5.0, Some(0.5)));
 
         style.flex_grow = 20.0;
         style.opacity = None;
+
         assert!(transitions.apply(
             &mut style,
             &mut state,
@@ -1043,10 +1167,12 @@ mod tests {
             started_at + duration,
             false,
         ));
+
         assert_eq!((style.flex_grow, style.opacity), (12.5, Some(0.25)));
 
         style.flex_grow = 20.0;
         style.opacity = None;
+
         assert!(!transitions.apply(
             &mut style,
             &mut state,
@@ -1054,10 +1180,12 @@ mod tests {
             started_at + duration + duration / 2,
             false,
         ));
+
         assert_eq!((style.flex_grow, style.opacity), (20.0, None));
 
         style.flex_grow = 30.0;
         style.opacity = Some(1.0);
+
         assert!(!transitions.apply(
             &mut style,
             &mut state,
@@ -1065,6 +1193,7 @@ mod tests {
             started_at + duration + duration / 2,
             true,
         ));
+
         assert_eq!((style.flex_grow, style.opacity), (30.0, Some(1.0)));
     }
 
@@ -1076,14 +1205,17 @@ mod tests {
         let context = StyleTransitionContext::new(None, px(16.0));
         let mut state = StyleTransitionState::default();
         let mut style = Style::default();
+
         style.ring.color = RingColor::Color(red().into());
 
         assert!(!transitions.apply(&mut style, &mut state, context, started_at, false));
 
         style.ring.color = RingColor::Color(blue().into());
+
         assert!(transitions.apply(&mut style, &mut state, context, started_at, false));
 
         style.ring.color = RingColor::Color(blue().into());
+
         assert!(transitions.apply(
             &mut style,
             &mut state,
@@ -1091,6 +1223,7 @@ mod tests {
             started_at + duration / 2,
             false,
         ));
+
         assert_eq!(
             style.ring.color,
             RingColor::Color(red().lerp(&blue(), 0.5).into())
@@ -1139,6 +1272,7 @@ mod tests {
         let started_at = Instant::now();
         let duration = Duration::from_secs(1);
         let layout_context = StyleTransitionContext::new(None, px(16.0));
+
         let prepaint_context = StyleTransitionContext::new(
             Some(Bounds {
                 origin: point(px(20.0), px(15.0)),
@@ -1167,6 +1301,7 @@ mod tests {
             let mut style = Style::default();
 
             assert!(!transitions.apply(&mut style, &mut state, layout_context, started_at, false,));
+
             assert!(!transitions.apply(
                 &mut style,
                 &mut state,
@@ -1176,10 +1311,12 @@ mod tests {
             ));
 
             edge.set(&mut style, target);
+
             assert!(transitions.apply(&mut style, &mut state, layout_context, started_at, false,));
             assert_eq!(edge.get(&style), length(resolved_auto));
 
             edge.set(&mut style, target);
+
             assert!(transitions.apply(
                 &mut style,
                 &mut state,
@@ -1187,9 +1324,11 @@ mod tests {
                 started_at + duration / 2,
                 false,
             ));
+
             assert_eq!(edge.get(&style), length(midpoint));
 
             edge.set(&mut style, target);
+
             assert!(!transitions.apply(
                 &mut style,
                 &mut state,
@@ -1197,6 +1336,7 @@ mod tests {
                 started_at + duration,
                 false,
             ));
+
             assert_eq!(edge.get(&style), target);
         }
     }
@@ -1207,6 +1347,7 @@ mod tests {
         let duration = Duration::from_secs(1);
         let transitions = StyleTransitions::new().w(duration);
         let layout_context = StyleTransitionContext::new(None, px(16.0));
+
         let prepaint_context = |width| {
             StyleTransitionContext::new(
                 Some(Bounds {
@@ -1216,10 +1357,12 @@ mod tests {
                 px(16.0),
             )
         };
+
         let mut state = StyleTransitionState::default();
         let mut style = Style::default();
 
         assert!(!transitions.apply(&mut style, &mut state, layout_context, started_at, false,));
+
         assert!(!transitions.apply(
             &mut style,
             &mut state,
@@ -1229,10 +1372,12 @@ mod tests {
         ));
 
         style.size.width = length(220.0);
+
         assert!(transitions.apply(&mut style, &mut state, layout_context, started_at, false,));
         assert_eq!(style.size.width, length(120.0));
 
         style.size.width = length(220.0);
+
         assert!(transitions.apply(
             &mut style,
             &mut state,
@@ -1240,9 +1385,11 @@ mod tests {
             started_at + duration / 2,
             false,
         ));
+
         assert_eq!(style.size.width, length(170.0));
 
         style.size.width = length(220.0);
+
         assert!(!transitions.apply(
             &mut style,
             &mut state,
@@ -1250,9 +1397,11 @@ mod tests {
             started_at + duration,
             false,
         ));
+
         assert_eq!(style.size.width, length(220.0));
 
         style.size.width = Length::Auto;
+
         assert!(transitions.apply(
             &mut style,
             &mut state,
@@ -1260,9 +1409,11 @@ mod tests {
             started_at + duration,
             false,
         ));
+
         assert_eq!(style.size.width, length(220.0));
 
         style.size.width = Length::Auto;
+
         assert!(!transitions.apply(
             &mut style,
             &mut state,
@@ -1270,6 +1421,7 @@ mod tests {
             started_at + duration * 2,
             false,
         ));
+
         assert_eq!(style.size.width, Length::Auto);
 
         assert!(!transitions.apply(
@@ -1281,6 +1433,7 @@ mod tests {
         ));
 
         style.size.width = length(240.0);
+
         assert!(transitions.apply(
             &mut style,
             &mut state,
@@ -1288,6 +1441,7 @@ mod tests {
             started_at + duration * 2,
             false,
         ));
+
         assert_eq!(style.size.width, length(140.0));
     }
 
@@ -1297,6 +1451,7 @@ mod tests {
             StyleTransitions::new().w(Duration::from_secs(1)),
             Duration::from_millis(500),
         );
+
         assert!(in_progress);
         assert_eq!(style.size, size(length(15.0), length(20.0)));
 
@@ -1306,6 +1461,7 @@ mod tests {
                 .w(Duration::from_secs(2)),
             Duration::from_secs(1),
         );
+
         assert!(in_progress);
         assert_eq!(style.size, size(length(15.0), length(20.0)));
 
@@ -1315,11 +1471,13 @@ mod tests {
                 .size(Duration::from_secs(1)),
             Duration::from_secs(1),
         );
+
         assert!(!in_progress);
         assert_eq!(style.size, size(length(20.0), length(20.0)));
 
         let started_at = Instant::now();
         let mut state = StyleTransitionState::default();
+
         let transitions = StyleTransitions::new()
             .opacity(Duration::from_secs(1))
             .rounded(Duration::from_secs(1))
@@ -1328,6 +1486,7 @@ mod tests {
             .border(Duration::from_secs(1))
             .gap(Duration::from_secs(1))
             .text_size(Duration::from_secs(1));
+
         let context = StyleTransitionContext::new(
             Some(Bounds {
                 origin: point(px(0.0), px(0.0)),
@@ -1335,6 +1494,7 @@ mod tests {
             }),
             px(16.0),
         );
+
         let mut style = Style {
             corner_radii: corners(30.0),
             corner_smoothing: Some(0.0),
@@ -1351,11 +1511,14 @@ mod tests {
         style.corner_smoothing = Some(1.0);
         style.padding = Edges::all(DefiniteLength::Absolute(AbsoluteLength::Pixels(px(20.0))));
         style.border_widths = Edges::all(AbsoluteLength::Pixels(px(10.0)));
+
         style.gap = size(
             DefiniteLength::Absolute(AbsoluteLength::Pixels(px(30.0))),
             DefiniteLength::Absolute(AbsoluteLength::Pixels(px(30.0))),
         );
+
         style.text.font_size = Some(AbsoluteLength::Pixels(px(24.0)));
+
         assert!(transitions.apply(&mut style, &mut state, context, started_at, false,));
 
         style.opacity = Some(0.5);
@@ -1363,11 +1526,14 @@ mod tests {
         style.corner_smoothing = Some(1.0);
         style.padding = Edges::all(DefiniteLength::Absolute(AbsoluteLength::Pixels(px(20.0))));
         style.border_widths = Edges::all(AbsoluteLength::Pixels(px(10.0)));
+
         style.gap = size(
             DefiniteLength::Absolute(AbsoluteLength::Pixels(px(30.0))),
             DefiniteLength::Absolute(AbsoluteLength::Pixels(px(30.0))),
         );
+
         style.text.font_size = Some(AbsoluteLength::Pixels(px(24.0)));
+
         assert!(transitions.apply(
             &mut style,
             &mut state,
@@ -1375,17 +1541,21 @@ mod tests {
             started_at + Duration::from_millis(500),
             false,
         ));
+
         assert_eq!(style.opacity, Some(0.25));
         assert_eq!(style.corner_radii, corners(15.0));
         assert_eq!(style.corner_smoothing, Some(0.5));
+
         assert_eq!(
             style.padding,
             Edges::all(DefiniteLength::Absolute(AbsoluteLength::Pixels(px(10.0))))
         );
+
         assert_eq!(
             style.border_widths,
             Edges::all(AbsoluteLength::Pixels(px(5.0)))
         );
+
         assert_eq!(
             style.gap,
             size(
@@ -1393,6 +1563,7 @@ mod tests {
                 DefiniteLength::Absolute(AbsoluteLength::Pixels(px(15.0))),
             )
         );
+
         assert_eq!(style.text.font_size, Some(AbsoluteLength::Pixels(px(12.0))));
     }
 
@@ -1433,21 +1604,26 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let presented_bounds = Rc::new(Cell::new(Bounds::default()));
+
         let window = cx.add_window({
             let presented_bounds = presented_bounds.clone();
+
             move |_, _| InsetTransitionTestView {
                 enabled: false,
                 presented_bounds,
             }
         });
+
         let any_window = AnyWindowHandle::from(window);
 
         let draw = |cx: &mut TestAppContext| {
             cx.update_window(any_window, |_, window, cx| window.draw(cx).clear(cx))
                 .expect("failed to draw inset transition test window");
         };
+
         let assert_x_near = |expected: f32| {
             let actual = presented_bounds.get().origin.x.0;
+
             assert!(
                 (actual - expected).abs() < 0.01,
                 "expected knob x near {expected}, got {actual}",
@@ -1460,34 +1636,42 @@ mod tests {
         window
             .update(cx, |view, _, cx| {
                 view.enabled = true;
+
                 cx.notify();
             })
             .expect("failed to enable inset transition test view");
+
         draw(cx);
         assert_x_near(10.0);
 
         cx.executor().advance_clock(Duration::from_millis(500));
+
         draw(cx);
         assert_x_near(40.0);
 
         cx.executor().advance_clock(Duration::from_millis(500));
+
         draw(cx);
         assert_x_near(70.0);
 
         window
             .update(cx, |view, _, cx| {
                 view.enabled = false;
+
                 cx.notify();
             })
             .expect("failed to disable inset transition test view");
+
         draw(cx);
         assert_x_near(70.0);
 
         cx.executor().advance_clock(Duration::from_millis(500));
+
         draw(cx);
         assert_x_near(40.0);
 
         cx.executor().advance_clock(Duration::from_millis(500));
+
         draw(cx);
         assert_x_near(10.0);
     }
@@ -1526,14 +1710,17 @@ mod tests {
     #[gpui::test]
     fn style_transitions_follow_interaction_and_reset_persistent_state(cx: &mut TestAppContext) {
         let presented_width = Rc::new(Cell::new(px(0.0)));
+
         let window = cx.add_window({
             let presented_width = presented_width.clone();
+
             move |_, _| StyleTransitionTestView {
                 transitions_enabled: true,
                 base_width: px(100.0),
                 presented_width,
             }
         });
+
         let any_window = AnyWindowHandle::from(window);
         let mouse_position = point(px(10.0), px(10.0));
 
@@ -1544,6 +1731,7 @@ mod tests {
                 panic!("failed to draw transition test window: {error:#}");
             }
         };
+
         let assert_width_near = |expected: f32| {
             assert!(
                 (presented_width.get().0 - expected).abs() < 0.01,
@@ -1561,9 +1749,11 @@ mod tests {
         }) {
             panic!("failed to move the mouse into the transition target: {error:#}");
         }
+
         assert_width_near(100.0);
 
         cx.executor().advance_clock(Duration::from_millis(100));
+
         draw(cx);
         assert_width_near(150.0);
 
@@ -1579,16 +1769,21 @@ mod tests {
                 .to_platform_input(),
                 cx,
             );
+
             window.draw(cx).clear(cx);
         }) {
             panic!("failed to press the transition target: {error:#}");
         }
+
         assert_width_near(150.0);
 
         cx.executor().advance_clock(Duration::from_millis(100));
+
         draw(cx);
         assert_width_near(100.0);
+
         cx.executor().advance_clock(Duration::from_millis(100));
+
         draw(cx);
         assert_width_near(50.0);
 
@@ -1603,26 +1798,32 @@ mod tests {
                 .to_platform_input(),
                 cx,
             );
+
             window.simulate_mouse_move(point(px(300.0), px(300.0)), cx);
         }) {
             panic!("failed to release the transition target: {error:#}");
         }
+
         if let Err(error) = window.update(cx, |view, _, cx| {
             view.transitions_enabled = false;
             view.base_width = px(240.0);
+
             cx.notify();
         }) {
             panic!("failed to disable transitions: {error:#}");
         }
+
         draw(cx);
         assert_width_near(240.0);
 
         if let Err(error) = window.update(cx, |view, _, cx| {
             view.transitions_enabled = true;
+
             cx.notify();
         }) {
             panic!("failed to re-enable transitions: {error:#}");
         }
+
         draw(cx);
         assert_width_near(240.0);
     }
@@ -1636,6 +1837,7 @@ mod tests {
     impl Render for HoverTransitionFocusTestView {
         fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let presented_width = self.presented_width.clone();
+
             let hover_width = if self.target_focus.is_focused(window) {
                 px(200.0)
             } else {
@@ -1676,25 +1878,31 @@ mod tests {
         let target_focus = cx.update(|cx| cx.focus_handle().tab_stop(true));
         let next_focus = cx.update(|cx| cx.focus_handle().tab_stop(true));
         let presented_width = Rc::new(Cell::new(px(0.0)));
+
         let window = cx.add_window({
             let target_focus = target_focus.clone();
             let next_focus = next_focus.clone();
             let presented_width = presented_width.clone();
+
             move |_, _| HoverTransitionFocusTestView {
                 target_focus,
                 next_focus,
                 presented_width,
             }
         });
+
         let any_window = AnyWindowHandle::from(window);
 
         let simulate_next_frame = |cx: &mut TestAppContext| {
             let callback_count = cx
                 .update_window(any_window, |_, window, cx| window.simulate_next_frame(cx))
                 .expect("failed to deliver the next transition frame");
+
             cx.run_until_parked();
+
             callback_count
         };
+
         let assert_width_near = |expected: f32| {
             assert!(
                 (presented_width.get().0 - expected).abs() < 0.01,
@@ -1709,40 +1917,53 @@ mod tests {
             window.simulate_mouse_move(point(px(10.0), px(10.0)), cx);
         })
         .expect("failed to focus and hover the transition target");
+
         cx.run_until_parked();
 
         cx.executor().advance_clock(Duration::from_millis(120));
+
         assert!(simulate_next_frame(cx) > 0);
+
         assert_width_near(200.0);
 
         cx.update_window(any_window, |_, window, cx| {
             window.focus(&next_focus, cx);
         })
         .expect("failed to move focus while retaining mouse modality");
+
         cx.run_until_parked();
 
         cx.executor().advance_clock(Duration::from_millis(120));
+
         assert!(simulate_next_frame(cx) > 0);
+
         assert_width_near(150.0);
 
         cx.update_window(any_window, |_, window, cx| {
             window.focus(&target_focus, cx);
         })
         .expect("failed to restore focus while retaining mouse modality");
+
         cx.run_until_parked();
         cx.executor().advance_clock(Duration::from_millis(120));
+
         assert!(simulate_next_frame(cx) > 0);
+
         assert_width_near(200.0);
 
         cx.simulate_keystrokes(any_window, "tab");
+
         assert!(
             cx.update_window(any_window, |_, window, _| next_focus.is_focused(window))
                 .expect("transition test window should remain open")
         );
 
         cx.executor().advance_clock(Duration::from_millis(120));
+
         assert!(simulate_next_frame(cx) > 0);
+
         assert_width_near(100.0);
+
         assert_eq!(
             simulate_next_frame(cx),
             0,

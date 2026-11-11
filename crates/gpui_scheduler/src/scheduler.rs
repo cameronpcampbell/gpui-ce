@@ -10,6 +10,7 @@ pub use test_scheduler::*;
 
 use async_task::Runnable;
 use futures::channel::oneshot;
+
 use std::{
     any::Any,
     future::Future,
@@ -63,6 +64,7 @@ pub struct SpawnTime(pub Instant);
 pub struct RunnableMeta {
     /// The source location where the task was spawned.
     pub location: &'static Location<'static>,
+
     /// The moment the task was spawned.
     pub spawned: SpawnTime,
 }
@@ -114,6 +116,7 @@ pub trait Scheduler: Send + Sync {
 
     #[track_caller]
     fn timer(&self, timeout: Duration) -> Timer;
+
     fn clock(&self) -> Arc<dyn Clock>;
 
     /// Spawn a closure on a fresh session pinned to its own [`LocalExecutor`].
@@ -171,16 +174,21 @@ where
     Fut::Output: Send + 'static,
 {
     let (task, delivery) = Task::rendezvous();
+
     let thread_body = move || {
         let (runnable_sender, runnable_receiver) = flume::unbounded::<Runnable<RunnableMeta>>();
+
         let dispatch = move |runnable: Runnable<RunnableMeta>| {
             let _ = runnable_sender.send(runnable);
         };
+
         let executor = LocalExecutor::new(session_id, scheduler, dispatch);
         let root_task = executor.spawn(f(executor.clone()));
+
         // If the caller already dropped or detached the rendezvous task,
         // delivery applies that disposition to the root task here.
         delivery.deliver(root_task);
+
         // After this drop, every strong reference to the runnable sender
         // lives inside a spawned task or a user-held executor clone. The
         // recv loop exits once all of those are gone.
@@ -190,25 +198,31 @@ where
             runnable.run();
         }
     };
+
     spawn_dedicated_os_thread(session_id, thread_body);
+
     task
 }
 
 fn spawn_dedicated_os_thread(session_id: SessionId, thread_body: impl FnOnce() + Send + 'static) {
     let thread_name = format!("spawn_dedicated session {:?}", session_id);
+
     #[cfg(not(target_family = "wasm"))]
     std::thread::Builder::new()
         .name(thread_name)
         .spawn(thread_body)
         .expect("failed to spawn dedicated thread");
+
     #[cfg(all(target_family = "wasm", feature = "wasm-threads"))]
     wasm_thread::Builder::new()
         .name(thread_name)
         .spawn(thread_body)
         .expect("failed to spawn dedicated thread");
+
     #[cfg(all(target_family = "wasm", not(feature = "wasm-threads")))]
     {
         let _ = (thread_name, thread_body);
+
         panic!("spawn_dedicated on wasm requires the scheduler crate's `wasm-threads` feature");
     }
 }

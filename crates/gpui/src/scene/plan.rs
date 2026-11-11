@@ -53,6 +53,7 @@ pub struct ScenePlanRequirements {
 pub struct ScenePlan {
     // Retain this allocation across `Scene::clear`/`Scene::finish`; scenes are rebuilt every frame.
     pub(super) commands: Vec<RenderCommand>,
+
     requirements: ScenePlanRequirements,
     scene_lengths: SceneLengths,
 }
@@ -60,6 +61,7 @@ pub struct ScenePlan {
 impl ScenePlan {
     pub(super) fn clear(&mut self) {
         self.commands.clear();
+
         self.requirements = ScenePlanRequirements::default();
         self.scene_lengths = SceneLengths::default();
     }
@@ -67,9 +69,12 @@ impl ScenePlan {
     pub(super) fn build(scene: &Scene, mut commands: Vec<RenderCommand>) -> Self {
         commands.clear();
         commands.reserve(scene.len());
+
         let mut matched_starts =
             SmallVec::<[bool; 8]>::from_elem(false, scene.filter_boundaries.len());
+
         let mut pending_starts = SmallVec::<[usize; 4]>::new();
+
         for (index, boundary) in scene.filter_boundaries.iter().enumerate() {
             if boundary.is_start {
                 pending_starts.push(index);
@@ -86,36 +91,45 @@ impl ScenePlan {
             match batch {
                 PrimitiveBatch::FilterBoundary(boundary_index) => {
                     let boundary = &scene.filter_boundaries[boundary_index];
+
                     if boundary.is_start {
                         let target = if matched_starts[boundary_index] {
                             FilterRenderTarget::Isolated(FilterTargetIndex(isolated_depth))
                         } else {
                             FilterRenderTarget::Inline
                         };
+
                         if target.is_isolated() {
                             isolated_depth += 1;
                             requirements.uses_offscreen_target = true;
                             requirements.uses_blur_target |= boundary.max_blur_radius() > 0.0;
+
                             requirements.isolated_target_count =
                                 requirements.isolated_target_count.max(isolated_depth);
                         }
+
                         filter_stack.push((boundary_index, target));
+
                         commands.push(RenderCommand::BeginFilter {
                             boundary_index,
                             target,
                         });
+
                     } else if let Some((start_index, target)) = filter_stack.pop() {
                         if target.is_isolated() {
                             isolated_depth -= 1;
                             requirements.isolated_filter_count += 1;
                         }
+
                         commands.push(RenderCommand::EndFilter {
                             boundary_index: start_index,
                             closing_boundary_index: boundary_index,
                             target,
                         });
+
                     } else {
                         debug_assert!(false, "content-filter end boundary has no matching start");
+
                         commands.push(RenderCommand::EndFilter {
                             boundary_index,
                             closing_boundary_index: boundary_index,
@@ -123,6 +137,7 @@ impl ScenePlan {
                         });
                     }
                 }
+
                 batch => {
                     if let PrimitiveBatch::BackdropFilters(range) = &batch {
                         requirements.uses_blur_target |= scene.backdrop_filters[range.clone()]
@@ -137,6 +152,7 @@ impl ScenePlan {
         }
 
         requirements.command_count = commands.len();
+
         Self {
             commands,
             requirements,
@@ -171,28 +187,34 @@ impl ScenePlanRequirements {
             | PrimitiveBatch::Underlines(range) => {
                 self.instance_batch_count += usize::from(!range.is_empty());
             }
+
             PrimitiveBatch::Paths {
                 rasterization_vertex_count,
                 sprite_count,
                 ..
             } => {
                 self.path_rasterization_vertex_count += rasterization_vertex_count;
+
                 if *rasterization_vertex_count > 0 {
                     self.path_sprite_count += sprite_count;
                     self.uses_path_target = true;
                     self.instance_batch_count += 2;
                 }
             }
+
             PrimitiveBatch::MonochromeSprites { range, .. }
             | PrimitiveBatch::SubpixelSprites { range, .. }
             | PrimitiveBatch::PolychromeSprites { range, .. } => {
                 self.instance_batch_count += usize::from(!range.is_empty());
             }
+
             PrimitiveBatch::Surfaces(range) => self.surface_count += range.len(),
+
             PrimitiveBatch::BackdropFilters(range) => {
                 self.backdrop_filter_count += range.len();
                 self.uses_offscreen_target |= !range.is_empty();
             }
+
             PrimitiveBatch::FilterBoundary(_) => {
                 unreachable!("filter boundaries are compiled before requirements are collected")
             }
@@ -276,6 +298,7 @@ pub enum RenderCommand {
     BeginFilter {
         /// Index of the opening boundary in [`Scene::filter_boundaries`].
         boundary_index: usize,
+
         /// Whether this group renders inline or into an isolated target.
         target: FilterRenderTarget,
     },
@@ -283,8 +306,10 @@ pub enum RenderCommand {
     EndFilter {
         /// Index of the matched opening boundary in [`Scene::filter_boundaries`].
         boundary_index: usize,
+
         /// Index of the closing marker in [`Scene::filter_boundaries`].
         closing_boundary_index: usize,
+
         /// The same target selected by the matching begin command.
         target: FilterRenderTarget,
     },
@@ -297,6 +322,7 @@ impl RenderCommand {
             Self::BeginFilter { boundary_index, .. } | Self::EndFilter { boundary_index, .. } => {
                 Some(&scene.filter_boundaries[*boundary_index])
             }
+
             Self::Batch(_) => None,
         }
     }
@@ -305,16 +331,20 @@ impl RenderCommand {
     pub fn label(&self) -> String {
         match self {
             Self::Batch(batch) => batch.label(),
+
             Self::BeginFilter { target, .. } => match target {
                 FilterRenderTarget::Isolated(index) => {
                     format!("begin filter group ({})", index.as_usize())
                 }
+
                 FilterRenderTarget::Inline => "begin inline filter group".into(),
             },
+
             Self::EndFilter { target, .. } => match target {
                 FilterRenderTarget::Isolated(index) => {
                     format!("end filter group ({})", index.as_usize())
                 }
+
                 FilterRenderTarget::Inline => "end inline filter group".into(),
             },
         }
@@ -330,23 +360,28 @@ impl PrimitiveBatch {
                 if *smoothed { "smoothed " } else { "" },
                 range.len()
             ),
+
             Self::Quads { range, smoothed } => format!(
                 "{}quads ({})",
                 if *smoothed { "smoothed " } else { "" },
                 range.len()
             ),
+
             Self::Paths { range, .. } => format!("paths ({})", range.len()),
             Self::Underlines(range) => format!("underlines ({})", range.len()),
+
             Self::MonochromeSprites { texture_id, range } => format!(
                 "monochrome sprites ({}) on atlas {}",
                 range.len(),
                 texture_id.index
             ),
+
             Self::SubpixelSprites { texture_id, range } => format!(
                 "subpixel sprites ({}) on atlas {}",
                 range.len(),
                 texture_id.index
             ),
+
             Self::PolychromeSprites {
                 texture_id,
                 range,
@@ -357,6 +392,7 @@ impl PrimitiveBatch {
                 range.len(),
                 texture_id.index
             ),
+
             Self::Surfaces(range) => format!("surfaces ({})", range.len()),
             Self::BackdropFilters(range) => format!("backdrop filters ({})", range.len()),
             Self::FilterBoundary(index) => format!("filter boundary ({index})"),

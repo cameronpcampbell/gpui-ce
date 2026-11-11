@@ -6,12 +6,14 @@ use crate::{
     TextInputConfiguration, TextInputStateChange, TileId, ValidatedRasterizedGlyph,
     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowParams,
 };
+
 use collections::HashMap;
 use gpui_util::ResultExt as _;
 #[cfg(any(test, feature = "test-support"))]
 use image::RgbaImage;
 use parking_lot::Mutex;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+
 use std::{
     cell::Cell,
     path::PathBuf,
@@ -27,8 +29,10 @@ pub(crate) struct TestWindowState {
     pub(crate) edited: bool,
     pub(crate) document_path: Option<std::path::PathBuf>,
     platform: Weak<TestPlatform>,
+
     // TODO: Replace with `Rc`
     sprite_atlas: Arc<dyn PlatformAtlas>,
+
     renderer: Option<Box<dyn PlatformHeadlessRenderer>>,
     pub(crate) should_close_handler: Option<Box<dyn FnMut() -> bool>>,
     hit_test_window_control_callback: Option<Box<dyn FnMut() -> Option<WindowControlArea>>>,
@@ -85,6 +89,7 @@ impl TestWindow {
             Some(r) => r.sprite_atlas(),
             None => Arc::new(TestAtlas::new()),
         };
+
         Self(Rc::new(Mutex::new(TestWindowState {
             bounds: params.bounds,
             display,
@@ -117,22 +122,30 @@ impl TestWindow {
             start_external_drag_result: false,
         })))
     }
+
     pub fn simulate_scheduled_frame(&self) -> bool {
         let callback = {
             let mut state = self.0.lock();
+
             if !std::mem::take(&mut state.frame_scheduled) {
                 return false;
             }
+
             state.frame_callback_pending = false;
+
             state.request_frame_callback.take()
         };
+
         let Some(mut callback) = callback else {
             self.0.lock().frame_scheduled = true;
+
             return false;
         };
 
         callback(RequestFrameOptions::default());
+
         self.0.lock().request_frame_callback = Some(callback);
+
         true
     }
 
@@ -157,34 +170,45 @@ impl TestWindow {
     pub fn simulate_resize(&mut self, size: Size<Pixels>) {
         let scale_factor = self.scale_factor();
         let mut lock = self.0.lock();
+
         // Always update bounds, even if no callback is registered
         lock.bounds.size = size;
+
         let Some(mut callback) = lock.resize_callback.take() else {
             return;
         };
+
         drop(lock);
         callback(size, scale_factor);
+
         self.0.lock().resize_callback = Some(callback);
     }
 
     pub(crate) fn simulate_active_status_change(&self, active: bool) {
         let mut lock = self.0.lock();
+
         let Some(mut callback) = lock.active_status_change_callback.take() else {
             return;
         };
+
         drop(lock);
         callback(active);
+
         self.0.lock().active_status_change_callback = Some(callback);
     }
 
     pub fn simulate_appearance_change(&self, appearance: WindowAppearance) {
         let mut lock = self.0.lock();
+
         lock.appearance = appearance;
+
         let Some(mut callback) = lock.appearance_change_callback.take() else {
             return;
         };
+
         drop(lock);
         callback();
+
         self.0.lock().appearance_change_callback = Some(callback);
     }
 
@@ -197,22 +221,30 @@ impl TestWindow {
     /// would.
     pub fn simulate_frame_request(&self, options: RequestFrameOptions) {
         let mut lock = self.0.lock();
+
         let Some(mut callback) = lock.request_frame_callback.take() else {
             return;
         };
+
         drop(lock);
         callback(options);
+
         self.0.lock().request_frame_callback = Some(callback);
     }
 
     pub fn simulate_input(&mut self, event: PlatformInput) -> bool {
         let mut lock = self.0.lock();
+
         let Some(mut callback) = lock.input_callback.take() else {
             return false;
         };
+
         drop(lock);
+
         let result = callback(event);
+
         self.0.lock().input_callback = Some(callback);
+
         !result.propagate
     }
 
@@ -244,6 +276,7 @@ impl PlatformWindow for TestWindow {
 
     fn resize(&mut self, size: Size<Pixels>) {
         let mut lock = self.0.lock();
+
         lock.bounds.size = size;
     }
 
@@ -308,12 +341,14 @@ impl PlatformWindow for TestWindow {
         if token.is_some() {
             return false;
         }
+
         self.0
             .lock()
             .platform
             .upgrade()
             .unwrap()
             .set_active_window(Some(self.clone()));
+
         true
     }
 
@@ -367,6 +402,7 @@ impl PlatformWindow for TestWindow {
 
     fn toggle_fullscreen(&self) {
         let mut lock = self.0.lock();
+
         lock.is_fullscreen = !lock.is_fullscreen;
     }
 
@@ -379,6 +415,7 @@ impl PlatformWindow for TestWindow {
         // assert the wake protocol without coupling to frame timing; tests
         // deliver frames explicitly via `simulate_frame_request`.
         let frame_wake_count = self.0.lock().frame_wake_count.clone();
+
         Some(Rc::new(move || {
             frame_wake_count.set(frame_wake_count.get() + 1);
         }))
@@ -390,6 +427,7 @@ impl PlatformWindow for TestWindow {
 
     fn schedule_frame(&self) {
         let mut state = self.0.lock();
+
         if !state.frame_callback_pending {
             state.frame_scheduled = true;
         }
@@ -432,9 +470,12 @@ impl PlatformWindow for TestWindow {
     fn draw(&self, scene: &Scene) {
         let scale_factor = self.scale_factor();
         let mut state = self.0.lock();
+
         state.frame_callback_pending = true;
         state.frame_scheduled = true;
+
         let device_size: Size<DevicePixels> = state.bounds.size.to_device_pixels(scale_factor);
+
         if let Some(renderer) = &mut state.renderer {
             renderer.render_scene(scene, device_size).warn_on_err();
         }
@@ -449,9 +490,12 @@ impl PlatformWindow for TestWindow {
         let scale_factor = self.scale_factor();
         let mut state = self.0.lock();
         let size = state.bounds.size;
+
         if let Some(renderer) = &mut state.renderer {
             let device_size: Size<DevicePixels> = size.to_device_pixels(scale_factor);
+
             renderer.render_scene_to_image(scene, device_size)
+
         } else {
             anyhow::bail!("render_to_image not available: no HeadlessRenderer configured")
         }
@@ -480,11 +524,13 @@ impl PlatformWindow for TestWindow {
 
     fn start_external_drag(&self, payload: &crate::ExternalDragPayload) -> bool {
         let mut state = self.0.lock();
+
         match payload {
             crate::ExternalDragPayload::Files(paths) => {
                 state.external_drag_files.extend_from_slice(paths.entries());
             }
         }
+
         state.start_external_drag_result
     }
 
@@ -506,9 +552,13 @@ pub(crate) struct TestAtlas(Mutex<TestAtlasState>);
 impl TestAtlasState {
     fn insert_tile(&mut self, key: AtlasKey, size: Size<DevicePixels>) -> AtlasTile {
         self.next_id += 1;
+
         let texture_id = self.next_id;
+
         self.next_id += 1;
+
         let tile_id = self.next_id;
+
         let tile = AtlasTile {
             texture_id: AtlasTextureId {
                 index: texture_id,
@@ -540,6 +590,7 @@ impl TestAtlas {
     #[allow(dead_code)]
     pub(crate) fn clear(&self) {
         let mut state = self.0.lock();
+
         state.tiles.clear();
         state.glyph_cache.clear();
     }
@@ -554,9 +605,11 @@ impl PlatformAtlas for TestAtlas {
         >,
     ) -> anyhow::Result<Option<crate::AtlasTile>> {
         let mut state = self.0.lock();
+
         if let Some(&tile) = state.tiles.get(key) {
             return Ok(Some(tile));
         }
+
         drop(state);
 
         let Some((size, _)) = build()? else {
@@ -580,6 +633,7 @@ impl PlatformAtlas for TestAtlas {
         let glyph = build()?;
 
         let mut state = self.0.lock();
+
         let tile = if glyph.size == Size::default() {
             None
         } else {
@@ -593,17 +647,20 @@ impl PlatformAtlas for TestAtlas {
 
     fn remove(&self, key: &AtlasKey) {
         let mut state = self.0.lock();
+
         state.glyph_cache.remove(key);
         state.tiles.remove(key);
     }
 
     fn contains(&self, key: &AtlasKey) -> bool {
         let state = self.0.lock();
+
         match key {
             AtlasKey::Glyph { params, format } => state
                 .glyph_cache
                 .get(params)
                 .is_some_and(|entry| entry.format == *format),
+
             _ => state.tiles.contains_key(key),
         }
     }

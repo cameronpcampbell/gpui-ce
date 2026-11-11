@@ -7,10 +7,12 @@
 //! 3. Theming patterns - using Colors for consistent styling
 
 use gpui::colors::Colors;
+
 use gpui::{
     App, Bounds, ColorExt, Context, FocusHandle, Hsla, KeyBinding, Menu, MenuItem, Render, Rgba,
     Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
+
 use palette::{IntoColor, WithAlpha};
 
 actions!(styling_example, [Quit, Tab, TabPrev]);
@@ -149,6 +151,7 @@ fn list_item(
         })
         .when(!is_disabled && is_selected, move |el| {
             let accent_bg: Hsla = accent.into_color();
+
             el.bg(accent_bg.opacity(0.2))
                 .border_color(accent)
                 .text_color(text)
@@ -294,6 +297,7 @@ struct StylingExample {
 impl StylingExample {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
+
         window.focus(&focus_handle, cx);
 
         let buttons = vec![
@@ -484,16 +488,19 @@ fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         cx.activate(true);
         cx.on_action(|_: &Quit, cx| cx.quit());
+
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("tab", Tab, None),
             KeyBinding::new("shift-tab", TabPrev, None),
         ]);
+
         cx.set_menus(vec![Menu {
             name: "Styling".into(),
             items: vec![MenuItem::action("Quit", Quit)],
             disabled: false,
         }]);
+
         cx.on_window_closed(|cx, _window_id| {
             if cx.windows().is_empty() {
                 cx.quit();
@@ -502,6 +509,7 @@ fn main() {
         .detach();
 
         let bounds = Bounds::centered(None, size(px(550.), px(800.)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| cx.new(|cx| StylingExample::new(window, cx)),

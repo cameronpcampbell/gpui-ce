@@ -20,12 +20,16 @@ pub enum CaretNotify {
 pub struct Caret {
     /// The frequency at which the caret blinks
     interval: Duration,
+
     generation: usize,
+
     /// Whether the caret is presently visible in this frame
     visible: bool,
+
     /// Whether the caret's EditableText element is currently focused.
     /// Caret is only eligible to be blinking if currently focused.
     has_focus: bool,
+
     #[allow(dead_code)]
     subscriptions: SmallVec<[Subscription; 2]>,
 }
@@ -44,6 +48,7 @@ impl Caret {
     /// Sets the blinking interval of the caret.
     pub fn with_blink_interval(mut self, interval: Duration) -> Self {
         self.set_blink_interval(interval);
+
         self
     }
 
@@ -66,10 +71,12 @@ impl Caret {
 
                 // Leave the caret visible for one complete interval after user activity.
                 state.visible = true;
+
                 state.restart_blink_ticker(cx);
                 cx.notify();
             }
         });
+
         self.subscriptions.push(handle);
     }
 
@@ -93,19 +100,23 @@ impl Caret {
 
     fn restart_blink_ticker(&mut self, cx: &mut Context<Self>) {
         let generation = self.generation.wrapping_add(1);
+
         self.generation = generation;
 
         let interval = self.interval;
+
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(interval).await;
 
             let Some(this) = this.upgrade() else { return };
+
             this.update(cx, |this, cx| {
                 if this.generation != generation || !this.has_focus || this.interval.is_zero() {
                     return;
                 }
 
                 this.visible = !this.visible;
+
                 cx.notify();
                 this.restart_blink_ticker(cx);
             });
@@ -119,15 +130,19 @@ mod tests {
     use super::*;
 
     struct CaretEventEmitter;
+
     impl EventEmitter<CaretNotify> for CaretEventEmitter {}
 
     #[gpui::test]
     fn visibility_tracks_focus_activity_and_blur(cx: &mut TestAppContext) {
         let interval = Duration::from_millis(10);
         let emitter = cx.new(|_| CaretEventEmitter);
+
         let caret = cx.new(|cx| {
             let mut caret = Caret::default().with_blink_interval(interval);
+
             caret.subscribe_to(&emitter, cx);
+
             caret
         });
 
@@ -137,21 +152,25 @@ mod tests {
 
         cx.executor().advance_clock(interval);
         cx.run_until_parked();
+
         assert!(!cx.read(|cx| caret.read(cx).visible));
 
         emitter.update(cx, |_, cx| cx.emit(CaretNotify::PauseBlinking));
 
         cx.run_until_parked();
+
         assert!(cx.read(|cx| caret.read(cx).visible));
 
         cx.executor().advance_clock(interval);
         cx.run_until_parked();
+
         assert!(!cx.read(|cx| caret.read(cx).visible));
 
         caret.update(cx, |caret, cx| assert!(!caret.update_focus(false, cx)));
 
         cx.executor().advance_clock(interval);
         cx.run_until_parked();
+
         assert!(!cx.read(|cx| caret.read(cx).visible));
     }
 }

@@ -47,6 +47,7 @@ mod text_range_tests {
     #[test]
     fn contained_ranges_are_valid_utf8_slices() {
         let text = "aé日";
+
         #[allow(
             clippy::reversed_empty_ranges,
             reason = "The reversed range is intentional invalid input for contains_range."
@@ -81,21 +82,25 @@ mod layout_cache_tests {
     fn paint_changes_reuse_shaped_geometry() {
         let system = window_text_system();
         let text = SharedString::from("paint cache");
+
         let mut run = TextRun {
             len: text.len(),
             color: hsla(0.0, 0.8, 0.4, 1.0),
             ..Default::default()
         };
+
         let first = system
             .shape_text(text.clone(), px(16.0), &[run.clone()], None, None)
             .unwrap();
 
         run.color = hsla(0.6, 0.8, 0.4, 1.0);
+
         run.underline = Some(crate::UnderlineStyle {
             thickness: px(1.5),
             color: None,
             wavy: false,
         });
+
         let second = system
             .shape_text(text, px(16.0), std::slice::from_ref(&run), None, None)
             .unwrap();
@@ -109,10 +114,12 @@ mod layout_cache_tests {
     fn inline_layouts_reuse_all_valid_widths_across_frames() {
         let system = window_text_system();
         let text = "cached inline paragraph";
+
         let runs = [TextRun {
             len: text.len(),
             ..Default::default()
         }];
+
         let request = |wrap_width| InlineLayoutRequest {
             text,
             runs: &runs,
@@ -131,32 +138,39 @@ mod layout_cache_tests {
 
         let wide = system.layout_inline(request(px(200.0)));
         let narrow = system.layout_inline(request(px(80.0)));
+
         assert!(!Arc::ptr_eq(&wide, &narrow));
 
         let painted_runs = [TextRun {
             color: hsla(0.5, 0.8, 0.4, 1.0),
             ..runs[0].clone()
         }];
+
         let changed_paint = system.layout_inline(InlineLayoutRequest {
             runs: &painted_runs,
             ..request(px(200.0))
         });
+
         let changed_size = system.layout_inline(InlineLayoutRequest {
             font_size: px(18.0),
             ..request(px(200.0))
         });
+
         assert!(!Arc::ptr_eq(&wide, &changed_paint));
         assert!(!Arc::ptr_eq(&wide, &changed_size));
+
         assert!(Arc::ptr_eq(
             &wide,
             &system.layout_inline(request(px(200.0)))
         ));
 
         system.finish_frame();
+
         assert!(Arc::ptr_eq(
             &wide,
             &system.layout_inline(request(px(200.0)))
         ));
+
         assert!(Arc::ptr_eq(
             &narrow,
             &system.layout_inline(request(px(80.0)))
@@ -167,10 +181,12 @@ mod layout_cache_tests {
 #[cfg(test)]
 mod raster_contract_tests {
     use super::*;
+
     use crate::{
         AtlasKey, AtlasTextureKind, Bounds, DevicePixels, PlatformAtlas, PlatformTextSystem, Point,
         Result, Size, TestAtlas, TestTextSystem, hsla, point, px, size,
     };
+
     use std::{
         borrow::Cow,
         sync::{
@@ -313,25 +329,30 @@ mod raster_contract_tests {
     fn prepared_style_and_format_drive_atlas_keys_without_caching_pixels() {
         let backend = Arc::new(SequencedRasterizer::default());
         let text_system = TextSystem::new(backend.clone());
+
         let style_a = text_system.prepare_raster_style(
             FontId(7),
             GlyphId(42),
             hsla(0.0, 0.0, 0.20, 1.0),
             GlyphRenderMode::Grayscale,
         );
+
         let style_b = text_system.prepare_raster_style(
             FontId(7),
             GlyphId(42),
             hsla(0.0, 0.0, 0.24, 1.0),
             GlyphRenderMode::Grayscale,
         );
+
         let style_c = text_system.prepare_raster_style(
             FontId(7),
             GlyphId(42),
             hsla(0.0, 0.0, 0.30, 1.0),
             GlyphRenderMode::Grayscale,
         );
+
         assert_eq!(style_a, style_b, "nearby scene colors share a mask style");
+
         assert_ne!(
             style_a, style_c,
             "different dilation levels need distinct rasters"
@@ -340,13 +361,17 @@ mod raster_contract_tests {
         let first = params(style_a);
         let second = params(style_b);
         let third = params(style_c);
+
         assert_eq!(first, second);
+
         let first_raster = text_system.rasterize_glyph(&first).unwrap();
         let reused_raster = text_system.rasterize_glyph(&second).unwrap();
         let distinct_raster = text_system.rasterize_glyph(&third).unwrap();
+
         assert_eq!(first_raster.pixels, reused_raster.pixels);
         assert_eq!(first_raster.pixels, distinct_raster.pixels);
         assert_eq!(backend.attempts.load(Ordering::SeqCst), 3);
+
         for (format, expected) in [
             (
                 RasterizedGlyphFormat::AlphaMask,
@@ -374,6 +399,7 @@ mod raster_contract_tests {
             attempts: AtomicUsize::new(0),
             fail_until_valid: true,
         });
+
         let text_system = TextSystem::new(backend.clone());
         let params = params(PreparedRasterStyle::independent(GlyphRenderMode::Grayscale));
         let atlas = TestAtlas::new();
@@ -383,31 +409,38 @@ mod raster_contract_tests {
                 .get_or_insert_glyph_with(&params, &mut || { text_system.rasterize_glyph(&params) })
                 .is_err()
         );
+
         assert!(
             atlas
                 .get_or_insert_glyph_with(&params, &mut || { text_system.rasterize_glyph(&params) })
                 .is_err()
         );
+
         let first_success = atlas
             .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
             .unwrap();
+
         let second_success = atlas
             .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
             .unwrap();
 
         assert_eq!(first_success, second_success);
+
         assert_eq!(
             first_success.bounds.size,
             size(DevicePixels(1), DevicePixels(1))
         );
+
         assert_eq!(first_success.format, RasterizedGlyphFormat::AlphaMask);
         assert!(first_success.tile.is_some());
         assert_eq!(backend.attempts.load(Ordering::SeqCst), 3);
 
         atlas.clear();
+
         atlas
             .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
             .unwrap();
+
         assert_eq!(backend.attempts.load(Ordering::SeqCst), 4);
     }
 
@@ -422,15 +455,18 @@ mod raster_contract_tests {
         let silhouette = first_atlas
             .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
             .unwrap();
+
         let silhouette_hit = first_atlas
             .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
             .unwrap();
+
         assert_eq!(silhouette_hit, silhouette);
         assert_eq!(backend.attempts.load(Ordering::SeqCst), 1);
 
         let color = second_atlas
             .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
             .unwrap();
+
         assert_ne!(color.bounds, silhouette.bounds);
         assert_ne!(color.format, silhouette.format);
         assert_eq!(backend.attempts.load(Ordering::SeqCst), 2);
@@ -438,13 +474,16 @@ mod raster_contract_tests {
         let original = first_atlas
             .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
             .unwrap();
+
         assert_eq!(original, silhouette);
         assert_eq!(backend.attempts.load(Ordering::SeqCst), 2);
 
         first_atlas.clear();
+
         let recovered = first_atlas
             .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))
             .unwrap();
+
         assert_ne!(recovered.bounds, silhouette.bounds);
         assert_eq!(recovered.format, RasterizedGlyphFormat::BgraColor);
         assert_eq!(backend.attempts.load(Ordering::SeqCst), 3);
@@ -455,6 +494,7 @@ mod raster_contract_tests {
         let atlas = TestAtlas::new();
         let params = params(PreparedRasterStyle::independent(GlyphRenderMode::Grayscale));
         let mut builds = 0;
+
         let mut build = || {
             builds += 1;
 
@@ -463,6 +503,7 @@ mod raster_contract_tests {
 
         let first = atlas.get_or_insert_glyph_with(&params, &mut build).unwrap();
         let second = atlas.get_or_insert_glyph_with(&params, &mut build).unwrap();
+
         assert_eq!(first, second);
         assert!(first.tile.is_none());
         assert_eq!(builds, 1);
@@ -473,8 +514,10 @@ mod raster_contract_tests {
         let atlas = TestAtlas::new();
         let params = params(PreparedRasterStyle::independent(GlyphRenderMode::Grayscale));
         let mut builds = 0;
+
         let mut build = || {
             builds += 1;
+
             let size = size(DevicePixels(1), DevicePixels(1));
             let pixels = if builds == 1 { Vec::new() } else { vec![255] };
 
@@ -493,6 +536,7 @@ mod raster_contract_tests {
 
         let first = atlas.get_or_insert_glyph_with(&params, &mut build).unwrap();
         let second = atlas.get_or_insert_glyph_with(&params, &mut build).unwrap();
+
         assert_eq!(first, second);
         assert!(first.tile.is_some());
         assert_eq!(builds, 2);
@@ -534,23 +578,27 @@ mod raster_contract_tests {
 
         fn rasterize_glyph(&self, _params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
             let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+
             let (origin, size, format) = match attempt {
                 0 => (
                     point(DevicePixels(-2), DevicePixels(-7)),
                     size(DevicePixels(2), DevicePixels(3)),
                     RasterizedGlyphFormat::AlphaMask,
                 ),
+
                 1 => (
                     point(DevicePixels(1), DevicePixels(-9)),
                     size(DevicePixels(4), DevicePixels(5)),
                     RasterizedGlyphFormat::BgraColor,
                 ),
+
                 _ => (
                     point(DevicePixels(3), DevicePixels(-8)),
                     size(DevicePixels(3), DevicePixels(4)),
                     RasterizedGlyphFormat::BgraColor,
                 ),
             };
+
             let bytes_per_pixel = if format == RasterizedGlyphFormat::AlphaMask {
                 1
             } else {
@@ -614,6 +662,7 @@ mod raster_contract_tests {
 
         fn rasterize_glyph(&self, _params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
             let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+
             if !self.fail_until_valid {
                 return Ok(RasterizedGlyph {
                     bounds: Bounds {
@@ -625,8 +674,10 @@ mod raster_contract_tests {
                     pixels: vec![0x7f],
                 });
             }
+
             match attempt {
                 0 => Err(anyhow::anyhow!("transient native failure")),
+
                 1 => Ok(RasterizedGlyph {
                     bounds: Bounds {
                         origin: Point::default(),
@@ -636,6 +687,7 @@ mod raster_contract_tests {
                     format: RasterizedGlyphFormat::AlphaMask,
                     pixels: Vec::new(),
                 }),
+
                 _ => Ok(RasterizedGlyph {
                     bounds: Bounds {
                         origin: Point::default(),

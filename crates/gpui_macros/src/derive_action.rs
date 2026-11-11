@@ -30,48 +30,70 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
                     if name_argument.is_some() {
                         return Err(meta.error("'name' argument specified multiple times"));
                     }
+
                     meta.input.parse::<Token![=]>()?;
+
                     let lit: LitStr = meta.input.parse()?;
+
                     name_argument = Some(lit.value());
+
                 } else if meta.path.is_ident("namespace") {
                     if namespace.is_some() {
                         return Err(meta.error("'namespace' argument specified multiple times"));
                     }
+
                     meta.input.parse::<Token![=]>()?;
+
                     let ident: Ident = meta.input.parse()?;
+
                     namespace = Some(ident.to_string());
+
                 } else if meta.path.is_ident("no_json") {
                     if no_json {
                         return Err(meta.error("'no_json' argument specified multiple times"));
                     }
+
                     no_json = true;
+
                 } else if meta.path.is_ident("no_register") {
                     if no_register {
                         return Err(meta.error("'no_register' argument specified multiple times"));
                     }
+
                     no_register = true;
+
                 } else if meta.path.is_ident("deprecated_aliases") {
                     if !deprecated_aliases.is_empty() {
                         return Err(
                             meta.error("'deprecated_aliases' argument specified multiple times")
                         );
                     }
+
                     meta.input.parse::<Token![=]>()?;
+
                     // Parse array of string literals
                     let content;
+
                     syn::bracketed!(content in meta.input);
+
                     let aliases = content.parse_terminated(
                         |input: ParseStream| input.parse::<LitStr>(),
                         Token![,],
                     )?;
+
                     deprecated_aliases.extend(aliases.into_iter().map(|lit| lit.value()));
+
                 } else if meta.path.is_ident("deprecated") {
                     if deprecated.is_some() {
                         return Err(meta.error("'deprecated' argument specified multiple times"));
                     }
+
                     meta.input.parse::<Token![=]>()?;
+
                     let lit: LitStr = meta.input.parse()?;
+
                     deprecated = Some(lit.value());
+
                 } else {
                     return Err(meta.error(format!(
                         "'{:?}' argument not recognized, expected \
@@ -79,11 +101,14 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
                         meta.path
                     )));
                 }
+
                 Ok(())
             })
             .unwrap_or_else(|e| panic!("in #[action] attribute: {}", e));
+
         } else if attr.path().is_ident("doc") {
             use syn::{Expr::Lit, ExprLit, Lit::Str, Meta, MetaNameValue};
+
             if let Meta::NameValue(MetaNameValue {
                 value:
                     Lit(ExprLit {
@@ -95,6 +120,7 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
             {
                 let doc = lit_str.value();
                 let doc_str = doc_str.get_or_insert_default();
+
                 doc_str.push_str(doc.trim());
                 doc_str.push('\n');
             }
@@ -120,7 +146,9 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
 
     let build_fn_body = if no_json {
         let error_msg = format!("{} cannot be built from JSON", full_name);
+
         quote! { Err(gpui::private::anyhow::anyhow!(#error_msg)) }
+
     } else if is_unit_struct {
         quote! { Ok(Box::new(Self)) }
     } else {
@@ -137,6 +165,7 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
         quote! { &[] }
     } else {
         let aliases = deprecated_aliases.iter();
+
         quote! { &[#(#aliases),*] }
     };
 
@@ -148,7 +177,9 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
 
     let documentation_fn_body = if let Some(doc) = doc_str {
         let doc = doc.trim();
+
         quote! { Some(#doc) }
+
     } else {
         quote! { None }
     };

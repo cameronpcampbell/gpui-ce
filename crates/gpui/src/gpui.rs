@@ -5,6 +5,7 @@
 #![allow(unused_mut)] // False positives in platform specific code
 
 extern crate self as gpui;
+
 #[macro_use]
 mod action;
 mod animated;
@@ -23,7 +24,9 @@ mod element;
 mod elements;
 mod executor;
 mod platform_scheduler;
+
 pub(crate) use platform_scheduler::PlatformScheduler;
+
 mod geometry;
 mod gestures;
 mod global;
@@ -112,10 +115,12 @@ pub use executor::*;
 pub use geometry::*;
 pub use gestures::*;
 pub use global::*;
+
 pub use gpui_macros::{
     AppContext, InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement,
     Styled, VisualContext, bench, property_test, register_action, test,
 };
+
 pub use resize::*;
 pub use spring::*;
 
@@ -142,10 +147,13 @@ macro_rules! bench_main {
         criterion::criterion_main!($($tokens)*);
     };
 }
+
 pub use gpui_shared_string::*;
 pub use gpui_util::arc_cow::ArcCow;
+
 /// HTTP client abstraction for making requests.
 pub mod http_client;
+
 pub use input::*;
 pub use inspector::*;
 pub use interactive::*;
@@ -335,10 +343,12 @@ pub trait EventEmitter<E: Any>: 'static {}
 pub trait BorrowAppContext {
     /// Set a global value on the context.
     fn set_global<T: Global>(&mut self, global: T);
+
     /// Updates the global state of the given type.
     fn update_global<G, R>(&mut self, f: impl FnOnce(&mut G, &mut Self) -> R) -> R
     where
         G: Global;
+
     /// Updates the global state of the given type, creating a default if it didn't exist before.
     fn update_default_global<G, R>(&mut self, f: impl FnOnce(&mut G, &mut Self) -> R) -> R
     where
@@ -360,7 +370,9 @@ where
     {
         let mut global = self.borrow_mut().lease_global::<G>();
         let result = f(&mut global, self);
+
         self.borrow_mut().end_global_lease(global);
+
         result
     }
 
@@ -378,10 +390,13 @@ where
 pub struct GpuSpecs {
     /// Whether the GPU is really a fake (like `llvmpipe`) running on the CPU.
     pub is_software_emulated: bool,
+
     /// The name of the device, as reported by Vulkan.
     pub device_name: String,
+
     /// The name of the driver, as reported by Vulkan.
     pub driver_name: String,
+
     /// Further information about the driver, as reported by Vulkan.
     pub driver_info: String,
 }

@@ -10,6 +10,7 @@ use gpui::{
     SharedString, UniformListScrollHandle, Window, WindowBounds, WindowOptions, canvas, div, point,
     prelude::*, px, rgb, size, uniform_list,
 };
+
 use gpui_platform::application;
 
 const TOTAL_ITEMS: usize = 10000;
@@ -44,6 +45,7 @@ pub struct Quote {
 impl Quote {
     pub fn random() -> Self {
         use rand::Rng;
+
         let mut rng = rand::rng();
         // simulate a base price in a realistic range
         let prev_close = rng.random_range(100.0..200.0);
@@ -55,8 +57,10 @@ impl Quote {
         let timestamp = Duration::from_secs(rng.random_range(0..86400));
         let volume = rng.random_range(1_000_000..100_000_000);
         let turnover = last_done * volume as f64;
+
         let symbol = {
             let mut ticker = String::new();
+
             if rng.random_bool(0.5) {
                 ticker.push_str(&format!(
                     "{:03}.{}",
@@ -70,15 +74,19 @@ impl Quote {
                     rng.random_range('A'..='Z')
                 ));
             }
+
             ticker.push_str(&format!(".{}", rng.random_range('A'..='Z')));
+
             ticker
         };
+
         let name = format!(
             "{} {} - #{}",
             symbol,
             rng.random_range(1..100),
             rng.random_range(10000..100000)
         );
+
         let ttm = rng.random_range(0.0..10.0);
         let market_cap = rng.random_range(1_000_000.0..10_000_000.0);
         let float_cap = market_cap + rng.random_range(1_000.0..10_000.0);
@@ -89,12 +97,14 @@ impl Quote {
         let dividend = rng.random_range(0.0..10.0);
         let dividend_yield = rng.random_range(0.0..10.0);
         let dividend_per_share = rng.random_range(0.0..10.0);
+
         let dividend_date = SharedString::new(format!(
             "{}-{}-{}",
             rng.random_range(2000..2023),
             rng.random_range(1..12),
             rng.random_range(1..28)
         ));
+
         let dividend_payment = rng.random_range(0.0..10.0);
 
         Self {
@@ -145,6 +155,7 @@ struct TableRow {
     ix: usize,
     quote: Rc<Quote>,
 }
+
 impl TableRow {
     fn new(ix: usize, quote: Rc<Quote>) -> Self {
         Self { ix, quote }
@@ -160,36 +171,47 @@ impl TableRow {
                 "id" => div().child(format!("{}", self.ix)),
                 "symbol" => div().child(self.quote.symbol.clone()),
                 "name" => div().child(self.quote.name.clone()),
+
                 "last_done" => div()
                     .text_color(color)
                     .child(format!("{:.3}", self.quote.last_done)),
+
                 "prev_close" => div()
                     .text_color(color)
                     .child(format!("{:.3}", self.quote.prev_close)),
+
                 "change" => div()
                     .text_color(color)
                     .child(format!("{:.2}%", self.quote.change())),
+
                 "timestamp" => div()
                     .text_color(color)
                     .child(format!("{:?}", self.quote.timestamp.as_secs())),
+
                 "open" => div()
                     .text_color(color)
                     .child(format!("{:.2}", self.quote.open)),
+
                 "low" => div()
                     .text_color(color)
                     .child(format!("{:.2}", self.quote.low)),
+
                 "high" => div()
                     .text_color(color)
                     .child(format!("{:.2}", self.quote.high)),
+
                 "ttm" => div()
                     .text_color(color)
                     .child(format!("{:.2}", self.quote.ttm)),
+
                 "eps" => div()
                     .text_color(color)
                     .child(format!("{:.2}", self.quote.eps)),
+
                 "market_cap" => {
                     div().child(format!("{:.2} M", self.quote.market_cap / 1_000_000.0))
                 }
+
                 "float_cap" => div().child(format!("{:.2} M", self.quote.float_cap / 1_000_000.0)),
                 "turnover" => div().child(format!("{:.2} M", self.quote.turnover / 1_000_000.0)),
                 "volume" => div().child(format!("{:.2} M", self.quote.volume as f64 / 1_000_000.0)),
@@ -199,9 +221,11 @@ impl TableRow {
                 "shares" => div().child(format!("{:.2}", self.quote.shares)),
                 "dividend" => div().child(format!("{:.2}", self.quote.dividend)),
                 "yield" => div().child(format!("{:.2}%", self.quote.dividend_yield)),
+
                 "dividend_per_share" => {
                     div().child(format!("{:.2}", self.quote.dividend_per_share))
                 }
+
                 "dividend_date" => div().child(format!("{}", self.quote.dividend_date)),
                 "dividend_payment" => div().child(format!("{:.2}", self.quote.dividend_payment)),
                 _ => div().child("--"),
@@ -239,6 +263,7 @@ const FIELDS: [(&str, f32); 24] = [
 impl RenderOnce for TableRow {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let color = self.quote.change_color();
+
         div()
             .flex()
             .flex_row()
@@ -258,8 +283,10 @@ impl RenderOnce for TableRow {
 struct DataTable {
     /// Use `Rc` to share the same quote data across multiple items, avoid cloning.
     quotes: Vec<Rc<Quote>>,
+
     visible_range: Range<usize>,
     scroll_handle: UniformListScrollHandle,
+
     /// The position in thumb bounds when dragging start mouse down.
     drag_position: Option<Point<Pixels>>,
 }
@@ -300,15 +327,18 @@ impl DataTable {
         let scroll_height = self.scroll_height();
         let table_bounds = self.table_bounds();
         let table_height = table_bounds.size.height;
+
         if table_height == px(0.) {
             return div().id("scrollbar");
         }
 
         let percentage = -self.scroll_top() / scroll_height;
+
         let offset_top = (table_height * percentage).clamp(
             px(4.),
             (table_height - SCROLLBAR_THUMB_HEIGHT - px(4.)).max(px(4.)),
         );
+
         let entity = cx.entity();
         let scroll_handle = self.scroll_handle.0.borrow().base_handle.clone();
 
@@ -328,6 +358,7 @@ impl DataTable {
                     move |thumb_bounds, _, window, _| {
                         window.on_mouse_event({
                             let entity = entity.clone();
+
                             move |ev: &MouseDownEvent, _, _, cx| {
                                 if !thumb_bounds.contains(&ev.position) {
                                     return;
@@ -340,8 +371,10 @@ impl DataTable {
                                 })
                             }
                         });
+
                         window.on_mouse_event({
                             let entity = entity.clone();
+
                             move |_: &MouseUpEvent, _, _, cx| {
                                 entity.update(cx, |this, _| {
                                     this.drag_position = None;
@@ -359,6 +392,7 @@ impl DataTable {
                             };
 
                             let inside_offset = drag_pos.y;
+
                             let percentage = ((ev.position.y - table_bounds.origin.y
                                 + inside_offset)
                                 / (table_bounds.size.height))
@@ -367,6 +401,7 @@ impl DataTable {
                             let offset_y = ((scroll_height - table_bounds.size.height)
                                 * percentage)
                                 .clamp(px(0.), scroll_height - SCROLLBAR_THUMB_HEIGHT);
+
                             scroll_handle.set_offset(point(px(0.), -offset_y));
                             cx.notify(entity.entity_id());
                         })
@@ -434,12 +469,15 @@ impl Render for DataTable {
                                     self.quotes.len(),
                                     cx.processor(move |this, range: Range<usize>, _, _| {
                                         this.visible_range = range.clone();
+
                                         let mut items = Vec::with_capacity(range.end - range.start);
+
                                         for i in range {
                                             if let Some(quote) = this.quotes.get(i) {
                                                 items.push(TableRow::new(i, quote.clone()));
                                             }
                                         }
+
                                         items
                                     }),
                                 )
@@ -457,6 +495,7 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         cx.open_window(
             WindowOptions::new()
                 .focus(true)
@@ -468,7 +507,9 @@ fn run_example() {
             |_, cx| {
                 cx.new(|_| {
                     let mut table = DataTable::new();
+
                     table.generate();
+
                     table
                 })
             },

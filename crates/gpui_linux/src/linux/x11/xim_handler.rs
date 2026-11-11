@@ -52,6 +52,7 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler 
             .push(AttributeName::ClientWindow, self.window)
             .push(AttributeName::FocusWindow, self.window)
             .build();
+
         client.create_ic(input_method_id, ic_attributes)
     }
 
@@ -63,6 +64,7 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler 
     ) -> Result<(), ClientError> {
         self.connected = true;
         self.ic_id = input_context_id;
+
         Ok(())
     }
 
@@ -77,6 +79,7 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler 
             self.window,
             String::from(text),
         ));
+
         Ok(())
     }
 
@@ -92,12 +95,15 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler 
             x11rb::protocol::xproto::KEY_PRESS_EVENT => {
                 self.last_callback_event = Some(XimCallbackEvent::XimXEvent(Event::KeyPress(xev)));
             }
+
             x11rb::protocol::xproto::KEY_RELEASE_EVENT => {
                 self.last_callback_event =
                     Some(XimCallbackEvent::XimXEvent(Event::KeyRelease(xev)));
             }
+
             _ => {}
         }
+
         Ok(())
     }
 
@@ -128,6 +134,7 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler 
             self.window,
             String::from(preedit_string),
         ));
+
         Ok(())
     }
 }

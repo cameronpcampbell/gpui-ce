@@ -4,6 +4,7 @@ use itertools::Itertools;
 use scheduler::{Instant, SpawnTime};
 #[cfg(feature = "profiler")]
 use smallvec::SmallVec;
+
 use std::{
     cell::LazyCell,
     collections::{HashMap, VecDeque},
@@ -21,6 +22,7 @@ mod actions;
 pub mod hang;
 #[cfg(feature = "profiler")]
 pub mod journal;
+
 pub use actions::{ActionStatistics, ActionTiming, take_action_stats};
 
 /// Hints that the calling branch is unlikely to be taken.
@@ -60,6 +62,7 @@ pub fn take_all_stats(included: TasksIncluded) -> Vec<gpui::ThreadTaskStatistics
 pub fn get_all_timings(_included: gpui::TasksIncluded) -> Vec<gpui::ThreadTaskTimings> {
     Vec::new()
 }
+
 #[cfg(not(feature = "profiler"))]
 #[doc(hidden)]
 pub fn get_current_thread_timings(_included: TasksIncluded) -> gpui::ThreadTaskTimings {
@@ -71,6 +74,7 @@ pub fn get_current_thread_timings(_included: TasksIncluded) -> gpui::ThreadTaskT
         total_pushed: 0,
     }
 }
+
 #[cfg(not(feature = "profiler"))]
 #[doc(hidden)]
 pub fn take_all_stats(_included: TasksIncluded) -> Vec<gpui::ThreadTaskStatistics> {
@@ -113,6 +117,7 @@ impl TaskTiming {
     /// A task timing with a duration of zero. Any task will replace this in history.
     pub fn placeholder() -> Self {
         let now = Instant::now();
+
         Self {
             location: std::panic::Location::caller(),
             spawned: SpawnTime(now),
@@ -158,8 +163,10 @@ impl ThreadTaskTimings {
 
                 let mut vec = Vec::with_capacity(completed.len() + 1); // +1 for running task
                 let (s1, s2) = completed.as_slices();
+
                 vec.extend_from_slice(s1);
                 vec.extend_from_slice(s2);
+
                 if let TasksIncluded::CompletedAndRunning = included
                     && let Some(running) = timings.running
                 {
@@ -203,6 +210,7 @@ impl ThreadTaskStatistics {
                 let thread_name = timings.thread_name.clone();
 
                 let mut stats = std::mem::take(&mut timings.stats);
+
                 if let TasksIncluded::CompletedAndRunning = include_running
                     && let Some(ActiveTiming {
                         location,
@@ -211,12 +219,14 @@ impl ThreadTaskStatistics {
                     }) = timings.running
                 {
                     let end = YieldTime(Instant::now());
+
                     let timing = TaskTiming {
                         location,
                         spawned,
                         start,
                         end,
                     };
+
                     stats.add_runtime(timing);
                     stats.add_yield_timing(timing);
                 }
@@ -236,8 +246,10 @@ impl ThreadTaskStatistics {
 pub struct SerializedLocation {
     /// Name of the source file
     pub file: SharedString,
+
     /// Line in the source file
     pub line: u32,
+
     /// Column in the source file
     pub column: u32,
 }
@@ -257,8 +269,10 @@ impl From<&core::panic::Location<'static>> for SerializedLocation {
 pub struct SerializedTaskTiming {
     /// Location of the timing
     pub location: SerializedLocation,
+
     /// Time at which the measurement was reported in nanoseconds
     pub start: u128,
+
     /// Duration of the measurement in nanoseconds
     pub duration: u128,
 }
@@ -275,6 +289,7 @@ impl SerializedTaskTiming {
             .map(|timing| {
                 let start = timing.start.duration_since(anchor).as_nanos();
                 let duration = timing.end.0.duration_since(timing.start).as_nanos();
+
                 SerializedTaskTiming {
                     location: timing.location.into(),
                     start,
@@ -290,6 +305,7 @@ impl SerializedTaskTiming {
     pub fn from(anchor: Instant, timing: TaskTiming) -> SerializedTaskTiming {
         let start = timing.start.duration_since(anchor).as_nanos();
         let duration = timing.end.0.duration_since(timing.start).as_nanos();
+
         SerializedTaskTiming {
             location: timing.location.into(),
             start,
@@ -303,8 +319,10 @@ impl SerializedTaskTiming {
 pub struct SerializedThreadTaskTimings {
     /// Thread name
     pub thread_name: Option<String>,
+
     /// Hash of the thread id
     pub thread_id: u64,
+
     /// Timing records for this thread
     pub timings: Vec<SerializedTaskTiming>,
 }
@@ -319,7 +337,9 @@ impl SerializedThreadTaskTimings {
         let serialized_timings = SerializedTaskTiming::convert(anchor, &timings.timings);
 
         let mut hasher = DefaultHasher::new();
+
         timings.thread_id.hash(&mut hasher);
+
         let thread_id = hasher.finish();
 
         SerializedThreadTaskTimings {
@@ -335,8 +355,10 @@ impl SerializedThreadTaskTimings {
 pub struct ThreadTimingsDelta {
     /// Hashed thread id
     pub thread_id: u64,
+
     /// Thread name, if known
     pub thread_name: Option<String>,
+
     /// New timings since the last call. If the circular buffer wrapped around
     /// since the previous poll, some entries may have been lost.
     pub new_timings: Vec<SerializedTaskTiming>,
@@ -369,7 +391,9 @@ impl ProfilingCollector {
 
         for thread in all_timings {
             let mut hasher = DefaultHasher::new();
+
             thread.thread_id.hash(&mut hasher);
+
             let hashed_id = hasher.finish();
 
             let prev_cursor = self.cursors.get(&thread.thread_id).copied().unwrap_or(0);
@@ -380,12 +404,15 @@ impl ProfilingCollector {
                 // Cursor fell behind the buffer — some entries were evicted.
                 // Return everything still in the buffer.
                 thread.timings.as_slice()
+
             } else {
                 let skip = (prev_cursor - buffer_start) as usize;
+
                 &thread.timings[skip.min(thread.timings.len())..]
             };
 
             let cursor_advance = thread.total_pushed;
+
             self.cursors.insert(thread.thread_id, cursor_advance);
 
             if slice.is_empty() {
@@ -439,6 +466,7 @@ pub struct TaskStatistics {
 impl std::fmt::Display for TaskStatistics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Tasks that blocked the longest before yielding\n")?;
+
         for timing in self.longest_poll_times {
             f.write_fmt(format_args!(
                 "{:<20} - {}:{}\n",
@@ -447,7 +475,9 @@ impl std::fmt::Display for TaskStatistics {
                 timing.location.column()
             ))?;
         }
+
         f.write_str("Tasks that ran the longest\n")?;
+
         for timing in self.longest_runtimes {
             f.write_fmt(format_args!(
                 "{:<20} - {}:{}\n",
@@ -456,6 +486,7 @@ impl std::fmt::Display for TaskStatistics {
                 timing.location.column()
             ))?;
         }
+
         Ok(())
     }
 }
@@ -477,13 +508,16 @@ impl TaskStatistics {
     #[inline(always)]
     fn add_yield_timing(&mut self, task: TaskTiming) {
         let yielded_after = task.poll_duration();
+
         if yielded_after >= self.poll_time_to_beat {
             cold_path(); // most tasks are not the worst, optimize for that
+
             let to_replace = self
                 .longest_poll_times
                 .iter()
                 .position_min_by_key(|task| task.since_spawn())
                 .expect("guarded by the comparison with nth_longest_yield_time");
+
             self.longest_poll_times[to_replace] = task;
 
             self.poll_time_to_beat = self
@@ -498,13 +532,16 @@ impl TaskStatistics {
     #[inline(always)]
     fn add_runtime(&mut self, task: TaskTiming) {
         let runtime = task.since_spawn();
+
         if runtime >= self.runtime_to_beat {
             cold_path(); // most tasks are not the worst, optimize for that
+
             let to_replace = self
                 .longest_runtimes
                 .iter()
                 .position_min_by_key(|task| task.since_spawn())
                 .expect("guarded by the comparison with nth_longest_yield_time");
+
             self.longest_runtimes[to_replace] = task;
 
             self.runtime_to_beat = self
@@ -532,6 +569,7 @@ pub static GLOBAL_THREAD_TIMINGS: spin::Mutex<Vec<GlobalThreadTimings>> =
 /// read, drop) the returned handles only after the global lock is released.
 fn upgraded_thread_timings() -> Vec<(ThreadId, Arc<GuardedTaskTimings>)> {
     let global_thread_timings = GLOBAL_THREAD_TIMINGS.lock();
+
     global_thread_timings
         .iter()
         .filter_map(|t| Some((t.thread_id, t.timings.upgrade()?)))
@@ -589,12 +627,14 @@ impl ThreadTimings {
         location: &'static std::panic::Location<'_>,
     ) {
         let start = Instant::now();
+
         self.running = Some(ActiveTiming {
             spawned,
             location,
             start,
         });
     }
+
     #[cfg(not(feature = "profiler"))]
     pub fn update_running_task(&mut self, _: SpawnTime, _: &'static std::panic::Location<'_>) {}
 
@@ -615,19 +655,25 @@ impl ThreadTimings {
             start,
             end: ended,
         };
+
         self.stats.add_yield_timing(timing);
         self.stats.add_runtime(timing);
 
         if trace_enabled() {
             cold_path(); // optimize for when the profiling is off
+
             if self.timings.len() >= MAX_TASK_TIMINGS {
                 self.timings.pop_front();
             }
+
             self.timings.push_back(timing);
+
             self.total_pushed += 1;
         }
+
         timing
     }
+
     #[cfg(not(feature = "profiler"))]
     pub fn save_task_timing(&mut self, _: YieldTime) {}
 
@@ -669,6 +715,7 @@ impl Drop for ThreadTimings {
         else {
             return;
         };
+
         thread_timings.swap_remove(index);
     }
 }
@@ -677,6 +724,7 @@ impl Drop for ThreadTimings {
 pub fn update_running_task(spawned: SpawnTime, location: &'static std::panic::Location<'_>) {
     #[cfg(feature = "profiler")]
     journal::begin_foreground_turn();
+
     THREAD_TIMINGS.with(|timings| {
         timings.lock().update_running_task(spawned, location);
     });
@@ -685,11 +733,14 @@ pub fn update_running_task(spawned: SpawnTime, location: &'static std::panic::Lo
 #[doc(hidden)]
 pub fn save_task_timing() {
     let yielded_at = YieldTime(Instant::now());
+
     #[cfg(feature = "profiler")]
     {
         let timing = THREAD_TIMINGS.with(|timings| timings.lock().save_task_timing(yielded_at));
+
         journal::record_task_poll(timing);
     }
+
     #[cfg(not(feature = "profiler"))]
     THREAD_TIMINGS.with(|timings| {
         timings.lock().save_task_timing(yielded_at);
@@ -703,6 +754,7 @@ pub fn get_current_thread_task_timings(include_running: TasksIncluded) -> Thread
 
 const TRACE_SETTING_ENABLED: u64 = 1 << 63;
 const TRACE_SCOPE_COUNT_MASK: u64 = TRACE_SETTING_ENABLED - 1;
+
 static TRACE_STATE: AtomicU64 = AtomicU64::new(0);
 
 /// Enables or disables profiler trace collection at runtime.
@@ -714,8 +766,10 @@ static TRACE_STATE: AtomicU64 = AtomicU64::new(0);
 /// until the last scope ends. Calls with the current setting are a no-op.
 pub fn set_trace_enabled(enabled: bool) -> bool {
     let mut state = TRACE_STATE.load(Ordering::Acquire);
+
     loop {
         let was_enabled = state & TRACE_SETTING_ENABLED != 0;
+
         if was_enabled == enabled {
             return false;
         }
@@ -725,6 +779,7 @@ pub fn set_trace_enabled(enabled: bool) -> bool {
         } else {
             state & TRACE_SCOPE_COUNT_MASK
         };
+
         match TRACE_STATE.compare_exchange_weak(
             state,
             next_state,
@@ -735,8 +790,10 @@ pub fn set_trace_enabled(enabled: bool) -> bool {
                 if next_state == 0 {
                     clear_trace_buffers();
                 }
+
                 return true;
             }
+
             Err(updated_state) => state = updated_state,
         }
     }
@@ -750,7 +807,9 @@ pub(crate) fn trace_scope() -> TraceGuard {
     let incremented = TRACE_STATE.fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
         (state & TRACE_SCOPE_COUNT_MASK < TRACE_SCOPE_COUNT_MASK).then_some(state + 1)
     });
+
     assert!(incremented.is_ok(), "too many active profiler trace scopes");
+
     TraceGuard
 }
 
@@ -761,6 +820,7 @@ impl Drop for TraceGuard {
             TRACE_STATE.fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
                 (state & TRACE_SCOPE_COUNT_MASK > 0).then_some(state - 1)
             });
+
         match previous_state {
             Ok(1) => clear_trace_buffers(),
             Ok(_) => {}
@@ -777,15 +837,20 @@ pub fn trace_enabled() -> bool {
 fn clear_trace_buffers() {
     for (_, timings) in upgraded_thread_timings() {
         let mut timings = timings.lock();
+
         timings.timings.clear();
         timings.timings.shrink_to_fit();
+
         timings.total_pushed = 0;
     }
+
     #[cfg(feature = "profiler")]
     {
         let mut frames = FRAME_TIMINGS.lock();
+
         frames.timings.clear();
         frames.timings.shrink_to_fit();
+
         frames.total_pushed = 0;
     }
 }
@@ -796,13 +861,17 @@ fn clear_trace_buffers() {
 pub struct FrameTiming {
     /// The window that was drawn.
     pub window_id: WindowId,
+
     /// When the frame first became dirty (its first invalidation). `None` if
     /// profiler tracing was not yet enabled when the invalidation occurred.
     pub dirty_at: Option<Instant>,
+
     /// Number of invalidations coalesced into this frame.
     pub invalidations: u64,
+
     /// When `Window::draw` started.
     pub draw_start: Instant,
+
     /// When `Window::draw` finished.
     pub draw_end: Instant,
 }
@@ -828,10 +897,13 @@ impl FrameTiming {
 pub struct PresentTiming {
     /// The window whose frame was submitted.
     pub window_id: WindowId,
+
     /// When the platform submission began.
     pub present_start: Instant,
+
     /// When the platform submission completed.
     pub present_end: Instant,
+
     /// The interval since the previous newly drawn frame was submitted, when
     /// both frames belong to an active animation.
     pub animation_interval: Option<Duration>,
@@ -862,8 +934,10 @@ pub enum FrameEvent {
 pub struct FrameDurationSnapshot {
     /// Histogram of durations from the first invalidation through presentation, in nanoseconds.
     pub dirty_to_present_histogram: Histogram<u64>,
+
     /// Histogram of `Window::draw` durations, in nanoseconds.
     pub draw_duration_histogram: Histogram<u64>,
+
     /// Histogram of intervals between consecutively presented frames while the
     /// window was animating, in nanoseconds.
     pub present_interval_histogram: Histogram<u64>,
@@ -876,8 +950,10 @@ pub struct FrameDurationSnapshot {
 pub struct InputLatencySnapshot {
     /// Histogram of input-to-frame latency samples, in nanoseconds.
     pub latency_histogram: Histogram<u64>,
+
     /// Histogram of input events coalesced per rendered frame.
     pub events_per_frame_histogram: Histogram<u64>,
+
     /// Count of input events that arrived mid-draw and were excluded from
     /// latency recording.
     pub mid_draw_events_dropped: u64,
@@ -947,6 +1023,7 @@ impl WindowProfiler {
             animating_at_last_present: false,
             pending_frame: None,
         };
+
         journal::record_frame_pending(window_id, Instant::now());
         Ok(profiler)
     }
@@ -955,6 +1032,7 @@ impl WindowProfiler {
     /// input variant being dispatched (see [`crate::PlatformInput::kind_name`]).
     pub fn begin_input(&mut self, kind: &'static str) {
         journal::begin_foreground_turn();
+
         self.active_activities.push(WindowActivity::Input {
             started_at: Instant::now(),
             kind,
@@ -965,7 +1043,9 @@ impl WindowProfiler {
     pub fn end_input(&mut self, caused_invalidation: bool) {
         let Some(WindowActivity::Input { started_at, kind }) = self.active_activities.pop() else {
             debug_assert!(false, "input activity must be the current window activity");
+
             journal::end_foreground_turn();
+
             return;
         };
 
@@ -975,6 +1055,7 @@ impl WindowProfiler {
             end: Instant::now(),
             caused_invalidation,
         });
+
         journal::end_foreground_turn();
 
         if !caused_invalidation {
@@ -985,10 +1066,12 @@ impl WindowProfiler {
             .active_activities
             .iter()
             .any(|activity| matches!(activity, WindowActivity::Draw { .. }));
+
         if arrived_during_draw {
             self.mid_draw_events_dropped += 1;
         } else {
             self.first_input_at.get_or_insert(started_at);
+
             self.pending_input_count += 1;
         }
     }
@@ -996,7 +1079,9 @@ impl WindowProfiler {
     /// Records the beginning of an action handler.
     pub fn begin_action_handler(&mut self, action: &(dyn Action + 'static), cx: &mut App) {
         journal::begin_foreground_turn();
+
         let name = actions::update_running_action(action, cx);
+
         self.active_actions.push((name, Instant::now()));
     }
 
@@ -1006,24 +1091,32 @@ impl WindowProfiler {
         // slot misbehaves when tests run actions concurrently, which is why
         // the journal entry is tracked here on the window instead.
         actions::save_action_timing();
+
         let Some((name, start)) = self.active_actions.pop() else {
             debug_assert!(false, "action handler must be begun before it ends");
+
             journal::end_foreground_turn();
+
             return;
         };
+
         journal::record_action(ActionTiming {
             name,
             start,
             end: Instant::now(),
         });
+
         journal::end_foreground_turn();
     }
 
     /// Records the beginning of a window draw.
     pub fn begin_draw(&mut self) {
         journal::begin_foreground_turn();
+
         let started_at = Instant::now();
+
         journal::record_frame_pending(self.window_id, started_at);
+
         self.active_activities
             .push(WindowActivity::Draw { started_at });
     }
@@ -1035,11 +1128,14 @@ impl WindowProfiler {
         }) = self.active_activities.pop()
         else {
             debug_assert!(false, "draw activity must be the current window activity");
+
             journal::end_foreground_turn();
+
             return Duration::ZERO;
         };
 
         let draw_end = Instant::now();
+
         let frame_timing = FrameTiming {
             window_id: self.window_id,
             dirty_at,
@@ -1047,9 +1143,13 @@ impl WindowProfiler {
             draw_start,
             draw_end,
         };
+
         let draw_duration = frame_timing.draw_duration();
+
         self.record_draw_timing(frame_timing);
+
         journal::end_foreground_turn();
+
         draw_duration
     }
 
@@ -1099,29 +1199,36 @@ impl WindowProfiler {
     ) {
         if let Some(first_input_at) = self.first_input_at.take() {
             let latency_nanos = present_end.duration_since(first_input_at).as_nanos() as u64;
+
             self.input_latency_histogram.record(latency_nanos).ok();
         }
+
         if self.pending_input_count > 0 {
             self.events_per_frame_histogram
                 .record(self.pending_input_count)
                 .ok();
+
             self.pending_input_count = 0;
         }
 
         let frame = self.pending_frame.take();
+
         let animation_interval =
             if frame.is_some() && self.animating_at_last_present && window_active {
                 self.last_present_at
                     .map(|last_present_at| present_end.duration_since(last_present_at))
+
             } else {
                 None
             };
+
         let present_timing = PresentTiming {
             window_id: self.window_id,
             present_start,
             present_end,
             animation_interval,
         };
+
         journal::record_present(present_timing, frame);
 
         let Some(frame) = frame else {
@@ -1141,6 +1248,7 @@ impl WindowProfiler {
                 .record(animation_interval.as_nanos() as u64)
                 .ok();
         }
+
         record_frame_event(FrameEvent::Present(present_timing));
 
         self.last_present_at = Some(present_end);
@@ -1149,7 +1257,9 @@ impl WindowProfiler {
 
     fn record_draw_timing(&mut self, timing: FrameTiming) {
         self.record_draw_duration(timing.draw_duration());
+
         self.pending_frame = Some(timing);
+
         record_frame_event(FrameEvent::Draw(timing));
         journal::record_draw(timing);
     }
@@ -1192,13 +1302,17 @@ pub fn record_frame_event(event: FrameEvent) {
     if !trace_enabled() {
         return;
     }
+
     cold_path(); // optimize for when profiling is off
 
     let mut frames = FRAME_TIMINGS.lock();
+
     if frames.timings.len() >= MAX_FRAME_TIMINGS {
         frames.timings.pop_front();
     }
+
     frames.timings.push_back(event);
+
     frames.total_pushed += 1;
 }
 
@@ -1233,13 +1347,16 @@ impl FrameTimingCollector {
         let buffer_len = frames.timings.len() as u64;
         let buffer_start = frames.total_pushed.saturating_sub(buffer_len);
         let skip = self.cursor.saturating_sub(buffer_start) as usize;
+
         let unseen = frames
             .timings
             .iter()
             .skip(skip.min(frames.timings.len()))
             .copied()
             .collect();
+
         self.cursor = frames.total_pushed;
+
         unseen
     }
 }
@@ -1253,13 +1370,16 @@ mod tests {
     fn records_draw_events_only_while_tracing() {
         let _trace_test_guard = TraceTestGuard::new();
         let window_id = WindowId::from(0xD0A0);
+
         let mut window_profiler =
             WindowProfiler::new(window_id).expect("window profiler should initialize");
+
         let dirty_at = Instant::now();
         let mut collector = FrameTimingCollector::new();
 
         window_profiler.begin_draw();
         window_profiler.end_draw(Some(dirty_at), 3);
+
         assert!(
             collector
                 .collect_unseen()
@@ -1268,7 +1388,9 @@ mod tests {
         );
 
         set_trace_enabled(true);
+
         let mut collector = FrameTimingCollector::new();
+
         window_profiler.begin_draw();
         window_profiler.end_draw(Some(dirty_at), 3);
 
@@ -1280,6 +1402,7 @@ mod tests {
                 _ => None,
             })
             .expect("draw event should be recorded while tracing");
+
         assert_eq!(timing.dirty_at, Some(dirty_at));
         assert_eq!(timing.invalidations, 3);
         assert!(timing.draw_start >= dirty_at);
@@ -1288,17 +1411,25 @@ mod tests {
     #[test]
     fn records_present_events_for_newly_drawn_frames() {
         let _trace_test_guard = TraceTestGuard::new();
+
         set_trace_enabled(true);
+
         let window_id = WindowId::from(0xA11E);
+
         let mut window_profiler =
             WindowProfiler::new(window_id).expect("window profiler should initialize");
+
         let start = Instant::now();
         let mut collector = FrameTimingCollector::new();
 
         record_test_draw(&mut window_profiler, start);
+
         window_profiler.record_present_at(start, start, true, true);
+
         record_test_draw(&mut window_profiler, start + FRAME);
+
         window_profiler.record_present_at(start + FRAME, start + FRAME, true, true);
+
         window_profiler.record_present_at(
             start + FRAME + FRAME / 2,
             start + FRAME + FRAME / 2,
@@ -1314,15 +1445,18 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
+
         let [first_present, second_present] = present_timings.as_slice() else {
             panic!("expected exactly two present events, got {present_timings:?}");
         };
+
         assert_eq!(first_present.animation_interval, None);
         assert_eq!(second_present.animation_interval, Some(FRAME));
 
         #[cfg(feature = "profiler")]
         {
             assert_eq!(window_profiler.present_interval_histogram.len(), 1);
+
             assert!(
                 window_profiler.present_interval_histogram.max()
                     >= second_present
@@ -1336,14 +1470,19 @@ mod tests {
     #[test]
     fn disabling_tracing_clears_frame_events() {
         let _trace_test_guard = TraceTestGuard::new();
+
         set_trace_enabled(true);
+
         let window_id = WindowId::from(0xC1EA);
+
         let mut window_profiler =
             WindowProfiler::new(window_id).expect("window profiler should initialize");
+
         let mut collector = FrameTimingCollector::new();
 
         window_profiler.begin_draw();
         window_profiler.end_draw(None, 0);
+
         assert!(
             FRAME_TIMINGS
                 .lock()
@@ -1354,6 +1493,7 @@ mod tests {
         );
 
         set_trace_enabled(false);
+
         assert!(
             collector
                 .collect_unseen()
@@ -1367,18 +1507,23 @@ mod tests {
     fn records_intervals_only_between_animation_frames() {
         let mut window_profiler =
             WindowProfiler::new(WindowId::from(1)).expect("window profiler should initialize");
+
         let start = Instant::now();
 
         draw_and_present(&mut window_profiler, start, true, true);
+
         assert_eq!(window_profiler.present_interval_histogram.len(), 0);
 
         draw_and_present(&mut window_profiler, start + FRAME, true, true);
+
         assert_eq!(window_profiler.present_interval_histogram.len(), 1);
 
         draw_and_present(&mut window_profiler, start + FRAME * 2, true, false);
+
         assert_eq!(window_profiler.present_interval_histogram.len(), 2);
 
         draw_and_present(&mut window_profiler, start + FRAME * 100, true, true);
+
         assert_eq!(window_profiler.present_interval_histogram.len(), 2);
     }
 
@@ -1387,12 +1532,14 @@ mod tests {
     fn missed_frames_stretch_the_recorded_interval() {
         let mut window_profiler =
             WindowProfiler::new(WindowId::from(2)).expect("window profiler should initialize");
+
         let start = Instant::now();
 
         draw_and_present(&mut window_profiler, start, true, true);
         draw_and_present(&mut window_profiler, start + FRAME * 5, true, true);
 
         let recorded = window_profiler.present_interval_histogram.max();
+
         assert!(recorded >= (FRAME * 4).as_nanos() as u64);
     }
 
@@ -1401,13 +1548,17 @@ mod tests {
     fn ignores_re_presents_of_unchanged_frames() {
         let mut window_profiler =
             WindowProfiler::new(WindowId::from(3)).expect("window profiler should initialize");
+
         let start = Instant::now();
 
         draw_and_present(&mut window_profiler, start, true, true);
+
         window_profiler.record_present_at(start + FRAME / 2, start + FRAME / 2, true, true);
+
         draw_and_present(&mut window_profiler, start + FRAME, true, true);
 
         assert_eq!(window_profiler.present_interval_histogram.len(), 1);
+
         assert!(
             window_profiler.present_interval_histogram.max() >= (FRAME * 3 / 4).as_nanos() as u64
         );
@@ -1418,16 +1569,20 @@ mod tests {
     fn skips_intervals_for_inactive_windows() {
         let mut window_profiler =
             WindowProfiler::new(WindowId::from(4)).expect("window profiler should initialize");
+
         let start = Instant::now();
 
         draw_and_present(&mut window_profiler, start, false, true);
         draw_and_present(&mut window_profiler, start + FRAME, false, true);
+
         assert_eq!(window_profiler.present_interval_histogram.len(), 0);
 
         draw_and_present(&mut window_profiler, start + FRAME * 2, true, true);
+
         assert_eq!(window_profiler.present_interval_histogram.len(), 0);
 
         draw_and_present(&mut window_profiler, start + FRAME * 3, true, true);
+
         assert_eq!(window_profiler.present_interval_histogram.len(), 1);
     }
 
@@ -1435,14 +1590,17 @@ mod tests {
     fn records_dirty_to_present_durations() {
         let mut window_profiler =
             WindowProfiler::new(WindowId::from(8)).expect("window profiler should initialize");
+
         let draw_end = Instant::now();
         let present_end = draw_end + Duration::from_millis(6);
 
         record_test_draw(&mut window_profiler, draw_end);
+
         window_profiler.record_present_at(present_end, present_end, true, false);
 
         let snapshot = window_profiler.frame_duration_snapshot();
         let histogram = snapshot.dirty_to_present_histogram;
+
         assert_eq!(histogram.len(), 1);
         assert!(histogram.max() >= Duration::from_millis(10).as_nanos() as u64);
     }
@@ -1457,6 +1615,7 @@ mod tests {
         window_profiler.record_draw_duration(Duration::from_millis(40));
 
         let snapshot = window_profiler.frame_duration_snapshot();
+
         assert_eq!(snapshot.draw_duration_histogram.len(), 2);
         assert!(snapshot.draw_duration_histogram.max() >= 39_000_000);
     }
@@ -1465,20 +1624,27 @@ mod tests {
     fn records_input_latency_at_the_frame_presentation_timestamp() {
         let mut window_profiler =
             WindowProfiler::new(WindowId::from(6)).expect("window profiler should initialize");
+
         let first_input_at = Instant::now();
         let presented_at = first_input_at + Duration::from_millis(12);
 
         begin_input_at(&mut window_profiler, first_input_at);
+
         window_profiler.end_input(true);
+
         begin_input_at(
             &mut window_profiler,
             first_input_at + Duration::from_millis(2),
         );
+
         window_profiler.end_input(true);
+
         record_test_draw(&mut window_profiler, presented_at);
+
         window_profiler.record_present_at(presented_at, presented_at, true, false);
 
         let snapshot = window_profiler.input_latency_snapshot();
+
         assert_eq!(snapshot.latency_histogram.len(), 1);
         assert!(snapshot.latency_histogram.max() >= Duration::from_millis(12).as_nanos() as u64);
         assert_eq!(snapshot.events_per_frame_histogram.len(), 1);
@@ -1492,11 +1658,14 @@ mod tests {
             WindowProfiler::new(WindowId::from(7)).expect("window profiler should initialize");
 
         window_profiler.begin_draw();
+
         begin_input_at(&mut window_profiler, Instant::now());
+
         window_profiler.end_input(true);
         window_profiler.end_draw(None, 0);
 
         let snapshot = window_profiler.input_latency_snapshot();
+
         assert!(snapshot.latency_histogram.is_empty());
         assert!(snapshot.events_per_frame_histogram.is_empty());
         assert_eq!(snapshot.mid_draw_events_dropped, 1);
@@ -1509,13 +1678,18 @@ mod tests {
         let second_scope = trace_scope();
 
         assert!(trace_enabled());
+
         drop(first_scope);
+
         assert!(trace_enabled());
+
         drop(second_scope);
+
         assert!(!trace_enabled());
     }
 
     const FRAME: Duration = Duration::from_millis(16);
+
     static TRACE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct TraceTestGuard {
@@ -1528,8 +1702,11 @@ mod tests {
             let lock = TRACE_TEST_LOCK
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+
             let was_enabled = trace_enabled();
+
             set_trace_enabled(false);
+
             Self {
                 was_enabled,
                 _lock: lock,
@@ -1540,6 +1717,7 @@ mod tests {
     impl Drop for TraceTestGuard {
         fn drop(&mut self) {
             set_trace_enabled(false);
+
             if self.was_enabled {
                 set_trace_enabled(true);
             }
@@ -1570,6 +1748,7 @@ mod tests {
         next_frame_scheduled: bool,
     ) {
         record_test_draw(window_profiler, presented_at);
+
         window_profiler.record_present_at(
             presented_at,
             presented_at,

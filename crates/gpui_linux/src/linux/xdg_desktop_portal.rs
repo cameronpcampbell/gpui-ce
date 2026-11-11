@@ -37,6 +37,7 @@ impl XDPEventSource {
                         window_appearance_from_color_scheme(initial_appearance),
                     ))?;
                 }
+
                 if let Ok(initial_theme) = settings
                     .read::<String>("org.gnome.desktop.interface", "cursor-theme")
                     .await
@@ -67,12 +68,15 @@ impl XDPEventSource {
                     .await
                 {
                     let sender = sender.clone();
+
                     background
                         .spawn(async move {
                             while let Some(theme) = cursor_theme_changed.next().await {
                                 let theme = theme?;
+
                                 sender.send(Event::CursorTheme(theme))?;
                             }
+
                             anyhow::Ok(())
                         })
                         .detach();
@@ -86,12 +90,15 @@ impl XDPEventSource {
                     .await
                 {
                     let sender = sender.clone();
+
                     background
                         .spawn(async move {
                             while let Some(size) = cursor_size_changed.next().await {
                                 let size = size?;
+
                                 sender.send(Event::CursorSize(size as u32))?;
                             }
+
                             anyhow::Ok(())
                         })
                         .detach();
@@ -105,18 +112,22 @@ impl XDPEventSource {
                     .await
                 {
                     let sender = sender.clone();
+
                     background
                         .spawn(async move {
                             while let Some(layout) = button_layout_changed.next().await {
                                 let layout = layout?;
+
                                 sender.send(Event::ButtonLayout(layout))?;
                             }
+
                             anyhow::Ok(())
                         })
                         .detach();
                 }
 
                 let mut appearance_changed = settings.receive_color_scheme_changed().await?;
+
                 while let Some(scheme) = appearance_changed.next().await {
                     sender.send(Event::WindowAppearance(
                         window_appearance_from_color_scheme(scheme),

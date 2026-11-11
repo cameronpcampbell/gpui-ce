@@ -4,10 +4,12 @@
 #![cfg_attr(target_family = "wasm", no_main)]
 
 use gpui::colors::Colors;
+
 use gpui::{
     App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
     uniform_list,
 };
+
 use gpui_platform::application;
 
 #[path = "../shared/prelude.rs"]
@@ -56,6 +58,7 @@ fn run_example() {
         }
 
         let bounds = Bounds::centered(None, size(px(400.0), px(400.0)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_window, cx| cx.new(|_cx| UniformListExample {}),

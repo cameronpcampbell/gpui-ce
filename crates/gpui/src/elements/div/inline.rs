@@ -1,7 +1,9 @@
 use crate::elements::div::ScrollHandle;
+
 use crate::elements::text::{
     TruncationCandidate, text_layout_fits, truncate_with_measured_candidates,
 };
+
 use crate::{
     App, AvailableSpace, Bounds, Display, InlineBidiScope, InlineBoxRequest, InlineLayout,
     InlineLayoutRequest, InlineTextMetrics, InlineTextStyle, LayoutId, Pixels, Point, Position,
@@ -12,12 +14,14 @@ use crate::{
 use collections::FxHashMap;
 use gpui_util::ResultExt;
 use smallvec::SmallVec;
+
 use std::{
     cell::{Ref, RefCell},
     ops::Range,
     rc::Rc,
     sync::Arc,
 };
+
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Resolved content published by the element's ordinary layout request. Wrappers that return
@@ -81,6 +85,7 @@ impl InlineDocument {
         };
 
         let max_lines = request.options.line_clamp;
+
         let request = InlineLayoutRequest {
             options: crate::TextLayoutOptions {
                 line_clamp: None,
@@ -88,6 +93,7 @@ impl InlineDocument {
             },
             ..request
         };
+
         let probe = text_system.layout_inline(request);
         let fits = |layout: &InlineLayout| text_layout_fits(&layout.layout, width, max_lines);
 
@@ -111,6 +117,7 @@ impl InlineDocument {
             |candidate| {
                 let document = self.truncated(candidate);
                 let bidi_scopes = document.bidi_scopes();
+
                 let layout = text_system.layout_inline(InlineLayoutRequest {
                     text: &document.text,
                     runs: &document.runs,
@@ -118,6 +125,7 @@ impl InlineDocument {
                     bidi_scopes: &bidi_scopes,
                     ..request
                 });
+
                 let fits = fits(&layout);
 
                 ((Rc::new(document), layout), fits)
@@ -141,6 +149,7 @@ impl InlineDocument {
                     })
             })
             .collect();
+
         let spans = self
             .spans
             .iter()
@@ -192,8 +201,10 @@ impl InlineParagraph {
 #[derive(Default)]
 pub(super) struct InlineDivFrameState {
     paragraphs: Vec<InlineParagraph>,
+
     /// Text and inline containers whose bounds come from paragraph fragments.
     span_layout_ids: Vec<LayoutId>,
+
     /// Anonymous paragraphs and separate children, including absolute children.
     flow_child_layout_ids: Vec<LayoutId>,
 }
@@ -221,6 +232,7 @@ impl InlineParagraphCollector<'_> {
             return;
         } else if position == Position::Absolute {
             self.frame_state.flow_child_layout_ids.push(layout_id);
+
             return;
         }
 
@@ -240,6 +252,7 @@ impl InlineParagraphCollector<'_> {
 
                 self.current_document.text.push_str(text);
                 self.current_document.runs.extend(runs.iter().cloned());
+
                 self.current_document.text_styles.push(InlineTextStyle {
                     range: text_start..self.current_document.text.len(),
                     font_size: *font_size,
@@ -307,11 +320,14 @@ impl InlineParagraphCollector<'_> {
 
         if let Some(span_idx) = self.current_span_indices.get(&layout_id).copied() {
             let span = &mut self.current_document.spans[span_idx];
+
             span.text_range.end = text_end;
             span.box_range.end = box_end;
+
         } else {
             self.current_span_indices
                 .insert(layout_id, self.current_document.spans.len());
+
             self.current_document.spans.push(InlineSpan {
                 layout_id,
                 text_range: text_start..text_end,
@@ -328,11 +344,14 @@ impl InlineParagraphCollector<'_> {
         }
 
         let document = Rc::new(std::mem::take(&mut self.current_document));
+
         self.current_span_indices.clear();
+
         let measurement = Rc::new(RefCell::new(None));
 
         let text_style = self.text_style.clone();
         let font_size = text_style.font_size.to_pixels(self.window.rem_size());
+
         let line_height = self.window.pixel_snap(
             text_style
                 .line_height
@@ -387,10 +406,12 @@ impl InlineParagraphCollector<'_> {
                     options,
                     bidi_scopes: &bidi_scopes,
                 };
+
                 let (document, layout) =
                     measured_document.layout(request, &truncation, window.text_system());
 
                 let size = layout.size;
+
                 measurement_cache
                     .borrow_mut()
                     .replace(InlineParagraphMeasurement {
@@ -406,6 +427,7 @@ impl InlineParagraphCollector<'_> {
         );
 
         self.frame_state.flow_child_layout_ids.push(layout_id);
+
         self.frame_state.paragraphs.push(InlineParagraph {
             layout_id,
             document,
@@ -484,6 +506,7 @@ impl InlineDivFrameState {
             let Some(measurement) = paragraph.measurement() else {
                 continue;
             };
+
             let origin = window.layout_bounds(paragraph.layout_id).origin;
             let layout = &measurement.layout;
             let document = &measurement.document;
@@ -507,10 +530,12 @@ impl InlineDivFrameState {
                 .iter()
                 .map(|span| span.text_range.clone())
                 .collect::<Vec<_>>();
+
             let text_geometry = layout
                 .layout
                 .platform_layout
                 .inline_geometry_for_ranges(&text_ranges);
+
             let mut boxes_by_id = vec![None; paragraph.document.box_layout_ids.len()];
 
             for inline_box in &layout.boxes {
@@ -584,6 +609,7 @@ impl InlineDivFrameState {
             let Some(measurement) = paragraph.measurement() else {
                 continue;
             };
+
             let layout = &measurement.layout;
 
             layout

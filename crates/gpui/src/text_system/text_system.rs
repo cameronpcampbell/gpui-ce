@@ -3,6 +3,7 @@ use crate::{
     PlatformTextSystem, PreparedRasterStyle, RasterStyleRequest, RenderGlyphParams, Result, Size,
     TextRenderingMode, ValidatedRasterizedGlyph, px,
 };
+
 use anyhow::{Context as _, anyhow};
 use collections::FxHashMap;
 use palette::Hsla;
@@ -40,7 +41,9 @@ impl TextSystem {
         // repopulate a stale miss after the newly registered fonts become available.
         let mut font_ids = self.font_ids_by_font.write();
         let result = self.platform_text_system.add_fonts(fonts);
+
         font_ids.clear();
+
         result
     }
 
@@ -58,15 +61,20 @@ impl TextSystem {
             .read()
             .get(font)
             .map(clone_font_id_result);
+
         if let Some(font_id) = font_id {
             font_id
         } else {
             let mut font_ids = self.font_ids_by_font.write();
+
             if let Some(font_id) = font_ids.get(font) {
                 return clone_font_id_result(font_id);
             }
+
             let font_id = self.platform_text_system.font_id(font);
+
             font_ids.insert(font.clone(), clone_font_id_result(&font_id));
+
             font_id
         }
     }
@@ -88,12 +96,15 @@ impl TextSystem {
     /// the normal shaping path.
     pub fn prewarm_fonts(&self, fonts: &[Font]) {
         let mut font_ids = SmallVec::<[FontId; 8]>::new();
+
         for font in fonts {
             let font_id = self.resolve_font(font);
+
             if !font_ids.contains(&font_id) {
                 font_ids.push(font_id);
             }
         }
+
         self.platform_text_system.prewarm_fonts(&font_ids);
     }
 
@@ -115,9 +126,11 @@ impl TextSystem {
             .platform_text_system
             .glyph_for_char(font_id, character)
             .with_context(|| format!("glyph not found for character '{character}'"))?;
+
         let bounds = self
             .platform_text_system
             .typographic_bounds(font_id, glyph_id)?;
+
         Ok(self.read_metrics(font_id, |metrics| {
             (bounds / metrics.units_per_em as f32 * font_size.0).map(px)
         }))
@@ -129,6 +142,7 @@ impl TextSystem {
             .platform_text_system
             .glyph_for_char(font_id, ch)
             .with_context(|| format!("glyph not found for character '{ch}'"))?;
+
         let result = self.platform_text_system.advance(font_id, glyph_id)?
             / self.units_per_em(font_id) as f32;
 
@@ -168,6 +182,7 @@ impl TextSystem {
         let ascent = self.ascent(font_id, font_size);
         let descent = self.descent(font_id, font_size);
         let padding_top = (line_height - ascent - descent) / 2.;
+
         padding_top + ascent
     }
 
@@ -178,9 +193,11 @@ impl TextSystem {
             read(metrics)
         } else {
             let mut lock = RwLockUpgradableReadGuard::upgrade(lock);
+
             let metrics = lock
                 .entry(font_id)
                 .or_insert_with(|| self.platform_text_system.font_metrics(font_id));
+
             read(metrics)
         }
     }

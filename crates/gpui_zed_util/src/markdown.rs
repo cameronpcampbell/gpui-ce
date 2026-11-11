@@ -19,18 +19,22 @@ pub fn generate_heading_slug(text: &str) -> String {
 /// Returns true if the URL starts with a URI scheme (RFC 3986 §3.1).
 fn has_uri_scheme(url: &str) -> bool {
     let mut chars = url.chars();
+
     match chars.next() {
         Some(c) if c.is_ascii_alphabetic() => {}
         _ => return false,
     }
+
     for c in chars {
         if c == ':' {
             return true;
         }
+
         if !(c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.') {
             return false;
         }
     }
+
     false
 }
 
@@ -40,10 +44,12 @@ pub fn split_local_url_fragment(url: &str) -> (&str, Option<&str>) {
     if has_uri_scheme(url) {
         return (url, None);
     }
+
     match url.find('#') {
         Some(pos) => {
             let path = &url[..pos];
             let fragment = &url[pos + 1..];
+
             (
                 path,
                 if fragment.is_empty() {
@@ -53,24 +59,30 @@ pub fn split_local_url_fragment(url: &str) -> (&str, Option<&str>) {
                 },
             )
         }
+
         None => (url, None),
     }
 }
 
 pub fn source_position_from_fragment(fragment: &str) -> Option<(u32, u32)> {
     let fragment = fragment.strip_prefix('L').unwrap_or(fragment);
+
     let fragment = fragment
         .split_once('-')
         .map_or(fragment, |(start, _)| start);
+
     let (line, column) = match fragment.split_once([',', ':', 'C']) {
         Some((line, column)) => (line, Some(column)),
         None => (fragment, None),
     };
+
     let line = line.parse::<u32>().ok()?.checked_sub(1)?;
+
     let column = column
         .and_then(|column| column.parse::<u32>().ok())
         .and_then(|column| column.checked_sub(1))
         .unwrap_or(0);
+
     Some((line, column))
 }
 
@@ -122,6 +134,7 @@ pub struct MarkdownCodeBlock<'a> {
 impl Display for MarkdownEscaped<'_> {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         let mut start_of_unescaped = None;
+
         for (ix, c) in self.0.char_indices() {
             match c {
                 // Always escaped.
@@ -132,39 +145,51 @@ impl Display for MarkdownEscaped<'_> {
                 '#' | '+' | '=' | '-' => {
                     match start_of_unescaped {
                         None => {}
+
                         Some(start_of_unescaped) => {
                             write!(formatter, "{}", &self.0[start_of_unescaped..ix])?;
                         }
                     }
+
                     write!(formatter, "\\")?;
+
                     // Can include this char in the "unescaped" text since a
                     // backslash was just emitted.
                     start_of_unescaped = Some(ix);
                 }
+
                 // Escaped since `<` is used in opening HTML tags. `&lt;` is used since Markdown
                 // supports HTML entities, and this allows the text to be used directly in HTML.
                 '<' => {
                     match start_of_unescaped {
                         None => {}
+
                         Some(start_of_unescaped) => {
                             write!(formatter, "{}", &self.0[start_of_unescaped..ix])?;
                         }
                     }
+
                     write!(formatter, "&lt;")?;
+
                     start_of_unescaped = None;
                 }
+
                 // Escaped since `>` is used for blockquotes. `&gt;` is used since Markdown supports
                 // HTML entities, and this allows the text to be used directly in HTML.
                 '>' => {
                     match start_of_unescaped {
                         None => {}
+
                         Some(start_of_unescaped) => {
                             write!(formatter, "{}", &self.0[start_of_unescaped..ix])?;
                         }
                     }
+
                     write!(formatter, "&gt;")?;
+
                     start_of_unescaped = None;
                 }
+
                 _ => {
                     if start_of_unescaped.is_none() {
                         start_of_unescaped = Some(ix);
@@ -172,9 +197,11 @@ impl Display for MarkdownEscaped<'_> {
                 }
             }
         }
+
         if let Some(start_of_unescaped) = start_of_unescaped {
             write!(formatter, "{}", &self.0[start_of_unescaped..])?;
         }
+
         Ok(())
     }
 }
@@ -191,6 +218,7 @@ impl Display for MarkdownInlineCode<'_> {
         // https://github.com/Byron/pulldown-cmark-to-cmark/blob/3c850de2d3d1d79f19ca5f375e1089a653cf3ff7/src/lib.rs#L290
 
         let mut all_whitespace = true;
+
         let text = self
             .0
             .chars()
@@ -199,6 +227,7 @@ impl Display for MarkdownInlineCode<'_> {
                     ' '
                 } else {
                     all_whitespace = false;
+
                     c
                 }
             })
@@ -212,11 +241,13 @@ impl Display for MarkdownInlineCode<'_> {
             // More backticks are needed to delimit the inline code than the maximum number of
             // backticks in a consecutive run.
             let backticks = "`".repeat(count_max_consecutive_chars(&text, '`') + 1);
+
             let space = match text.as_bytes() {
                 &[b'`', ..] | &[.., b'`'] => " ", // Space needed to separate backtick.
                 &[b' ', .., b' '] => " ",         // Space needed to escape inner space.
                 _ => "",                          // No space needed.
             };
+
             write!(formatter, "{backticks}{space}{text}{space}{backticks}")
         }
     }
@@ -227,6 +258,7 @@ impl Display for MarkdownCodeBlock<'_> {
         let tag = self.tag;
         let text = self.text;
         let backticks = "`".repeat(3.max(count_max_consecutive_chars(text, '`') + 1));
+
         write!(formatter, "{backticks}{tag}\n{text}\n{backticks}\n")
     }
 }
@@ -243,12 +275,14 @@ fn count_max_consecutive_chars(text: &str, search: char) -> usize {
         if ch == search {
             cur_count += 1;
             in_search_chars = true;
+
         } else if in_search_chars {
             max_count = max_count.max(cur_count);
             cur_count = 0;
             in_search_chars = false;
         }
     }
+
     max_count.max(cur_count)
 }
 
@@ -320,6 +354,7 @@ mod tests {
         assert_eq!(MarkdownInlineCode("`").to_string(), "`` ` ``");
         assert_eq!(MarkdownInlineCode("``").to_string(), "``` `` ```");
         assert_eq!(MarkdownInlineCode("`text`").to_string(), "`` `text` ``");
+
         assert_eq!(
             MarkdownInlineCode("some `text` no leading or trailing backticks").to_string(),
             "``some `text` no leading or trailing backticks``"
@@ -333,6 +368,7 @@ mod tests {
             3,
             "the highest seen consecutive segment of backticks counts"
         );
+
         assert_eq!(
             count_max_consecutive_chars("```a``b`", '`'),
             3,
@@ -343,24 +379,31 @@ mod tests {
     #[test]
     fn test_split_local_url_fragment() {
         assert_eq!(split_local_url_fragment("#heading"), ("", Some("heading")));
+
         assert_eq!(
             split_local_url_fragment("./file.md#heading"),
             ("./file.md", Some("heading"))
         );
+
         assert_eq!(split_local_url_fragment("./file.md"), ("./file.md", None));
+
         assert_eq!(
             split_local_url_fragment("https://example.com#frag"),
             ("https://example.com#frag", None)
         );
+
         assert_eq!(
             split_local_url_fragment("mailto:user@example.com"),
             ("mailto:user@example.com", None)
         );
+
         assert_eq!(split_local_url_fragment("#"), ("", None));
+
         assert_eq!(
             split_local_url_fragment("../other.md#section"),
             ("../other.md", Some("section"))
         );
+
         assert_eq!(
             split_local_url_fragment("123:not-a-scheme#frag"),
             ("123:not-a-scheme", Some("frag"))
@@ -386,19 +429,24 @@ mod tests {
         assert_eq!(generate_heading_slug("Hello World"), "hello-world");
         assert_eq!(generate_heading_slug("Hello  World"), "hello--world");
         assert_eq!(generate_heading_slug("Hello-World"), "hello-world");
+
         assert_eq!(
             generate_heading_slug("Some **bold** text"),
             "some-bold-text"
         );
+
         assert_eq!(generate_heading_slug("Let's try with Ü"), "lets-try-with-ü");
+
         assert_eq!(
             generate_heading_slug("heading with 123 numbers"),
             "heading-with-123-numbers"
         );
+
         assert_eq!(
             generate_heading_slug("What about (parens)?"),
             "what-about-parens"
         );
+
         assert_eq!(
             generate_heading_slug("  leading spaces  "),
             "leading-spaces"

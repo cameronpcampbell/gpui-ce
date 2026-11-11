@@ -31,6 +31,7 @@ impl MacDisplay {
         // https://chromium.googlesource.com/chromium/src/+/66.0.3359.158/ui/display/mac/screen_mac.mm#56
         let marker = MainThreadMarker::new().expect("NSScreen access requires the main thread");
         let screen = NSScreen::mainScreen(marker).expect("macOS reported no primary NSScreen");
+
         Self(screen_id(&screen).expect("NSScreen device description is missing NSScreenNumber"))
     }
 
@@ -40,6 +41,7 @@ impl MacDisplay {
             // We're assuming there aren't more than 32 displays connected to the system.
             let mut displays = Vec::with_capacity(32);
             let mut display_count = 0;
+
             let result = CGGetActiveDisplayList(
                 displays.capacity() as u32,
                 displays.as_mut_ptr(),
@@ -49,6 +51,7 @@ impl MacDisplay {
             if result == 0 {
                 displays.set_len(display_count as usize);
                 displays.into_iter().map(MacDisplay)
+
             } else {
                 panic!("Failed to get active display list. Result: {result}");
             }
@@ -68,13 +71,16 @@ impl PlatformDisplay for MacDisplay {
 
     fn uuid(&self) -> Result<Uuid> {
         let cfuuid = unsafe { CGDisplayCreateUUIDFromDisplayID(self.0 as CGDirectDisplayID) };
+
         anyhow::ensure!(
             !cfuuid.is_null(),
             "AppKit returned a null from CGDisplayCreateUUIDFromDisplayID"
         );
 
         let bytes = unsafe { CFUUIDGetUUIDBytes(cfuuid) };
+
         unsafe { CFRelease(cfuuid as _) };
+
         Ok(Uuid::from_bytes([
             bytes.byte0,
             bytes.byte1,
@@ -138,6 +144,7 @@ impl MacDisplay {
     /// Find the NSScreen corresponding to this display
     fn get_nsscreen(&self) -> Option<Retained<NSScreen>> {
         let marker = MainThreadMarker::new()?;
+
         NSScreen::screens(marker)
             .into_iter()
             .find(|screen| screen_id(screen) == Some(self.0))
@@ -151,5 +158,6 @@ pub(crate) fn screen_id(screen: &NSScreen) -> Option<CGDirectDisplayID> {
     let key = NSString::from_str("NSScreenNumber");
     let number = screen.deviceDescription().objectForKey(&key)?;
     let display_number: usize = unsafe { msg_send![&*number, unsignedIntegerValue] };
+
     Some(display_number as CGDirectDisplayID)
 }

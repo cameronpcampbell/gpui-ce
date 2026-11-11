@@ -25,6 +25,7 @@ impl InstanceRange {
         let first = u32::try_from(range.start).ok()?;
         let end = u32::try_from(range.end).ok()?;
         let count = end.checked_sub(first)?;
+
         Some(Self { first, count })
     }
 
@@ -66,11 +67,13 @@ mod tests {
     #[test]
     fn converts_scene_slices_into_draw_arguments() {
         let range = InstanceRange::new(12..20).expect("small ranges convert");
+
         assert_eq!(range.first(), 12);
         assert_eq!(range.count(), 8);
         assert_eq!(range.end(), 20);
         assert_eq!(range.as_range(), 12..20);
         assert!(!range.is_empty());
+
         assert!(
             InstanceRange::new(3..3)
                 .expect("empty ranges convert")
@@ -81,6 +84,7 @@ mod tests {
     #[test]
     fn rejects_ranges_the_gpu_cannot_address() {
         let (start, end) = (5, 4);
+
         assert!(InstanceRange::new(start..end).is_none());
         assert!(InstanceRange::new(0..u32::MAX as usize + 1).is_none());
     }

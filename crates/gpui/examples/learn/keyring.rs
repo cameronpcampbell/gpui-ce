@@ -14,6 +14,7 @@
 mod example_prelude;
 
 use gpui::colors::Colors;
+
 use gpui::{
     App, Bounds, Context, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
@@ -35,15 +36,19 @@ impl KeyringExample {
 
     fn set_status(&mut self, status: impl Into<String>, cx: &mut Context<Self>) {
         self.status = status.into();
+
         cx.notify();
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
         self.set_status("Saving...", cx);
+
         cx.spawn(async move |this, cx| {
             let task =
                 cx.update(|cx| cx.write_credentials(CREDENTIAL_URL, "ada@example.com", b"hunter2"));
+
             let result = task.await;
+
             this.update(cx, |this, cx| match result {
                 Ok(()) => this.set_status("Saved credentials for ada@example.com.", cx),
                 Err(err) => this.set_status(format!("Failed to save: {err}"), cx),
@@ -54,14 +59,17 @@ impl KeyringExample {
 
     fn load(&mut self, cx: &mut Context<Self>) {
         self.set_status("Loading...", cx);
+
         cx.spawn(async move |this, cx| {
             let task = cx.update(|cx| cx.read_credentials(CREDENTIAL_URL));
             let result = task.await;
+
             this.update(cx, |this, cx| match result {
                 Ok(Some((username, password))) => this.set_status(
                     format!("Loaded {username} (password is {} bytes).", password.len()),
                     cx,
                 ),
+
                 Ok(None) => this.set_status("No credentials stored yet.", cx),
                 Err(err) => this.set_status(format!("Failed to load: {err}"), cx),
             })
@@ -71,9 +79,11 @@ impl KeyringExample {
 
     fn delete(&mut self, cx: &mut Context<Self>) {
         self.set_status("Deleting...", cx);
+
         cx.spawn(async move |this, cx| {
             let task = cx.update(|cx| cx.delete_credentials(CREDENTIAL_URL));
             let result = task.await;
+
             this.update(cx, |this, cx| match result {
                 Ok(()) => this.set_status("Deleted stored credentials.", cx),
                 Err(err) => this.set_status(format!("Failed to delete: {err}"), cx),
@@ -144,6 +154,7 @@ fn button(
     label: &'static str,
 ) -> gpui::Stateful<gpui::Div> {
     let bg_hover = colors.border;
+
     div()
         .id(id)
         .px_3()
@@ -162,6 +173,7 @@ fn main() {
         cx.set_keyring_label("gpui-ce-keyring-example");
 
         let bounds = Bounds::centered(None, size(px(500.), px(360.)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(|_| KeyringExample::new()),

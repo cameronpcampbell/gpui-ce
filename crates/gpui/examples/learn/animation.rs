@@ -14,11 +14,13 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gpui::colors::Colors;
+
 use gpui::{
     Animation, AnimationExt as _, App, AssetSource, Bounds, ColorExt, Context, Hsla, SharedString,
     Transformation, Window, WindowBounds, WindowOptions, bounce, div, ease_in_out, linear,
     percentage, prelude::*, px, rgb, size as gpui_size, svg,
 };
+
 use palette::IntoColor;
 
 struct Assets {}
@@ -196,6 +198,7 @@ fn scale_example(colors: &Colors) -> impl IntoElement {
                             .with_easing(bounce(linear)),
                         |svg, delta| {
                             let scale = 0.8 + (delta * 0.4);
+
                             svg.with_transformation(Transformation::scale(gpui_size(scale, scale)))
                         },
                     ),
@@ -231,6 +234,7 @@ fn combined_example(colors: &Colors) -> impl IntoElement {
                             .with_easing(ease_in_out),
                         |svg, delta| {
                             let scale = 0.7 + (delta * 0.6);
+
                             svg.with_transformation(
                                 Transformation::rotate(percentage(delta))
                                     .with_scaling(gpui_size(scale, scale)),
@@ -266,6 +270,7 @@ fn main() {
         .with_assets(Assets {})
         .run(|cx: &mut App| {
             let bounds = Bounds::centered(None, gpui_size(px(500.), px(650.)), cx);
+
             cx.open_window(
                 WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
                 |_, cx| cx.new(|_| AnimationExample),

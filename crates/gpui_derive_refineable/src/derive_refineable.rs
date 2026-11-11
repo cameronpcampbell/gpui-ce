@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
+
 use syn::{
     DeriveInput, Field, FieldsNamed, PredicateType, TraitBound, Type, TypeParamBound, WhereClause,
     WherePredicate, parse_macro_input, parse_quote,
@@ -30,8 +31,10 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
                 if meta.path.is_ident("Serialize") {
                     derives_serialize = true;
                 }
+
                 refinement_traits_to_derive.push(meta.path);
             }
+
             Ok(())
         });
     }
@@ -44,6 +47,7 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
             fields: syn::Fields::Named(FieldsNamed { named, .. }),
             ..
         }) => named.into_iter().collect::<Vec<Field>>(),
+
         _ => panic!("This derive macro only supports structs with named fields"),
     };
 
@@ -60,6 +64,7 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
                 } else {
                     quote! { #[serde(skip_serializing_if = "::std::option::Option::is_none")] }
                 }
+
             } else {
                 quote! {}
             }
@@ -76,6 +81,7 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
                 colon_token: Default::default(),
                 bounds: {
                     let mut punctuated = syn::punctuated::Punctuated::new();
+
                     punctuated.push_value(TypeParamBound::Trait(TraitBound {
                         paren_token: None,
                         modifier: syn::TraitBoundModifier::None,
@@ -95,6 +101,7 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
             where_clause.predicates.extend(type_param_bounds);
             where_clause.clone()
         }
+
         None => WhereClause {
             where_token: Default::default(),
             predicates: type_param_bounds.into_iter().collect(),
@@ -223,6 +230,7 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
             .iter()
             .map(|field| {
                 let name = &field.ident;
+
                 quote! {
                     if self.#name.is_some() {
                         debug_struct.field(stringify!(#name), &self.#name);
@@ -249,6 +257,7 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
                 }
             }
         }
+
     } else {
         quote! {}
     };
@@ -377,6 +386,7 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
         .collect();
 
     let mut derive_stream = quote! {};
+
     for trait_to_derive in refinement_traits_to_derive {
         derive_stream.extend(quote! { #[derive(#trait_to_derive)] })
     }
@@ -493,6 +503,7 @@ pub fn derive_refineable(input: TokenStream) -> TokenStream {
 
         #debug_impl
     };
+
     r#gen.into()
 }
 
@@ -507,10 +518,12 @@ fn is_optional_field(f: &Field) -> bool {
         && typepath.qself.is_none()
     {
         let segments = &typepath.path.segments;
+
         if segments.len() == 1 && segments.iter().any(|s| s.ident == "Option") {
             return true;
         }
     }
+
     false
 }
 
@@ -527,12 +540,15 @@ fn get_wrapper_type(field: &Field, ty: &Type) -> syn::Type {
         } else {
             format_ident!("{}Refinement", struct_name)
         };
+
         let generics = if let Type::Path(tp) = ty {
             &tp.path.segments.last().unwrap().arguments
         } else {
             &syn::PathArguments::None
         };
+
         parse_quote!(#refinement_struct_name #generics)
+
     } else if is_optional_field(field) {
         ty.clone()
     } else {

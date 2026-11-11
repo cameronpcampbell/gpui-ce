@@ -24,6 +24,7 @@ mod source {
     pub fn normalized_superellipse_power(corner_smoothing: f32) -> f32 {
         let smoothing = clamp(corner_smoothing, 0.0, 1.0);
         let normalized_diagonal = 1.0 - SUPERELLIPSE_DIAGONAL_INSET / (1.0 + smoothing);
+
         -log(2.0) / log(normalized_diagonal)
     }
 
@@ -39,6 +40,7 @@ mod source {
     ) -> bool {
         let radii = max(corner_values(corner_radii), vec4f(0.0, 0.0, 0.0, 0.0));
         let reaches = normalized_superellipse_reaches(corner_radii, corner_smoothing);
+
         corner_smoothing > 0.0
             && size.x > 0.0
             && size.y > 0.0
@@ -108,8 +110,10 @@ mod source {
     ) -> f32 {
         let local_point = point - bounds.origin;
         let radii = corner_values(corner_radii);
+
         let mut distance =
             figma_nearest_straight_sample(local_point, bounds.size, reaches, reaches).distance;
+
         let mut corner = 0u32;
 
         while corner < 4u32 {
@@ -199,6 +203,7 @@ mod source {
             max(corner_radii.bottom_right, 0.0),
             max(corner_radii.bottom_left, 0.0),
         ];
+
         let mut budgets = [-1.0, -1.0, -1.0, -1.0];
         let mut order = [0u32, 1u32, 3u32, 2u32];
 
@@ -212,6 +217,7 @@ mod source {
                     < radii[order[(index + 1u32) as usize] as usize]
                 {
                     let swap = order[index as usize];
+
                     order[index as usize] = order[(index + 1u32) as usize];
                     order[(index + 1u32) as usize] = swap;
                 }
@@ -223,6 +229,7 @@ mod source {
         }
 
         let mut rank = 0u32;
+
         while rank < 4u32 {
             let corner = order[rank as usize];
             let radius = radii[corner as usize];
@@ -234,14 +241,17 @@ mod source {
                     horizontal_neighbor = 1u32;
                     vertical_neighbor = 3u32;
                 }
+
                 1u32 => {
                     horizontal_neighbor = 0u32;
                     vertical_neighbor = 2u32;
                 }
+
                 2u32 => {
                     horizontal_neighbor = 3u32;
                     vertical_neighbor = 1u32;
                 }
+
                 _ => {
                     horizontal_neighbor = 2u32;
                     vertical_neighbor = 0u32;
@@ -271,6 +281,7 @@ mod source {
             }
 
             let budget = max(0.0, min(horizontal_budget, vertical_budget));
+
             budgets[corner as usize] = budget;
             radii[corner as usize] = min(radius, budget);
             rank += 1u32;
@@ -357,10 +368,12 @@ mod source {
     ) -> FigmaCornerParams {
         let safe_horizontal_reach = max(horizontal_reach, 0.0);
         let safe_vertical_reach = max(vertical_reach, 0.0);
+
         let radius = min(
             max(corner_radius, 0.0),
             min(safe_horizontal_reach, safe_vertical_reach),
         );
+
         let smoothing = select(0.0, smoothing_factors.x, radius > FIGMA_EPSILON);
         let desired_reach = radius * (1.0 + smoothing);
         let arc_sweep = 0.5 * PI * (1.0 - smoothing);
@@ -371,6 +384,7 @@ mod source {
         let ideal_b = max((desired_reach - core_length) / 3.0, 0.0);
         let horizontal_available = max(safe_horizontal_reach - core_length, 0.0);
         let vertical_available = max(safe_vertical_reach - core_length, 0.0);
+
         let shared_b = min(
             ideal_b,
             min(
@@ -407,10 +421,12 @@ mod source {
         let zero = vec4f(0.0, 0.0, 0.0, 0.0);
         let horizontal = max(horizontal_budgets, zero);
         let vertical = max(vertical_budgets, zero);
+
         let radii = min(
             max(corner_values(corner_radii), zero),
             min(horizontal, vertical),
         );
+
         let reaches = radii * (1.0 + clamp(corner_smoothing, 0.0, 1.0));
 
         FigmaCornerExtents {
@@ -426,6 +442,7 @@ mod source {
         allow_superellipse: bool,
     ) -> PreparedCorners {
         let radius_values = corner_values(radii);
+
         let mut prepared = PreparedCorners {
             horizontal_reaches: radius_values,
             vertical_reaches: radius_values,
@@ -439,13 +456,16 @@ mod source {
 
         if allow_superellipse && can_use_normalized_superellipse(size, radii, smoothing) {
             let reaches = normalized_superellipse_reaches(radii, smoothing);
+
             prepared.horizontal_reaches = reaches;
             prepared.vertical_reaches = reaches;
             prepared.superellipse_power = normalized_superellipse_power(smoothing);
+
             return prepared;
         }
 
         let corner_layout = figma_corner_layout(size, radii);
+
         let extents = figma_corner_extents(
             radii,
             corner_layout.horizontal_budgets,
@@ -456,6 +476,7 @@ mod source {
         prepared.horizontal_reaches = extents.horizontal;
         prepared.vertical_reaches = extents.vertical;
         prepared.smoothing_factors = figma_smoothing_factors(smoothing);
+
         prepared
     }
 
@@ -492,13 +513,16 @@ mod source {
     ) -> CubicClosestPoint {
         let y_seed = pow(clamp(point.y / max(d, 0.00001), 0.0, 1.0), 1.0 / 3.0);
         let chord = figma_cubic_point(axis, c, d, 1.0);
+
         let chord_seed = clamp(
             dot(point, chord) / max(dot(chord, chord), FIGMA_EPSILON),
             0.0,
             1.0,
         );
+
         let y_delta = figma_cubic_point(axis, c, d, y_seed) - point;
         let chord_delta = figma_cubic_point(axis, c, d, chord_seed) - point;
+
         let mut t = select(
             y_seed,
             chord_seed,
@@ -506,6 +530,7 @@ mod source {
         );
 
         let mut iteration = 0u32;
+
         while iteration < 4u32 {
             let curve_point = figma_cubic_point(axis, c, d, t);
             let tangent = figma_cubic_derivative(axis, c, d, t);
@@ -586,13 +611,16 @@ mod source {
         let horizontal_point = vec2f(z.x, params.vertical.p - z.y);
         let vertical_point = vec2f(z.y, params.horizontal.p - z.x);
         let circle_center = vec2f(params.horizontal.p - params.radius, params.radius);
+
         let join = vec2f(
             params.horizontal.a + params.horizontal.b + params.c,
             params.d,
         );
+
         let start_direction = (join - circle_center) / params.radius;
         let to_point = horizontal_point - circle_center;
         let to_point_length = length(to_point);
+
         let point_direction = select(
             start_direction,
             to_point / max(to_point_length, FIGMA_EPSILON),
@@ -607,14 +635,18 @@ mod source {
             0.0,
             params.arc_sweep,
         );
+
         let arc_sine = sin(arc_angle);
         let arc_cosine = cos(arc_angle);
+
         let arc_normal = vec2f(
             arc_cosine * start_direction.x - arc_sine * start_direction.y,
             arc_sine * start_direction.x + arc_cosine * start_direction.y,
         );
+
         let arc_point = circle_center + params.radius * arc_normal;
         let arc_delta = horizontal_point - arc_point;
+
         let arc_t = select(
             0.0,
             arc_angle / max(params.arc_sweep, FIGMA_EPSILON),
@@ -639,7 +671,9 @@ mod source {
             {
                 let cubic =
                     closest_figma_cubic(horizontal_point, params.horizontal, params.c, params.d);
+
                 let normal = normalize(vec2f(cubic.tangent.y, -cubic.tangent.x));
+
                 let distance =
                     figma_signed_distance(horizontal_point - cubic.point, normal, cubic.distance);
 
@@ -652,6 +686,7 @@ mod source {
             }
 
             let vertical_join = vec2f(params.vertical.a + params.vertical.b + params.c, params.d);
+
             let vertical_bounds_delta = max(
                 vec2f(0.0, 0.0),
                 max(-vertical_point, vertical_point - vertical_join),
@@ -662,9 +697,12 @@ mod source {
             {
                 let cubic =
                     closest_figma_cubic(vertical_point, params.vertical, params.c, params.d);
+
                 let normal = normalize(vec2f(cubic.tangent.y, -cubic.tangent.x));
+
                 let distance =
                     figma_signed_distance(vertical_point - cubic.point, normal, cubic.distance);
+
                 if abs(distance) <= abs(sample.distance) {
                     sample.distance = distance;
                     sample.normal = figma_unfold_normal(normal, true);
@@ -679,6 +717,7 @@ mod source {
 
     pub fn figma_cubic_length(params: FigmaCornerParams, axis: FigmaAxisParams, end_t: f32) -> f32 {
         let half_t = clamp(end_t, 0.0, 1.0) / 2.0;
+
         if half_t <= 0.0 || params.smoothing <= 0.0 {
             return 0.0;
         }
@@ -687,6 +726,7 @@ mod source {
         let offset1 = half_t * 0.5384693101;
         let offset2 = half_t * 0.9061798459;
         let speed0 = length(figma_cubic_derivative(axis, params.c, params.d, center));
+
         let speed1 = length(figma_cubic_derivative(
             axis,
             params.c,
@@ -698,6 +738,7 @@ mod source {
             params.d,
             center + offset1,
         ));
+
         let speed2 = length(figma_cubic_derivative(
             axis,
             params.c,
@@ -825,8 +866,10 @@ mod source {
                 ),
                 0.0,
             );
+
         let mut nearest_normal = vec2f(0.0, -1.0);
         let mut nearest_distance_squared = dot(nearest_delta, nearest_delta);
+
         let mut candidate_delta = point
             - vec2f(
                 size.x,
@@ -838,6 +881,7 @@ mod source {
             );
 
         let mut candidate_distance_squared = dot(candidate_delta, candidate_delta);
+
         if candidate_distance_squared < nearest_distance_squared {
             nearest_delta = candidate_delta;
             nearest_normal = vec2f(1.0, 0.0);
@@ -855,6 +899,7 @@ mod source {
             );
 
         candidate_distance_squared = dot(candidate_delta, candidate_delta);
+
         if candidate_distance_squared < nearest_distance_squared {
             nearest_delta = candidate_delta;
             nearest_normal = vec2f(0.0, 1.0);
@@ -872,6 +917,7 @@ mod source {
             );
 
         candidate_distance_squared = dot(candidate_delta, candidate_delta);
+
         if candidate_distance_squared < nearest_distance_squared {
             nearest_delta = candidate_delta;
             nearest_normal = vec2f(-1.0, 0.0);
@@ -900,6 +946,7 @@ mod source {
     ) -> FigmaRectangleSample {
         let local_point = point - bounds.origin;
         let radii = corner_values(corner_radii);
+
         let mut result = FigmaRectangleSample {
             signed_distance: figma_nearest_straight_sample(
                 local_point,
@@ -920,6 +967,7 @@ mod source {
         }
 
         let mut corner = 0u32;
+
         while corner < 4u32 {
             if figma_is_corner_candidate(
                 local_point,
@@ -940,6 +988,7 @@ mod source {
                         figma_corner_to_point(local_point, bounds.size, corner),
                         params,
                     );
+
                     candidate.normal = figma_orient_corner_normal(candidate.normal, corner);
 
                     if abs(candidate.distance) <= abs(result.signed_distance.distance) {
@@ -1025,6 +1074,7 @@ mod tests {
             origin: vec2f(0.0, 0.0),
             size: vec2f(120.0, 80.0),
         };
+
         let cases = [
             corners([20.0, 20.0, 20.0, 20.0]),
             corners([28.0, 8.0, 22.0, 2.0]),
@@ -1038,10 +1088,12 @@ mod tests {
                     for x in -1..=13 {
                         let point = vec2f(x as f32 * 10.0, y as f32 * 10.0);
                         let actual = distance(point, bounds, radii, smoothing, false);
+
                         assert!(actual.is_finite(), "non-finite SDF at {point:?}");
 
                         if smoothing == 0.0 {
                             let circular = rounded_rectangle_signed_distance(point, bounds, radii);
+
                             assert_eq!(actual, circular);
                         }
                     }
@@ -1056,6 +1108,7 @@ mod tests {
             origin: vec2f(0.0, 0.0),
             size: vec2f(100.0, 100.0),
         };
+
         let uniform = corners([20.0, 20.0, 20.0, 20.0]);
 
         for smoothing in [0.0, 0.6, 1.0] {
@@ -1063,6 +1116,7 @@ mod tests {
             let b = distance(vec2f(83.0, 8.0), square, uniform, smoothing, true);
             let c = distance(vec2f(92.0, 83.0), square, uniform, smoothing, true);
             let d = distance(vec2f(17.0, 92.0), square, uniform, smoothing, true);
+
             assert!(
                 [b, c, d]
                     .into_iter()
@@ -1070,13 +1124,16 @@ mod tests {
             );
 
             let diagonal = 20.0 * SUPERELLIPSE_DIAGONAL_INSET;
+
             let diagonal_distance =
                 distance(vec2f(diagonal, diagonal), square, uniform, smoothing, true);
+
             assert!(diagonal_distance.abs() < 0.0001);
         }
 
         let circular = prepare_corners(square.size, uniform, 0.0, false);
         let smoothed = prepare_corners(square.size, uniform, 0.6, false);
+
         assert_eq!(circular.horizontal_reaches.x, 20.0);
         assert!(smoothed.horizontal_reaches.x > circular.horizontal_reaches.x);
         assert!(smoothed.vertical_reaches.x > circular.vertical_reaches.x);
@@ -1094,6 +1151,7 @@ mod tests {
         ] {
             for (offset, expected) in [(-0.001, true), (0.0, true), (0.001, false)] {
                 let mut values = base;
+
                 values[corner_idx] += offset;
 
                 assert_eq!(
@@ -1105,6 +1163,7 @@ mod tests {
         }
 
         let preservation = prepare_corners(size, corners([20.0, 30.0, 0.0, 0.0]), 1.0, false);
+
         assert_eq!(preservation.superellipse_power, 0.0);
     }
 
@@ -1120,7 +1179,9 @@ mod tests {
             ("reach-aware", corners([35.0, 0.0, 0.0, 0.0]), 1.0, false),
         ] {
             let prepared = prepare_corners(bounds.size, radii, smoothing, true);
+
             assert!(prepared.superellipse_power > 0.0, "{name}: shortcut");
+
             assert_eq!(
                 can_use_compact_corner_selection(bounds.size, prepared.horizontal_reaches),
                 compact,
@@ -1139,24 +1200,31 @@ mod tests {
                         smoothing,
                         prepared.superellipse_power,
                     );
+
                     let actual =
                         prepared_corner_signed_distance(point, bounds, radii, smoothing, prepared);
+
                     assert_eq!(actual, expected, "{name}: distance at {point:?}");
                 }
+
             } else {
                 let shoulder = vec2f(65.0, 0.0);
+
                 let expected = normalized_superellipse_signed_distance_from_corner(
                     -shoulder,
                     radii.top_left,
                     smoothing,
                     prepared.superellipse_power,
                 );
+
                 let actual =
                     prepared_corner_signed_distance(shoulder, bounds, radii, smoothing, prepared);
+
                 assert!(
                     (actual - expected).abs() < 0.0001,
                     "{name}: shoulder distance"
                 );
+
                 assert!(actual > 0.0, "{name}: shoulder outside");
 
                 let deep_interior = prepared_corner_signed_distance(
@@ -1166,6 +1234,7 @@ mod tests {
                     smoothing,
                     prepared,
                 );
+
                 assert!(
                     (deep_interior + 15.0).abs() < 0.0001,
                     "{name}: interior distance"

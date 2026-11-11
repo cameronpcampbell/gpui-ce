@@ -4,6 +4,7 @@ use std::rc::Rc;
 use anyhow::Result;
 use gpui::*;
 use gpui_util::ResultExt;
+
 use windows::Win32::{
     Foundation::*,
     Graphics::{DirectManipulation::*, Gdi::*},
@@ -45,6 +46,7 @@ impl DirectManipulationHandler {
                 | DIRECTMANIPULATION_CONFIGURATION_RAILS_X
                 | DIRECTMANIPULATION_CONFIGURATION_RAILS_Y
                 | DIRECTMANIPULATION_CONFIGURATION_SCALING;
+
             viewport.ActivateConfiguration(configuration)?;
 
             viewport.SetViewportOptions(
@@ -58,6 +60,7 @@ impl DirectManipulationHandler {
                 right: DEFAULT_VIEWPORT_SIZE,
                 bottom: DEFAULT_VIEWPORT_SIZE,
             };
+
             viewport.SetViewportRect(&mut rect)?;
 
             manager.Activate(window)?;
@@ -98,6 +101,7 @@ impl DirectManipulationHandler {
         unsafe {
             let pointer_id = wparam.loword() as u32;
             let mut pointer_type = POINTER_INPUT_TYPE::default();
+
             if GetPointerType(pointer_id, &mut pointer_type).is_ok() && pointer_type == PT_TOUCHPAD
             {
                 self.viewport.SetContact(pointer_id).log_err();
@@ -166,6 +170,7 @@ impl DirectManipulationEventHandler {
     fn end_gesture(&self) {
         let position = self.mouse_position();
         let modifiers = current_modifiers();
+
         match self.gesture_kind.get() {
             GestureKind::Scroll => {
                 self.pending_events
@@ -177,6 +182,7 @@ impl DirectManipulationEventHandler {
                         touch_phase: TouchPhase::Ended,
                     }));
             }
+
             GestureKind::Pinch => {
                 self.pending_events
                     .borrow_mut()
@@ -187,17 +193,21 @@ impl DirectManipulationEventHandler {
                         phase: TouchPhase::Ended,
                     }));
             }
+
             GestureKind::None => {}
         }
+
         self.gesture_kind.set(GestureKind::None);
     }
 
     fn mouse_position(&self) -> Point<Pixels> {
         let scale_factor = self.scale_factor.get();
+
         unsafe {
             let mut point: POINT = std::mem::zeroed();
             let _ = GetCursorPos(&mut point);
             let _ = ScreenToClient(self.window, &mut point);
+
             logical_point(point.x as f32, point.y as f32, scale_factor)
         }
     }
@@ -267,6 +277,7 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
 
         // Get the 6-element content transform: [scale, 0, 0, scale, tx, ty]
         let mut xform = [0.0f32; 6];
+
         unsafe {
             content.GetContentTransform(&mut xform)?;
         }
@@ -302,6 +313,7 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
             if self.gesture_kind.get() != GestureKind::Pinch {
                 self.end_gesture();
                 self.gesture_kind.set(GestureKind::Pinch);
+
                 self.pending_events
                     .borrow_mut()
                     .push(PlatformInput::Pinch(PinchEvent {
@@ -311,6 +323,7 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
                         phase: TouchPhase::Started,
                     }));
             }
+
         } else if self.gesture_kind.get() == GestureKind::None {
             self.gesture_kind.set(GestureKind::Scroll);
             self.scroll_phase.set(TouchPhase::Started);
@@ -321,7 +334,9 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
                 let dx = x_offset - last_x;
                 let dy = y_offset - last_y;
                 let touch_phase = self.scroll_phase.get();
+
                 self.scroll_phase.set(TouchPhase::Moved);
+
                 self.pending_events
                     .borrow_mut()
                     .push(PlatformInput::ScrollWheel(ScrollWheelEvent {
@@ -331,8 +346,10 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
                         touch_phase,
                     }));
             }
+
             GestureKind::Pinch => {
                 let scale_delta = scale / last_scale;
+
                 self.pending_events
                     .borrow_mut()
                     .push(PlatformInput::Pinch(PinchEvent {
@@ -342,6 +359,7 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
                         phase: TouchPhase::Moved,
                     }));
             }
+
             GestureKind::None => {}
         }
 
@@ -355,5 +373,6 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
 
 fn float_equals(f1: f32, f2: f32) -> bool {
     const EPSILON_SCALE: f32 = 0.00001;
+
     (f1 - f2).abs() < EPSILON_SCALE * f1.abs().max(f2.abs()).max(EPSILON_SCALE)
 }

@@ -35,10 +35,13 @@ fn palette_commands(desktop: &str) -> [PaletteCommand<'static>; 5] {
 async fn launch_palette(commands: &[PaletteCommand<'_>], activation_token: Option<&str>) -> bool {
     for (program, arguments) in commands {
         let mut command = Command::new(program);
+
         command.args(*arguments);
+
         if let Some(token) = activation_token {
             command.env("XDG_ACTIVATION_TOKEN", token);
         }
+
         match command.status().await {
             Ok(status) if status.success() => return true,
             Ok(status) => log::warn!("Character palette {program} exited with {status}"),
@@ -46,6 +49,7 @@ async fn launch_palette(commands: &[PaletteCommand<'_>], activation_token: Optio
             Err(error) => log::warn!("Failed to open character palette {program}: {error}"),
         }
     }
+
     false
 }
 
@@ -54,6 +58,7 @@ pub(super) fn show_character_palette(
     activation_token: Option<String>,
 ) {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+
     executor
         .spawn(async move {
             if !launch_palette(&palette_commands(&desktop), activation_token.as_deref()).await {
@@ -76,6 +81,7 @@ mod tests {
             palette_commands("ubuntu:GNOME")[0],
             ("gnome-characters", &[][..])
         );
+
         assert_eq!(palette_commands("KDE")[0].0, "plasma-emojier");
         assert_eq!(palette_commands("other:kde")[0].0, "plasma-emojier");
     }

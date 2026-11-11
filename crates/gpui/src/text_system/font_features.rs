@@ -33,6 +33,7 @@ impl FontFeatures {
 impl std::fmt::Debug for FontFeatures {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("FontFeatures");
+
         for (tag, value) in self.tag_value_list() {
             debug.field(tag, value);
         }
@@ -76,8 +77,10 @@ impl<'de> serde::Deserialize<'de> for FontFeatures {
                 {
                     if !is_valid_feature_tag(&key) {
                         log::error!("Incorrect font feature tag: {}", key);
+
                         continue;
                     }
+
                     if let Some(value) = value {
                         match value {
                             FeatureValue::Bool(enable) => {
@@ -87,6 +90,7 @@ impl<'de> serde::Deserialize<'de> for FontFeatures {
                                     feature_list.push((key, 0));
                                 }
                             }
+
                             FeatureValue::Number(value) => {
                                 if value.is_u64() {
                                     feature_list.push((key, value.as_u64().unwrap() as u32));
@@ -96,6 +100,7 @@ impl<'de> serde::Deserialize<'de> for FontFeatures {
                                         value,
                                         key
                                     );
+
                                     continue;
                                 }
                             }
@@ -108,6 +113,7 @@ impl<'de> serde::Deserialize<'de> for FontFeatures {
         }
 
         let features = deserializer.deserialize_map(FontFeaturesVisitor)?;
+
         Ok(features)
     }
 }

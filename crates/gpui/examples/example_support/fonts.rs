@@ -31,10 +31,13 @@ pub fn load_fonts(cx: &App) -> bool {
             include_bytes!("../../../../assets/fonts/lilex/Lilex-BoldItalic.ttf").as_slice(),
         ),
     ];
+
     if let Err(error) = cx.text_system().add_fonts(fonts.into()) {
         web_sys::console::error_1(&format!("failed to load application fonts: {error:#}").into());
+
         return false;
     }
+
     true
 }
 

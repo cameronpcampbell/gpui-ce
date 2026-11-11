@@ -6,12 +6,14 @@
 //! - Controllable time via `advance_clock`
 
 use crate::ScreenCaptureSource;
+
 use crate::{
     AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle, ForegroundExecutor, Keymap,
     Menu, MenuItem, OwnedMenu, PathPromptOptions, Platform, PlatformDisplay,
     PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, Task,
     TestDispatcher, WindowAppearance, WindowParams,
 };
+
 use anyhow::Result;
 use futures::channel::oneshot;
 use parking_lot::Mutex;
@@ -146,7 +148,9 @@ impl Platform for VisualTestPlatform {
         _options: PathPromptOptions,
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>> {
         let (tx, rx) = oneshot::channel();
+
         tx.send(Ok(None)).ok();
+
         rx
     }
 
@@ -156,7 +160,9 @@ impl Platform for VisualTestPlatform {
         _suggested_name: Option<&str>,
     ) -> oneshot::Receiver<Result<Option<PathBuf>>> {
         let (tx, rx) = oneshot::channel();
+
         tx.send(Ok(None)).ok();
+
         rx
     }
 

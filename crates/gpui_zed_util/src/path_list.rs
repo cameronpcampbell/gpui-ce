@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 pub struct PathList {
     /// The paths, in lexicographic order.
     paths: Arc<[PathBuf]>,
+
     /// The order in which the paths were provided.
     ///
     /// See `ordered_paths()` for a way to get the paths in the original order.
@@ -51,13 +52,17 @@ impl PathList {
             .enumerate()
             .map(|(ix, path)| (ix, SanitizedPath::new(path).into()))
             .collect();
+
         indexed_paths.sort_by(|(_, a), (_, b)| a.cmp(b));
+
         let order = indexed_paths.iter().map(|e| e.0).collect::<Vec<_>>().into();
+
         let paths = indexed_paths
             .into_iter()
             .map(|e| e.1)
             .collect::<Vec<_>>()
             .into();
+
         Self { order, paths }
     }
 
@@ -72,6 +77,7 @@ impl PathList {
             .filter(|p| p.as_path() != path_to_remove)
             .cloned()
             .collect();
+
         PathList::new(&paths)
     }
 
@@ -118,6 +124,7 @@ impl PathList {
 
         if !paths.is_sorted() || order.len() != paths.len() {
             order = (0..paths.len()).collect();
+
             paths.sort();
         }
 
@@ -131,20 +138,25 @@ impl PathList {
         use std::fmt::Write as _;
 
         let mut paths = String::new();
+
         for path in self.paths.iter() {
             if !paths.is_empty() {
                 paths.push('\n');
             }
+
             paths.push_str(&path.to_string_lossy());
         }
 
         let mut order = String::new();
+
         for ix in self.order.iter() {
             if !order.is_empty() {
                 order.push(',');
             }
+
             write!(&mut order, "{}", *ix).unwrap();
         }
+
         SerializedPathList { paths, order }
     }
 }
@@ -169,9 +181,11 @@ mod tests {
         );
 
         let list1_deserialized = PathList::deserialize(&list1.serialize());
+
         assert_eq!(list1_deserialized, list1, "list1 deserialization failed");
 
         let list2_deserialized = PathList::deserialize(&list2.serialize());
+
         assert_eq!(list2_deserialized, list2, "list2 deserialization failed");
 
         assert_eq!(
@@ -179,6 +193,7 @@ mod tests {
             [&PathBuf::from("a/d"), &PathBuf::from("a/c")],
             "list1 ordered paths incorrect"
         );
+
         assert_eq!(
             list2.ordered_paths().collect_array().unwrap(),
             [&PathBuf::from("a/c"), &PathBuf::from("a/d")],
@@ -189,15 +204,18 @@ mod tests {
     #[test]
     fn test_path_list_ordering() {
         let list = PathList::new(&["b", "a", "c"]);
+
         assert_eq!(
             list.paths(),
             &[PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")]
         );
+
         assert_eq!(list.order(), &[1, 0, 2]);
         assert!(!list.is_lexicographically_ordered());
 
         let serialized = list.serialize();
         let deserialized = PathList::deserialize(&serialized);
+
         assert_eq!(deserialized, list);
 
         assert_eq!(
@@ -210,15 +228,18 @@ mod tests {
         );
 
         let list = PathList::new(&["b", "c", "a"]);
+
         assert_eq!(
             list.paths(),
             &[PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")]
         );
+
         assert_eq!(list.order(), &[2, 0, 1]);
         assert!(!list.is_lexicographically_ordered());
 
         let serialized = list.serialize();
         let deserialized = PathList::deserialize(&serialized);
+
         assert_eq!(deserialized, list);
 
         assert_eq!(

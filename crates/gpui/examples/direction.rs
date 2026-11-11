@@ -2,6 +2,7 @@ use gpui::{
     App, Bounds, Context, LayoutDirection, Window, WindowBounds, WindowOptions, div, prelude::*,
     px, rgb, size,
 };
+
 use gpui_ce_elements::editable_text::{
     actions::{DEFAULT_INPUT_CONTEXT, default_bindings},
     text_input,
@@ -35,6 +36,7 @@ impl DirectionExample {
             .child(label)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.direction = direction;
+
                 cx.notify();
             }))
     }
@@ -133,6 +135,7 @@ fn main() {
         cx.bind_keys(default_bindings().as_keybindings(Some(DEFAULT_INPUT_CONTEXT)));
 
         let bounds = Bounds::centered(None, size(px(760.0), px(620.0)), cx);
+
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

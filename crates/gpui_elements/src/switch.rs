@@ -23,23 +23,31 @@ type StateRenderer = Box<dyn FnOnce(Stateful<Div>, bool, bool) -> Stateful<Div>>
 pub struct BaseSwitch {
     element_id: ElementId,
     base: Stateful<Div>,
+
     #[style]
     style: StyleRefinement,
+
     /// Sets the application-controlled checked value.
     #[setters(generate)]
     checked: bool,
+
     /// Sets whether the switch ignores user interaction.
     #[setters(generate)]
     disabled: bool,
+
     /// Sets the horizontal distance required to select a value while dragging.
     #[setters(generate)]
     drag_threshold: Pixels,
+
     #[children]
     children: Vec<AnyElement>,
+
     on_change: Option<OnChange>,
+
     /// Sets the name exposed to accessibility clients.
     #[setters(generate, strip_option, into)]
     aria_label: Option<SharedString>,
+
     state_renderer: Option<StateRenderer>,
 }
 
@@ -140,8 +148,10 @@ impl RenderOnce for BaseSwitch {
 #[derive(IntoElement, Styled, ParentElement, StatefulInteractiveElement)]
 pub struct BaseSwitchThumb {
     base: Stateful<Div>,
+
     #[style]
     style: StyleRefinement,
+
     #[children]
     children: Vec<AnyElement>,
 }
@@ -258,6 +268,7 @@ impl BaseSwitchDrag {
                         hitbox.bounds.contains(&event.position),
                         threshold,
                     );
+
                     cx.notify();
 
                     next
@@ -486,6 +497,7 @@ mod tests {
 
     fn activate_key(cx: &mut VisualTestContext, key: &str) {
         let keystroke = Keystroke::parse(key).unwrap();
+
         cx.simulate_event(KeyDownEvent {
             keystroke: keystroke.clone(),
             is_held: false,
@@ -505,11 +517,15 @@ mod tests {
         assert_eq!(bounds(&view, cx).1.size.width, px(10.));
 
         let at_default_threshold = point(inside.x + BaseSwitch::DRAG_THRESHOLD, inside.y);
+
         let beyond_default_threshold =
             point(inside.x + BaseSwitch::DRAG_THRESHOLD + px(1.), inside.y);
+
         cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::none());
         cx.simulate_mouse_move(at_default_threshold, MouseButton::Left, Modifiers::none());
+
         assert_eq!(bounds(&view, cx).0.size.width, px(100.));
+
         cx.simulate_mouse_move(
             beyond_default_threshold,
             MouseButton::Left,
@@ -526,24 +542,32 @@ mod tests {
             MouseButton::Left,
             Modifiers::none(),
         );
+
         assert!(state(&view, cx).0);
         assert_eq!(state(&view, cx).1, vec![true]);
 
         let outside_left = point(initial.left() - px(30.), inside.y);
+
         cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::none());
         cx.simulate_mouse_move(outside_left, MouseButton::Left, Modifiers::none());
+
         assert_eq!(bounds(&view, cx).0.size.width, px(100.));
         assert_eq!(bounds(&view, cx).1.size.width, px(10.));
+
         cx.simulate_mouse_up(outside_left, MouseButton::Left, Modifiers::none());
+
         assert_eq!(state(&view, cx).1, vec![true, false]);
 
         cx.simulate_click(inside, Modifiers::none());
+
         let small_move = point(inside.x + px(5.), inside.y);
+
         cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::none());
         cx.simulate_mouse_move(small_move, MouseButton::Left, Modifiers::none());
         cx.simulate_mouse_up(small_move, MouseButton::Left, Modifiers::none());
 
         let outside_below = point(inside.x, initial.bottom() + px(20.));
+
         cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::none());
         cx.simulate_mouse_up(outside_below, MouseButton::Left, Modifiers::none());
 
@@ -552,13 +576,16 @@ mod tests {
 
         view.update(cx, |view, cx| {
             view.drag_threshold = px(40.);
+
             cx.notify();
         });
 
         let below_custom_threshold = point(inside.x + px(20.), inside.y);
         let beyond_custom_threshold = point(inside.x + px(41.), inside.y);
+
         cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::none());
         cx.simulate_mouse_move(below_custom_threshold, MouseButton::Left, Modifiers::none());
+
         assert_eq!(bounds(&view, cx).0.size.width, px(100.));
         assert_eq!(state(&view, cx).1, vec![true, false, true, false]);
 
@@ -567,6 +594,7 @@ mod tests {
             MouseButton::Left,
             Modifiers::none(),
         );
+
         assert_eq!(bounds(&view, cx).0.size.width, px(120.));
         assert_eq!(state(&view, cx).1, vec![true, false, true, false]);
 
@@ -575,6 +603,7 @@ mod tests {
             MouseButton::Left,
             Modifiers::none(),
         );
+
         assert!(state(&view, cx).0);
         assert_eq!(state(&view, cx).1, vec![true, false, true, false, true]);
     }
@@ -587,6 +616,7 @@ mod tests {
 
         cx.simulate_click(inside, Modifiers::none());
         cx.simulate_click(inside, Modifiers::none());
+
         activate_key(cx, "enter");
         activate_key(cx, "space");
 
@@ -609,24 +639,30 @@ mod tests {
         cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::none());
         cx.simulate_mouse_move(outside_right, MouseButton::Left, Modifiers::none());
         cx.simulate_mouse_up(outside_right, MouseButton::Left, Modifiers::none());
+
         activate_key(cx, "enter");
+
         assert_eq!(state(&view, cx), (false, Vec::new(), 0));
 
         view.update(cx, |view, cx| {
             view.disabled = false;
+
             cx.notify();
         });
 
         cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::none());
         cx.simulate_mouse_move(outside_right, MouseButton::Left, Modifiers::none());
+
         assert_eq!(bounds(&view, cx).0.size.width, px(120.));
 
         view.update(cx, |view, cx| {
             view.disabled = true;
+
             cx.notify();
         });
 
         assert_eq!(bounds(&view, cx).0.size.width, px(100.));
+
         cx.simulate_mouse_up(outside_right, MouseButton::Left, Modifiers::none());
 
         assert!(!state(&view, cx).0);
@@ -634,21 +670,26 @@ mod tests {
 
         view.update(cx, |view, cx| {
             view.disabled = false;
+
             cx.notify();
         });
 
         cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::none());
         cx.simulate_mouse_move(outside_right, MouseButton::Left, Modifiers::none());
+
         assert_eq!(bounds(&view, cx).0.size.width, px(120.));
 
         view.update(cx, |view, cx| {
             view.has_handler = false;
+
             cx.notify();
         });
 
         assert_eq!(bounds(&view, cx).0.size.width, px(100.));
+
         cx.simulate_mouse_up(outside_right, MouseButton::Left, Modifiers::none());
         cx.simulate_click(inside, Modifiers::none());
+
         activate_key(cx, "enter");
 
         assert!(!state(&view, cx).0);
@@ -656,10 +697,12 @@ mod tests {
 
         view.update(cx, |view, cx| {
             view.has_handler = true;
+
             cx.notify();
         });
 
         cx.simulate_click(inside, Modifiers::none());
+
         assert!(state(&view, cx).0);
         assert_eq!(state(&view, cx).1, vec![true]);
     }
@@ -684,6 +727,7 @@ mod tests {
                     move |_bounds, window, cx| {
                         let mut info = |switch: BaseSwitch| {
                             let mut node = accesskit::Node::new(accesskit::Role::Switch);
+
                             switch
                                 .render(window, cx)
                                 .into_any_element()
@@ -700,12 +744,14 @@ mod tests {
                                 .aria_label("Notifications")
                                 .on_change(|_checked, _window, _app| {}),
                         );
+
                         let disabled = info(
                             BaseSwitch::new("disabled")
                                 .disabled(true)
                                 .aria_label("Notifications")
                                 .on_change(|_checked, _window, _app| {}),
                         );
+
                         *captured.lock().unwrap() = Some((enabled, disabled));
                     },
                     |_bounds, _prepaint, _window, _app| {},

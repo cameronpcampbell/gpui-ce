@@ -21,6 +21,7 @@ pub struct ActionBindingCollection {
 struct ActionBindingEntry {
     // The action used to build Keybinding
     action: Box<dyn Action>,
+
     // The keystrokes that trigger the action
     // NOTE: could limit allocations by utilizing smallvec
     keystrokes: Vec<SharedString>,
@@ -31,11 +32,14 @@ impl ActionBindingCollection {
     pub fn with<A: Action + Default>(mut self, keystrokes: impl Into<SharedString>) -> Self {
         let action_id = TypeId::of::<A>();
         let entry = self.entries.entry(action_id);
+
         let entry = entry.or_insert_with(|| ActionBindingEntry {
             action: Box::new(A::default()),
             keystrokes: Vec::with_capacity(5),
         });
+
         entry.keystrokes.push(keystrokes.into());
+
         self
     }
 
@@ -44,10 +48,13 @@ impl ActionBindingCollection {
     pub fn as_keybindings(&self, context: Option<&str>) -> impl Iterator<Item = KeyBinding> {
         let context_predicate =
             context.map(|context| KeyBindingContextPredicate::parse(context).unwrap().into());
+
         let iter = self.entries.iter();
+
         let iter = iter.map(move |(_, entry)| {
             let action = &entry.action;
             let context_predicate = context_predicate.clone();
+
             entry.keystrokes.iter().map(move |keystrokes| {
                 let keybinding = KeyBinding::load(
                     keystrokes.as_str(),
@@ -57,9 +64,11 @@ impl ActionBindingCollection {
                     None,
                     &DummyKeyboardMapper,
                 );
+
                 keybinding.expect("failed to load keybinding")
             })
         });
+
         iter.flatten()
     }
 }
@@ -83,9 +92,11 @@ mod tests {
 
         let entry = collection.entries.get(&TypeId::of::<TestAction>());
         let entry = entry.map(|entry| &entry.keystrokes);
+
         assert_eq!(entry, Some(&vec![SharedString::new_static("enter")]));
 
         let out_bindings = collection.as_keybindings(None).collect::<Vec<_>>();
+
         assert_eq!(out_bindings.len(), 1);
     }
 
@@ -97,6 +108,7 @@ mod tests {
 
         let entry = collection.entries.get(&TypeId::of::<TestAction>());
         let entry = entry.map(|entry| &entry.keystrokes);
+
         assert_eq!(
             entry,
             Some(&vec![
@@ -106,6 +118,7 @@ mod tests {
         );
 
         let out_bindings = collection.as_keybindings(None).collect::<Vec<_>>();
+
         assert_eq!(out_bindings.len(), 2);
     }
 
@@ -114,9 +127,11 @@ mod tests {
         let collection = ActionBindingCollection::default();
         let collection = collection.with::<TestAction>("enter");
         let collection = collection.with::<TestAction>("escape");
+
         let out_bindings = collection
             .as_keybindings(Some("test_content"))
             .collect::<Vec<_>>();
+
         assert_eq!(out_bindings.len(), 2);
     }
 }

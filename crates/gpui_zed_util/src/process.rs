@@ -11,6 +11,7 @@ use std::process::Stdio;
 /// its handles, so spawned process trees can never outlive Zed.
 pub struct Child {
     process: smol::process::Child,
+
     #[cfg(windows)]
     job: Option<windows_job::JobObject>,
 }
@@ -38,7 +39,9 @@ impl Child {
         stderr: Stdio,
     ) -> Result<Self> {
         crate::set_pre_exec_to_start_new_session(&mut command);
+
         let mut command = smol::process::Command::from(command);
+
         let process = command
             .stdin(stdin)
             .stdout(stdout)
@@ -50,6 +53,7 @@ impl Child {
                     crate::redact::redact_command(&format!("{command:?}"))
                 )
             })?;
+
         Ok(Self { process })
     }
 
@@ -61,6 +65,7 @@ impl Child {
         stderr: Stdio,
     ) -> Result<Self> {
         let mut command = smol::process::Command::from(command);
+
         let process = command
             .stdin(stdin)
             .stdout(stdout)
@@ -91,6 +96,7 @@ impl Child {
         let job = windows_job::JobObject::new()
             .and_then(|job| {
                 job.assign_process(process.id())?;
+
                 Ok(job)
             })
             .map_err(|error| {
@@ -114,9 +120,11 @@ impl Child {
     #[cfg(not(windows))]
     pub fn kill(&mut self) -> Result<()> {
         let pid = self.process.id();
+
         unsafe {
             libc::killpg(pid as i32, libc::SIGKILL);
         }
+
         Ok(())
     }
 
@@ -126,6 +134,7 @@ impl Child {
             job.terminate()
         } else {
             self.process.kill()?;
+
             Ok(())
         }
     }
@@ -135,6 +144,7 @@ impl Child {
 mod windows_job {
     use crate::ResultExt as _;
     use anyhow::{Context as _, Result};
+
     use windows::Win32::{
         Foundation::{CloseHandle, HANDLE},
         System::{
@@ -163,8 +173,11 @@ mod windows_job {
             unsafe {
                 let job =
                     Self(CreateJobObjectW(None, None).context("failed to create job object")?);
+
                 let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+
                 info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
                 SetInformationJobObject(
                     job.0,
                     JobObjectExtendedLimitInformation,
@@ -172,6 +185,7 @@ mod windows_job {
                     size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
                 )
                 .context("failed to set job object limits")?;
+
                 Ok(job)
             }
         }
@@ -180,9 +194,12 @@ mod windows_job {
             unsafe {
                 let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid)
                     .context("failed to open process")?;
+
                 let result = AssignProcessToJobObject(self.0, process)
                     .context("failed to assign process to job object");
+
                 CloseHandle(process).log_err();
+
                 result
             }
         }
@@ -214,6 +231,7 @@ mod windows_tests {
         // temp paths containing `'` can't break out of the literal.
         let pid_file_literal = pid_file.display().to_string().replace('\'', "''");
         let mut command = std::process::Command::new("powershell.exe");
+
         // `-ExecutionPolicy Bypass` keeps locked-down CI images from refusing
         // to run the snippet, and writing the pid with the .NET API (rather
         // than `Set-Content`) pins the encoding to plain ASCII without a BOM
@@ -226,11 +244,13 @@ mod windows_tests {
                  [System.IO.File]::WriteAllText('{pid_file_literal}', \"$($p.Id)\", [System.Text.Encoding]::ASCII); \
                  Wait-Process -Id $p.Id"
             ));
+
         // Capture powershell's stderr so a startup failure (missing binary,
         // policy violation, bad path quoting, ...) is visible in the panic
         // below instead of vanishing into the null device.
         let stderr_log = std::fs::File::create(temp_dir.join("powershell-stderr.log"))
             .expect("failed to create powershell stderr log");
+
         let child = Child::spawn(
             command,
             Stdio::null(),
@@ -244,21 +264,26 @@ mod windows_tests {
         // concurrently, so allow ample headroom before declaring the handoff
         // lost.
         let deadline = Instant::now() + Duration::from_secs(20);
+
         let grandchild_pid = loop {
             if let Some(pid) = read_grandchild_pid(&pid_file) {
                 break pid;
             }
+
             assert!(
                 Instant::now() < deadline,
                 "timed out waiting for grandchild pid file: {}",
                 describe_pid_handoff(temp_dir, &pid_file)
             );
+
             std::thread::sleep(Duration::from_millis(50));
         };
+
         assert!(
             process_is_alive(grandchild_pid),
             "grandchild should be alive after spawning"
         );
+
         (child, grandchild_pid)
     }
 
@@ -274,10 +299,14 @@ mod windows_tests {
             let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
                 return false;
             };
+
             let mut exit_code = 0u32;
+
             let alive = GetExitCodeProcess(handle, &mut exit_code).is_ok()
                 && exit_code == STILL_ACTIVE.0 as u32;
+
             CloseHandle(handle).expect("failed to close process handle");
+
             alive
         }
     }
@@ -291,6 +320,7 @@ mod windows_tests {
         // Strip a UTF-8/UTF-16 BOM if one was emitted, then accept the pid
         // surrounded by arbitrary whitespace/newlines.
         let text = text.trim().trim_start_matches('\u{feff}').trim();
+
         text.parse::<u32>().ok()
     }
 
@@ -304,8 +334,10 @@ mod windows_tests {
                 bytes.len(),
                 String::from_utf8_lossy(&bytes)
             ),
+
             Err(error) => format!("pid file missing ({error})"),
         };
+
         let dir_state = match std::fs::read_dir(temp_dir) {
             Ok(entries) => {
                 let names: Vec<String> = entries
@@ -315,15 +347,19 @@ mod windows_tests {
                             .map(|entry| entry.file_name().to_string_lossy().into_owned())
                     })
                     .collect();
+
                 format!("temp dir entries: {names:?}")
             }
+
             Err(error) => format!("temp dir unreadable ({error})"),
         };
+
         let stderr_state = match std::fs::read_to_string(temp_dir.join("powershell-stderr.log")) {
             Ok(log) if log.trim().is_empty() => "powershell stderr: <empty>".to_string(),
             Ok(log) => format!("powershell stderr: {log:?}"),
             Err(error) => format!("powershell stderr log unreadable ({error})"),
         };
+
         format!(
             "{pid_state}; {dir_state}; {stderr_state}; pid file: {}",
             pid_file.display()
@@ -334,8 +370,10 @@ mod windows_tests {
         // Job-object termination is normally near-instant, but allow headroom
         // for a loaded CI worker to reap the whole tree.
         let deadline = Instant::now() + Duration::from_secs(10);
+
         while process_is_alive(pid) {
             assert!(Instant::now() < deadline, "{message} (pid {pid})");
+
             std::thread::sleep(Duration::from_millis(50));
         }
     }

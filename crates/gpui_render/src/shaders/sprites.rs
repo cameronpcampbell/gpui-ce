@@ -13,21 +13,28 @@ pub mod underline {
         pub thickness: f32,
         pub wavy: ShaderBool,
     }
+
     storage!(group(1), binding(0), UNDERLINES: RuntimeArray<Underline>);
 
     pub fn wavy_underline_coverage(underline: Underline, position: Vec2f) -> f32 {
         let normalized_position =
             (position - underline.bounds.origin) / underline.bounds.size.y - vec2f(0.0, 0.5);
+
         let angular_frequency =
             PI * UNDERLINE_WAVE_FREQUENCY * underline.thickness / underline.bounds.size.y;
+
         let amplitude = underline.thickness * UNDERLINE_WAVE_HEIGHT_RATIO / underline.bounds.size.y;
         let wave_height = sin(normalized_position.x * angular_frequency) * amplitude;
+
         let wave_slope =
             cos(normalized_position.x * angular_frequency) * amplitude * angular_frequency;
+
         let signed_distance = (normalized_position.y - wave_height)
             / sqrt(1.0 + wave_slope * wave_slope)
             * underline.bounds.size.y;
+
         let stroke_distance = abs(signed_distance) - underline.thickness * 0.5;
+
         antialiased_coverage(stroke_distance)
     }
 
@@ -35,12 +42,15 @@ pub mod underline {
     pub struct UnderlineVarying {
         #[builtin(position)]
         pub position: Vec4f,
+
         #[location(0)]
         #[interpolate(flat)]
         pub color: Vec4f,
+
         #[location(1)]
         #[interpolate(flat)]
         pub underline_id: u32,
+
         #[location(3)]
         pub clip_distances: Vec4f,
     }
@@ -52,6 +62,7 @@ pub mod underline {
     ) -> UnderlineVarying {
         let underline = get!(UNDERLINES)[instance_id as usize];
         let vertex = rectangle_vertex(vertex_id, underline.bounds);
+
         UnderlineVarying {
             position: vertex.clip_position,
             color: hsla_to_rgba(underline.color),
@@ -65,13 +76,16 @@ pub mod underline {
         if is_clipped(input.clip_distances) {
             return transparent();
         }
+
         let underline = get!(UNDERLINES)[input.underline_id as usize];
+
         if !is_enabled(underline.wavy) {
             return blend_color(
                 input.color,
                 ContentMask::alpha(underline.content_mask, input.position.xy()),
             );
         }
+
         blend_color(
             input.color,
             wavy_underline_coverage(underline, input.position.xy())
@@ -95,6 +109,7 @@ pub mod monochrome_sprite {
         pub tile: AtlasTile,
         pub transformation: TransformationMatrix,
     }
+
     storage!(group(1), binding(0), MONOCHROME_SPRITES: RuntimeArray<MonochromeSprite>);
     texture!(group(1), binding(1), MONOCHROME_TEXTURE: Texture2D<f32>);
     sampler!(group(1), binding(2), MONOCHROME_SAMPLER: Sampler);
@@ -103,14 +118,18 @@ pub mod monochrome_sprite {
     pub struct MonochromeSpriteVarying {
         #[builtin(position)]
         pub position: Vec4f,
+
         #[location(0)]
         pub tile_position: Vec2f,
+
         #[location(1)]
         #[interpolate(flat)]
         pub color: Vec4f,
+
         #[location(2)]
         #[interpolate(flat)]
         pub sprite_id: u32,
+
         #[location(3)]
         pub clip_distances: Vec4f,
     }
@@ -122,6 +141,7 @@ pub mod monochrome_sprite {
     ) -> MonochromeSpriteVarying {
         let sprite = get!(MONOCHROME_SPRITES)[instance_id as usize];
         let vertex = transformed_rectangle_vertex(vertex_id, sprite.bounds, sprite.transformation);
+
         MonochromeSpriteVarying {
             position: vertex.clip_position,
             tile_position: atlas_texture_coordinates(
@@ -140,7 +160,9 @@ pub mod monochrome_sprite {
         if is_clipped(input.clip_distances) {
             return transparent();
         }
+
         let sprite = get!(MONOCHROME_SPRITES)[input.sprite_id as usize];
+
         let sample = texture_sample_level(
             MONOCHROME_TEXTURE,
             MONOCHROME_SAMPLER,
@@ -148,12 +170,14 @@ pub mod monochrome_sprite {
             0.0,
         )
         .x;
+
         let corrected = apply_contrast_and_gamma_correction(
             sample,
             input.color.rgb(),
             get!(FONT_RASTERIZATION).grayscale_enhanced_contrast,
             get!(FONT_RASTERIZATION).gamma_ratios,
         );
+
         blend_color(
             input.color,
             corrected * ContentMask::alpha(sprite.content_mask, input.position.xy()),
@@ -178,6 +202,7 @@ pub mod polychrome_sprite {
         pub corner_radii: Corners,
         pub tile: AtlasTile,
     }
+
     storage!(group(1), binding(0), POLYCHROME_SPRITES: RuntimeArray<PolychromeSprite>);
     texture!(group(1), binding(1), POLYCHROME_TEXTURE: Texture2D<f32>);
     sampler!(group(1), binding(2), POLYCHROME_SAMPLER: Sampler);
@@ -196,6 +221,7 @@ pub mod polychrome_sprite {
         sprite: PolychromeSprite,
     ) -> PolychromeVertexData {
         let vertex = rectangle_vertex(vertex_id, sprite.bounds);
+
         PolychromeVertexData {
             position: vertex.clip_position,
             tile_position: atlas_texture_coordinates(
@@ -211,7 +237,9 @@ pub mod polychrome_sprite {
     pub fn polychrome_color(sprite: PolychromeSprite, tile_position: Vec2f) -> Vec4f {
         let sample =
             texture_sample_level(POLYCHROME_TEXTURE, POLYCHROME_SAMPLER, tile_position, 0.0);
+
         let grayscale = dot(sample.rgb(), LINEAR_RGB_LUMA_WEIGHTS);
+
         select(
             sample,
             vec4f(grayscale, grayscale, grayscale, sample.w),
@@ -223,11 +251,14 @@ pub mod polychrome_sprite {
     pub struct PolychromeSpriteVarying {
         #[builtin(position)]
         pub position: Vec4f,
+
         #[location(0)]
         pub tile_position: Vec2f,
+
         #[location(1)]
         #[interpolate(flat)]
         pub sprite_id: u32,
+
         #[location(3)]
         pub clip_distances: Vec4f,
     }
@@ -239,6 +270,7 @@ pub mod polychrome_sprite {
     ) -> PolychromeSpriteVarying {
         let sprite = get!(POLYCHROME_SPRITES)[instance_id as usize];
         let vertex = prepare_polychrome_vertex(vertex_id, instance_id, sprite);
+
         PolychromeSpriteVarying {
             position: vertex.position,
             tile_position: vertex.tile_position,
@@ -252,8 +284,10 @@ pub mod polychrome_sprite {
         if is_clipped(input.clip_distances) {
             return transparent();
         }
+
         let sprite = get!(POLYCHROME_SPRITES)[input.sprite_id as usize];
         let color = polychrome_color(sprite, input.tile_position);
+
         blend_color(
             color,
             sprite.opacity
@@ -270,22 +304,29 @@ pub mod polychrome_sprite {
     pub struct SmoothedPolychromeSpriteVarying {
         #[builtin(position)]
         pub position: Vec4f,
+
         #[location(0)]
         pub tile_position: Vec2f,
+
         #[location(1)]
         #[interpolate(flat)]
         pub sprite_id: u32,
+
         #[location(2)]
         #[interpolate(flat)]
         pub horizontal_corner_reaches: Vec4f,
+
         #[location(3)]
         pub clip_distances: Vec4f,
+
         #[location(4)]
         #[interpolate(flat)]
         pub vertical_corner_reaches: Vec4f,
+
         #[location(5)]
         #[interpolate(flat)]
         pub smoothing_factors: Vec4f,
+
         #[location(6)]
         #[interpolate(flat)]
         pub superellipse_power: f32,
@@ -298,6 +339,7 @@ pub mod polychrome_sprite {
     ) -> SmoothedPolychromeSpriteVarying {
         let sprite = get!(POLYCHROME_SPRITES)[instance_id as usize];
         let vertex = prepare_polychrome_vertex(vertex_id, instance_id, sprite);
+
         let prepared = prepare_corners(
             sprite.bounds.size,
             sprite.corner_radii,
@@ -322,8 +364,10 @@ pub mod polychrome_sprite {
         if is_clipped(input.clip_distances) {
             return transparent();
         }
+
         let sprite = get!(POLYCHROME_SPRITES)[input.sprite_id as usize];
         let color = polychrome_color(sprite, input.tile_position);
+
         blend_color(
             color,
             sprite.opacity
@@ -360,6 +404,7 @@ pub mod subpixel_sprite {
         pub tile: AtlasTile,
         pub transformation: TransformationMatrix,
     }
+
     storage!(group(1), binding(0), SUBPIXEL_SPRITES: RuntimeArray<SubpixelSprite>);
     texture!(group(1), binding(1), SPRITE_TEXTURE: Texture2D<f32>);
     sampler!(group(1), binding(2), SPRITE_SAMPLER: Sampler);
@@ -368,22 +413,28 @@ pub mod subpixel_sprite {
     pub struct SubpixelSpriteOutput {
         #[builtin(position)]
         pub position: Vec4f,
+
         #[location(0)]
         pub tile_position: Vec2f,
+
         #[location(1)]
         #[interpolate(flat)]
         pub color: Vec4f,
+
         #[location(2)]
         #[interpolate(flat)]
         pub sprite_id: u32,
+
         #[location(3)]
         pub clip_distances: Vec4f,
     }
+
     #[derive(Wgsl)]
     pub struct SubpixelSpriteFragmentOutput {
         #[location(0)]
         #[blend_src(0)]
         pub foreground: Vec4f,
+
         #[location(0)]
         #[blend_src(1)]
         pub alpha: Vec4f,
@@ -396,6 +447,7 @@ pub mod subpixel_sprite {
     ) -> SubpixelSpriteOutput {
         let sprite = get!(SUBPIXEL_SPRITES)[instance_id as usize];
         let vertex = transformed_rectangle_vertex(vertex_id, sprite.bounds, sprite.transformation);
+
         SubpixelSpriteOutput {
             position: vertex.clip_position,
             tile_position: atlas_texture_coordinates(
@@ -417,21 +469,27 @@ pub mod subpixel_sprite {
                 alpha: transparent(),
             };
         }
+
         let sprite = get!(SUBPIXEL_SPRITES)[input.sprite_id as usize];
+
         let sampled =
             texture_sample_level(SPRITE_TEXTURE, SPRITE_SAMPLER, input.tile_position, 0.0).rgb();
+
         let sample = select(
             sampled,
             sampled.bgr(),
             is_enabled(get!(FONT_RASTERIZATION).uses_blue_green_red_subpixel_order),
         );
+
         let alpha_corrected = apply_contrast_and_gamma_correction3(
             sample,
             input.color.rgb(),
             get!(FONT_RASTERIZATION).subpixel_enhanced_contrast,
             get!(FONT_RASTERIZATION).gamma_ratios,
         );
+
         let mask_alpha = ContentMask::alpha(sprite.content_mask, input.position.xy());
+
         SubpixelSpriteFragmentOutput {
             foreground: vec4f(input.color.x, input.color.y, input.color.z, 1.0),
             alpha: vec4f(

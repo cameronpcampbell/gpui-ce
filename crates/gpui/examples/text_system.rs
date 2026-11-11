@@ -6,6 +6,7 @@ mod example_prelude;
 use std::borrow::Cow;
 
 use example_prelude::init_example;
+
 use gpui::{
     App, Bounds, Context, Div, FontFallbacks, FontFeatures, FontStyle, FontWeight, FontWidth,
     HighlightStyle, Render, StrikethroughStyle, StyledText, TextTransform, UnderlineStyle, Window,
@@ -248,6 +249,7 @@ fn open_type_and_spacing() -> impl IntoElement {
 
 fn multilingual_text() -> impl IntoElement {
     let mut multilingual_font = font("IBM Plex Sans");
+
     multilingual_font.fallbacks = Some(FontFallbacks::from_fonts(vec![
         "Noto Sans Arabic".into(),
         "Noto Sans Hebrew".into(),
@@ -255,6 +257,7 @@ fn multilingual_text() -> impl IntoElement {
     ]));
 
     let mut emoji_samples = div().flex().flex_col().gap_2();
+
     for font_size in [16.0, 24.0, 32.0] {
         emoji_samples = emoji_samples.child(
             div()
@@ -484,6 +487,7 @@ fn main() {
         register_fonts(cx);
 
         let bounds = Bounds::centered(None, size(px(1000.), px(900.)), cx);
+
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

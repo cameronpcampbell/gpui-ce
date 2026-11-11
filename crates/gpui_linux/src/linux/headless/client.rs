@@ -6,6 +6,7 @@ use gpui_util::ResultExt;
 
 use crate::linux::headless::window::{HeadlessDisplay, HeadlessWindow};
 use crate::linux::{LinuxClient, LinuxCommon, LinuxKeyboardLayout};
+
 use gpui::{
     AnyWindowHandle, CursorStyle, DisplayId, PlatformDisplay, PlatformKeyboardLayout,
     PlatformWindow, WindowParams,
@@ -73,6 +74,7 @@ impl LinuxClient for HeadlessClient {
 
     fn display(&self, id: DisplayId) -> Option<Rc<dyn PlatformDisplay>> {
         let display = self.0.borrow().display.clone();
+
         (display.id() == id).then_some(display)
     }
 

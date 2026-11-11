@@ -42,6 +42,7 @@ impl<K: Eq, V> VecMap<K, V> {
                 key: &self.keys[index],
                 value: &mut self.values[index],
             }),
+
             None => Entry::Vacant(VacantEntry { map: self, key }),
         }
     }
@@ -56,6 +57,7 @@ impl<K: Eq, V> VecMap<K, V> {
                 key: &self.keys[index],
                 value: &mut self.values[index],
             }),
+
             None => EntryRef::Vacant(VacantEntryRef { map: self, key }),
         }
     }
@@ -92,9 +94,11 @@ impl<'a, K, V> Entry<'a, K, V> {
     {
         match self {
             Entry::Occupied(entry) => entry.value,
+
             Entry::Vacant(entry) => {
                 entry.map.values.push(default(&entry.key));
                 entry.map.keys.push(entry.key);
+
                 match entry.map.values.last_mut() {
                     Some(value) => value,
                     None => unreachable!("vec empty after pushing to it"),
@@ -156,9 +160,11 @@ where
     {
         match self {
             EntryRef::Occupied(entry) => entry.value,
+
             EntryRef::Vacant(entry) => {
                 entry.map.values.push(default(entry.key));
                 entry.map.keys.push(entry.key.clone());
+
                 match entry.map.values.last_mut() {
                     Some(value) => value,
                     None => unreachable!("vec empty after pushing to it"),

@@ -18,6 +18,7 @@ impl Log for ConsoleLogger {
             record.target(),
             record.args()
         );
+
         let js_string = wasm_bindgen::JsValue::from_str(&message);
 
         match record.level() {
@@ -37,6 +38,7 @@ pub fn init_logging() {
     console_error_panic_hook::set_once();
 
     log::set_logger(&ConsoleLogger).ok();
+
     log::set_max_level(if cfg!(debug_assertions) {
         log::LevelFilter::Debug
     } else {

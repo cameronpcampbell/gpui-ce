@@ -22,6 +22,7 @@ mod visual_test;
 pub mod screen_capture;
 #[cfg(target_os = "windows")]
 mod windows_screen_capture;
+
 #[cfg(target_os = "windows")]
 pub use windows_screen_capture::WindowsScreenCaptureFrame;
 
@@ -41,6 +42,7 @@ pub(crate) type PlatformScreenCaptureFrame = core_video::image_buffer::CVImageBu
 pub(crate) type PlatformScreenCaptureFrame = ();
 
 use crate::util::FluentBuilder;
+
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
     DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Edges, ExternalDragPayload, Font,
@@ -51,6 +53,7 @@ use crate::{
     Scene, SharedString, Size, SvgRenderer, SystemWindowTab, Task, TextLayoutRequest,
     ValidatedRasterizedGlyph, Window, WindowControlArea, hash, point, px,
 };
+
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use anyhow::bail;
 use anyhow::{Context as _, Result};
@@ -73,6 +76,7 @@ use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::ops;
 use std::time::Duration;
+
 use std::{
     ffi::OsString,
     fmt::{self, Debug},
@@ -81,6 +85,7 @@ use std::{
     rc::Rc,
     sync::Arc,
 };
+
 use strum::EnumIter;
 use uuid::Uuid;
 
@@ -150,21 +155,33 @@ pub enum MacActivationPolicy {
 #[expect(missing_docs)]
 pub trait Platform: 'static {
     fn background_executor(&self) -> BackgroundExecutor;
+
     fn foreground_executor(&self) -> ForegroundExecutor;
+
     fn text_system(&self) -> Arc<dyn PlatformTextSystem>;
 
     fn set_mac_activation_policy(&self, _policy: MacActivationPolicy) {}
+
     fn run(&self, on_finish_launching: Box<dyn 'static + FnOnce()>);
+
     fn quit(&self);
+
     fn restart(&self, binary_path: Option<PathBuf>, arguments: Vec<OsString>);
+
     fn activate(&self, ignoring_other_apps: bool);
+
     fn hide(&self);
+
     fn hide_other_apps(&self);
+
     fn unhide_other_apps(&self);
 
     fn displays(&self) -> Vec<Rc<dyn PlatformDisplay>>;
+
     fn primary_display(&self) -> Option<Rc<dyn PlatformDisplay>>;
+
     fn active_window(&self) -> Option<AnyWindowHandle>;
+
     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
         None
     }
@@ -177,11 +194,13 @@ pub trait Platform: 'static {
         &self,
     ) -> oneshot::Receiver<anyhow::Result<Vec<Rc<dyn ScreenCaptureSource>>>> {
         let (sources_tx, sources_rx) = oneshot::channel();
+
         sources_tx
             .send(Err(anyhow::anyhow!(
                 "gpui was compiled without the screen-capture feature"
             )))
             .ok();
+
         sources_rx
     }
 
@@ -210,24 +229,32 @@ pub trait Platform: 'static {
     }
 
     fn open_url(&self, url: &str);
+
     fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>)>);
+
     fn register_url_scheme(&self, url: &str) -> Task<Result<()>>;
 
     fn prompt_for_paths(
         &self,
         options: PathPromptOptions,
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>>;
+
     fn prompt_for_new_path(
         &self,
         directory: &Path,
         suggested_name: Option<&str>,
     ) -> oneshot::Receiver<Result<Option<PathBuf>>>;
+
     fn can_select_mixed_files_and_dirs(&self) -> bool;
+
     fn reveal_path(&self, path: &Path);
+
     fn open_with_system(&self, path: &Path);
 
     fn on_quit(&self, callback: Box<dyn FnMut() -> bool>);
+
     fn on_reopen(&self, callback: Box<dyn FnMut()>);
+
     fn on_system_wake(&self, callback: Box<dyn FnMut()>);
 
     // Mobile platform methods. On mobile the OS owns the application
@@ -255,13 +282,17 @@ pub trait Platform: 'static {
     }
 
     fn set_menus(&self, menus: Vec<Menu>, keymap: &Keymap);
+
     fn get_menus(&self) -> Option<Vec<OwnedMenu>> {
         None
     }
 
     fn set_dock_menu(&self, menu: Vec<MenuItem>, keymap: &Keymap);
+
     fn perform_dock_menu_action(&self, _action: usize) {}
+
     fn add_recent_document(&self, _path: &Path) {}
+
     fn update_jump_list(
         &self,
         _menus: Vec<MenuItem>,
@@ -269,11 +300,15 @@ pub trait Platform: 'static {
     ) -> Task<Vec<SmallVec<[PathBuf; 2]>>> {
         Task::ready(Vec::new())
     }
+
     fn on_app_menu_action(&self, callback: Box<dyn FnMut(&dyn Action)>);
+
     fn on_will_open_app_menu(&self, callback: Box<dyn FnMut()>);
+
     fn on_validate_app_menu_command(&self, callback: Box<dyn FnMut(&dyn Action) -> bool>);
 
     fn thermal_state(&self) -> ThermalState;
+
     fn on_thermal_state_change(&self, callback: Box<dyn FnMut()>);
 
     /// Sets the application's process-wide identity and user-visible name.
@@ -319,7 +354,9 @@ pub trait Platform: 'static {
     fn compositor_name(&self) -> &'static str {
         ""
     }
+
     fn app_path(&self) -> Result<PathBuf>;
+
     fn path_for_auxiliary_executable(&self, name: &str) -> Result<PathBuf>;
 
     fn set_cursor_style(&self, style: CursorStyle);
@@ -334,6 +371,7 @@ pub trait Platform: 'static {
     fn should_auto_hide_scrollbars(&self) -> bool;
 
     fn read_from_clipboard(&self) -> Option<ClipboardItem>;
+
     fn write_to_clipboard(&self, item: ClipboardItem);
 
     /// Reads the clipboard, resolving once its contents are available.
@@ -349,20 +387,26 @@ pub trait Platform: 'static {
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn read_from_primary(&self) -> Option<ClipboardItem>;
+
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn write_to_primary(&self, item: ClipboardItem);
 
     #[cfg(target_os = "macos")]
     fn read_from_find_pasteboard(&self) -> Option<ClipboardItem>;
+
     #[cfg(target_os = "macos")]
     fn write_to_find_pasteboard(&self, item: ClipboardItem);
 
     fn write_credentials(&self, url: &str, username: &str, password: &[u8]) -> Task<Result<()>>;
+
     fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>>;
+
     fn delete_credentials(&self, url: &str) -> Task<Result<()>>;
 
     fn keyboard_layout(&self) -> Box<dyn PlatformKeyboardLayout>;
+
     fn keyboard_mapper(&self) -> Rc<dyn PlatformKeyboardMapper>;
+
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>);
 
     /// Register additional GPU device requirements (features, limits) before
@@ -412,6 +456,7 @@ pub trait PlatformDisplay: Debug {
 
         let offset = clipped_window_size / 2.0;
         let origin = point(center.x - offset.width, center.y - offset.height);
+
         Bounds::new(origin, clipped_window_size)
     }
 }
@@ -424,10 +469,13 @@ pub struct SystemNotification {
     /// the same tag replaces the previous one where the platform supports it,
     /// and responses carry the tag back to the application.
     pub tag: SharedString,
+
     /// The notification's headline.
     pub title: SharedString,
+
     /// Additional text displayed below the title.
     pub body: SharedString,
+
     /// Buttons offered on the notification. Platforms that cannot display
     /// action buttons show the notification without them.
     pub actions: Vec<SystemNotificationAction>,
@@ -439,6 +487,7 @@ pub struct SystemNotificationAction {
     /// Identifies the action in [`SystemNotificationResponse::action_id`]
     /// when the user presses this button.
     pub id: SharedString,
+
     /// The button's user-visible label.
     pub label: SharedString,
 }
@@ -448,6 +497,7 @@ pub struct SystemNotificationAction {
 pub struct SystemNotificationResponse {
     /// The [`SystemNotification::tag`] of the activated notification.
     pub tag: SharedString,
+
     /// The pressed action button's [`SystemNotificationAction::id`], or
     /// `None` when the user activated the notification body itself.
     pub action_id: Option<SharedString>,
@@ -486,10 +536,13 @@ pub enum HapticFeedbackStyle {
 pub struct SourceMetadata {
     /// Opaque identifier of this screen.
     pub id: u64,
+
     /// Human-readable label for this source.
     pub label: Option<SharedString>,
+
     /// Whether this source is the main display.
     pub is_main: Option<bool>,
+
     /// Video resolution of this source.
     pub resolution: Size<DevicePixels>,
 }
@@ -610,10 +663,13 @@ pub enum Decorations {
 pub struct WindowControls {
     /// Whether this platform supports fullscreen
     pub fullscreen: bool,
+
     /// Whether this platform supports maximize
     pub maximize: bool,
+
     /// Whether this platform supports minimize
     pub minimize: bool,
+
     /// Whether this platform supports a window menu
     pub window_menu: bool,
 }
@@ -672,6 +728,7 @@ pub const MAX_BUTTONS_PER_SIDE: usize = 3;
 pub struct WindowButtonLayout {
     /// Buttons on the left side of the titlebar.
     pub left: [Option<WindowButton>; MAX_BUTTONS_PER_SIDE],
+
     /// Buttons on the right side of the titlebar.
     pub right: [Option<WindowButton>; MAX_BUTTONS_PER_SIDE],
 }
@@ -699,24 +756,31 @@ impl WindowButtonLayout {
         ) -> [Option<WindowButton>; MAX_BUTTONS_PER_SIDE] {
             let mut result = [None; MAX_BUTTONS_PER_SIDE];
             let mut i = 0;
+
             for name in s.split(',') {
                 let trimmed = name.trim();
+
                 if trimmed.is_empty() {
                     continue;
                 }
+
                 let button = match trimmed {
                     "minimize" => Some(WindowButton::Minimize),
                     "maximize" => Some(WindowButton::Maximize),
                     "close" => Some(WindowButton::Close),
+
                     other => {
                         unrecognized.push(other.to_string());
+
                         None
                     }
                 };
+
                 if let Some(button) = button {
                     if seen_buttons[button.index()] {
                         continue;
                     }
+
                     if let Some(slot) = result.get_mut(i) {
                         *slot = Some(button);
                         seen_buttons[button.index()] = true;
@@ -724,12 +788,14 @@ impl WindowButtonLayout {
                     }
                 }
             }
+
             result
         }
 
         let (left_str, right_str) = layout_string.split_once(':').unwrap_or(("", layout_string));
         let mut unrecognized = Vec::new();
         let mut seen_buttons = [false; MAX_BUTTONS_PER_SIDE];
+
         let layout = Self {
             left: parse_side(left_str, &mut seen_buttons, &mut unrecognized),
             right: parse_side(right_str, &mut seen_buttons, &mut unrecognized),
@@ -774,10 +840,13 @@ impl WindowButtonLayout {
 pub struct Tiling {
     /// Whether the top edge is tiled
     pub top: bool,
+
     /// Whether the left edge is tiled
     pub left: bool,
+
     /// Whether the right edge is tiled
     pub right: bool,
+
     /// Whether the bottom edge is tiled
     pub bottom: bool,
 }
@@ -803,8 +872,10 @@ impl Tiling {
 pub struct A11yCallbacks {
     /// Called when the adapter is activated (a screen reader connects).
     pub activation: Box<dyn Fn() -> Option<accesskit::TreeUpdate> + Send + 'static>,
+
     /// Called when an action is requested by the screen reader.
     pub action: Box<dyn Fn(accesskit::ActionRequest) + Send + 'static>,
+
     /// Called when the adapter is deactivated (screen reader disconnects).
     pub deactivation: Box<dyn Fn() + Send + 'static>,
 }
@@ -814,6 +885,7 @@ pub struct A11yCallbacks {
 pub struct RequestFrameOptions {
     /// Whether a presentation is required.
     pub require_presentation: bool,
+
     /// Force refresh of all rendering states when true.
     pub force_render: bool,
 }
@@ -856,6 +928,7 @@ pub struct WindowInsets {
     /// (iOS: `safeAreaInsets`. Android: `WindowInsets` of types
     /// `systemBars() | displayCutout()`.)
     pub safe_area: Edges<Pixels>,
+
     /// The region covered by the keyboard, when present.
     /// (iOS: derived from `keyboardWillShow`/frame-change notifications.
     /// Android: `WindowInsets.Type.ime()`.)
@@ -890,23 +963,37 @@ pub enum TextInputStateChange {
 #[expect(missing_docs)]
 pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn bounds(&self) -> Bounds<Pixels>;
+
     fn is_maximized(&self) -> bool;
+
     fn window_bounds(&self) -> WindowBounds;
+
     fn content_size(&self) -> Size<Pixels>;
+
     fn resize(&mut self, size: Size<Pixels>);
+
     fn scale_factor(&self) -> f32;
+
     fn appearance(&self) -> WindowAppearance;
+
     fn display(&self) -> Option<Rc<dyn PlatformDisplay>>;
+
     fn mouse_position(&self) -> Point<Pixels>;
+
     fn modifiers(&self) -> Modifiers;
+
     fn capslock(&self) -> Capslock;
+
     fn set_input_handler(&mut self, input_handler: PlatformInputHandler);
+
     fn take_input_handler(&mut self) -> Option<PlatformInputHandler>;
+
     /// Apply the focused text region's [`TextInputConfiguration`] to the
     /// platform's text input session (e.g. attributes of the hidden editable
     /// element on web). Called only when the configuration changes, because
     /// reconfiguring a live input session can restart the IME connection.
     fn set_text_input_configuration(&mut self, _configuration: TextInputConfiguration) {}
+
     fn prompt(
         &self,
         level: PromptLevel,
@@ -914,62 +1001,98 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         detail: Option<&str>,
         answers: &[PromptButton],
     ) -> Option<oneshot::Receiver<usize>>;
+
     /// Request activation, optionally using an externally supplied token.
     /// Returns whether a request was sent, not whether focus was granted.
     fn activate(&self, token: Option<&str>) -> bool;
+
     /// Requests that the operating system draw attention to this window.
     fn request_attention(&self) {}
+
     fn is_active(&self) -> bool;
+
     fn is_hovered(&self) -> bool;
+
     fn background_appearance(&self) -> WindowBackgroundAppearance;
+
     fn set_title(&mut self, title: &str);
+
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance);
+
     /// Show or hide the window without explicitly requesting focus.
     ///
     /// The default implementation does nothing for platforms that do not support
     /// changing window visibility at runtime.
     fn set_visible(&self, _visible: bool) {}
+
     fn minimize(&self);
+
     fn zoom(&self);
+
     fn toggle_fullscreen(&self);
+
     fn is_fullscreen(&self) -> bool;
+
     fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
         None
     }
+
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>);
+
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>);
+
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
+
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>);
+
     fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32)>);
+
     fn on_moved(&self, callback: Box<dyn FnMut()>);
+
     fn on_should_close(&self, callback: Box<dyn FnMut() -> bool>);
+
     fn on_hit_test_window_control(&self, callback: Box<dyn FnMut() -> Option<WindowControlArea>>);
+
     fn on_close(&self, callback: Box<dyn FnOnce()>);
+
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
+
     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
+
     fn draw(&self, scene: &Scene);
+
     fn schedule_frame(&self) {}
+
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
+
     fn is_subpixel_rendering_supported(&self) -> bool;
 
     // macOS specific methods
     fn get_title(&self) -> String {
         String::new()
     }
+
     fn tabbed_windows(&self) -> Option<Vec<SystemWindowTab>> {
         None
     }
+
     fn tab_bar_visible(&self) -> bool {
         false
     }
+
     fn set_edited(&mut self, _edited: bool) {}
+
     fn set_document_path(&self, _path: Option<&std::path::Path>) {}
+
     fn toggle_simple_fullscreen(&self) {}
+
     fn is_simple_fullscreen(&self) -> bool {
         false
     }
+
     #[cfg(target_os = "macos")]
     fn set_traffic_light_position(&self, _position: Point<Pixels>) {}
+
     /// Show the platform character palette.
     ///
     /// The default implementation logs a warning when the backend does not
@@ -977,15 +1100,25 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn show_character_palette(&self) {
         log::warn!("show_character_palette is not implemented by this platform backend");
     }
+
     fn titlebar_double_click(&self, _is_resizable: bool, _is_minimizable: bool) {}
+
     fn on_move_tab_to_new_window(&self, _callback: Box<dyn FnMut()>) {}
+
     fn on_merge_all_windows(&self, _callback: Box<dyn FnMut()>) {}
+
     fn on_select_previous_tab(&self, _callback: Box<dyn FnMut()>) {}
+
     fn on_select_next_tab(&self, _callback: Box<dyn FnMut()>) {}
+
     fn on_toggle_tab_bar(&self, _callback: Box<dyn FnMut()>) {}
+
     fn merge_all_windows(&self) {}
+
     fn move_tab_to_new_window(&self) {}
+
     fn toggle_window_tab_overview(&self) {}
+
     fn set_tabbing_identifier(&self, _identifier: Option<String>) {}
 
     #[cfg(target_os = "windows")]
@@ -995,31 +1128,46 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn inner_window_bounds(&self) -> WindowBounds {
         self.window_bounds()
     }
+
     fn request_decorations(&self, _decorations: WindowDecorations) {}
+
     fn show_window_menu(&self, _position: Point<Pixels>) {}
+
     fn start_window_move(&self) {}
+
     fn can_start_external_drag(&self) -> bool {
         false
     }
+
     fn start_external_drag(&self, _payload: &ExternalDragPayload) -> bool {
         false
     }
+
     fn start_window_resize(&self, _edge: ResizeEdge) {}
+
     fn set_exclusive_zone(&self, _zone: Pixels) {}
+
     #[cfg(all(target_os = "linux", feature = "wayland"))]
     fn set_exclusive_edge(&self, _edge: layer_shell::Anchor) {}
+
     fn set_input_region(&self, _region: Option<&[Bounds<Pixels>]>) {}
+
     fn window_decorations(&self) -> Decorations {
         Decorations::Server
     }
+
     fn set_app_id(&mut self, _app_id: &str) {}
+
     fn map_window(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
+
     fn window_controls(&self) -> WindowControls {
         WindowControls::default()
     }
+
     fn set_client_inset(&self, _inset: Pixels) {}
+
     fn gpu_specs(&self) -> Option<GpuSpecs>;
 
     /// Returns the GPU context for this window's renderer.
@@ -1162,8 +1310,11 @@ pub enum TasksIncluded {
 #[doc(hidden)]
 pub trait PlatformDispatcher: Send + Sync {
     fn is_main_thread(&self) -> bool;
+
     fn dispatch(&self, runnable: RunnableVariant, priority: Priority);
+
     fn dispatch_on_main_thread(&self, runnable: RunnableVariant, priority: Priority);
+
     fn dispatch_after(&self, duration: Duration, runnable: RunnableVariant);
 
     fn dispatch_on_main_thread_when_idle(
@@ -1172,6 +1323,7 @@ pub trait PlatformDispatcher: Send + Sync {
         timeout: Option<Duration>,
     ) {
         let _ = timeout;
+
         self.dispatch_on_main_thread(runnable, Priority::Low);
     }
 
@@ -1205,34 +1357,47 @@ pub trait PlatformDispatcher: Send + Sync {
 #[expect(missing_docs)]
 pub trait PlatformTextSystem: Send + Sync {
     fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()>;
+
     /// Get all available font names.
     fn all_font_names(&self) -> Vec<String>;
+
     /// Generation of the font collection used by layout cache invalidation.
     fn font_generation(&self) -> u64 {
         0
     }
+
     /// Get the font ID for a font descriptor.
     fn font_id(&self, descriptor: &Font) -> Result<FontId>;
+
     /// Prewarm any system font caches needed to shape text.
     fn prewarm_fonts(&self, _font_ids: &[FontId]) {}
+
     /// Get metrics for a font.
     fn font_metrics(&self, font_id: FontId) -> FontMetrics;
+
     /// Get typographic bounds for a glyph.
     fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>>;
+
     /// Get the advance width for a glyph.
     fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>>;
+
     /// Get the glyph ID for a character.
     fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId>;
+
     /// Rasterize a glyph, including its atlas placement and pixels.
     fn rasterize_glyph(&self, params: &RenderGlyphParams) -> Result<RasterizedGlyph>;
+
     /// Normalizes the render settings that affect cached glyph pixels.
     fn prepare_raster_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
         PreparedRasterStyle::independent(request.requested_mode)
     }
+
     /// Layout one complete text document, including hard breaks and optional wrapping.
     fn layout_text(&self, request: TextLayoutRequest<'_>) -> LineLayout;
+
     /// Layout one complete text document containing atomic element boxes.
     fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> InlineLayout;
+
     /// Returns the recommended text rendering mode for the given font and size.
     fn recommended_rendering_mode(
         &self,
@@ -1254,6 +1419,7 @@ mod tests {
         TextRenderingMode, TextSelectionKind, VisualDirection, VisualLine, align_inline_boxes,
         point, px, size,
     };
+
     use anyhow::Result;
     use std::{borrow::Cow, ops::Range, sync::Arc};
 
@@ -1265,8 +1431,10 @@ mod tests {
     struct TestPlatformTextLayout {
         /// Source text.
         text: String,
+
         /// Ordered (byte index, x position) caret stops.
         stops: Vec<(usize, Pixels)>,
+
         /// Size of the single visual line.
         size: Size<Pixels>,
     }
@@ -1305,6 +1473,7 @@ mod tests {
                 .caret_from_pixel_point(pixel_point, line_height)
                 .unwrap_or_else(|caret| caret)
                 .index;
+
             self.stops
                 .windows(2)
                 .find_map(|stops| {
@@ -1332,6 +1501,7 @@ mod tests {
                         .total_cmp(&(f32::from(*right) - f32::from(pixel_point.x)).abs())
                 })
                 .map_or(0, |(index, _)| *index);
+
             let caret = self.normalized_caret(CaretPosition {
                 index,
                 affinity: CaretAffinity::Downstream,
@@ -1364,6 +1534,7 @@ mod tests {
 
         fn normalized_caret(&self, caret: CaretPosition) -> CaretPosition {
             let (index, _position) = self.caret_stop(caret.index);
+
             let affinity = if index == self.len() && index != 0 {
                 CaretAffinity::Upstream
             } else {
@@ -1379,16 +1550,19 @@ mod tests {
             direction: VisualDirection,
         ) -> Option<CaretPosition> {
             let caret = self.normalized_caret(caret);
+
             let position = self
                 .stops
                 .iter()
                 .position(|(index, _)| *index == caret.index)?;
+
             let position = match direction {
                 VisualDirection::Left => position.checked_sub(1)?,
                 VisualDirection::Right => position.checked_add(1)?,
             };
 
             let index = self.stops.get(position)?.0;
+
             Some(self.normalized_caret(CaretPosition {
                 index,
                 affinity: CaretAffinity::Downstream,
@@ -1445,29 +1619,35 @@ mod tests {
                         .unwrap_or(caret)
                         .index
                 }
+
                 (Right, Cluster) => {
                     self.adjacent_visual_caret(caret, VisualDirection::Right)
                         .unwrap_or(caret)
                         .index
                 }
+
                 (Left, Word) => {
                     let prefix = &self.text[..caret.index.min(self.text.len())];
                     let trimmed = prefix.trim_end_matches(char::is_whitespace);
+
                     trimmed.rfind(char::is_whitespace).map_or(0, |index| {
                         index + trimmed[index..].chars().next().unwrap().len_utf8()
                     })
                 }
+
                 (Right, Word) => {
                     let start = caret.index.min(self.text.len());
                     let suffix = &self.text[start..];
                     let word_end = suffix.find(char::is_whitespace).unwrap_or(suffix.len());
                     let rest = &suffix[word_end..];
+
                     start
                         + word_end
                         + rest
                             .find(|character: char| !character.is_whitespace())
                             .unwrap_or(rest.len())
                 }
+
                 // This test layout has one visual and hard line. Without wrapping or
                 // additional hard lines, these movements resolve to the document endpoints.
                 (Up | Start, VisualLine) | (Start, HardLine | Document) => 0,
@@ -1507,14 +1687,17 @@ mod tests {
                 .unwrap_or_else(|caret| caret)
                 .index
                 .min(self.text.len());
+
             let start = self.text[..index]
                 .rfind(char::is_whitespace)
                 .map_or(0, |offset| {
                     offset + self.text[offset..].chars().next().unwrap().len_utf8()
                 });
+
             let end = self.text[index..]
                 .find(char::is_whitespace)
                 .map_or(self.text.len(), |offset| index + offset);
+
             start..end
         }
     }
@@ -1528,6 +1711,7 @@ mod tests {
 
         fn em_width(&self, font_size: Pixels) -> Pixels {
             let metrics = self.font_metrics(FontId(0));
+
             let advance = self
                 .advance(FontId(0), self.glyph_for_char(FontId(0), 'm').unwrap())
                 .unwrap();
@@ -1542,6 +1726,7 @@ mod tests {
         baseline: Pixels,
     ) -> Vec<PositionedInlineBox> {
         let mut preceding_width = Pixels::ZERO;
+
         request
             .boxes
             .iter()
@@ -1551,6 +1736,7 @@ mod tests {
                         .chars()
                         .map(|character| character.len_utf16() as f32)
                         .sum::<f32>();
+
                 let positioned = PositionedInlineBox {
                     id: inline_box.id,
                     line_index: 0,
@@ -1564,6 +1750,7 @@ mod tests {
                 };
 
                 preceding_width += inline_box.size.width;
+
                 positioned
             })
             .collect()
@@ -1591,6 +1778,7 @@ mod tests {
             .iter()
             .map(|inline_box| inline_box.size.width)
             .sum::<Pixels>();
+
         for fragment in &mut layout.paint_fragments {
             fragment.x_range.end += box_width;
         }
@@ -1674,6 +1862,7 @@ mod tests {
 
             for (idx, character) in text.char_indices() {
                 let glyph_id = GlyphId(character.len_utf16() as u32);
+
                 glyphs.push(ShapedGlyph {
                     id: glyph_id,
                     position: point(position, Pixels::ZERO),
@@ -1681,33 +1870,40 @@ mod tests {
                 });
 
                 position += em_width * glyph_id.0 as f32;
+
                 stops.push((idx + character.len_utf8(), position));
             }
 
             let mut tracking = px(0.);
             let mut tracking_covered = 0usize;
+
             for run in shaping_runs {
                 let start = tracking_covered.min(text.len());
                 let end = start.saturating_add(run.len).min(text.len()).max(start);
                 let slice = text.get(start..end).unwrap_or("");
                 let n = slice.chars().count();
+
                 if n > 1 {
                     if let Some(spacing) = run.letter_spacing {
                         tracking += spacing * (n - 1) as f32;
                     }
                 }
+
                 tracking_covered = end;
             }
 
             let direction = match request.options.direction {
                 crate::ParagraphDirection::LeftToRight => ResolvedDirection::LeftToRight,
                 crate::ParagraphDirection::RightToLeft => ResolvedDirection::RightToLeft,
+
                 crate::ParagraphDirection::Auto => {
                     ResolvedDirection::from_first_strong(text).unwrap_or_default()
                 }
             };
+
             let advance = position + tracking;
             let alignment_width = request.options.alignment_width.unwrap_or(advance);
+
             let offset = match request.options.text_align {
                 TextAlign::Start if direction.is_rtl() => alignment_width - advance,
                 TextAlign::Start | TextAlign::Left => Pixels::ZERO,
@@ -1729,6 +1925,7 @@ mod tests {
             }]
             .into_iter()
             .collect();
+
             let paint_fragments = (!glyphs.is_empty())
                 .then(|| PaintFragment {
                     source_run: 0,
@@ -1744,6 +1941,7 @@ mod tests {
                 })
                 .into_iter()
                 .collect();
+
             LineLayout {
                 font_size,
                 width: advance,
@@ -1769,19 +1967,25 @@ mod tests {
             });
 
             let em_width = self.em_width(request.font_size);
+
             let baseline = request
                 .boxes
                 .iter()
                 .map(|inline_box| inline_box.size.height)
                 .fold(request.line_height, Pixels::max);
+
             let positioned_boxes = position_test_inline_boxes(request, em_width, baseline);
+
             add_test_inline_box_advances(&mut layout, request);
+
             let line_width = request
                 .options
                 .wrap_width
                 .unwrap_or(Pixels::MAX)
                 .min(layout.width);
+
             let line_offset = layout.visual_lines[0].offset;
+
             let mut inline = InlineLayout {
                 size: size(layout.width, baseline),
                 layout: Arc::new(layout),
@@ -1806,6 +2010,7 @@ mod tests {
                 request.text_metrics,
                 request.line_height,
             );
+
             inline
         }
 
@@ -1882,6 +2087,7 @@ impl AtlasKey {
                 RasterizedGlyphFormat::BgraSubpixelMask => AtlasTextureKind::Subpixel,
                 RasterizedGlyphFormat::BgraColor => AtlasTextureKind::Polychrome,
             },
+
             AtlasKey::Svg(_) => AtlasTextureKind::Monochrome,
             AtlasKey::Image(_) => AtlasTextureKind::Polychrome,
         }
@@ -1928,6 +2134,7 @@ impl GlyphAtlasCache {
             bounds: glyph.bounds,
             format: glyph.format,
         };
+
         self.entries.insert(params.clone(), entry);
 
         entry
@@ -1959,12 +2166,14 @@ pub trait PlatformAtlas {
         key: &AtlasKey,
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>>;
+
     /// On a cache miss, `build` returns a validated glyph for atlas insertion.
     fn get_or_insert_glyph_with(
         &self,
         params: &RenderGlyphParams,
         build: &mut dyn FnMut() -> Result<ValidatedRasterizedGlyph>,
     ) -> Result<GlyphAtlasEntry>;
+
     fn remove(&self, key: &AtlasKey);
 
     #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
@@ -2015,10 +2224,13 @@ impl<T> AtlasTextureList<T> {
 pub struct AtlasTile {
     /// The texture this tile belongs to.
     pub texture_id: AtlasTextureId,
+
     /// The unique ID of this tile within its texture.
     pub tile_id: TileId,
+
     /// Padding around the tile content in pixels.
     pub padding: u32,
+
     /// The bounds of this tile within the texture.
     pub bounds: Bounds<DevicePixels>,
 }
@@ -2030,6 +2242,7 @@ pub struct AtlasTextureId {
     // We use u32 instead of usize for Metal Shader Language compatibility
     /// The index of this texture in the atlas.
     pub index: u32,
+
     /// The kind of content stored in this texture.
     pub kind: AtlasTextureKind,
 }
@@ -2058,19 +2271,23 @@ impl AtlasTextureKind {
             size.width.0 > 0 && size.height.0 > 0,
             "{self:?} atlas upload requires positive dimensions, got {size:?}"
         );
+
         let channels = match self {
             Self::Monochrome => 1,
             Self::Polychrome | Self::Subpixel => 4,
         };
+
         let expected = (size.width.0 as usize)
             .checked_mul(size.height.0 as usize)
             .and_then(|pixels| pixels.checked_mul(channels))
             .ok_or_else(|| anyhow::anyhow!("atlas upload byte count overflow for {size:?}"))?;
+
         anyhow::ensure!(
             bytes.len() == expected,
             "{self:?} atlas upload for {size:?} requires {expected} bytes, got {}",
             bytes.len()
         );
+
         Ok(())
     }
 }
@@ -2217,17 +2434,21 @@ impl PlatformInputHandler {
             // the Y coordinate means we crossed into the previous visual line, so
             // the line start is one position after the break point.
             let caret = selection.range.end;
+
             if let Some(caret_bounds) = bounds_for_range(caret..caret) {
                 for i in (marked_range.start..caret).rev() {
                     if let Some(b) = bounds_for_range(i..i) {
                         if (b.origin.y - caret_bounds.origin.y).abs() > px(0.1) {
                             line_start = i + 1;
+
                             break;
                         }
                     }
                 }
             }
+
             bounds_for_range(line_start..line_start)
+
         } else {
             // No active composition — use the selection endpoint.
             let offset = if selection.reversed {
@@ -2235,6 +2456,7 @@ impl PlatformInputHandler {
             } else {
                 selection.range.end
             };
+
             bounds_for_range(offset..offset)
         }
     }
@@ -2242,6 +2464,7 @@ impl PlatformInputHandler {
     pub fn selected_bounds(&mut self, window: &mut Window, cx: &mut App) -> Option<Bounds<Pixels>> {
         let marked_range = self.handler.marked_text_range(window, cx);
         let selection = self.handler.selected_text_range(true, window, cx)?;
+
         Self::compute_ime_candidate_bounds(marked_range, &selection, |range| {
             self.handler.bounds_for_range(range, window, cx)
         })
@@ -2250,6 +2473,7 @@ impl PlatformInputHandler {
     pub fn ime_candidate_bounds(&mut self) -> Option<Bounds<Pixels>> {
         let marked_range = self.marked_text_range();
         let selection = self.selected_text_range(true)?;
+
         Self::compute_ime_candidate_bounds(marked_range, &selection, |range| {
             self.bounds_for_range(range)
         })
@@ -2341,6 +2565,7 @@ pub struct UTF16Selection {
     /// The range of text in the document this selection corresponds to
     /// in UTF16 characters.
     pub range: Range<usize>,
+
     /// Whether the head of this selection is at the start (true), or end (false)
     /// of the range
     pub reversed: bool,
@@ -2547,10 +2772,13 @@ pub trait InputHandler: 'static {
 pub struct TextInputConfiguration {
     /// Whether the platform may automatically correct entered text.
     pub autocorrect: bool,
+
     /// How software keyboards automatically capitalize entered text.
     pub autocapitalize: Autocapitalize,
+
     /// Whether software keyboards may offer word suggestions and spellcheck.
     pub suggestions: bool,
+
     /// The action advertised on a software keyboard's confirm ("enter") key.
     pub input_action: TextInputAction,
 }
@@ -2854,18 +3082,22 @@ impl WindowOptions {
         {
             self.macos_window_background.into()
         }
+
         #[cfg(target_os = "windows")]
         {
             self.windows_window_background.into()
         }
+
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             self.linux_window_background.into()
         }
+
         #[cfg(target_family = "wasm")]
         {
             self.web_window_background.into()
         }
+
         #[cfg(not(any(
             target_os = "macos",
             target_os = "windows",
@@ -3145,10 +3377,12 @@ mod platform_window_background_tests {
     #[test]
     fn macos_backgrounds_map_to_appearances() {
         use super::MacosWindowBackground;
+
         assert_eq!(
             WindowBackgroundAppearance::from(MacosWindowBackground::Opaque),
             WindowBackgroundAppearance::Opaque
         );
+
         assert_eq!(
             WindowBackgroundAppearance::from(MacosWindowBackground::Blurred),
             WindowBackgroundAppearance::Blurred
@@ -3159,10 +3393,12 @@ mod platform_window_background_tests {
     #[test]
     fn windows_backgrounds_map_to_appearances() {
         use super::WindowsWindowBackground;
+
         assert_eq!(
             WindowBackgroundAppearance::from(WindowsWindowBackground::MicaAltBackdrop),
             WindowBackgroundAppearance::MicaAltBackdrop
         );
+
         assert_eq!(
             WindowBackgroundAppearance::from(WindowsWindowBackground::default()),
             WindowBackgroundAppearance::Opaque
@@ -3173,6 +3409,7 @@ mod platform_window_background_tests {
     #[test]
     fn linux_backgrounds_map_to_appearances() {
         use super::LinuxWindowBackground;
+
         assert_eq!(
             WindowBackgroundAppearance::from(LinuxWindowBackground::Transparent),
             WindowBackgroundAppearance::Transparent
@@ -3183,6 +3420,7 @@ mod platform_window_background_tests {
     #[test]
     fn web_backgrounds_map_to_appearances() {
         use super::WebWindowBackground;
+
         assert_eq!(
             WindowBackgroundAppearance::from(WebWindowBackground::Opaque),
             WindowBackgroundAppearance::Opaque
@@ -3207,10 +3445,13 @@ pub enum TextRenderingMode {
 pub struct PathPromptOptions {
     /// Should the prompt allow files to be selected?
     pub files: bool,
+
     /// Should the prompt allow directories to be selected?
     pub directories: bool,
+
     /// Should the prompt allow multiple files to be selected?
     pub multiple: bool,
+
     /// The prompt to show to a user when selecting a path
     pub prompt: Option<SharedString>,
 }
@@ -3410,9 +3651,11 @@ impl std::fmt::Display for ClipboardReadError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unavailable => formatter.write_str("the clipboard is unavailable"),
+
             Self::Denied(message) => {
                 write!(formatter, "clipboard access was denied: {message}")
             }
+
             Self::UnsupportedContent => {
                 formatter.write_str("the clipboard contents are unsupported")
             }
@@ -3483,6 +3726,7 @@ impl ClipboardItem {
                 if let ClipboardEntry::ExternalPaths(paths) = entry {
                     for path in &paths.0 {
                         use std::fmt::Write as _;
+
                         _ = write!(answer, "{}", path.display());
                     }
                 }
@@ -3503,6 +3747,7 @@ impl ClipboardItem {
             Some(ClipboardEntry::String(clipboard_string)) if self.entries.len() == 1 => {
                 clipboard_string.metadata.as_ref()
             }
+
             _ => None,
         }
     }
@@ -3616,6 +3861,7 @@ impl ImageFormat {
     /// Returns the ImageFormat for the given mime type, including known aliases.
     pub fn from_mime_type(mime_type: &str) -> Option<Self> {
         use strum::IntoEnumIterator;
+
         Self::iter()
             .find(|format| format.mime_type() == mime_type)
             .or_else(|| Self::from_mime_type_alias(mime_type))
@@ -3638,8 +3884,10 @@ impl ImageFormat {
 pub struct Image {
     /// The image format the bytes represent (e.g. PNG)
     pub format: ImageFormat,
+
     /// The raw image bytes
     pub bytes: Vec<u8>,
+
     /// The unique ID for the image
     pub id: u64,
 }
@@ -3651,6 +3899,7 @@ pub(crate) fn decode_static_image(
     let decoder = image::ImageReader::with_format(Cursor::new(bytes), format)
         .into_decoder()
         .context("creating image decoder")?;
+
     decode_static_image_from_decoder(decoder)
 }
 
@@ -3660,10 +3909,13 @@ pub(crate) fn decode_static_image_from_decoder(
     let orientation = decoder
         .orientation()
         .context("reading decoder's orientation")?;
+
     let mut image = DynamicImage::from_decoder(decoder).context("decoding image")?;
+
     image.apply_orientation(orientation);
 
     let mut data = image.into_rgba8();
+
     for pixel in data.chunks_exact_mut(4) {
         pixel.swap(0, 2);
     }
@@ -3745,8 +3997,10 @@ impl Image {
                             for pixel in frame.buffer_mut().chunks_exact_mut(4) {
                                 pixel.swap(0, 2);
                             }
+
                             frames.push(frame);
                         }
+
                         Err(err) => {
                             log::debug!("Skipping GIF frame due to decode error: {err}");
                         }
@@ -3759,17 +4013,20 @@ impl Image {
 
                 frames
             }
+
             ImageFormat::Png => decode_static_image(&self.bytes, image::ImageFormat::Png)?,
             ImageFormat::Jpeg => decode_static_image(&self.bytes, image::ImageFormat::Jpeg)?,
             ImageFormat::Webp => decode_static_image(&self.bytes, image::ImageFormat::WebP)?,
             ImageFormat::Bmp => decode_static_image(&self.bytes, image::ImageFormat::Bmp)?,
             ImageFormat::Tiff => decode_static_image(&self.bytes, image::ImageFormat::Tiff)?,
             ImageFormat::Ico => decode_static_image(&self.bytes, image::ImageFormat::Ico)?,
+
             ImageFormat::Svg => {
                 return svg_renderer
                     .render_single_frame(&self.bytes, 1.0)
                     .map_err(Into::into);
             }
+
             ImageFormat::Pnm => decode_static_image(&self.bytes, image::ImageFormat::Pnm)?,
         };
 
@@ -3792,6 +4049,7 @@ impl Image {
 pub struct ClipboardString {
     /// The text content.
     pub text: String,
+
     /// Optional metadata associated with this clipboard string.
     pub metadata: Option<String>,
 }
@@ -3809,6 +4067,7 @@ impl ClipboardString {
     /// after serializing it as JSON.
     pub fn with_json_metadata<T: Serialize>(mut self, metadata: T) -> Self {
         self.metadata = Some(serde_json::to_string(&metadata).unwrap());
+
         self
     }
 
@@ -3836,6 +4095,7 @@ impl ClipboardString {
     /// Compute a hash of the given text for clipboard change detection.
     pub fn text_hash(text: &str) -> u64 {
         let mut hasher = SeaHasher::new();
+
         text.hash(&mut hasher);
         hasher.finish()
     }
@@ -3871,6 +4131,7 @@ mod image_tests {
         assert_eq!(render_image.size(0), size(16.into(), 32.into()));
 
         let bytes = render_image.as_bytes(0).unwrap();
+
         assert_eq!(&bytes[..4], &[255, 255, 255, 255]);
         assert_eq!(&bytes[(16 * 32 - 1) * 4..], &[0, 0, 0, 255]);
     }
@@ -3888,6 +4149,7 @@ mod image_tests {
         let render_image = image
             .to_image_data(SvgRenderer::new(Arc::new(AssetRegistry::default())))
             .unwrap();
+
         let bytes = render_image.as_bytes(0).unwrap();
 
         for pixel in bytes.chunks_exact(4) {
@@ -3904,6 +4166,7 @@ mod window_button_layout_tests {
     #[test]
     fn test_window_button_layout_parse_standard() {
         let layout = WindowButtonLayout::parse("close,minimize:maximize").unwrap();
+
         assert_eq!(
             layout.left,
             [
@@ -3912,13 +4175,16 @@ mod window_button_layout_tests {
                 None
             ]
         );
+
         assert_eq!(layout.right, [Some(WindowButton::Maximize), None, None]);
     }
 
     #[test]
     fn test_window_button_layout_parse_right_only() {
         let layout = WindowButtonLayout::parse("minimize,maximize,close").unwrap();
+
         assert_eq!(layout.left, [None, None, None]);
+
         assert_eq!(
             layout.right,
             [
@@ -3932,6 +4198,7 @@ mod window_button_layout_tests {
     #[test]
     fn test_window_button_layout_parse_left_only() {
         let layout = WindowButtonLayout::parse("close,minimize,maximize:").unwrap();
+
         assert_eq!(
             layout.left,
             [
@@ -3940,12 +4207,14 @@ mod window_button_layout_tests {
                 Some(WindowButton::Maximize)
             ]
         );
+
         assert_eq!(layout.right, [None, None, None]);
     }
 
     #[test]
     fn test_window_button_layout_parse_with_whitespace() {
         let layout = WindowButtonLayout::parse(" close , minimize : maximize ").unwrap();
+
         assert_eq!(
             layout.left,
             [
@@ -3954,12 +4223,14 @@ mod window_button_layout_tests {
                 None
             ]
         );
+
         assert_eq!(layout.right, [Some(WindowButton::Maximize), None, None]);
     }
 
     #[test]
     fn test_window_button_layout_parse_empty() {
         let layout = WindowButtonLayout::parse("").unwrap();
+
         assert_eq!(layout.left, [None, None, None]);
         assert_eq!(layout.right, [None, None, None]);
     }
@@ -3967,6 +4238,7 @@ mod window_button_layout_tests {
     #[test]
     fn test_window_button_layout_parse_intentionally_empty() {
         let layout = WindowButtonLayout::parse(":").unwrap();
+
         assert_eq!(layout.left, [None, None, None]);
         assert_eq!(layout.right, [None, None, None]);
     }
@@ -3974,6 +4246,7 @@ mod window_button_layout_tests {
     #[test]
     fn test_window_button_layout_parse_invalid_buttons() {
         let layout = WindowButtonLayout::parse("close,invalid,minimize:maximize,foo").unwrap();
+
         assert_eq!(
             layout.left,
             [
@@ -3982,12 +4255,14 @@ mod window_button_layout_tests {
                 None
             ]
         );
+
         assert_eq!(layout.right, [Some(WindowButton::Maximize), None, None]);
     }
 
     #[test]
     fn test_window_button_layout_parse_deduplicates_same_side_buttons() {
         let layout = WindowButtonLayout::parse("close,close,minimize").unwrap();
+
         assert_eq!(
             layout.right,
             [
@@ -3996,13 +4271,16 @@ mod window_button_layout_tests {
                 None
             ]
         );
+
         assert_eq!(layout.format(), ":close,minimize");
     }
 
     #[test]
     fn test_window_button_layout_parse_deduplicates_buttons_across_sides() {
         let layout = WindowButtonLayout::parse("close:maximize,close,minimize").unwrap();
+
         assert_eq!(layout.left, [Some(WindowButton::Close), None, None]);
+
         assert_eq!(
             layout.right,
             [
@@ -4019,7 +4297,9 @@ mod window_button_layout_tests {
             .flatten()
             .map(WindowButton::id)
             .collect();
+
         let unique_button_ids = button_ids.iter().copied().collect::<HashSet<_>>();
+
         assert_eq!(unique_button_ids.len(), button_ids.len());
         assert_eq!(layout.format(), "close:maximize,minimize");
     }
@@ -4027,6 +4307,7 @@ mod window_button_layout_tests {
     #[test]
     fn test_window_button_layout_parse_gnome_style() {
         let layout = WindowButtonLayout::parse("close").unwrap();
+
         assert_eq!(layout.left, [None, None, None]);
         assert_eq!(layout.right, [Some(WindowButton::Close), None, None]);
     }
@@ -4034,6 +4315,7 @@ mod window_button_layout_tests {
     #[test]
     fn test_window_button_layout_parse_elementary_style() {
         let layout = WindowButtonLayout::parse("close:maximize").unwrap();
+
         assert_eq!(layout.left, [Some(WindowButton::Close), None, None]);
         assert_eq!(layout.right, [Some(WindowButton::Maximize), None, None]);
     }
@@ -4051,6 +4333,7 @@ mod window_button_layout_tests {
 
         for case in cases {
             let layout = WindowButtonLayout::parse(case).unwrap();
+
             assert_eq!(layout.format(), case, "Round-trip failed for: {}", case);
         }
     }
@@ -4058,7 +4341,9 @@ mod window_button_layout_tests {
     #[test]
     fn test_window_button_layout_linux_default() {
         let layout = WindowButtonLayout::linux_default();
+
         assert_eq!(layout.left, [None, None, None]);
+
         assert_eq!(
             layout.right,
             [
@@ -4069,6 +4354,7 @@ mod window_button_layout_tests {
         );
 
         let round_tripped = WindowButtonLayout::parse(&layout.format()).unwrap();
+
         assert_eq!(round_tripped, layout);
     }
 

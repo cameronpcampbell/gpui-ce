@@ -23,10 +23,12 @@ mod custom_gpu {
 
     #[cfg(target_family = "wasm")]
     use gpui::ApplicationHandle;
+
     use gpui::{
         App, AppContext, Bounds, Context, ParentElement, Render, Styled, TitlebarOptions, Window,
         WindowBounds, WindowOptions, div, px, size,
     };
+
     use gpui_ce_wgpu::{WgpuContextHandle, WgpuRenderTarget};
     use gpui_platform::application;
     use wgpu::util::DeviceExt;
@@ -142,10 +144,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         fn ensure_gpu_resources(&mut self, window: &Window, context: &WgpuContextHandle) {
             let viewport = window.viewport_size();
             let scale_factor = window.scale_factor();
+
             let target_size = size(
                 gpui::DevicePixels((f32::from(viewport.width) * scale_factor).round() as i32),
                 gpui::DevicePixels((f32::from(viewport.height) * scale_factor).round() as i32),
             );
+
             let target_size = size(
                 target_size.width.max(gpui::DevicePixels(1)),
                 target_size.height.max(gpui::DevicePixels(1)),
@@ -164,16 +168,19 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             }
 
             let device = context.device();
+
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("custom-gpu-shader"),
                 source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SHADER)),
             });
+
             let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("custom-gpu-uniforms"),
                 size: std::mem::size_of::<Uniforms>() as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
+
             let bind_group_layout =
                 device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some("custom-gpu-bind-group-layout"),
@@ -188,6 +195,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                         count: None,
                     }],
                 });
+
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("custom-gpu-bind-group"),
                 layout: &bind_group_layout,
@@ -196,11 +204,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                     resource: uniform_buffer.as_entire_binding(),
                 }],
             });
+
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("custom-gpu-pipeline-layout"),
                 bind_group_layouts: &[Some(&bind_group_layout)],
                 immediate_size: 0,
             });
+
             let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("custom-gpu-pipeline"),
                 layout: Some(&pipeline_layout),
@@ -241,6 +251,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 multiview_mask: None,
                 cache: None,
             });
+
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("custom-gpu-vertices"),
                 contents: bytemuck::cast_slice(VERTICES),
@@ -256,8 +267,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         fn render_gpu(&mut self, window: &mut Window) {
             let Some(context) = WgpuContextHandle::from_window(window) else {
                 self.clear_gpu_resources();
+
                 return;
             };
+
             if self
                 .context
                 .as_ref()
@@ -265,20 +278,26 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             {
                 self.clear_gpu_resources();
             }
+
             if context.device_lost() {
                 self.clear_gpu_resources();
+
                 return;
             }
+
             self.context = Some(context.clone());
 
             self.ensure_gpu_resources(window, &context);
+
             self.time += 0.02;
+
             let target = self.target.as_ref().unwrap();
             let uniform_buffer = self.uniform_buffer.as_ref().unwrap();
             let pipeline = self.pipeline.as_ref().unwrap();
             let bind_group = self.bind_group.as_ref().unwrap();
             let vertex_buffer = self.vertex_buffer.as_ref().unwrap();
             let aspect = target.size().width.0 as f32 / target.size().height.0 as f32;
+
             context.queue().write_buffer(
                 uniform_buffer,
                 0,
@@ -295,6 +314,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("custom-gpu-encoder"),
                     });
+
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("custom-gpu-pass"),
@@ -310,11 +330,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                     depth_stencil_attachment: None,
                     ..Default::default()
                 });
+
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, bind_group, &[]);
                 pass.set_vertex_buffer(0, vertex_buffer.slice(..));
                 pass.draw(0..VERTICES.len() as u32, 0..1);
             }
+
             context.queue().submit([encoder.finish()]);
         }
     }
@@ -327,16 +349,20 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         ) -> impl gpui::IntoElement {
             window.request_animation_frame();
             self.render_gpu(window);
+
             let mut root = div().size_full();
+
             if let Some(target) = self.target.as_ref() {
                 root = root.child(target.surface());
             }
+
             root
         }
     }
 
     pub fn run() {
         env_logger::init();
+
         let application_handle = application().run(|cx: &mut App| {
             cx.open_window(
                 WindowOptions::new()
@@ -352,11 +378,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 |window, cx| cx.new(|cx| CustomGpuControl::new(window, cx)),
             )
             .unwrap();
+
             cx.activate(true);
         });
 
         #[cfg(target_family = "wasm")]
         APPLICATION.set(Some(application_handle));
+
         #[cfg(not(target_family = "wasm"))]
         drop(application_handle);
     }

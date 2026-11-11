@@ -3,6 +3,7 @@ use gpui_util::ResultExt;
 use smallvec::SmallVec;
 
 use image::{Delay, EncodableLayout, Frame};
+
 use std::{
     borrow::Cow,
     collections::BTreeMap,
@@ -32,10 +33,13 @@ pub trait AssetSource: 'static + Send + Sync {
     /// Output can be provided directly to [`AssetRegistry::extend`].
     fn iter_preloaded(&self) -> Box<dyn Iterator<Item = (SharedString, AssetEntry)> + '_> {
         let paths = self.list("").unwrap_or_default();
+
         let iter = paths.into_iter().filter_map(move |path| {
             let entry = AssetEntry::from(self.load(&path).ok().flatten()?);
+
             Some((path, entry))
         });
+
         Box::new(iter)
     }
 
@@ -44,16 +48,21 @@ pub trait AssetSource: 'static + Send + Sync {
     /// Output can be provided directly to [`AssetRegistry::extend`].
     fn iter_ondemand(self: Arc<Self>) -> Box<dyn Iterator<Item = (SharedString, AssetEntry)>> {
         use gpui_util::ResultExt;
+
         let paths = self.list("").unwrap_or_default();
+
         let iter = paths.into_iter().map(move |path| {
             // constructing OnDemand for loading assets from shared:Arc only when they are requested
             let entry = AssetEntry::from({
                 let source = self.clone();
                 let path = path.clone();
+
                 move || source.load(path.as_str()).log_err().flatten()
             });
+
             (path, entry)
         });
+
         Box::new(iter)
     }
 }
@@ -72,6 +81,7 @@ impl AssetSource for () {
 pub type AssetData = Cow<'static, [u8]>;
 /// A thread-safe callback to load an asset, possibly from disk.
 pub type FnAssetLoader = Arc<dyn Fn() -> Option<AssetData> + 'static + Send + Sync>;
+
 /// The entry stored in the [`AssetRegistry`].
 pub enum AssetEntry {
     /// The asset is pre-loaded. It may be stored staticlly/embedded, or has already been loaded from disk.
@@ -79,11 +89,13 @@ pub enum AssetEntry {
     /// The entry should be loaded on demand.
     OnDemand(FnAssetLoader),
 }
+
 impl From<AssetData> for AssetEntry {
     fn from(value: AssetData) -> Self {
         Self::PreLoaded(value)
     }
 }
+
 impl<F> From<F> for AssetEntry
 where
     F: Fn() -> Option<AssetData> + 'static + Send + Sync,
@@ -109,6 +121,7 @@ pub struct AssetRegistry {
 impl<T: AssetSource + 'static> From<T> for AssetRegistry {
     fn from(value: T) -> Self {
         let shared: Arc<dyn AssetSource> = Arc::new(value);
+
         Self::from(shared)
     }
 }
@@ -119,6 +132,7 @@ impl From<Arc<dyn AssetSource>> for AssetRegistry {
     fn from(value: Arc<dyn AssetSource>) -> Self {
         let mut assets = Self::default();
         let _ = assets.extend(value.iter_ondemand());
+
         assets
     }
 }
@@ -132,6 +146,7 @@ where
         iter.into_iter()
             .fold(Self::default(), |mut assets, (key, value)| {
                 assets.insert(key.as_ref(), value).log_err();
+
                 assets
             })
     }
@@ -146,10 +161,13 @@ impl AssetRegistry {
         asset: impl Into<AssetEntry>,
     ) -> Result<(), DuplicateAssetPath> {
         let path = path.into();
+
         if self.entries.contains_key(&path) {
             return Err(DuplicateAssetPath(path));
         }
+
         self.entries.insert(path, asset.into());
+
         Ok(())
     }
 
@@ -178,16 +196,21 @@ impl AssetRegistry {
         EntryType: Into<AssetEntry>,
     {
         let mut result = Ok(());
+
         for (path_key, into_entry) in into_iter.into_iter() {
             if let Err(err) = self.insert(path_key.as_ref(), into_entry.into()) {
                 gpui_util::log_err(&err);
+
                 result = Err({
                     let mut errs: Vec<DuplicateAssetPath> = result.err().unwrap_or_default();
+
                     errs.push(err);
+
                     errs
                 });
             }
         }
+
         result
     }
 
@@ -200,6 +223,7 @@ impl AssetRegistry {
     -> impl Iterator<Item = (Cow<'static, str>, AssetEntry)> + 'static {
         T::iter().filter_map(|path| {
             let file = T::get(path.as_ref())?;
+
             Some((path, AssetEntry::PreLoaded(file.data)))
         })
     }
@@ -220,8 +244,10 @@ pub struct RenderImageParams {
 pub struct RenderImage {
     /// The ID associated with this image
     pub id: ImageId,
+
     /// The scale factor of this image on render.
     pub(crate) scale_factor: f32,
+
     data: SmallVec<[Frame; 1]>,
 }
 
@@ -258,6 +284,7 @@ impl RenderImage {
             .get(frame_index)
             .map(|frame| {
                 let (width, height) = frame.buffer().dimensions();
+
                 size(width.into(), height.into())
             })
             .unwrap_or_default()
@@ -300,11 +327,13 @@ mod tests {
     #[test]
     fn empty_render_image_does_not_panic() {
         let image = RenderImage::new(SmallVec::new());
+
         assert_eq!(image.frame_count(), 0);
         assert_eq!(image.size(0), Size::default());
         assert_eq!(image.as_bytes(0), None);
         assert_eq!(image.render_size(0), Size::default());
         assert_eq!(image.delay(0), Delay::from_numer_denom_ms(100, 1));
+
         let _ = format!("{image:?}");
     }
 
@@ -320,11 +349,13 @@ mod tests {
     fn test_load_from(registry: &AssetRegistry) {
         for (key, value) in example_assets() {
             let loaded = registry.load(key).map(|cow| cow.to_vec());
+
             assert_eq!(loaded, Some(value.to_vec()));
         }
     }
 
     struct StubAssetSource;
+
     impl AssetSource for StubAssetSource {
         fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
             for (key, data) in example_assets() {
@@ -332,6 +363,7 @@ mod tests {
                     return Ok(Some(data));
                 }
             }
+
             unimplemented!()
         }
 
@@ -346,6 +378,7 @@ mod tests {
     #[test]
     fn test_from_assetsource() {
         let assets = AssetRegistry::from(StubAssetSource);
+
         test_load_from(&assets);
     }
 
@@ -353,12 +386,14 @@ mod tests {
     fn test_from_arc_assetsource() {
         let arc: Arc<dyn AssetSource> = Arc::new(StubAssetSource);
         let assets = AssetRegistry::from(arc);
+
         test_load_from(&assets);
     }
 
     #[test]
     fn test_fromiter_assetdata() {
         let assets = AssetRegistry::from_iter(example_assets());
+
         test_load_from(&assets);
     }
 
@@ -373,7 +408,9 @@ mod tests {
                     AssetEntry::OnDemand(Arc::new(|| Some(AssetData::Owned(vec![6u8])))),
                 ))),
         );
+
         test_load_from(&assets);
+
         assert_eq!(
             assets.load("asset6").map(|cow| cow.to_vec()),
             Some(vec![6u8])
@@ -383,22 +420,28 @@ mod tests {
     #[test]
     fn test_insert() {
         let mut assets = AssetRegistry::default();
+
         for (key, value) in example_assets() {
             let result = assets.insert(key, value);
+
             assert!(result.is_ok());
         }
+
         test_load_from(&assets);
     }
 
     #[test]
     fn test_extend() {
         let mut assets = AssetRegistry::default();
+
         let result = assets.extend(
             example_assets()
                 .into_iter()
                 .map(|(key, value)| (key, AssetEntry::PreLoaded(value))),
         );
+
         assert!(result.is_ok());
+
         test_load_from(&assets);
     }
 
@@ -406,7 +449,9 @@ mod tests {
     fn test_extend_assetsource_preloaded() {
         let mut assets = AssetRegistry::default();
         let result = assets.extend(StubAssetSource.iter_preloaded());
+
         assert!(result.is_ok());
+
         test_load_from(&assets);
     }
 
@@ -414,7 +459,9 @@ mod tests {
     fn test_extend_assetsource_ondemand() {
         let mut assets = AssetRegistry::default();
         let result = assets.extend(Arc::new(StubAssetSource).iter_ondemand());
+
         assert!(result.is_ok());
+
         test_load_from(&assets);
     }
 }

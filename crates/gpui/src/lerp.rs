@@ -3,10 +3,12 @@ use crate::{
     AbsoluteLength, Background, Bounds, Corners, DefiniteLength, DevicePixels, Edges, Fill, Length,
     Percentage, Pixels, Point, Radians, Relative, Rems, RingColor, Size, colors::Colors,
 };
+
 use palette::{
     Hsla, IntoColor, Oklab, Oklaba,
     rgb::{Rgb, Rgba},
 };
+
 use std::{
     fmt::Debug,
     ops::{Add, Mul, Sub},
@@ -142,12 +144,14 @@ impl Lerp for Hsla {
         if delta <= 0.0 {
             return *self;
         }
+
         if delta >= 1.0 {
             return *to;
         }
 
         let from: Rgba = (*self).into_color();
         let to: Rgba = (*to).into_color();
+
         from.lerp(&to, delta).into_color()
     }
 }
@@ -167,18 +171,23 @@ impl Lerp for AbsoluteLength {
         match (*self, *to) {
             (Self::Pixels(from), Self::Pixels(to)) => Self::Pixels(from.lerp(&to, delta)),
             (Self::Rems(from), Self::Rems(to)) => Self::Rems(from.lerp(&to, delta)),
+
             (from, Self::Pixels(to)) if from.is_zero() => {
                 Self::Pixels(Pixels::default().lerp(&to, delta))
             }
+
             (from, Self::Rems(to)) if from.is_zero() => {
                 Self::Rems(Rems::default().lerp(&to, delta))
             }
+
             (Self::Pixels(from), to) if to.is_zero() => {
                 Self::Pixels(from.lerp(&Pixels::default(), delta))
             }
+
             (Self::Rems(from), to) if to.is_zero() => {
                 Self::Rems(from.lerp(&Rems::default(), delta))
             }
+
             _ if delta >= 1.0 => *to,
             _ => *self,
         }
@@ -211,6 +220,7 @@ impl Lerp for Background {
         if delta <= 0.0 {
             return *self;
         }
+
         if delta >= 1.0 {
             return *to;
         }
@@ -219,6 +229,7 @@ impl Lerp for Background {
             (Some(from), Some(to_color)) => {
                 Background::from(from.lerp(&to_color, delta)).color_space(to.interpolation_space())
             }
+
             _ => *self,
         }
     }

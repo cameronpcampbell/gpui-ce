@@ -2,6 +2,7 @@ use crate::editable_text::{
     StringStorage, TextBoundary, UnicodeTextStorage, actions::EditableTextActionHandler,
     caret::CaretNotify, history::EditableTextHistory, layout::EditableTextLayoutResult,
 };
+
 use gpui::{
     App, Bounds, CaretAffinity, CaretPosition, CaretSelection, CaretSelectionMovement,
     ClipboardItem, Context, ElementId, Entity, EntityInputHandler, EventEmitter, FocusHandle,
@@ -9,6 +10,7 @@ use gpui::{
     TextDirection as Direction, TextMovement, TextRangeExt, TextSelectionKind, UTF16Selection,
     Window, point, utf16_to_utf8_offset,
 };
+
 use std::{borrow::Cow, ops::Range};
 
 const CARET_PIXELS_EPSILON: Pixels = gpui::px(4.);
@@ -37,6 +39,7 @@ struct OldDocumentVersion;
 struct SelectionDragVisualCaret {
     /// The selection state for which `position` is the displayed caret.
     selection: CaretSelection,
+
     /// The caret position directly under the pointer.
     position: CaretPosition,
 }
@@ -58,14 +61,18 @@ pub struct EditableTextState {
     /// True while the user holds the mouse button to select text, including while dragging.
     /// Cleared on mouse-up or when this input loses focus.
     is_selecting: bool,
+
     /// Caret captured at single-click drag start. Reused by
     /// `adjust_drag_endpoint_at_visual_line_edge` because edge handling can shift
     /// `selection_movement.result.anchor`.
     selection_drag_anchor: Option<CaretPosition>,
+
     /// The pointer-aligned caret for the current drag selection.
     selection_drag_visual_caret: Option<SelectionDragVisualCaret>,
+
     /// Last click's position relative to this element, used to match nearby clicks.
     last_click_position: Option<Point<Pixels>>,
+
     /// Count of consecutive nearby clicks, used to choose single, double, or triple-click behavior.
     click_count: usize,
 
@@ -83,6 +90,7 @@ impl EventEmitter<CaretNotify> for EditableTextState {}
 ///
 /// This is not suitable for input sanitation (which should occur before the mutation).
 pub struct TextChanged;
+
 impl EventEmitter<TextChanged> for EditableTextState {}
 
 impl Focusable for EditableTextState {
@@ -183,6 +191,7 @@ impl EditableTextState {
     /// Replaces the contents of the stored text with the provided string slice.
     pub fn emplace(&mut self, content: &str, cx: &mut Context<Self>) {
         let len = self.storage.content_utf8().len();
+
         self.replace_text(0..len, content);
         self.emit_text_changed(cx);
         cx.notify();
@@ -210,16 +219,19 @@ impl EditableTextState {
         }
 
         let focus_handle = self.focus_handle.clone();
+
         let subscription = cx.on_blur(&focus_handle, window, |_state, window, cx| {
             cx.defer_in(window, |state, _window, cx| {
                 state.clear_selection(cx);
             });
         });
+
         self.blur_subscription = Some(subscription);
     }
 
     fn clear_selection(&mut self, cx: &mut Context<Self>) {
         self.set_selection(self.caret_selection().caret);
+
         self.is_selecting = false;
         self.selection_drag_anchor = None;
         self.selection_drag_visual_caret = None;
@@ -234,6 +246,7 @@ impl EditableTextState {
             Some(drag_caret) if drag_caret.selection == self.selection_movement.result => {
                 drag_caret.position
             }
+
             _ => self.caret_selection().caret,
         }
     }
@@ -259,6 +272,7 @@ impl AccessibilityTextMetrics {
             character_lengths: Vec::new(),
             byte_offsets: Vec::new(),
         };
+
         metrics.refresh(text);
 
         metrics
@@ -296,6 +310,7 @@ impl AccessibilityTextMetrics {
 impl EditableTextState {
     fn replace_storage_range(&mut self, range: Range<usize>, text: &str) {
         self.storage.replace_range(range, text);
+
         self.accessibility_text_metrics
             .refresh(self.storage.content_utf8());
     }
@@ -350,10 +365,12 @@ impl EditableTextState {
         affinity: CaretAffinity,
     ) {
         let end_pos = range.start + text_to_insert.len();
+
         self.record_history(range.clone(), text_to_insert.len());
         self.replace_storage_range(range, text_to_insert);
 
         self.set_selection(CaretPosition::from((end_pos, affinity)));
+
         self.marked_range = None;
     }
 
@@ -399,23 +416,29 @@ impl EditableTextState {
                     .logical_cluster_before(caret)
                     .filter(|range| !range.is_empty() && self.as_str().contains_range(range));
             }
+
             (NavigationDirection::Forward, TextBoundary::Cluster) => {
                 return document
                     .logical_cluster_after(caret)
                     .filter(|range| !range.is_empty() && self.as_str().contains_range(range));
             }
+
             (NavigationDirection::Back, TextBoundary::Word) => {
                 Direction::Left.with_boundary(TextBoundary::Word)
             }
+
             (NavigationDirection::Forward, TextBoundary::Word) => {
                 Direction::Right.with_boundary(TextBoundary::Word)
             }
+
             (NavigationDirection::Back, TextBoundary::HardLine) => {
                 Direction::Start.with_boundary(TextBoundary::HardLine)
             }
+
             (NavigationDirection::Forward, TextBoundary::HardLine) => {
                 Direction::End.with_boundary(TextBoundary::HardLine)
             }
+
             (_, TextBoundary::VisualLine) => return None,
             (_, TextBoundary::Document) => return None,
         };
@@ -428,6 +451,7 @@ impl EditableTextState {
     /// Returns the utf-8 character position of the start of the line that contains the provided pixel-point.
     fn caret_for_pixel_point(&self, point: Point<Pixels>, line_height: Pixels) -> CaretPosition {
         let storage_len_utf8 = self.as_str().len();
+
         if storage_len_utf8 == 0 {
             return CaretPosition::default();
         }
@@ -458,11 +482,13 @@ impl EditableTextState {
         };
 
         let line_height = self.layout_data.line_height;
+
         let Some(endpoint_visual_position) =
             document.visual_position_for_caret(endpoint, line_height)
         else {
             return endpoint;
         };
+
         let Some(opposite_visual_position) =
             document.visual_position_for_caret(opposite_endpoint, line_height)
         else {
@@ -475,11 +501,13 @@ impl EditableTextState {
                     Direction::End.with_boundary(TextBoundary::VisualLine),
                     Direction::Start.with_boundary(TextBoundary::VisualLine),
                 )
+
             } else if opposite_visual_position.y < endpoint_visual_position.y {
                 (
                     Direction::Start.with_boundary(TextBoundary::VisualLine),
                     Direction::End.with_boundary(TextBoundary::VisualLine),
                 )
+
             } else {
                 return endpoint;
             };
@@ -502,6 +530,7 @@ impl EditableTextState {
 
     fn line_range_for_cut(&self) -> Range<usize> {
         let caret = self.caret_selection().caret;
+
         let mut range = match self.current_document() {
             Ok(document) => {
                 let [start, end] = [Direction::Start, Direction::End].map(|direction| {
@@ -512,6 +541,7 @@ impl EditableTextState {
 
                 start.min(end)..start.max(end)
             }
+
             Err(OldDocumentVersion) => {
                 let [start, end] =
                     [NavigationDirection::Back, NavigationDirection::Forward].map(|direction| {
@@ -550,6 +580,7 @@ impl EditableTextState {
         if self.layout_data.scroll_bounds.is_empty() {
             return;
         }
+
         let Some(content_size) = self.layout_data.state.size else {
             return;
         };
@@ -569,17 +600,23 @@ impl EditableTextState {
         if point.x < self.layout_data.scroll_bounds.left() {
             scroll_offset.to_mut().x = point.x;
         }
+
         if point.y < self.layout_data.scroll_bounds.top() {
             scroll_offset.to_mut().y = point.y;
         }
+
         let right = self.layout_data.scroll_bounds.right();
+
         if point.x > right {
             scroll_offset.to_mut().x += point.x - right;
         }
+
         let bottom = self.layout_data.scroll_bounds.bottom();
         let point_bottom = point.y + self.layout_data.line_height;
+
         if point_bottom > bottom {
             let delta = point_bottom - bottom;
+
             scroll_offset.to_mut().y += delta;
         }
 
@@ -631,6 +668,7 @@ impl EditableTextState {
         cx: &mut Context<Self>,
     ) {
         let storage_len = self.storage.content_utf8().len();
+
         moved.result.caret.index = moved.result.caret.index.min(storage_len);
         moved.result.anchor.index = moved.result.anchor.index.min(storage_len);
         self.selection_movement = moved;
@@ -664,6 +702,7 @@ impl EditableTextState {
 
         let range = self.selected_byte_range();
         let had_selection = !range.is_empty();
+
         let range = if had_selection {
             range
         } else {
@@ -732,6 +771,7 @@ impl EditableTextState {
         if let Some(index) = document_endpoint {
             // Document commands use storage bounds regardless of layout freshness.
             let caret = self.caret_for_index(index);
+
             self.apply_selection_movement(
                 self.selection_movement.move_or_select_to(caret, extend),
                 cx,
@@ -748,6 +788,7 @@ impl EditableTextState {
                 self.selection_movement.vertical_navigation_x,
                 self.layout_data.line_height,
             );
+
             self.apply_selection_movement(moved, cx);
 
             return;
@@ -757,11 +798,15 @@ impl EditableTextState {
             Direction::Left | Direction::Up | Direction::Start => NavigationDirection::Back,
             Direction::Right | Direction::Down | Direction::End => NavigationDirection::Forward,
         };
+
         let boundary = movement.boundary;
+
         let horizontal = matches!(movement.direction, Direction::Left | Direction::Right)
             && matches!(boundary, TextBoundary::Cluster | TextBoundary::Word);
+
         let collapse_selection =
             !extend && !self.selection_movement.result.is_empty() && horizontal;
+
         let index = if collapse_selection {
             let selected_range = self.selection_movement.result.byte_range();
 
@@ -769,10 +814,12 @@ impl EditableTextState {
                 NavigationDirection::Back => selected_range.start,
                 NavigationDirection::Forward => selected_range.end,
             }
+
         } else {
             self.storage
                 .offset_from_caret(self.caret_selection().caret.index, direction, boundary)
         };
+
         let caret = CaretPosition::attached_to_next_cluster(index);
 
         self.apply_selection_movement(self.selection_movement.move_or_select_to(caret, extend), cx);
@@ -790,6 +837,7 @@ impl EditableTextState {
                 NavigationDirection::Back => Direction::Start,
                 NavigationDirection::Forward => Direction::End,
             };
+
             self.move_semantic(direction.with_boundary(boundary), extend, cx);
 
             return;
@@ -802,10 +850,12 @@ impl EditableTextState {
                 NavigationDirection::Back => selected_range.start,
                 NavigationDirection::Forward => selected_range.end,
             }
+
         } else {
             self.storage
                 .offset_from_caret(self.caret_selection().caret.index, direction, boundary)
         };
+
         let caret = self.caret_for_index(index);
 
         self.apply_selection_movement(self.selection_movement.move_or_select_to(caret, extend), cx);
@@ -838,11 +888,13 @@ impl EditableTextState {
     fn apply_click(&mut self, click_count: usize, text_position: Point<Pixels>) {
         let should_continue_click =
             click_count > 1 && self.is_position_nearly_at_previous_click(text_position);
+
         self.click_count = if should_continue_click {
             click_count
         } else {
             1
         };
+
         self.last_click_position = Some(text_position);
     }
 
@@ -859,9 +911,11 @@ impl EditableTextState {
 
         match group {
             SelectionGroup::Word => self.storage.word_range_at(caret_pos),
+
             SelectionGroup::Line => {
                 let line_start = self.storage.offset_from_caret(caret_pos, Back, HardLine);
                 let line_end = self.storage.offset_from_caret(caret_pos, Forward, HardLine);
+
                 let line_end_with_newline = if line_end < self.storage.content_utf8().len() {
                     self.storage.offset_from_caret(line_end, Forward, Cluster)
                 } else {
@@ -870,6 +924,7 @@ impl EditableTextState {
 
                 line_start..line_end_with_newline
             }
+
             SelectionGroup::Document => 0..self.storage.content_utf8().len(),
         }
     }
@@ -884,14 +939,17 @@ impl EditableTextState {
         let selection = match group.layout_kind() {
             Some(kind) => match self.current_document() {
                 Ok(document) => document.selection_from_pixel_point(point, line_height, kind),
+
                 Err(OldDocumentVersion) => {
                     let caret_pos = self.caret_for_pixel_point(point, line_height).index;
 
                     self.storage_selection_at(caret_pos, group)
                 }
             },
+
             None => self.storage_selection_at(0, group),
         };
+
         self.set_selection(selection);
         cx.notify();
     }
@@ -916,6 +974,7 @@ impl EditableTextState {
 
         // Capture the text that will be replaced
         let old_text = &self.storage.content_utf8()[range.clone()];
+
         history.record(
             range,
             old_text,
@@ -938,10 +997,12 @@ impl EditableTextState {
 
         // Push the entry onto the redo stack so the undo can be undone
         let selection = entry.selected_range;
+
         self.history
             .as_mut()
             .expect("history was available when the entry was taken")
             .push(dst, entry.as_inverted(removed_text));
+
         self.set_selection(selection);
 
         self.scroll_to_caret();
@@ -958,6 +1019,7 @@ impl EditableTextState {
         let range = range.unwrap_or_else(|| self.selected_byte_range());
 
         let storage_len_utf8 = self.as_str().len();
+
         range.start.min(storage_len_utf8)..range.end.min(storage_len_utf8)
     }
 
@@ -976,10 +1038,12 @@ impl EditableTextState {
     ) {
         let selection: CaretSelection = {
             let new_range = new_selected_range_utf16.as_ref();
+
             let new_range = new_range.map(|range_utf16| {
                 utf16_to_utf8_offset(inserted_text, range_utf16.start) + range_overwritten.start
                     ..utf16_to_utf8_offset(inserted_text, range_utf16.end) + range_overwritten.start
             });
+
             let new_range = new_range.unwrap_or_else(|| {
                 range_overwritten.start + inserted_text.len()
                     ..range_overwritten.start + inserted_text.len()
@@ -987,6 +1051,7 @@ impl EditableTextState {
 
             new_range.into()
         };
+
         self.set_selection(selection);
     }
 }
@@ -1003,7 +1068,9 @@ impl EntityInputHandler for EditableTextState {
         let range = self.storage.utf_range_16to8(&range_utf16);
         let storage_len_utf8 = self.storage.content_utf8().len();
         let clamped_range = range.start.min(storage_len_utf8)..range.end.min(storage_len_utf8);
+
         adjusted_range.replace(self.storage.utf_range_8to16(&clamped_range));
+
         Some(self.storage.content_utf8()[clamped_range].to_string())
     }
 
@@ -1045,6 +1112,7 @@ impl EntityInputHandler for EditableTextState {
     ) {
         let range_utf8 = self.ime_resolve_range(range_utf16);
         let text_to_insert = self.validate_incoming_text(&range_utf8, text_to_insert);
+
         self.replace_text(range_utf8, text_to_insert.as_ref());
         cx.emit(CaretNotify::PauseBlinking);
         self.emit_text_changed(cx);
@@ -1061,6 +1129,7 @@ impl EntityInputHandler for EditableTextState {
     ) {
         let range = self.ime_resolve_range(range_utf16);
         let text_to_insert = self.validate_incoming_text(&range, text_to_insert);
+
         self.replace_text(range.clone(), text_to_insert.as_ref());
 
         self.ime_mark_text_in_range(&range, text_to_insert.len());
@@ -1081,14 +1150,17 @@ impl EntityInputHandler for EditableTextState {
         let line_height = window.line_height();
 
         let document = self.current_document().ok()?;
+
         let document_origin = bounds.origin + self.layout_data.document_offset
             - self.layout_data.scroll_bounds.origin;
+
         let start = range.start.min(document.text.len());
         let end = range.end.min(document.text.len());
 
         if start == end {
             let caret = CaretPosition::attached_to_next_cluster(start);
             let position = document.visual_position_for_caret(caret, line_height)?;
+
             return Some(Bounds::from_corners(
                 document_origin + position,
                 document_origin + position + point(CARET_PIXELS_EPSILON, line_height),
@@ -1099,6 +1171,7 @@ impl EntityInputHandler for EditableTextState {
             .selection_bounds(start..end, line_height)
             .into_iter()
             .next()?;
+
         Some(Bounds::new(
             document_origin + selection.origin,
             selection.size,
@@ -1113,13 +1186,16 @@ impl EntityInputHandler for EditableTextState {
     ) -> Option<usize> {
         let point =
             point + self.layout_data.scroll_bounds.origin - self.layout_data.document_offset;
+
         let index = self.index_for_pixel_point(point, window.line_height());
+
         Some(self.storage.utf_offset_8to16(index))
     }
 }
 
 // Input Action handler
 use super::{actions::*, history::HistoryKind};
+
 impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState {
     fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<'app, Self>) {
         self.set_selection(0);
@@ -1132,9 +1208,11 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         if !self.layout_data.supports_multiline {
             return;
         }
+
         if !self.layout_data.accepts_input {
             return;
         }
+
         self.replace_text_in_range(None, "\n", window, cx);
     }
 
@@ -1142,6 +1220,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         if !self.layout_data.accepts_input {
             return;
         }
+
         self.replace_text_in_range(None, "\t", window, cx);
     }
 
@@ -1310,6 +1389,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         }
 
         let range = self.selected_byte_range();
+
         let range_to_cut = if range.is_empty() {
             self.line_range_for_cut()
         } else {
@@ -1317,6 +1397,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         };
 
         let slice = &self.storage.content_utf8()[range_to_cut.clone()];
+
         cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
         self.replace_text(range_to_cut, "");
 
@@ -1332,6 +1413,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         }
 
         let slice = &self.storage.content_utf8()[range];
+
         cx.write_to_clipboard(ClipboardItem::new_string(slice.to_string()));
     }
 
@@ -1346,6 +1428,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
         let range = self.ime_resolve_range(None);
         let text_to_insert = self.validate_incoming_text(&range, &text);
+
         self.replace_text(range, text_to_insert.as_ref());
         self.emit_text_changed(cx);
         cx.notify();
@@ -1374,15 +1457,18 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
 
         self.is_selecting = true;
         self.selection_drag_visual_caret = None;
+
         self.apply_click(event.click_count, text_position);
 
         match self.click_count {
             DOUBLE_CLICK => {
                 self.select_group_at(text_position, line_height, SelectionGroup::Word, cx)
             }
+
             TRIPLE_CLICK => {
                 self.select_group_at(text_position, line_height, SelectionGroup::Line, cx)
             }
+
             _ if event.modifiers.shift => self.select_to_caret(caret, cx),
             _ => self.move_to_caret(caret, cx),
         }
@@ -1411,11 +1497,13 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
         if self.is_selecting && self.click_count == 1 {
             let pointer_caret =
                 self.caret_for_pixel_point(text_position, self.layout_data.line_height);
+
             let mut selection_caret = pointer_caret;
 
             if let Some(anchor) = self.selection_drag_anchor {
                 self.selection_movement.result.anchor =
                     self.adjust_drag_endpoint_at_visual_line_edge(anchor, selection_caret);
+
                 selection_caret =
                     self.adjust_drag_endpoint_at_visual_line_edge(selection_caret, anchor);
             }
@@ -1424,6 +1512,7 @@ impl<'app> EditableTextActionHandler<Context<'app, Self>> for EditableTextState 
                 selection: self.selection_movement.result.with_caret(selection_caret),
                 position: pointer_caret,
             });
+
             self.select_to_caret(selection_caret, cx);
         }
     }
@@ -1438,10 +1527,12 @@ mod tests {
 
     use super::*;
     use crate::editable_text::StringStorage;
+
     use gpui::{
         AppContext, Entity, IntoElement, PlatformTextSystem, Render, TestAppContext, TextRun,
         TextSystem, WindowHandle, WindowTextSystem, div, font, px,
     };
+
     use gpui_parley::{ParleyTextSystem, SystemFonts};
 
     type TestMovementAction =
@@ -1471,6 +1562,7 @@ mod tests {
 
         fn replace_range(&mut self, range: Range<usize>, text: &str) {
             self.text.replace_range(range, text);
+
             self.version = self.version.wrapping_add(1);
         }
     }
@@ -1483,7 +1575,9 @@ mod tests {
 
     fn default_state(content: &str, cx: &mut Context<EditableTextState>) -> EditableTextState {
         let mut state = EditableTextState::new(StringStorage::from(content), cx);
+
         state.layout_data.state.last_seen_storage_version = state.version().wrapping_sub(1);
+
         state
     }
 
@@ -1493,10 +1587,12 @@ mod tests {
         let metrics = AccessibilityTextMetrics::new(text);
         let start = 1;
         let end = "A😀日本".len();
+
         let forward = CaretSelection {
             anchor: CaretPosition::attached_to_next_cluster(start),
             caret: CaretPosition::attached_to_next_cluster(end),
         };
+
         let reversed = CaretSelection {
             anchor: forward.caret,
             caret: forward.anchor,
@@ -1504,6 +1600,7 @@ mod tests {
 
         assert_eq!(metrics.character_indices_for_selection(forward), (1, 4));
         assert_eq!(metrics.character_indices_for_selection(reversed), (4, 1));
+
         assert_eq!(
             metrics.character_indices_for_selection(CaretSelection::from(5)),
             (2, 2)
@@ -1515,6 +1612,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let view = create_test_input(cx, "A😀B", 5);
+
         view.update(cx, |view, _window, cx| {
             view.input.update(cx, |input, _cx| {
                 let metrics = input.accessibility_text_metrics();
@@ -1523,24 +1621,30 @@ mod tests {
                 assert!(std::ptr::eq(metrics, repeated));
                 assert_eq!(metrics.character_lengths, [1, 4, 1]);
                 assert_eq!(metrics.byte_offsets, [0, 1, 5, 6]);
+
                 assert_eq!(
                     repeated.character_indices_for_selection(input.caret_selection()),
                     (2, 2)
                 );
 
                 input.replace_text(1..5, "日本");
+
                 assert_eq!(input.as_str(), "A日本B");
 
                 let metrics = input.accessibility_text_metrics();
+
                 assert_eq!(metrics.character_lengths, [1, 3, 3, 1]);
                 assert_eq!(metrics.byte_offsets, [0, 1, 4, 7, 8]);
+
                 assert_eq!(
                     metrics.character_indices_for_selection(input.caret_selection()),
                     (3, 3)
                 );
 
                 input.replace_text(0..input.as_str().len(), "");
+
                 let metrics = input.accessibility_text_metrics();
+
                 assert!(metrics.character_lengths.is_empty());
                 assert_eq!(metrics.byte_offsets, [0]);
             });
@@ -1570,6 +1674,7 @@ mod tests {
                 assert_eq!(input.accessibility_text_metrics().byte_offsets, [0, 4]);
 
                 input.replace_text(0..4, "日本");
+
                 assert_eq!(input.version(), 0);
                 assert_eq!(input.accessibility_text_metrics().byte_offsets, [0, 3, 6]);
             });
@@ -1585,10 +1690,14 @@ mod tests {
         cx.add_window(|_window, cx| {
             let input = cx.new(|cx| {
                 let mut input = default_state(content, cx);
+
                 input.set_selection(range);
+
                 input.layout_data.accepts_input = true;
+
                 input
             });
+
             TestView { input }
         })
     }
@@ -1598,13 +1707,16 @@ mod tests {
             ParleyTextSystem::new_with_system_font(SystemFonts::Skip, "IBM Plex Sans")
                 .with_fallback_families(["IBM Plex Sans", "Noto Color Emoji"]),
         );
+
         backend
             .add_fonts(vec![
                 Cow::Borrowed(*gpui_fonts::IBM_PLEX),
                 Cow::Borrowed(*gpui_fonts::NOTO_COLOR_EMOJI),
             ])
             .unwrap();
+
         let text_system = WindowTextSystem::new(Arc::new(TextSystem::new(backend)));
+
         let run = TextRun {
             len: text.len(),
             font: font("IBM Plex Sans"),
@@ -1647,8 +1759,10 @@ mod tests {
     #[gpui::test]
     fn test_left_at_start_of_content(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 0);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_left(&NavLeft, window, cx);
+
             assert_eq!(input.caret_selection(), 0.into());
         });
     }
@@ -1656,8 +1770,10 @@ mod tests {
     #[gpui::test]
     fn test_left_moves_by_grapheme(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 3);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_left(&NavLeft, window, cx);
+
             assert_eq!(input.caret_selection(), 2.into());
         });
     }
@@ -1672,8 +1788,10 @@ mod tests {
                 caret: CaretPosition::attached_to_next_cluster(1),
             },
         );
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_left(&NavLeft, window, cx);
+
             assert_eq!(input.caret_selection(), 1.into());
         });
     }
@@ -1683,8 +1801,10 @@ mod tests {
         // "ab\ncd" - cursor at position 3 (start of "cd", after newline)
         // Pressing left should move to position 2 (end of "ab", before newline)
         let view = create_test_input(cx, "ab\ncd", 3);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_left(&NavLeft, window, cx);
+
             assert_eq!(input.caret_selection(), 2.into()); // cursor at end of line 1
         });
     }
@@ -1692,8 +1812,10 @@ mod tests {
     #[gpui::test]
     fn test_right_at_end_of_content(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 5);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_right(&NavRight, window, cx);
+
             assert_eq!(input.caret_selection(), 5.into());
         });
     }
@@ -1701,8 +1823,10 @@ mod tests {
     #[gpui::test]
     fn test_right_moves_by_grapheme(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 2);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_right(&NavRight, window, cx);
+
             assert_eq!(input.caret_selection(), 3.into());
         });
     }
@@ -1717,8 +1841,10 @@ mod tests {
                 caret: CaretPosition::attached_to_next_cluster(1),
             },
         );
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_right(&NavRight, window, cx);
+
             assert_eq!(input.caret_selection(), 4.into());
         });
     }
@@ -1728,8 +1854,10 @@ mod tests {
         // "ab\ncd" - cursor at position 1 (after 'a')
         // Pressing right should move to position 2 (end of "ab", before newline)
         let view = create_test_input(cx, "ab\ncd", 1);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_right(&NavRight, window, cx);
+
             assert_eq!(input.caret_selection(), 2.into()); // cursor at end of line 1
         });
     }
@@ -1739,8 +1867,10 @@ mod tests {
         // "ab\ncd" - cursor at position 2 (end of "ab", before newline)
         // Pressing right should move to position 3 (after newline, start of "cd")
         let view = create_test_input(cx, "ab\ncd", 2);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_right(&NavRight, window, cx);
+
             assert_eq!(input.caret_selection(), 3.into()); // cursor at start of line 2
         });
     }
@@ -1750,8 +1880,10 @@ mod tests {
         // "ab\ncd" - cursor at position 2 (end of "ab", before newline)
         // Pressing left should move to position 1 (after 'a')
         let view = create_test_input(cx, "ab\ncd", 2);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_left(&NavLeft, window, cx);
+
             assert_eq!(input.caret_selection(), 1.into());
         });
     }
@@ -1759,8 +1891,10 @@ mod tests {
     #[gpui::test]
     fn test_home_moves_to_line_start(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "first\nsecond", 9);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_line_start(&NavLineStart, window, cx);
+
             assert_eq!(input.caret_selection(), 6.into());
         });
     }
@@ -1768,8 +1902,10 @@ mod tests {
     #[gpui::test]
     fn test_end_moves_to_line_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "first\nsecond", 8);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_line_end(&NavLineEnd, window, cx);
+
             assert_eq!(input.caret_selection(), 12.into());
         });
     }
@@ -1777,8 +1913,10 @@ mod tests {
     #[gpui::test]
     fn test_move_to_beginning(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "first\nsecond\nthird", 9);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_start(&NavDocumentStart, window, cx);
+
             assert_eq!(input.caret_selection(), 0.into());
         });
     }
@@ -1786,8 +1924,10 @@ mod tests {
     #[gpui::test]
     fn test_move_to_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "first\nsecond\nthird", 0);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_end(&NavDocumentEnd, window, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection::from(CaretPosition::attached_to_previous_cluster(18))
@@ -1798,8 +1938,10 @@ mod tests {
     #[gpui::test]
     fn test_word_left_at_start(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 0);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_left_word(&NavWordLeft, window, cx);
+
             assert_eq!(input.caret_selection(), 0.into());
         });
     }
@@ -1807,8 +1949,10 @@ mod tests {
     #[gpui::test]
     fn test_word_left_stops_at_boundary(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world test", 11);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_left_word(&NavWordLeft, window, cx);
+
             assert_eq!(input.caret_selection(), 6.into());
         });
     }
@@ -1816,8 +1960,10 @@ mod tests {
     #[gpui::test]
     fn test_word_right_at_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 11);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_right_word(&NavWordRight, window, cx);
+
             assert_eq!(input.caret_selection(), 11.into());
         });
     }
@@ -1825,8 +1971,10 @@ mod tests {
     #[gpui::test]
     fn test_word_right_stops_at_boundary(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world test", 0);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_right_word(&NavWordRight, window, cx);
+
             assert_eq!(input.caret_selection(), 5.into());
         });
     }
@@ -1834,8 +1982,10 @@ mod tests {
     #[gpui::test]
     fn test_select_left_extends_selection(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 3);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.select_left(&SelectLeft, window, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection {
@@ -1849,8 +1999,10 @@ mod tests {
     #[gpui::test]
     fn test_select_right_extends_selection(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 2..2);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.select_right(&SelectRight, window, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection {
@@ -1864,8 +2016,10 @@ mod tests {
     #[gpui::test]
     fn test_select_all(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello\nworld", 3);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.select_all(&SelectAll, window, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection {
@@ -1879,8 +2033,10 @@ mod tests {
     #[gpui::test]
     fn test_select_to_beginning(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 6);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.select_start(&SelectDocumentStart, window, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection {
@@ -1894,8 +2050,10 @@ mod tests {
     #[gpui::test]
     fn test_select_to_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 6);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.select_end(&SelectDocumentEnd, window, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection {
@@ -1922,6 +2080,7 @@ mod tests {
             anchor: CaretPosition::attached_to_next_cluster(5),
             caret: CaretPosition::attached_to_next_cluster(0),
         };
+
         let selected_world = CaretSelection {
             anchor: CaretPosition::attached_to_next_cluster(11),
             caret: CaretPosition::attached_to_next_cluster(6),
@@ -2112,13 +2271,17 @@ mod tests {
                 match command {
                     TestDeletion::PreviousCluster => input.delete_left(&DeleteLeft, window, cx),
                     TestDeletion::NextCluster => input.delete_right(&DeleteRight, window, cx),
+
                     TestDeletion::PreviousWord => {
                         input.delete_word_left(&DeleteWordLeft, window, cx)
                     }
+
                     TestDeletion::NextWord => input.delete_word_right(&DeleteWordRight, window, cx),
+
                     TestDeletion::LineStart => {
                         input.delete_to_line_start(&DeleteToLineStart, window, cx)
                     }
+
                     TestDeletion::LineEnd => input.delete_to_line_end(&DeleteToLineEnd, window, cx),
                 }
 
@@ -2149,11 +2312,14 @@ mod tests {
         cx: &mut Context<EditableTextState>,
     ) {
         let edited = input.as_str().to_owned();
+
         input.undo(&Undo, window, cx);
+
         assert_eq!(input.as_str(), original);
         assert_eq!(input.caret_selection(), selection);
 
         input.redo(&Redo, window, cx);
+
         assert_eq!(input.as_str(), edited);
     }
 
@@ -2170,17 +2336,22 @@ mod tests {
             ),
         ] {
             let view = create_test_input(cx, "hello world", selection);
+
             update_movement_input(view, cx, |input, window, cx| {
                 without_history_grouping(input);
+
                 input.layout_data.supports_multiline = true;
 
                 input.insert_enter(&Enter, window, cx);
+
                 assert_eq!(input.as_str(), expected);
                 assert_eq!(input.caret_selection(), 6.into());
+
                 assert_eq!(
                     input.caret_selection().caret.affinity,
                     CaretAffinity::Downstream
                 );
+
                 assert_history_round_trip(input, "hello world", selection, window, cx);
             });
         }
@@ -2196,11 +2367,13 @@ mod tests {
                 caret: CaretPosition::attached_to_next_cluster(6),
             },
         );
+
         update_movement_input(view, cx, |input, window, cx| {
             input.copy(&Copy, window, cx);
         });
 
         let clipboard = cx.read_from_clipboard();
+
         assert!(clipboard.is_some());
         assert_eq!(clipboard.unwrap().text().as_deref(), Some("world"));
     }
@@ -2215,17 +2388,22 @@ mod tests {
                 caret: CaretPosition::attached_to_next_cluster(0),
             },
         );
+
         update_movement_input(view, cx, |input, window, cx| {
             without_history_grouping(input);
+
             let selection = input.caret_selection();
 
             input.cut(&Cut, window, cx);
+
             assert_eq!(input.as_str(), " world");
             assert_eq!(input.caret_selection(), 0.into());
+
             assert_history_round_trip(input, "hello world", selection, window, cx);
         });
 
         let clipboard = cx.read_from_clipboard();
+
         assert_eq!(clipboard.unwrap().text().as_deref(), Some("hello"));
     }
 
@@ -2236,18 +2414,23 @@ mod tests {
             ("hello", 5, " world", "hello world", 11),
         ] {
             let view = create_test_input(cx, original, caret);
+
             cx.write_to_clipboard(ClipboardItem::new_string(inserted.to_string()));
 
             update_movement_input(view, cx, |input, window, cx| {
                 without_history_grouping(input);
+
                 let selection = input.caret_selection();
 
                 EditableTextActionHandler::paste(input, &Paste, window, cx);
+
                 assert_eq!(input.as_str(), expected);
+
                 assert_eq!(
                     input.caret_selection(),
                     CaretPosition::attached_to_previous_cluster(expected_caret).into()
                 );
+
                 assert_history_round_trip(input, original, selection, window, cx);
             });
         }
@@ -2276,16 +2459,19 @@ mod tests {
             ("keycap", "x1\u{FE0F}\u{20E3}y", &[0, 1, 8, 9][..]),
         ] {
             assert_eq!(offsets.last(), Some(&text.len()), "{name}");
+
             let view = create_test_input(cx, text, 0);
 
             update_movement_input(view, cx, |input, window, cx| {
                 for &expected in &offsets[1..] {
                     input.nav_right(&NavRight, window, cx);
+
                     assert_eq!(input.caret_selection(), expected.into(), "{name}");
                 }
 
                 for &expected in offsets[..offsets.len() - 1].iter().rev() {
                     input.nav_left(&NavLeft, window, cx);
+
                     assert_eq!(input.caret_selection(), expected.into(), "{name}");
                 }
             });
@@ -2295,8 +2481,10 @@ mod tests {
     #[gpui::test]
     fn test_selection_with_multibyte_characters(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "日本語", 0);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.select_right(&SelectRight, window, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection {
@@ -2304,7 +2492,9 @@ mod tests {
                     caret: CaretPosition::attached_to_next_cluster(3),
                 }
             );
+
             input.select_right(&SelectRight, window, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection {
@@ -2312,7 +2502,9 @@ mod tests {
                     caret: CaretPosition::attached_to_next_cluster(6),
                 }
             );
+
             input.select_right(&SelectRight, window, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection {
@@ -2326,9 +2518,11 @@ mod tests {
     #[gpui::test]
     fn test_find_line_start_and_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "first\nsecond\nthird", 0);
+
         update_movement_input(view, cx, |input, _window, _cx| {
             use NavigationDirection::*;
             use TextBoundary::*;
+
             let storage = &input.storage;
 
             assert_eq!(storage.offset_from_caret(0, Back, HardLine), 0);
@@ -2345,20 +2539,26 @@ mod tests {
     #[gpui::test]
     fn test_operations_on_empty_content(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "", 0);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_left(&NavLeft, window, cx);
+
             assert_eq!(input.caret_selection(), 0.into());
 
             input.nav_right(&NavRight, window, cx);
+
             assert_eq!(input.caret_selection(), 0.into());
 
             input.delete_left(&DeleteLeft, window, cx);
+
             assert_eq!(input.as_str(), "");
 
             input.delete_right(&DeleteRight, window, cx);
+
             assert_eq!(input.as_str(), "");
 
             input.select_all(&SelectAll, window, cx);
+
             assert_eq!(input.caret_selection(), 0.into());
         });
     }
@@ -2373,14 +2573,19 @@ mod tests {
                 caret: CaretPosition::attached_to_next_cluster(3),
             },
         );
+
         update_movement_input(view, cx, |input, window, cx| {
             input.marked_range = Some(5..7);
+
             input.replace_text_in_range(Some(0..11), "new content", window, cx);
+
             assert_eq!(input.as_str(), "new content");
+
             assert_eq!(
                 input.caret_selection(),
                 CaretPosition::attached_to_previous_cluster(11).into()
             );
+
             assert_eq!(input.marked_range, None);
         });
     }
@@ -2388,8 +2593,10 @@ mod tests {
     #[gpui::test]
     fn test_cursor_clamped_to_content_length(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 100);
+
         update_movement_input(view, cx, |input, _window, cx| {
             input.move_to(1000, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection::from(CaretPosition::attached_to_previous_cluster(5))
@@ -2397,6 +2604,7 @@ mod tests {
 
             input.set_selection(0);
             input.select_to(1000, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection {
@@ -2410,9 +2618,11 @@ mod tests {
     #[gpui::test]
     fn test_previous_boundary_at_start(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 0);
+
         update_movement_input(view, cx, |input, _window, _cx| {
             use NavigationDirection::*;
             use TextBoundary::*;
+
             assert_eq!(input.storage.offset_from_caret(0, Back, Cluster), 0);
         });
     }
@@ -2420,10 +2630,13 @@ mod tests {
     #[gpui::test]
     fn test_next_boundary_at_end(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 0);
+
         update_movement_input(view, cx, |input, _window, _cx| {
             use NavigationDirection::*;
             use TextBoundary::*;
+
             let storage = &input.storage;
+
             assert_eq!(storage.offset_from_caret(5, Forward, Cluster), 5);
             assert_eq!(storage.offset_from_caret(100, Forward, Cluster), 5);
         });
@@ -2432,12 +2645,15 @@ mod tests {
     #[gpui::test]
     fn test_word_range_at_boundary(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello world", 0);
+
         update_movement_input(view, cx, |input, _window, _cx| {
             let range = input.storage.word_range_at(5);
+
             assert_eq!(range.start, 0);
             assert_eq!(range.end, 5);
 
             let range = input.storage.word_range_at(8);
+
             assert_eq!(range.start, 6);
             assert_eq!(range.end, 11);
         });
@@ -2446,21 +2662,27 @@ mod tests {
     #[gpui::test]
     fn test_select_group_at_falls_back_without_a_current_layout(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "first line\nlast", 0);
+
         update_movement_input(view, cx, |input, _window, cx| {
             input.layout_data.state.last_seen_storage_version = input.version();
+
             input.emplace("first line\nlast word", cx);
+
             assert!(matches!(input.current_document(), Err(OldDocumentVersion)));
 
             let position = point(gpui::px(0.), gpui::px(0.));
             let line_height = gpui::px(16.);
 
             input.select_group_at(position, line_height, SelectionGroup::Word, cx);
+
             assert_eq!(input.selected_byte_range(), 16..20);
 
             input.select_group_at(position, line_height, SelectionGroup::Line, cx);
+
             assert_eq!(input.selected_byte_range(), 11..20);
 
             input.select_group_at(position, line_height, SelectionGroup::Document, cx);
+
             assert_eq!(input.selected_byte_range(), 0..20);
         });
     }
@@ -2468,8 +2690,10 @@ mod tests {
     #[gpui::test]
     fn test_select_emoji_with_shift(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "a😀b", 1); // cursor before emoji
+
         update_movement_input(view, cx, |input, window, cx| {
             input.select_right(&SelectRight, window, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection {
@@ -2490,9 +2714,12 @@ mod tests {
         cx.add_window(|_window, cx| {
             let input = cx.new(|cx| {
                 let mut input = default_state(content, cx);
+
                 input.set_selection(selected_range);
+
                 input
             });
+
             TestView { input }
         })
     }
@@ -2500,8 +2727,10 @@ mod tests {
     #[gpui::test]
     fn test_single_line_enter_does_nothing(cx: &mut TestAppContext) {
         let view = create_single_line_input(cx, "hello", 5);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.insert_enter(&Enter, window, cx);
+
             assert_eq!(input.as_str(), "hello");
             assert_eq!(input.caret_selection(), 5.into());
         });
@@ -2510,8 +2739,10 @@ mod tests {
     #[gpui::test]
     fn test_single_line_up_moves_to_start(cx: &mut TestAppContext) {
         let view = create_single_line_input(cx, "hello world", 5);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_up(&NavUp, window, cx);
+
             assert_eq!(input.caret_selection(), 0.into());
         });
     }
@@ -2519,8 +2750,10 @@ mod tests {
     #[gpui::test]
     fn test_single_line_down_moves_to_end(cx: &mut TestAppContext) {
         let view = create_single_line_input(cx, "hello world", 5);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.nav_down(&NavDown, window, cx);
+
             assert_eq!(input.caret_selection(), 11.into()); // "hello world".len() == 11
         });
     }
@@ -2528,8 +2761,10 @@ mod tests {
     #[gpui::test]
     fn test_single_line_select_up_selects_to_start(cx: &mut TestAppContext) {
         let view = create_single_line_input(cx, "hello world", 5);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.select_up(&SelectUp, window, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection {
@@ -2543,8 +2778,10 @@ mod tests {
     #[gpui::test]
     fn test_single_line_select_down_selects_to_end(cx: &mut TestAppContext) {
         let view = create_single_line_input(cx, "hello world", 5);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.select_down(&SelectDown, window, cx);
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection {
@@ -2560,14 +2797,18 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let view = create_test_input(cx, "hello", 0);
+
         update_movement_input(view, cx, |input, window, cx| {
             for kind in [HistoryKind::Undo, HistoryKind::Redo] {
                 assert!(!is_history_kind_available(input, kind));
             }
 
             input.undo(&Undo, window, cx);
+
             assert_eq!(input.as_str(), "hello");
+
             input.redo(&Redo, window, cx);
+
             assert_eq!(input.as_str(), "hello");
         });
 
@@ -2598,39 +2839,49 @@ mod tests {
             ),
         ] {
             let view = create_test_input(cx, original, original.len());
+
             update_movement_input(view, cx, |input, window, cx| {
                 without_history_grouping(input);
+
                 assert!(
                     !is_history_kind_available(input, HistoryKind::Undo),
                     "{name}"
                 );
+
                 assert!(
                     !is_history_kind_available(input, HistoryKind::Redo),
                     "{name}"
                 );
 
                 input.replace_text_in_range(None, inserted, window, cx);
+
                 assert_eq!(input.as_str(), edited, "{name}");
+
                 assert_eq!(
                     input.accessibility_text_metrics().character_lengths,
                     lengths,
                     "{name}"
                 );
+
                 assert!(
                     is_history_kind_available(input, HistoryKind::Undo),
                     "{name}"
                 );
+
                 assert!(
                     !is_history_kind_available(input, HistoryKind::Redo),
                     "{name}"
                 );
 
                 input.undo(&Undo, window, cx);
+
                 assert_eq!(input.as_str(), original, "{name}");
+
                 assert!(
                     !is_history_kind_available(input, HistoryKind::Undo),
                     "{name}"
                 );
+
                 assert!(
                     is_history_kind_available(input, HistoryKind::Redo),
                     "{name}"
@@ -2644,16 +2895,20 @@ mod tests {
                 }
 
                 input.redo(&Redo, window, cx);
+
                 assert_eq!(input.as_str(), edited, "{name}");
+
                 assert_eq!(
                     input.accessibility_text_metrics().byte_offsets,
                     offsets,
                     "{name}"
                 );
+
                 assert!(
                     is_history_kind_available(input, HistoryKind::Undo),
                     "{name}"
                 );
+
                 assert!(
                     !is_history_kind_available(input, HistoryKind::Redo),
                     "{name}"
@@ -2672,21 +2927,28 @@ mod tests {
                 caret: CaretPosition::attached_to_next_cluster(0),
             },
         );
+
         update_movement_input(view, cx, |input, window, cx| {
             without_history_grouping(input);
+
             let mut selection = input.caret_selection();
+
             selection.caret.affinity = CaretAffinity::Upstream;
             selection.anchor.affinity = CaretAffinity::Downstream;
+
             input.set_selection(selection);
 
             // Delete selection
             input.replace_text_in_range(None, "", window, cx);
+
             assert_eq!(input.as_str(), " world");
             assert_eq!(input.caret_selection(), 0.into());
 
             // Undo should restore content and selection
             input.undo(&Undo, window, cx);
+
             assert_eq!(input.as_str(), "hello world");
+
             assert_eq!(
                 input.caret_selection(),
                 CaretSelection {
@@ -2700,30 +2962,38 @@ mod tests {
     #[gpui::test]
     fn test_multiple_undo_redo(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "", 0);
+
         update_movement_input(view, cx, |input, window, cx| {
             without_history_grouping(input);
 
             input.replace_text_in_range(None, "a", window, cx);
             input.replace_text_in_range(None, "b", window, cx);
             input.replace_text_in_range(None, "c", window, cx);
+
             assert_eq!(input.as_str(), "abc");
 
             input.undo(&Undo, window, cx);
+
             assert_eq!(input.as_str(), "ab");
 
             input.undo(&Undo, window, cx);
+
             assert_eq!(input.as_str(), "a");
 
             input.undo(&Undo, window, cx);
+
             assert_eq!(input.as_str(), "");
 
             input.redo(&Redo, window, cx);
+
             assert_eq!(input.as_str(), "a");
 
             input.redo(&Redo, window, cx);
+
             assert_eq!(input.as_str(), "ab");
 
             input.redo(&Redo, window, cx);
+
             assert_eq!(input.as_str(), "abc");
         });
     }
@@ -2731,18 +3001,22 @@ mod tests {
     #[gpui::test]
     fn test_new_edit_clears_redo_stack(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "hello", 5);
+
         update_movement_input(view, cx, |input, window, cx| {
             without_history_grouping(input);
 
             input.replace_text_in_range(None, " world", window, cx);
+
             assert_eq!(input.as_str(), "hello world");
 
             input.undo(&Undo, window, cx);
+
             assert_eq!(input.as_str(), "hello");
             assert!(is_history_kind_available(input, HistoryKind::Redo));
 
             // New edit should clear redo stack
             input.replace_text_in_range(None, "!", window, cx);
+
             assert_eq!(input.as_str(), "hello!");
             assert!(!is_history_kind_available(input, HistoryKind::Redo));
         });
@@ -2784,6 +3058,7 @@ mod tests {
             ("empty current layout", "", 0, "", "", true),
         ] {
             let view = create_test_input(cx, text, caret);
+
             view.update(cx, |view, window, cx| {
                 let document = current_layout.then(|| {
                     window
@@ -2805,12 +3080,15 @@ mod tests {
                     }
 
                     assert_eq!(input.current_document().is_ok(), current_layout, "{name}");
+
                     without_history_grouping(input);
 
                     input.cut(&Cut, window, cx);
+
                     assert_eq!(input.as_str(), remaining, "{name}");
 
                     input.undo(&Undo, window, cx);
+
                     assert_eq!(input.as_str(), text, "{name}");
                     assert_eq!(input.caret_selection(), caret.into(), "{name}");
                 });
@@ -2818,6 +3096,7 @@ mod tests {
             .unwrap();
 
             let clipboard = cx.read_from_clipboard().and_then(|item| item.text());
+
             assert_eq!(
                 clipboard.as_deref().unwrap_or_default(),
                 expected_clipboard,
@@ -2829,18 +3108,23 @@ mod tests {
     #[gpui::test]
     fn ime_composition_uses_relative_utf16_ranges_around_surrogate_pairs(cx: &mut TestAppContext) {
         let view = create_test_input(cx, "A😀B", 0);
+
         update_movement_input(view, cx, |input, window, cx| {
             input.replace_and_mark_text_in_range(Some(1..3), "にほん", Some(1..2), window, cx);
+
             assert_eq!(input.as_str(), "AにほんB");
+
             assert_eq!(
                 input.accessibility_text_metrics().character_lengths,
                 [1, 3, 3, 3, 1]
             );
+
             assert_eq!(
                 input.marked_text_range(window, cx),
                 Some(1..4),
                 "marked ranges exposed to the platform use document UTF-16 offsets"
             );
+
             assert_eq!(
                 input.selected_text_range(false, window, cx).unwrap().range,
                 2..3,
@@ -2848,19 +3132,25 @@ mod tests {
             );
 
             input.replace_and_mark_text_in_range(None, "日本", None, window, cx);
+
             assert_eq!(input.as_str(), "A日本B");
+
             assert_eq!(
                 input.accessibility_text_metrics().byte_offsets,
                 [0, 1, 4, 7, 8]
             );
+
             assert_eq!(input.marked_text_range(window, cx), Some(1..3));
+
             assert_eq!(
                 input.selected_text_range(false, window, cx).unwrap().range,
                 3..3
             );
 
             input.unmark_text(window, cx);
+
             assert_eq!(input.marked_text_range(window, cx), None);
+
             assert_eq!(
                 input.selected_text_range(false, window, cx).unwrap().range,
                 3..3
@@ -2914,6 +3204,7 @@ mod tests {
             let view = create_test_input(cx, text, 0);
             let start = 1.min(text.len());
             let end = "a😀".len().min(text.len());
+
             let initial_selections = [
                 CaretPosition::attached_to_previous_cluster(start).into(),
                 CaretSelection {
@@ -2931,31 +3222,37 @@ mod tests {
                     update_movement_input(view, cx, |input, window, cx| {
                         input.layout_data.document = Some(document.clone());
                         input.layout_data.line_height = px(24.);
+
                         input.layout_data.state.last_seen_storage_version = if current_layout {
                             input.version()
                         } else {
                             input.version().wrapping_sub(1)
                         };
+
                         input.selection_movement = CaretSelectionMovement {
                             result: initial,
                             vertical_navigation_x: Some(px(37.)),
                         };
+
                         assert_eq!(input.current_document().is_ok(), current_layout);
 
                         action(input, window, cx);
 
                         let index = if to_end { text.len() } else { 0 };
                         let caret = input.caret_for_index(index);
+
                         let expected = if extend {
                             initial.with_caret(caret)
                         } else {
                             caret.into()
                         };
+
                         assert_eq!(
                             input.caret_selection(),
                             expected,
                             "{name}, {text:?}, current={current_layout}, initial={initial:?}"
                         );
+
                         assert_eq!(
                             input.selection_movement.vertical_navigation_x, None,
                             "{name}"
@@ -3010,6 +3307,7 @@ mod tests {
         ] {
             let document = movement_document(text, None);
             let view = create_test_input(cx, text, 0);
+
             let initial = CaretSelection {
                 anchor: CaretPosition::attached_to_previous_cluster(text.len()),
                 caret: CaretPosition::attached_to_next_cluster(index),
@@ -3021,8 +3319,11 @@ mod tests {
                         input.layout_data.document = Some(document.clone());
                         input.layout_data.line_height = px(24.);
                         input.layout_data.state.last_seen_storage_version = input.version();
+
                         input.set_selection(initial);
+
                         assert!(input.current_document().is_ok());
+
                         let expected = document.selection_movement(
                             initial,
                             direction.with_boundary(boundary),
@@ -3037,6 +3338,7 @@ mod tests {
                             input.selection_movement, expected,
                             "{text:?}, {direction:?}, {boundary:?}, extend={extend}"
                         );
+
                         assert!(text.is_char_boundary(input.caret_selection().caret.index));
 
                         if extend {
@@ -3050,6 +3352,7 @@ mod tests {
 
             update_movement_input(view, cx, |input, window, cx| {
                 input.set_selection(CaretPosition::attached_to_next_cluster(index));
+
                 let expected = document
                     .caret_movement(
                         input.caret_selection().caret,
@@ -3085,21 +3388,28 @@ mod tests {
         for wrap_width in [None, Some(px(65.))] {
             let text = "abcd efgh ijkl\nm\nabcd efgh ijkl";
             let document = movement_document(text, wrap_width);
+
             assert!(document.visual_lines().len() >= 3);
+
             let view = create_test_input(cx, text, 3);
+
             update_movement_input(view, cx, |input, window, cx| {
                 input.layout_data.document = Some(document.clone());
                 input.layout_data.line_height = px(24.);
                 input.layout_data.supports_multiline = true;
                 input.layout_data.state.last_seen_storage_version = input.version();
+
                 assert!(input.current_document().is_ok());
+
                 let anchor = input.caret_selection().caret;
 
                 input.select_down(&SelectDown, window, cx);
 
                 let retained_x = input.selection_movement.vertical_navigation_x;
+
                 assert!(retained_x.is_some());
                 assert_eq!(input.caret_selection().anchor, anchor);
+
                 let first_caret = input.caret_selection().caret;
 
                 input.select_down(&SelectDown, window, cx);
@@ -3119,6 +3429,7 @@ mod tests {
 
                 input.layout_data.state.last_seen_storage_version = input.version().wrapping_sub(1);
                 input.selection_movement.vertical_navigation_x = retained_x;
+
                 input.nav_down(&NavDown, window, cx);
 
                 assert_eq!(input.selection_movement.vertical_navigation_x, None);
@@ -3133,17 +3444,23 @@ mod tests {
         let text = "אבג";
         let document = movement_document(text, None);
         let view = create_test_input(cx, text, 2);
+
         let entity = view
             .update(cx, |view, _window, _cx| view.input.clone())
             .unwrap();
+
         let blink_events = Rc::new(Cell::new(0));
         let notifications = Rc::new(Cell::new(0));
+
         let subscriptions = cx.update(|cx| {
             let events = blink_events.clone();
+
             let subscription = cx.subscribe(&entity, move |_entity, _event: &CaretNotify, _cx| {
                 events.set(events.get() + 1);
             });
+
             let changes = notifications.clone();
+
             let observer = cx.observe(&entity, move |_entity, _cx| {
                 changes.set(changes.get() + 1);
             });
@@ -3158,18 +3475,22 @@ mod tests {
             ] {
                 let previous_events = blink_events.get();
                 let previous_notifications = notifications.get();
+
                 update_movement_input(view, cx, |input, _window, cx| {
                     input.layout_data.document = Some(document.clone());
+
                     input.layout_data.state.last_seen_storage_version = if current_layout {
                         input.version()
                     } else {
                         input.version().wrapping_sub(1)
                     };
+
                     input.set_selection(2);
                     input.nav_linear(direction, TextBoundary::Cluster, cx);
 
                     assert_eq!(input.caret_selection(), expected_index.into());
                 });
+
                 assert_eq!(blink_events.get(), previous_events + 1);
                 assert_eq!(notifications.get(), previous_notifications + 1);
             }
@@ -3179,6 +3500,7 @@ mod tests {
                     anchor: CaretPosition::attached_to_previous_cluster(0),
                     caret: CaretPosition::attached_to_next_cluster(2),
                 };
+
                 input.set_selection(initial);
                 input.select_linear(NavigationDirection::Forward, TextBoundary::Cluster, cx);
 
@@ -3192,6 +3514,7 @@ mod tests {
                         caret: CaretPosition::attached_to_next_cluster(caret),
                         anchor: CaretPosition::attached_to_previous_cluster(anchor),
                     };
+
                     input.set_selection(initial);
                     input.nav_linear(NavigationDirection::Back, TextBoundary::Word, cx);
 
@@ -3204,26 +3527,32 @@ mod tests {
                 }
 
                 input.selection_movement.vertical_navigation_x = Some(px(11.));
+
                 let caret = CaretPosition::attached_to_previous_cluster(100);
+
                 input.move_to_caret(caret, cx);
 
                 assert_eq!(
                     input.caret_selection(),
                     CaretPosition::attached_to_previous_cluster(text.len()).into()
                 );
+
                 assert_eq!(input.selection_movement.vertical_navigation_x, None);
 
                 input.selection_movement.vertical_navigation_x = Some(px(11.));
+
                 input.select_to_caret(CaretPosition::attached_to_next_cluster(0), cx);
 
                 assert_eq!(
                     input.caret_selection().anchor,
                     CaretPosition::attached_to_previous_cluster(text.len())
                 );
+
                 assert_eq!(
                     input.caret_selection().caret,
                     CaretPosition::attached_to_next_cluster(0)
                 );
+
                 assert_eq!(input.selection_movement.vertical_navigation_x, None);
             });
         }
@@ -3243,16 +3572,21 @@ mod tests {
             for action in actions {
                 let previous_events = blink_events.get();
                 let previous_notifications = notifications.get();
+
                 update_movement_input(view, cx, |input, window, cx| {
                     input.layout_data.document = Some(document.clone());
+
                     input.layout_data.state.last_seen_storage_version = if current_layout {
                         input.version()
                     } else {
                         input.version().wrapping_sub(1)
                     };
+
                     input.set_selection(2);
+
                     action(input, window, cx);
                 });
+
                 assert_eq!(blink_events.get(), previous_events + 1);
                 assert_eq!(notifications.get(), previous_notifications + 1);
             }

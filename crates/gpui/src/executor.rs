@@ -27,8 +27,10 @@ pub struct BackgroundExecutor {
 pub struct ForegroundExecutor {
     inner: scheduler::LocalExecutor,
     dispatcher: Arc<dyn PlatformDispatcher>,
+
     #[cfg(feature = "profiler")]
     foreground_runnables: Option<crate::profiler::journal::ForegroundRunnableCounter>,
+
     not_send: PhantomData<Rc<()>>,
 }
 
@@ -38,6 +40,7 @@ pub struct ForegroundExecutor {
 pub trait TaskExt<T, E> {
     /// Run the task to completion in the background and log any errors that occur.
     fn detach_and_log_err(self, cx: &App);
+
     /// Like [`Self::detach_and_log_err`], but uses `{:?}` formatting on failure so `anyhow::Error`
     /// values emit their full backtrace. Prefer `detach_and_log_err` unless a backtrace is wanted.
     fn detach_and_log_err_with_backtrace(self, cx: &App);
@@ -51,6 +54,7 @@ where
     #[track_caller]
     fn detach_and_log_err(self, cx: &App) {
         let location = core::panic::Location::caller();
+
         cx.foreground_executor()
             .spawn(self.log_tracked_err(*location))
             .detach();
@@ -59,6 +63,7 @@ where
     #[track_caller]
     fn detach_and_log_err_with_backtrace(self, cx: &App) {
         let location = *core::panic::Location::caller();
+
         cx.foreground_executor()
             .spawn(self.log_tracked_err_with_backtrace(location))
             .detach();
@@ -151,11 +156,14 @@ impl BackgroundExecutor {
         F: FnOnce(&mut Scope<'scope>),
     {
         let mut scope = Scope::new(self.clone(), Priority::default());
+
         (scheduler)(&mut scope);
+
         let spawned = mem::take(&mut scope.futures)
             .into_iter()
             .map(|f| self.spawn_with_priority(scope.priority, f))
             .collect::<Vec<_>>();
+
         for task in spawned {
             task.await;
         }
@@ -172,11 +180,14 @@ impl BackgroundExecutor {
         F: FnOnce(&mut Scope<'scope>),
     {
         let mut scope = Scope::new(self.clone(), priority);
+
         (scheduler)(&mut scope);
+
         let spawned = mem::take(&mut scope.futures)
             .into_iter()
             .map(|f| self.spawn_with_priority(scope.priority, f))
             .collect::<Vec<_>>();
+
         for task in spawned {
             task.await;
         }
@@ -198,6 +209,7 @@ impl BackgroundExecutor {
         if duration.is_zero() {
             return Task::ready(());
         }
+
         self.spawn(self.inner.scheduler().timer(duration))
     }
 
@@ -228,6 +240,7 @@ impl BackgroundExecutor {
     #[cfg(any(test, feature = "test-support"))]
     pub fn run_until_parked(&self) {
         let scheduler = self.dispatcher.as_test().unwrap().scheduler();
+
         scheduler.run();
     }
 
@@ -277,6 +290,7 @@ impl BackgroundExecutor {
         if let Some(test) = self.dispatcher.as_test() {
             return test.num_cpus_override().unwrap_or(4);
         }
+
         num_cpus::get()
     }
 
@@ -311,9 +325,11 @@ impl ForegroundExecutor {
                     test_dispatcher.scheduler().clone(),
                     test_dispatcher.session_id(),
                 )
+
             } else {
                 let platform_scheduler = Arc::new(PlatformScheduler::new(dispatcher.clone()));
                 let inner = platform_scheduler.foreground_executor();
+
                 return Self {
                     inner,
                     dispatcher,
@@ -333,6 +349,7 @@ impl ForegroundExecutor {
         #[cfg(any(test, feature = "test-support"))]
         let inner = {
             let scheduler_for_dispatch = Arc::downgrade(&scheduler);
+
             scheduler::LocalExecutor::new(session_id, scheduler, move |runnable| {
                 if let Some(scheduler) = scheduler_for_dispatch.upgrade() {
                     scheduler.schedule_local(session_id, runnable);
@@ -398,12 +415,14 @@ impl ForegroundExecutor {
         let dispatcher = self.dispatcher.clone();
         #[cfg(feature = "profiler")]
         let foreground_runnables = self.foreground_runnables.clone();
+
         self.inner
             .spawn_with_dispatch(future.boxed_local(), move |runnable| {
                 #[cfg(feature = "profiler")]
                 if let Some(foreground_runnables) = &foreground_runnables {
                     foreground_runnables.queued();
                 }
+
                 dispatcher.dispatch_on_main_thread_when_idle(runnable, timeout);
             })
     }
@@ -426,9 +445,11 @@ impl ForegroundExecutor {
         let scheduler = self.inner.scheduler();
 
         let output = Cell::new(None);
+
         let future = async {
             output.set(Some(future.await));
         };
+
         let mut future = std::pin::pin!(future);
 
         // In async GPUI tests, we must allow foreground tasks scheduled by the test itself
@@ -482,6 +503,7 @@ pub struct Scope<'a> {
 impl<'a> Scope<'a> {
     fn new(executor: BackgroundExecutor, priority: Priority) -> Self {
         let (tx, rx) = mpsc::channel(1);
+
         Self {
             executor,
             priority,
@@ -513,9 +535,11 @@ impl<'a> Scope<'a> {
                 Pin<Box<dyn Future<Output = ()> + Send + 'static>>,
             >(Box::pin(async move {
                 f.await;
+
                 drop(tx);
             }))
         };
+
         self.futures.push(f);
     }
 }
@@ -530,7 +554,9 @@ impl Drop for Scope<'_> {
         let future = async {
             self.rx.next().await;
         };
+
         let mut future = std::pin::pin!(future);
+
         self.executor
             .inner
             .scheduler()
@@ -556,6 +582,7 @@ mod test {
         let http_client = crate::http_client::FakeHttpClient::with_404_response();
 
         let app = App::new_app(platform, AssetRegistry::default().into(), http_client);
+
         (dispatcher, background_executor, app)
     }
 
@@ -569,6 +596,7 @@ mod test {
         foreground_executor
             .spawn({
                 let task_ran = Rc::clone(&task_ran);
+
                 async move {
                     *task_ran.borrow_mut() = true;
                 }

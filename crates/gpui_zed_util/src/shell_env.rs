@@ -10,19 +10,24 @@ fn parse_env_map_from_noisy_output(output: &str) -> Result<collections::HashMap<
     for (position, _) in output.match_indices('{') {
         let candidate = &output[position..];
         let mut deserializer = serde_json::Deserializer::from_str(candidate);
+
         if let Ok(env_map) = HashMap::<String, String>::deserialize(&mut deserializer) {
             return Ok(env_map);
         }
     }
+
     anyhow::bail!("Failed to find JSON in shell output: {output}")
 }
 
 pub fn print_env() {
     let env_vars: HashMap<String, String> = std::env::vars().collect();
+
     let json = serde_json::to_string_pretty(&env_vars).unwrap_or_else(|err| {
         eprintln!("Error serializing environment variables: {}", err);
+
         std::process::exit(1);
     });
+
     println!("{}", json);
 }
 
@@ -54,8 +59,10 @@ fn parse_env_output(
             if !status.success() {
                 log::warn!("{}", successful_capture_warning());
             }
+
             Ok(env_map)
         }
+
         Err(parse_error) => {
             if !status.success() {
                 anyhow::bail!(
@@ -86,7 +93,9 @@ async fn capture_unix(
 
     let mut command_string = String::new();
     let mut command = new_std_command(shell_path);
+
     command.args(args);
+
     // In some shells, file descriptors greater than 2 cannot be used in interactive mode,
     // so file descriptor 0 (stdin) is used instead. This impacts zsh, old bash; perhaps others.
     // See: https://github.com/zed-industries/zed/pull/32136#issuecomment-2999645482
@@ -109,11 +118,13 @@ async fn capture_unix(
             // For csh/tcsh, login shell requires passing `-` as 0th argument (instead of `-l`)
             command.arg0("-");
         }
+
         ShellKind::Fish => {
             // in fish, asdf, direnv attach to the `fish_prompt` event
             command_string.push_str("emit fish_prompt;");
             command.arg("-l");
         }
+
         _ => {
             command.arg("-l");
         }
@@ -129,20 +140,24 @@ async fn capture_unix(
 
     // Prefix with "./" if the path starts with "-" to prevent cd from interpreting it as a flag
     let dir_str = directory.to_string_lossy();
+
     let dir_str = if dir_str.starts_with('-') {
         format!("./{dir_str}").into()
     } else {
         dir_str
     };
+
     let quoted_dir = shell_kind
         .try_quote(&dir_str)
         .context("unexpected null in directory name")?;
 
     // cd into the directory, triggering directory specific side-effects (asdf, direnv, etc)
     command_string.push_str(&format!("cd {};", quoted_dir));
+
     if let Some(prefix) = shell_kind.command_prefix() {
         command_string.push(prefix);
     }
+
     command_string.push_str(&format!("{} --printenv {}", quoted_zed_path, redir));
 
     if let ShellKind::Nushell = shell_kind {
@@ -199,6 +214,7 @@ async fn spawn_and_read_fd(
         .spawn()?;
 
     let mut buffer = Vec::new();
+
     reader.read_to_end(&mut buffer)?;
 
     Ok((buffer, process.output().await?))
@@ -218,22 +234,29 @@ async fn capture_windows(
     let shell_kind = ShellKind::new(shell_path, true);
     // Prefix with "./" if the path starts with "-" to prevent cd from interpreting it as a flag
     let directory_string = directory.display().to_string();
+
     let directory_string = if directory_string.starts_with('-') {
         format!("./{directory_string}")
     } else {
         directory_string
     };
+
     let zed_path_string = zed_path.display().to_string();
+
     let quote_for_shell = |value: &str| {
         shell_kind
             .try_quote(value)
             .map(|quoted| quoted.into_owned())
             .context("unexpected null in directory name")
     };
+
     let mut cmd = crate::command::new_command(shell_path);
+
     cmd.args(args);
+
     let quoted_directory = quote_for_shell(&directory_string)?;
     let quoted_zed_path = quote_for_shell(&zed_path_string)?;
+
     let cmd = match shell_kind {
         ShellKind::Csh
         | ShellKind::Tcsh
@@ -246,6 +269,7 @@ async fn capture_windows(
             "-c",
             &format!("cd {}; {} --printenv", quoted_directory, quoted_zed_path),
         ]),
+
         ShellKind::PowerShell | ShellKind::Pwsh => cmd.args([
             "-NonInteractive",
             "-NoProfile",
@@ -255,31 +279,38 @@ async fn capture_windows(
                 quoted_directory, quoted_zed_path
             ),
         ]),
+
         ShellKind::Elvish => cmd.args([
             "-c",
             &format!("cd {}; {} --printenv", quoted_directory, quoted_zed_path),
         ]),
+
         ShellKind::Nushell => {
             let zed_command = shell_kind
                 .prepend_command_prefix(&quoted_zed_path)
                 .into_owned();
+
             cmd.args([
                 "-c",
                 &format!("cd {}; {} --printenv", quoted_directory, zed_command),
             ])
         }
+
         ShellKind::Cmd => {
             let dir = directory_string.trim_end_matches('\\');
+
             cmd.args(["/d", "/c", "cd", dir, "&&", &zed_path_string, "--printenv"])
         }
     }
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
+
     let output = cmd
         .output()
         .await
         .with_context(|| format!("command {cmd:?}"))?;
+
     let env_output = String::from_utf8_lossy(&output.stdout);
 
     parse_env_output(
@@ -329,6 +360,7 @@ mod tests {
             "PATH": "/usr/bin",
             "SHELL": "/bin/zsh",
         });
+
         let env_output = format!("shell startup noise\n{env_json}\nshell shutdown noise");
 
         let env_map = parse_env_output(
@@ -338,6 +370,7 @@ mod tests {
             || panic!("failed capture error should not be evaluated for valid environment output"),
         )
         .expect("valid environment output should be returned despite non-zero shell exit");
+
         assert_eq!(env_map.get("PATH").map(String::as_str), Some("/usr/bin"));
         assert_eq!(env_map.get("SHELL").map(String::as_str), Some("/bin/zsh"));
     }

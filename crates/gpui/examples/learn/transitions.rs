@@ -12,6 +12,7 @@ use gpui::{
     AnyElement, App, AppContext, Bounds, Context, ElementId, Pixels, Point, Window, WindowBounds,
     WindowOptions, actions, bounce, div, ease_in_out, point, prelude::*, px, rgb, size,
 };
+
 use smallvec::SmallVec;
 
 actions!(app, [Quit]);
@@ -61,6 +62,7 @@ impl RenderOnce for Button {
                 |_window, _cx| 0.,
             )
             .with_easing(bounce(ease_in_out));
+
         let progress = *bounce_transition.evaluate(window, cx);
         let resting_position = centered_position(window);
 
@@ -81,8 +83,10 @@ impl RenderOnce for Button {
             .children(self.children)
             .on_click(move |_, _window, cx| {
                 bounce_transition.reset(cx);
+
                 bounce_transition.update(cx, |progress, cx| {
                     *progress = 1.;
+
                     cx.notify();
                 });
             })
@@ -105,6 +109,7 @@ impl Render for TransitionExample {
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(500.), px(650.)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(|_| TransitionExample),

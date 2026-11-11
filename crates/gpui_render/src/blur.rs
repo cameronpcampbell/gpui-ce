@@ -5,6 +5,7 @@ pub use crate::shaders::{
         Corners as ShaderCorners, DownsampleMode,
     },
 };
+
 use gpui::{Bounds, Corners, ScaledPixels};
 use wgsl_rs::std::vec2f;
 
@@ -14,6 +15,7 @@ pub const DOWNSAMPLE_FACTOR: u32 = 2;
 pub fn downsampled_dimension(dimension: u32) -> u32 {
     dimension.div_ceil(DOWNSAMPLE_FACTOR).max(1)
 }
+
 const RADIUS_TO_STANDARD_DEVIATION: f32 = 0.5;
 pub const GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS: f32 = 3.0;
 pub const MAX_GAUSSIAN_SAMPLES_PER_SIDE: u32 = 32;
@@ -51,12 +53,14 @@ pub struct BlurKernel {
 impl BlurKernel {
     pub fn for_radius(blur_radius: f32) -> Option<Self> {
         let standard_deviation = (blur_radius * RADIUS_TO_STANDARD_DEVIATION).max(0.0);
+
         if standard_deviation <= 0.0 {
             return None;
         }
 
         let ideal_sample_count = (GAUSSIAN_CUTOFF_STANDARD_DEVIATIONS * standard_deviation).ceil();
         let sample_count = (ideal_sample_count as u32).clamp(1, MAX_GAUSSIAN_SAMPLES_PER_SIDE);
+
         Some(Self {
             standard_deviation,
             sample_count,
@@ -83,6 +87,7 @@ impl BlurUniforms {
             BlurAxis::Horizontal => vec2f(1.0 / texture_size[0], 0.0),
             BlurAxis::Vertical => vec2f(0.0, 1.0 / texture_size[1]),
         };
+
         Self {
             direction,
             standard_deviation: kernel.standard_deviation,
@@ -142,28 +147,33 @@ impl ScissorRectangle {
     ) -> Self {
         let downsampled_width = full_width.div_ceil(DOWNSAMPLE_FACTOR).max(1);
         let downsampled_height = full_height.div_ceil(DOWNSAMPLE_FACTOR).max(1);
+
         let minimum_x = downsampled_coordinate(
             bounds.origin.x.0 - dilation,
             downsampled_width,
             EdgeRounding::OutwardMinimum,
         );
+
         let minimum_y = downsampled_coordinate(
             bounds.origin.y.0 - dilation,
             downsampled_height,
             EdgeRounding::OutwardMinimum,
         );
+
         let maximum_x = downsampled_coordinate(
             bounds.origin.x.0 + bounds.size.width.0 + dilation,
             downsampled_width,
             EdgeRounding::OutwardMaximum,
         )
         .max(minimum_x);
+
         let maximum_y = downsampled_coordinate(
             bounds.origin.y.0 + bounds.size.height.0 + dilation,
             downsampled_height,
             EdgeRounding::OutwardMaximum,
         )
         .max(minimum_y);
+
         Self {
             x: minimum_x,
             y: minimum_y,
@@ -185,10 +195,12 @@ enum EdgeRounding {
 
 fn downsampled_coordinate(value: f32, maximum: u32, rounding: EdgeRounding) -> u32 {
     let downsampled = value / DOWNSAMPLE_FACTOR as f32;
+
     let rounded = match rounding {
         EdgeRounding::OutwardMinimum => downsampled.floor(),
         EdgeRounding::OutwardMaximum => downsampled.ceil(),
     };
+
     (rounded.max(0.0) as u32).min(maximum)
 }
 
@@ -199,6 +211,7 @@ fn with_texture_sizes(
 ) -> BlurUniforms {
     uniforms.source_size = vec2f(source_size[0], source_size[1]);
     uniforms.target_size = vec2f(target_size[0], target_size[1]);
+
     uniforms
 }
 
@@ -207,6 +220,7 @@ fn empty_uniforms(downsample_mode: DownsampleMode) -> BlurUniforms {
         origin: vec2f(0.0, 0.0),
         size: vec2f(0.0, 0.0),
     };
+
     BlurUniforms {
         bounds,
         content_mask: bounds,

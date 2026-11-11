@@ -1,4 +1,5 @@
 use anyhow::{Context as _, Result, anyhow};
+
 use std::{
     borrow::{Borrow, Cow},
     fmt,
@@ -45,6 +46,7 @@ impl RelPath {
     /// Creates an empty [`RelPath`].
     pub fn empty_arc() -> Arc<Self> {
         static EMPTY: std::sync::OnceLock<Arc<RelPath>> = std::sync::OnceLock::new();
+
         EMPTY.get_or_init(|| Arc::from(Self::empty())).clone()
     }
 
@@ -67,6 +69,7 @@ impl RelPath {
         while prefixes.iter().any(|prefix| path.starts_with(prefix)) {
             path = &path[prefixes[0].len()..];
         }
+
         while let Some(prefix) = path.strip_suffix(suffixes)
             && !prefix.is_empty()
         {
@@ -78,6 +81,7 @@ impl RelPath {
         }
 
         let mut string = Cow::Borrowed(path);
+
         if path_style == PathStyle::Windows && path.contains('\\') {
             string = Cow::Owned(string.as_ref().replace('\\', "/"))
         }
@@ -92,18 +96,22 @@ impl RelPath {
             .any(|component| component.is_empty() || component == "." || component == "..")
         {
             let mut normalized = RelPathBuf::new();
+
             for component in result.components() {
                 match component {
                     "" => {}
                     "." => {}
+
                     ".." => {
                         if !normalized.pop() {
                             return Err(anyhow!("path is not relative: {result:?}"));
                         }
                     }
+
                     other => normalized.push(RelPath::from_str(other)),
                 }
             }
+
             result = Cow::Owned(normalized)
         }
 
@@ -122,6 +130,7 @@ impl RelPath {
     #[track_caller]
     pub fn from_unix_str<S: AsRef<Path> + ?Sized>(path: &S) -> anyhow::Result<&Self> {
         let path = path.as_ref();
+
         match Self::new(path, PathStyle::Unix)? {
             Cow::Borrowed(path) => Ok(path),
             Cow::Owned(_) => Err(anyhow!("invalid relative path {path:?}")),
@@ -164,7 +173,9 @@ impl RelPath {
 
     pub fn parent(&self) -> Option<&Self> {
         let mut components = self.components();
+
         components.next_back()?;
+
         Some(components.rest())
     }
 
@@ -181,6 +192,7 @@ impl RelPath {
         if ancestor.is_empty() || self == ancestor {
             return false;
         }
+
         self.starts_with(ancestor)
     }
 
@@ -188,11 +200,13 @@ impl RelPath {
         if other.is_empty() {
             return true;
         }
+
         if let Some(suffix) = self.0.strip_suffix(&other.0)
             && (suffix.ends_with('/') || suffix.is_empty())
         {
             return true;
         }
+
         false
     }
 
@@ -200,6 +214,7 @@ impl RelPath {
         if other.is_empty() {
             return Ok(self);
         }
+
         if let Some(suffix) = self.0.strip_prefix(&other.0) {
             if let Some(suffix) = suffix.strip_prefix('/') {
                 return Ok(Self::from_str(suffix));
@@ -207,6 +222,7 @@ impl RelPath {
                 return Ok(Self::empty());
             }
         }
+
         Err(StripPrefixError)
     }
 
@@ -220,12 +236,16 @@ impl RelPath {
 
     pub fn last_n_components(&self, count: usize) -> Option<&Self> {
         let len = self.len();
+
         if len >= count {
             let mut components = self.components();
+
             for _ in 0..(len - count) {
                 components.next()?;
             }
+
             Some(components.rest())
+
         } else {
             None
         }
@@ -339,10 +359,14 @@ impl RelPathBuf {
     pub fn pop(&mut self) -> bool {
         if let Some(ix) = self.0.rfind('/') {
             self.0.truncate(ix);
+
             true
+
         } else if !self.is_empty() {
             self.0.clear();
+
             true
+
         } else {
             false
         }
@@ -352,9 +376,11 @@ impl RelPathBuf {
         if path.is_empty() {
             return;
         }
+
         if !self.is_empty() {
             self.0.push('/');
         }
+
         self.0.push_str(&path.0);
     }
 
@@ -370,7 +396,9 @@ impl RelPathBuf {
         if !self.is_empty() {
             self.0.push('/');
         }
+
         self.0.push_str(component);
+
         Ok(())
     }
 
@@ -381,10 +409,13 @@ impl RelPathBuf {
     pub fn set_extension(&mut self, extension: &str) -> bool {
         if let Some(filename) = self.file_name() {
             let mut filename = PathBuf::from(filename);
+
             filename.set_extension(extension);
             self.pop();
             self.push(RelPath::from_str(filename.to_str().unwrap()));
+
             true
+
         } else {
             false
         }
@@ -450,6 +481,7 @@ impl<'a> From<&'a RelPath> for Cow<'a, RelPath> {
 impl From<&RelPath> for Arc<RelPath> {
     fn from(rel_path: &RelPath) -> Self {
         let bytes: Arc<str> = Arc::from(&rel_path.0);
+
         // SAFETY: `AbsPath` is a `repr(transparent)` wrapper around `Path`.
         unsafe { Arc::from_raw(Arc::into_raw(bytes) as *const RelPath) }
     }
@@ -537,13 +569,18 @@ impl<'a> Iterator for RelPathComponents<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(sep_ix) = self.0.find(SEPARATOR) {
             let (head, tail) = self.0.split_at(sep_ix);
+
             self.0 = &tail[1..];
+
             Some(head)
+
         } else if self.0.is_empty() {
             None
         } else {
             let result = self.0;
+
             self.0 = "";
+
             Some(result)
         }
     }
@@ -556,12 +593,15 @@ impl<'a> Iterator for RelPathAncestors<'a> {
         if self.done {
             return None;
         }
+
         let result = &self.full[..self.front];
+
         if self.front == self.back {
             self.done = true;
         } else {
             self.front = result.rfind(SEPARATOR).unwrap_or_default();
         }
+
         Some(RelPath::from_str(result))
     }
 }
@@ -571,16 +611,20 @@ impl<'a> DoubleEndedIterator for RelPathAncestors<'a> {
         if self.done {
             return None;
         }
+
         let result = &self.full[..self.back];
+
         if self.front == self.back {
             self.done = true;
         } else {
             let search_start = if self.back == 0 { 0 } else { self.back + 1 };
+
             self.back = match self.full[search_start..].find(SEPARATOR) {
                 Some(sep_ix) => search_start + sep_ix,
                 None => self.full.len(),
             };
         }
+
         Some(RelPath::from_str(result))
     }
 }
@@ -589,13 +633,18 @@ impl<'a> DoubleEndedIterator for RelPathComponents<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if let Some(sep_ix) = self.0.rfind(SEPARATOR) {
             let (head, tail) = self.0.split_at(sep_ix);
+
             self.0 = head;
+
             Some(&tail[1..])
+
         } else if self.0.is_empty() {
             None
         } else {
             let result = self.0;
+
             self.0 = "";
+
             Some(result)
         }
     }
@@ -608,8 +657,10 @@ impl<'de> serde::Deserialize<'de> for RelPathBuf {
         D: serde::Deserializer<'de>,
     {
         let path = String::deserialize(deserializer)?;
+
         let rel_path =
             RelPath::new(Path::new(&path), PathStyle::local()).map_err(serde::de::Error::custom)?;
+
         Ok(rel_path.into_owned())
     }
 }
@@ -625,10 +676,12 @@ mod tests {
         assert!(RelPath::new(Path::new("/foo/"), PathStyle::local()).is_err());
 
         let path = RelPath::new("foo/".as_ref(), PathStyle::local()).unwrap();
+
         assert_eq!(path, rel_path("foo").into());
         assert!(matches!(path, Cow::Borrowed(_)));
 
         let path = RelPath::new("foo\\".as_ref(), PathStyle::Windows).unwrap();
+
         assert_eq!(path, rel_path("foo").into());
         assert!(matches!(path, Cow::Borrowed(_)));
 
@@ -640,26 +693,32 @@ mod tests {
         );
 
         let path = RelPath::new("./foo/bar".as_ref(), PathStyle::Unix).unwrap();
+
         assert_eq!(path.as_ref(), rel_path("foo/bar"));
         assert!(matches!(path, Cow::Borrowed(_)));
 
         let path = RelPath::new(".\\foo".as_ref(), PathStyle::Windows).unwrap();
+
         assert_eq!(path, rel_path("foo").into());
         assert!(matches!(path, Cow::Borrowed(_)));
 
         let path = RelPath::new("./.\\./foo/\\/".as_ref(), PathStyle::Windows).unwrap();
+
         assert_eq!(path, rel_path("foo").into());
         assert!(matches!(path, Cow::Borrowed(_)));
 
         let path = RelPath::new("foo/./bar".as_ref(), PathStyle::Unix).unwrap();
+
         assert_eq!(path.as_ref(), rel_path("foo/bar"));
         assert!(matches!(path, Cow::Owned(_)));
 
         let path = RelPath::new("./foo/bar".as_ref(), PathStyle::Windows).unwrap();
+
         assert_eq!(path.as_ref(), rel_path("foo/bar"));
         assert!(matches!(path, Cow::Borrowed(_)));
 
         let path = RelPath::new(".\\foo\\bar".as_ref(), PathStyle::Windows).unwrap();
+
         assert_eq!(path.as_ref(), rel_path("foo/bar"));
         assert!(matches!(path, Cow::Owned(_)));
     }
@@ -667,10 +726,12 @@ mod tests {
     #[test]
     fn test_rel_path_components() {
         let path = rel_path("foo/bar/baz");
+
         assert_eq!(
             path.components().collect::<Vec<_>>(),
             vec!["foo", "bar", "baz"]
         );
+
         assert_eq!(
             path.components().rev().collect::<Vec<_>>(),
             vec!["baz", "bar", "foo"]
@@ -678,6 +739,7 @@ mod tests {
 
         let path = rel_path("");
         let mut components = path.components();
+
         assert_eq!(components.next(), None);
     }
 
@@ -685,6 +747,7 @@ mod tests {
     fn test_rel_path_ancestors() {
         let path = rel_path("foo/bar/baz");
         let mut ancestors = path.ancestors();
+
         assert_eq!(ancestors.next(), Some(rel_path("foo/bar/baz")));
         assert_eq!(ancestors.next(), Some(rel_path("foo/bar")));
         assert_eq!(ancestors.next(), Some(rel_path("foo")));
@@ -693,17 +756,20 @@ mod tests {
 
         let path = rel_path("foo");
         let mut ancestors = path.ancestors();
+
         assert_eq!(ancestors.next(), Some(rel_path("foo")));
         assert_eq!(ancestors.next(), Some(RelPath::empty()));
         assert_eq!(ancestors.next(), None);
 
         let path = RelPath::empty();
         let mut ancestors = path.ancestors();
+
         assert_eq!(ancestors.next(), Some(RelPath::empty()));
         assert_eq!(ancestors.next(), None);
 
         let path = rel_path("foo/bar/baz");
         let mut ancestors = path.ancestors();
+
         assert_eq!(ancestors.next_back(), Some(rel_path("")));
         assert_eq!(ancestors.next_back(), Some(rel_path("foo")));
         assert_eq!(ancestors.next_back(), Some(rel_path("foo/bar")));
@@ -712,6 +778,7 @@ mod tests {
 
         let path = rel_path("foo/bar/baz");
         let mut ancestors = path.ancestors();
+
         assert_eq!(ancestors.next(), Some(rel_path("foo/bar/baz")));
         assert_eq!(ancestors.next_back(), Some(rel_path("")));
         assert_eq!(ancestors.next(), Some(rel_path("foo/bar")));
@@ -721,17 +788,20 @@ mod tests {
 
         let path = rel_path("foo");
         let mut ancestors = path.ancestors();
+
         assert_eq!(ancestors.next_back(), Some(RelPath::empty()));
         assert_eq!(ancestors.next_back(), Some(rel_path("foo")));
         assert_eq!(ancestors.next_back(), None);
 
         let path = RelPath::empty();
         let mut ancestors = path.ancestors();
+
         assert_eq!(ancestors.next_back(), Some(RelPath::empty()));
         assert_eq!(ancestors.next_back(), None);
 
         let path = rel_path("über/x");
         let mut ancestors = path.ancestors();
+
         assert_eq!(ancestors.next_back(), Some(RelPath::empty()));
         assert_eq!(ancestors.next_back(), Some(rel_path("über")));
         assert_eq!(ancestors.next_back(), Some(rel_path("über/x")));
@@ -748,6 +818,7 @@ mod tests {
     #[test]
     fn test_rel_path_partial_ord_is_compatible_with_std() {
         let test_cases = ["a/b/c", "relative/path/with/dot.", "relative/path/with.dot"];
+
         for (i, lhs) in test_cases.iter().enumerate() {
             for rhs in &test_cases[i + 1..] {
                 assert_eq!(
@@ -794,11 +865,17 @@ mod tests {
     #[test]
     fn test_pop() {
         let mut path = rel_path_buf("a/b");
+
         path.pop();
+
         assert_eq!(path.as_rel_path().as_unix_str(), "a");
+
         path.pop();
+
         assert_eq!(path.as_rel_path().as_unix_str(), "");
+
         path.pop();
+
         assert_eq!(path.as_rel_path().as_unix_str(), "");
     }
 
@@ -813,14 +890,17 @@ mod tests {
     #[test]
     fn test_set_extension() {
         let mut path = rel_path_buf("a/b/c.txt");
+
         assert!(path.set_extension("rs"));
         assert_eq!(path.as_rel_path().as_unix_str(), "a/b/c.rs");
 
         let mut single = rel_path_buf("file.txt");
+
         assert!(single.set_extension("md"));
         assert_eq!(single.as_rel_path().as_unix_str(), "file.md");
 
         let mut no_ext = rel_path_buf("a/b/c");
+
         assert!(no_ext.set_extension("rs"));
         assert_eq!(no_ext.as_rel_path().as_unix_str(), "a/b/c.rs");
     }

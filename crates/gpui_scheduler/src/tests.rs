@@ -1,4 +1,5 @@
 use super::*;
+
 use futures::{
     FutureExt,
     channel::{mpsc, oneshot},
@@ -7,6 +8,7 @@ use futures::{
     sink::SinkExt,
     stream::{FuturesUnordered, StreamExt},
 };
+
 use std::{
     cell::RefCell,
     collections::{BTreeSet, HashSet},
@@ -20,8 +22,10 @@ use std::{
 fn test_foreground_executor_spawn() {
     let result = TestScheduler::once(async |scheduler| {
         let task = scheduler.foreground().spawn(async move { 42 });
+
         task.await
     });
+
     assert_eq!(result, 42);
 }
 
@@ -30,6 +34,7 @@ fn test_background_executor_spawn() {
     TestScheduler::once(async |scheduler| {
         let task = scheduler.background().spawn(async move { 42 });
         let result = task.await;
+
         assert_eq!(result, 42);
     });
 }
@@ -39,6 +44,7 @@ fn test_dedicated_executor_spawn() {
     TestScheduler::once(async |scheduler| {
         let dedicated = DedicatedExecutor::new(&scheduler.background());
         let task = dedicated.spawn(async move { 42 });
+
         assert_eq!(task.await, 42);
     });
 }
@@ -55,10 +61,13 @@ fn test_scheduler_drops_with_stalled_detached_foreground_task() {
             receiver.await.ok();
         })
         .detach();
+
     scheduler.run();
 
     drop(scheduler);
+
     assert!(weak_scheduler.upgrade().is_none());
+
     drop(sender);
 }
 
@@ -74,10 +83,13 @@ fn test_scheduler_drops_with_stalled_detached_background_task() {
             receiver.await.ok();
         })
         .detach();
+
     scheduler.run();
 
     drop(scheduler);
+
     assert!(weak_scheduler.upgrade().is_none());
+
     drop(sender);
 }
 
@@ -95,6 +107,7 @@ fn test_scheduler_drops_with_never_polled_dedicated_task() {
         .detach();
 
     drop(scheduler);
+
     assert!(weak_scheduler.upgrade().is_none());
 }
 
@@ -112,10 +125,12 @@ fn test_foreground_ordering() {
         let trace = Rc::new(RefCell::new(Vec::new()));
 
         let foreground_1 = scheduler.foreground();
+
         for task in 0..10 {
             foreground_1
                 .spawn({
                     let trace = trace.clone();
+
                     async move {
                         trace.borrow_mut().push(TraceEntry { session: 0, task });
                     }
@@ -124,10 +139,12 @@ fn test_foreground_ordering() {
         }
 
         let foreground_2 = scheduler.foreground();
+
         for task in 0..10 {
             foreground_2
                 .spawn({
                     let trace = trace.clone();
+
                     async move {
                         trace.borrow_mut().push(TraceEntry { session: 1, task });
                     }
@@ -146,6 +163,7 @@ fn test_foreground_ordering() {
                 .collect::<Vec<_>>(),
             (0..10).collect::<Vec<_>>()
         );
+
         assert_eq!(
             trace
                 .borrow()
@@ -167,27 +185,34 @@ fn test_timer_ordering() {
     TestScheduler::many(1, async |scheduler| {
         let background = scheduler.background();
         let futures = FuturesUnordered::new();
+
         futures.push(
             async {
                 background.timer(Duration::from_millis(100)).await;
+
                 2
             }
             .boxed(),
         );
+
         futures.push(
             async {
                 background.timer(Duration::from_millis(50)).await;
+
                 1
             }
             .boxed(),
         );
+
         futures.push(
             async {
                 background.timer(Duration::from_millis(150)).await;
+
                 3
             }
             .boxed(),
         );
+
         assert_eq!(futures.collect::<Vec<_>>().await, vec![1, 2, 3]);
     });
 }
@@ -226,6 +251,7 @@ fn test_send_from_bg_to_fg() {
 
         let task = foreground.spawn(async move { receiver.await.unwrap() });
         let result = task.await;
+
         assert_eq!(result, 42);
     });
 }
@@ -234,14 +260,18 @@ fn test_send_from_bg_to_fg() {
 fn test_randomize_order() {
     // Test deterministic mode: different seeds should produce same execution order
     let mut deterministic_results = HashSet::new();
+
     for seed in 0..10 {
         let config = TestSchedulerConfig {
             seed,
             randomize_order: false,
             ..Default::default()
         };
+
         let order = block_on(capture_execution_order(config));
+
         assert_eq!(order.len(), 6);
+
         deterministic_results.insert(order);
     }
 
@@ -254,10 +284,13 @@ fn test_randomize_order() {
 
     // Test randomized mode: different seeds can produce different execution orders
     let mut randomized_results = HashSet::new();
+
     for seed in 0..20 {
         let config = TestSchedulerConfig::with_seed(seed);
         let order = block_on(capture_execution_order(config));
+
         assert_eq!(order.len(), 6);
+
         randomized_results.insert(order);
     }
 
@@ -278,6 +311,7 @@ async fn capture_execution_order(config: TestSchedulerConfig) -> Vec<String> {
     // Spawn foreground tasks
     for i in 0..3 {
         let mut sender = sender.clone();
+
         foreground
             .spawn(async move {
                 sender.send(format!("fg-{}", i)).await.ok();
@@ -288,6 +322,7 @@ async fn capture_execution_order(config: TestSchedulerConfig) -> Vec<String> {
     // Spawn background tasks
     for i in 0..3 {
         let mut sender = sender.clone();
+
         background
             .spawn(async move {
                 sender.send(format!("bg-{}", i)).await.ok();
@@ -296,6 +331,7 @@ async fn capture_execution_order(config: TestSchedulerConfig) -> Vec<String> {
     }
 
     drop(sender); // Close sender to signal no more messages
+
     scheduler.run();
 
     receiver.collect().await
@@ -316,6 +352,7 @@ fn test_block() {
 
     // Block on receiving the value
     let result = scheduler.foreground().block_on(async { rx.await.unwrap() });
+
     assert_eq!(result, 42);
 }
 
@@ -326,9 +363,12 @@ fn test_parking_panics() {
         capture_pending_traces: true,
         ..Default::default()
     };
+
     let scheduler = Arc::new(TestScheduler::new(config));
+
     scheduler.foreground().block_on(async {
         let (_tx, rx) = oneshot::channel::<()>();
+
         rx.await.unwrap(); // This will never complete
     });
 }
@@ -339,6 +379,7 @@ fn test_block_with_parking() {
         allow_parking: true,
         ..Default::default()
     };
+
     let scheduler = Arc::new(TestScheduler::new(config));
     let (tx, rx) = oneshot::channel();
 
@@ -352,6 +393,7 @@ fn test_block_with_parking() {
 
     // Block on receiving the value (will park if needed)
     let result = scheduler.foreground().block_on(async { rx.await.unwrap() });
+
     assert_eq!(result, 42);
 }
 
@@ -360,15 +402,19 @@ fn test_helper_methods() {
     // Test the once method
     let result = TestScheduler::once(async |scheduler: Arc<TestScheduler>| {
         let background = scheduler.background();
+
         background.spawn(async { 42 }).await
     });
+
     assert_eq!(result, 42);
 
     // Test the many method
     let results = TestScheduler::many(3, async |scheduler: Arc<TestScheduler>| {
         let background = scheduler.background();
+
         background.spawn(async { 10 }).await
     });
+
     assert_eq!(results, vec![10, 10, 10]);
 }
 
@@ -382,10 +428,13 @@ fn test_many_with_arbitrary_seed() {
             let scheduler = Arc::new(TestScheduler::new(TestSchedulerConfig::with_seed(
                 current_seed,
             )));
+
             let captured_seed = current_seed;
+
             scheduler
                 .foreground()
                 .block_on(async { seeds_seen.push(captured_seed) });
+
             scheduler.run();
         }
 
@@ -404,6 +453,7 @@ fn test_block_with_timeout() {
         let foreground = scheduler.foreground();
         let future = future::ready(42);
         let output = foreground.block_with_timeout(Duration::from_millis(100), future);
+
         assert_eq!(output.ok(), Some(42));
     });
 
@@ -417,23 +467,29 @@ fn test_block_with_timeout() {
         let foreground = scheduler.foreground();
         let future = future::pending::<()>();
         let output = foreground.block_with_timeout(Duration::from_millis(50), future);
+
         assert!(output.is_err(), "future should not have finished");
     });
 
     // Test case: future makes progress via timer but still times out
     let mut results = BTreeSet::new();
+
     TestScheduler::many(if cfg!(miri) { 5 } else { 100 }, async |scheduler| {
         // Keep the existing probabilistic behavior here (do not force 0 ticks), since this subtest
         // is explicitly checking that some seeds/timeouts can complete while others can time out.
         let task = scheduler.background().spawn(async move {
             Yield { polls: 10 }.await;
+
             42
         });
+
         let output = scheduler
             .foreground()
             .block_with_timeout(Duration::from_millis(50), task);
+
         results.insert(output.ok());
     });
+
     assert_eq!(
         results.into_iter().collect::<Vec<_>>(),
         if cfg!(miri) {
@@ -457,8 +513,10 @@ fn test_block_with_timeout() {
         // This task should only complete once time is explicitly advanced.
         let task = background.spawn({
             let scheduler = scheduler.clone();
+
             async move {
                 scheduler.timer(Duration::from_millis(100)).await;
+
                 123
             }
         });
@@ -467,6 +525,7 @@ fn test_block_with_timeout() {
         let timed_out = scheduler
             .foreground()
             .block_with_timeout(Duration::from_millis(50), task);
+
         assert!(
             timed_out.is_err(),
             "expected timeout before advancing the clock enough for the timer"
@@ -474,10 +533,12 @@ fn test_block_with_timeout() {
 
         // Now explicitly advance time and ensure the returned future can complete.
         let mut task = timed_out.err().unwrap();
+
         scheduler.advance_clock(Duration::from_millis(100));
         scheduler.run();
 
         let output = scheduler.foreground().block_on(&mut task);
+
         assert_eq!(output, 123);
     });
 }
@@ -486,6 +547,7 @@ fn test_block_with_timeout() {
 #[test]
 fn test_block_does_not_progress_same_session_foreground() {
     let mut task2_made_progress_once = false;
+
     TestScheduler::many(if cfg!(miri) { 5 } else { 1000 }, async |scheduler| {
         let foreground1 = scheduler.foreground();
         let foreground2 = scheduler.foreground();
@@ -495,7 +557,9 @@ fn test_block_does_not_progress_same_session_foreground() {
 
         foreground1.block_on(async {
             scheduler.yield_random().await;
+
             assert!(!task1.is_ready());
+
             task2_made_progress_once |= task2.is_ready();
         });
 
@@ -518,10 +582,12 @@ impl Future for Yield {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.polls -= 1;
+
         if self.polls == 0 {
             Poll::Ready(())
         } else {
             cx.waker().wake_by_ref();
+
             Poll::Pending
         }
     }
@@ -533,6 +599,7 @@ fn test_nondeterministic_wake_detection() {
         allow_parking: false,
         ..Default::default()
     };
+
     let scheduler = Arc::new(TestScheduler::new(config));
 
     // A future that captures its waker and sends it to an external thread
@@ -547,6 +614,7 @@ fn test_nondeterministic_wake_detection() {
             if let Some(tx) = self.waker_tx.take() {
                 tx.send(cx.waker().clone()).ok();
             }
+
             Poll::Ready(())
         }
     }
@@ -573,13 +641,17 @@ fn test_nondeterministic_wake_detection() {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         scheduler.end_test();
     }));
+
     assert!(result.is_err(), "Expected end_test to panic");
+
     let panic_payload = result.unwrap_err();
+
     let panic_message = panic_payload
         .downcast_ref::<String>()
         .map(|s| s.as_str())
         .or_else(|| panic_payload.downcast_ref::<&str>().copied())
         .unwrap_or("<unknown panic>");
+
     assert!(
         panic_message.contains("Your test is not deterministic"),
         "Expected panic message to contain non-determinism error, got: {}",
@@ -593,6 +665,7 @@ fn test_nondeterministic_wake_allowed_with_parking() {
         allow_parking: true,
         ..Default::default()
     };
+
     let scheduler = Arc::new(TestScheduler::new(config));
 
     // A future that captures its waker and sends it to an external thread
@@ -607,10 +680,13 @@ fn test_nondeterministic_wake_allowed_with_parking() {
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             if !self.waker_sent {
                 self.waker_sent = true;
+
                 if let Some(tx) = self.waker_tx.take() {
                     tx.send(cx.waker().clone()).ok();
                 }
+
                 Poll::Pending
+
             } else {
                 Poll::Ready(())
             }
@@ -640,6 +716,7 @@ fn test_nondeterministic_waker_drop_detection() {
         allow_parking: false,
         ..Default::default()
     };
+
     let scheduler = Arc::new(TestScheduler::new(config));
 
     // A future that captures its waker and sends it to an external thread
@@ -654,6 +731,7 @@ fn test_nondeterministic_waker_drop_detection() {
             if let Some(tx) = self.waker_tx.take() {
                 tx.send(cx.waker().clone()).ok();
             }
+
             Poll::Ready(())
         }
     }
@@ -680,13 +758,17 @@ fn test_nondeterministic_waker_drop_detection() {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         scheduler.end_test();
     }));
+
     assert!(result.is_err(), "Expected end_test to panic");
+
     let panic_payload = result.unwrap_err();
+
     let panic_message = panic_payload
         .downcast_ref::<String>()
         .map(|s| s.as_str())
         .or_else(|| panic_payload.downcast_ref::<&str>().copied())
         .unwrap_or("<unknown panic>");
+
     assert!(
         panic_message.contains("Your test is not deterministic"),
         "Expected panic message to contain non-determinism error, got: {}",
@@ -712,6 +794,7 @@ fn test_background_priority_scheduling() {
         // Spawn low priority tasks first
         for i in 0..3 {
             let order = execution_order.clone();
+
             background
                 .spawn_with_priority(Priority::Low, async move {
                     order.lock().push(format!("low-{}", i));
@@ -722,6 +805,7 @@ fn test_background_priority_scheduling() {
         // Spawn high priority tasks second
         for i in 0..3 {
             let order = execution_order.clone();
+
             background
                 .spawn_with_priority(Priority::High, async move {
                     order.lock().push(format!("high-{}", i));
@@ -733,6 +817,7 @@ fn test_background_priority_scheduling() {
 
         // Count how many high priority tasks ran in the first half
         let order = execution_order.lock();
+
         let high_in_first_half = order
             .iter()
             .take(3)
@@ -763,6 +848,7 @@ fn test_spawn_dedicated_basic_round_trip() {
             .spawn_dedicated(|_executor| async { 42 })
             .await
     });
+
     assert_eq!(result, 42);
 }
 
@@ -775,13 +861,16 @@ fn test_spawn_dedicated_not_send_future() {
                 // `Rc<RefCell<_>>` is `!Send`. If `spawn_dedicated` required
                 // the returned future to be `Send`, this wouldn't compile.
                 let state = Rc::new(RefCell::new(0_i32));
+
                 for _ in 0..5 {
                     *state.borrow_mut() += 1;
                 }
+
                 *state.borrow()
             })
             .await
     });
+
     assert_eq!(result, 5);
 }
 
@@ -792,20 +881,25 @@ fn test_spawn_dedicated_send_closure_captures() {
     let observed = TestScheduler::once(async |scheduler| {
         let shared = Arc::new(Mutex::new(0_i32));
         let shared_for_closure = shared.clone();
+
         let returned = scheduler
             .background()
             .spawn_dedicated(move |_executor| {
                 // `shared_for_closure` crossed the `Send` boundary of the
                 // closure; we then mutate it from inside the !Send future.
                 let local = shared_for_closure;
+
                 async move {
                     *local.lock() = 7;
                 }
             })
             .await;
+
         let _: () = returned;
+
         *shared.lock()
     });
+
     assert_eq!(observed, 7);
 }
 
@@ -819,14 +913,18 @@ fn test_spawn_dedicated_inner_spawn_local() {
                 // onto the same dedicated session.
                 let inner = Rc::new(RefCell::new(0_i32));
                 let inner_for_child = inner.clone();
+
                 let child = executor.spawn(async move {
                     *inner_for_child.borrow_mut() = 99;
+
                     *inner_for_child.borrow()
                 });
+
                 child.await
             })
             .await
     });
+
     assert_eq!(result, 99);
 }
 
@@ -839,19 +937,25 @@ fn test_spawn_dedicated_determinism_under_many() {
 
         let background = scheduler.background();
         let mut tasks = Vec::new();
+
         for id in 0..4_u32 {
             let trace = trace.clone();
+
             let task = background.spawn_dedicated(move |executor| async move {
                 for step in 0..3 {
                     trace.lock().push(id * 100 + step);
+
                     executor.spawn(async {}).await;
                 }
+
                 id
             });
+
             tasks.push(task);
         }
 
         let mut outputs = Vec::new();
+
         for task in tasks {
             outputs.push(task.await);
         }
@@ -866,19 +970,25 @@ fn test_spawn_dedicated_determinism_under_many() {
 
         let background = scheduler.background();
         let mut tasks = Vec::new();
+
         for id in 0..4_u32 {
             let trace = trace.clone();
+
             let task = background.spawn_dedicated(move |executor| async move {
                 for step in 0..3 {
                     trace.lock().push(id * 100 + step);
+
                     executor.spawn(async {}).await;
                 }
+
                 id
             });
+
             tasks.push(task);
         }
 
         let mut outputs = Vec::new();
+
         for task in tasks {
             outputs.push(task.await);
         }
@@ -899,6 +1009,7 @@ fn test_spawn_dedicated_determinism_under_many() {
             .windows(2)
             .any(|window| window[0] / 100 != window[1] / 100)
     });
+
     assert!(
         any_interleaved,
         "expected at least one seed to interleave dedicated tasks"
@@ -915,26 +1026,32 @@ fn test_spawn_dedicated_dropping_task_cancels_future() {
 
         let task = {
             let counter = counter.clone();
+
             scheduler
                 .background()
                 .spawn_dedicated(move |_executor| async move {
                     *counter.lock() = 1;
+
                     // Park here until the test resumes us. If the task is
                     // dropped before this resolves, the second assignment
                     // below must never happen.
                     let _ = resume_rx.await;
+
                     *counter.lock() = 2;
                 })
         };
 
         // Let the dedicated future make its first observable step.
         scheduler.run();
+
         assert_eq!(*counter.lock(), 1);
 
         // Cancel by dropping the root task, then unblock the parked oneshot.
         // The future must not advance past the await: counter stays at 1.
         drop(task);
+
         let _ = resume_tx.send(());
+
         scheduler.run();
 
         *counter.lock()
@@ -955,6 +1072,7 @@ fn test_spawn_dedicated_detached_child_runs_after_root_completes() {
 
         let task = {
             let child_ran = child_ran.clone();
+
             scheduler
                 .background()
                 .spawn_dedicated(move |executor| async move {

@@ -6,13 +6,16 @@ use crate::{
     StyleRefinement, TextAlign, TextOverflow, TextStyleRefinement, TextTransform, UnderlineStyle,
     UnicodeBidi, VerticalAlign, WhiteSpace, px, relative, rems,
 };
+
 pub use gpui_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
     overflow_style_methods, padding_style_methods, position_style_methods,
     visibility_style_methods,
 };
+
 use palette::{Hsla, IntoColor};
 use refineable::Refineable;
+
 const ELLIPSIS: SharedString = SharedString::new_static("…");
 
 /// A trait for elements that can be styled.
@@ -63,6 +66,7 @@ pub trait Styled: Sized {
     /// Sets this element's Unicode bidirectional formatting behavior.
     fn unicode_bidi(mut self, unicode_bidi: UnicodeBidi) -> Self {
         let style = self.style();
+
         style.unicode_bidi = Some(unicode_bidi);
         style.unicode_bidi_explicit = Some(true);
 
@@ -83,6 +87,7 @@ pub trait Styled: Sized {
             .filter
             .get_or_insert_with(Vec::new)
             .push(Filter::Blur(radius.into()));
+
         self
     }
 
@@ -91,6 +96,7 @@ pub trait Styled: Sized {
     /// convenience setters such as [`Styled::blur`].
     fn filter(mut self, filters: impl Into<Vec<Filter>>) -> Self {
         self.style().filter = Some(filters.into());
+
         self
     }
 
@@ -105,6 +111,7 @@ pub trait Styled: Sized {
             .backdrop_filter
             .get_or_insert_with(Vec::new)
             .push(Filter::Blur(radius.into()));
+
         self
     }
 
@@ -113,12 +120,14 @@ pub trait Styled: Sized {
     /// convenience setters such as [`Styled::backdrop_blur`].
     fn backdrop_filter(mut self, filters: impl Into<Vec<Filter>>) -> Self {
         self.style().backdrop_filter = Some(filters.into());
+
         self
     }
 
     /// Sets the display type of the element.
     fn display(mut self, display: Display) -> Self {
         self.style().display = Some(display);
+
         self
     }
 
@@ -154,6 +163,7 @@ pub trait Styled: Sized {
     /// Sets the vertical alignment of this element when it is placed in an inline layout.
     fn vertical_align(mut self, align: VerticalAlign) -> Self {
         self.style().vertical_align = Some(align);
+
         self
     }
 
@@ -191,6 +201,7 @@ pub trait Styled: Sized {
     /// `Overflow::Scroll`.
     fn scrollbar_width(mut self, width: impl Into<AbsoluteLength>) -> Self {
         self.style().scrollbar_width = Some(width.into());
+
         self
     }
 
@@ -202,10 +213,12 @@ pub trait Styled: Sized {
     fn overflow_fade(mut self, fade: impl Into<Edges<AbsoluteLength>>) -> Self {
         let fade = fade.into();
         let overflow_fade = &mut self.style().overflow_fade;
+
         overflow_fade.top = Some(fade.top);
         overflow_fade.right = Some(fade.right);
         overflow_fade.bottom = Some(fade.bottom);
         overflow_fade.left = Some(fade.left);
+
         self
     }
 
@@ -225,6 +238,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/whitespace)
     fn whitespace(mut self, white_space: WhiteSpace) -> Self {
         self.text_style().white_space = Some(white_space);
+
         self
     }
 
@@ -232,6 +246,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/whitespace#normal)
     fn whitespace_normal(mut self) -> Self {
         self.text_style().white_space = Some(WhiteSpace::Normal);
+
         self
     }
 
@@ -239,6 +254,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/whitespace#nowrap)
     fn whitespace_nowrap(mut self) -> Self {
         self.text_style().white_space = Some(WhiteSpace::Nowrap);
+
         self
     }
 
@@ -246,6 +262,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/text-overflow#ellipsis)
     fn text_ellipsis(mut self) -> Self {
         self.text_style().text_overflow = Some(TextOverflow::Truncate(ELLIPSIS));
+
         self
     }
 
@@ -254,6 +271,7 @@ pub trait Styled: Sized {
     /// Note: This doesn't exist in Tailwind CSS.
     fn text_ellipsis_start(mut self) -> Self {
         self.text_style().text_overflow = Some(TextOverflow::TruncateStart(ELLIPSIS));
+
         self
     }
 
@@ -262,18 +280,21 @@ pub trait Styled: Sized {
     /// Note: This doesn't exist in Tailwind CSS.
     fn text_ellipsis_middle(mut self) -> Self {
         self.text_style().text_overflow = Some(TextOverflow::TruncateMiddle(ELLIPSIS));
+
         self
     }
 
     /// Sets the text overflow behavior of the element.
     fn text_overflow(mut self, overflow: TextOverflow) -> Self {
         self.text_style().text_overflow = Some(overflow);
+
         self
     }
 
     /// Set the text alignment of the element.
     fn text_align(mut self, align: TextAlign) -> Self {
         self.text_style().text_align = Some(align);
+
         self
     }
 
@@ -305,12 +326,14 @@ pub trait Styled: Sized {
     /// Sets the letter spacing for text in this element and its children.
     fn letter_spacing(mut self, spacing: impl Into<Pixels>) -> Self {
         self.text_style().letter_spacing = Some(spacing.into());
+
         self
     }
 
     /// Sets the case transformation for text in this element and its children.
     fn text_transform(mut self, transform: TextTransform) -> Self {
         self.text_style().text_transform = Some(transform);
+
         self
     }
 
@@ -324,7 +347,9 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/line-clamp)
     fn line_clamp(mut self, lines: usize) -> Self {
         let mut text_style = self.text_style();
+
         text_style.line_clamp = Some(lines);
+
         self.overflow_hidden()
     }
 
@@ -332,6 +357,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-direction)
     fn flex_direction(mut self, direction: FlexDirection) -> Self {
         self.style().flex_direction = Some(direction);
+
         self
     }
 
@@ -339,6 +365,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-direction#column)
     fn flex_col(mut self) -> Self {
         self.style().flex_direction = Some(FlexDirection::Column);
+
         self
     }
 
@@ -346,6 +373,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-direction#column-reverse)
     fn flex_col_reverse(mut self) -> Self {
         self.style().flex_direction = Some(FlexDirection::ColumnReverse);
+
         self
     }
 
@@ -353,6 +381,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-direction#row)
     fn flex_row(mut self) -> Self {
         self.style().flex_direction = Some(FlexDirection::Row);
+
         self
     }
 
@@ -360,6 +389,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-direction#row-reverse)
     fn flex_row_reverse(mut self) -> Self {
         self.style().flex_direction = Some(FlexDirection::RowReverse);
+
         self
     }
 
@@ -369,6 +399,7 @@ pub trait Styled: Sized {
         self.style().flex_grow = Some(1.);
         self.style().flex_shrink = Some(1.);
         self.style().flex_basis = Some(relative(0.).into());
+
         self
     }
 
@@ -378,6 +409,7 @@ pub trait Styled: Sized {
         self.style().flex_grow = Some(1.);
         self.style().flex_shrink = Some(1.);
         self.style().flex_basis = Some(Length::Auto);
+
         self
     }
 
@@ -387,6 +419,7 @@ pub trait Styled: Sized {
         self.style().flex_grow = Some(0.);
         self.style().flex_shrink = Some(1.);
         self.style().flex_basis = Some(Length::Auto);
+
         self
     }
 
@@ -396,6 +429,7 @@ pub trait Styled: Sized {
         self.style().flex_grow = Some(0.);
         self.style().flex_shrink = Some(0.);
         self.style().flex_basis = Some(Length::Auto);
+
         self
     }
 
@@ -403,6 +437,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-basis)
     fn flex_basis(mut self, basis: impl Into<Length>) -> Self {
         self.style().flex_basis = Some(basis.into());
+
         self
     }
 
@@ -410,6 +445,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-grow)
     fn flex_grow(mut self, grow: f32) -> Self {
         self.style().flex_grow = Some(grow);
+
         self
     }
 
@@ -417,6 +453,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-grow#dont-grow)
     fn flex_grow_0(mut self) -> Self {
         self.style().flex_grow = Some(0.);
+
         self
     }
 
@@ -424,6 +461,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-grow#grow-1)
     fn flex_grow_1(mut self) -> Self {
         self.style().flex_grow = Some(1.);
+
         self
     }
 
@@ -431,6 +469,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-shrink)
     fn flex_shrink(mut self, shrink: f32) -> Self {
         self.style().flex_shrink = Some(shrink);
+
         self
     }
 
@@ -438,6 +477,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-shrink#dont-shrink)
     fn flex_shrink_0(mut self) -> Self {
         self.style().flex_shrink = Some(0.);
+
         self
     }
 
@@ -445,6 +485,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-shrink#shrink-1)
     fn flex_shrink_1(mut self) -> Self {
         self.style().flex_shrink = Some(1.);
+
         self
     }
 
@@ -452,6 +493,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-wrap#wrap-normally)
     fn flex_wrap(mut self) -> Self {
         self.style().flex_wrap = Some(FlexWrap::Wrap);
+
         self
     }
 
@@ -459,6 +501,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-wrap#wrap-reversed)
     fn flex_wrap_reverse(mut self) -> Self {
         self.style().flex_wrap = Some(FlexWrap::WrapReverse);
+
         self
     }
 
@@ -466,6 +509,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/flex-wrap#dont-wrap)
     fn flex_nowrap(mut self) -> Self {
         self.style().flex_wrap = Some(FlexWrap::NoWrap);
+
         self
     }
 
@@ -473,6 +517,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-items#start)
     fn items_start(mut self) -> Self {
         self.style().align_items = Some(AlignItems::FlexStart);
+
         self
     }
 
@@ -480,6 +525,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-items#end)
     fn items_end(mut self) -> Self {
         self.style().align_items = Some(AlignItems::FlexEnd);
+
         self
     }
 
@@ -487,6 +533,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-items#center)
     fn items_center(mut self) -> Self {
         self.style().align_items = Some(AlignItems::Center);
+
         self
     }
 
@@ -494,6 +541,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-items#baseline)
     fn items_baseline(mut self) -> Self {
         self.style().align_items = Some(AlignItems::Baseline);
+
         self
     }
 
@@ -501,6 +549,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-items#stretch)
     fn items_stretch(mut self) -> Self {
         self.style().align_items = Some(AlignItems::Stretch);
+
         self
     }
 
@@ -508,6 +557,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-self#start)
     fn self_start(mut self) -> Self {
         self.style().align_self = Some(AlignSelf::Start);
+
         self
     }
 
@@ -515,6 +565,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-self#end)
     fn self_end(mut self) -> Self {
         self.style().align_self = Some(AlignSelf::End);
+
         self
     }
 
@@ -522,6 +573,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-self#start)
     fn self_flex_start(mut self) -> Self {
         self.style().align_self = Some(AlignSelf::FlexStart);
+
         self
     }
 
@@ -529,6 +581,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-self#end)
     fn self_flex_end(mut self) -> Self {
         self.style().align_self = Some(AlignSelf::FlexEnd);
+
         self
     }
 
@@ -536,6 +589,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-self#center)
     fn self_center(mut self) -> Self {
         self.style().align_self = Some(AlignSelf::Center);
+
         self
     }
 
@@ -543,6 +597,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-self#baseline)
     fn self_baseline(mut self) -> Self {
         self.style().align_self = Some(AlignSelf::Baseline);
+
         self
     }
 
@@ -550,6 +605,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-self#stretch)
     fn self_stretch(mut self) -> Self {
         self.style().align_self = Some(AlignSelf::Stretch);
+
         self
     }
 
@@ -557,6 +613,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/justify-content#start)
     fn justify_start(mut self) -> Self {
         self.style().justify_content = Some(JustifyContent::Start);
+
         self
     }
 
@@ -564,18 +621,21 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/justify-content#end)
     fn justify_end(mut self) -> Self {
         self.style().justify_content = Some(JustifyContent::End);
+
         self
     }
 
     /// Packs items against the flex-relative start of the main axis.
     fn justify_flex_start(mut self) -> Self {
         self.style().justify_content = Some(JustifyContent::FlexStart);
+
         self
     }
 
     /// Packs items against the flex-relative end of the main axis.
     fn justify_flex_end(mut self) -> Self {
         self.style().justify_content = Some(JustifyContent::FlexEnd);
+
         self
     }
 
@@ -583,6 +643,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/justify-content#center)
     fn justify_center(mut self) -> Self {
         self.style().justify_content = Some(JustifyContent::Center);
+
         self
     }
 
@@ -591,6 +652,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/justify-content#space-between)
     fn justify_between(mut self) -> Self {
         self.style().justify_content = Some(JustifyContent::SpaceBetween);
+
         self
     }
 
@@ -599,6 +661,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/justify-content#space-around)
     fn justify_around(mut self) -> Self {
         self.style().justify_content = Some(JustifyContent::SpaceAround);
+
         self
     }
 
@@ -609,6 +672,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/justify-content#space-evenly)
     fn justify_evenly(mut self) -> Self {
         self.style().justify_content = Some(JustifyContent::SpaceEvenly);
+
         self
     }
 
@@ -616,6 +680,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-content#normal)
     fn content_normal(mut self) -> Self {
         self.style().align_content = None;
+
         self
     }
 
@@ -623,6 +688,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-content#center)
     fn content_center(mut self) -> Self {
         self.style().align_content = Some(AlignContent::Center);
+
         self
     }
 
@@ -630,6 +696,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-content#start)
     fn content_start(mut self) -> Self {
         self.style().align_content = Some(AlignContent::FlexStart);
+
         self
     }
 
@@ -637,6 +704,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-content#end)
     fn content_end(mut self) -> Self {
         self.style().align_content = Some(AlignContent::FlexEnd);
+
         self
     }
 
@@ -645,6 +713,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-content#space-between)
     fn content_between(mut self) -> Self {
         self.style().align_content = Some(AlignContent::SpaceBetween);
+
         self
     }
 
@@ -653,6 +722,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-content#space-around)
     fn content_around(mut self) -> Self {
         self.style().align_content = Some(AlignContent::SpaceAround);
+
         self
     }
 
@@ -661,6 +731,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-content#space-evenly)
     fn content_evenly(mut self) -> Self {
         self.style().align_content = Some(AlignContent::SpaceEvenly);
+
         self
     }
 
@@ -668,6 +739,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/align-content#stretch)
     fn content_stretch(mut self) -> Self {
         self.style().align_content = Some(AlignContent::Stretch);
+
         self
     }
 
@@ -675,6 +747,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/aspect-ratio)
     fn aspect_ratio(mut self, ratio: f32) -> Self {
         self.style().aspect_ratio = Some(ratio);
+
         self
     }
 
@@ -682,6 +755,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/aspect-ratio)
     fn aspect_square(mut self) -> Self {
         self.style().aspect_ratio = Some(1.0);
+
         self
     }
 
@@ -692,12 +766,14 @@ pub trait Styled: Sized {
         Self: Sized,
     {
         self.style().background = Some(fill.into());
+
         self
     }
 
     /// Sets the border style of the element.
     fn border_dashed(mut self) -> Self {
         self.style().border_style = Some(BorderStyle::Dashed);
+
         self
     }
 
@@ -718,6 +794,7 @@ pub trait Styled: Sized {
     /// Returns a mutable reference to the text style that has been configured on this element.
     fn text_style(&mut self) -> &mut TextStyleRefinement {
         let style: &mut StyleRefinement = self.style();
+
         &mut style.text
     }
 
@@ -726,6 +803,7 @@ pub trait Styled: Sized {
     /// This value cascades to its child elements.
     fn text_color(mut self, color: impl IntoColor<Hsla>) -> Self {
         self.text_style().color = Some(color.into_color());
+
         self
     }
 
@@ -734,6 +812,7 @@ pub trait Styled: Sized {
     /// This value cascades to its child elements.
     fn font_weight(mut self, weight: FontWeight) -> Self {
         self.text_style().font_weight = Some(weight);
+
         self
     }
 
@@ -751,6 +830,7 @@ pub trait Styled: Sized {
     /// This value cascades to its child elements.
     fn text_bg(mut self, bg: impl IntoColor<Hsla>) -> Self {
         self.text_style().background_color = Some(bg.into_color());
+
         self
     }
 
@@ -759,6 +839,7 @@ pub trait Styled: Sized {
     /// This value cascades to its child elements.
     fn text_size(mut self, size: impl Into<AbsoluteLength>) -> Self {
         self.text_style().font_size = Some(size.into());
+
         self
     }
 
@@ -766,6 +847,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/font-size#setting-the-font-size)
     fn text_xs(mut self) -> Self {
         self.text_style().font_size = Some(rems(0.75).into());
+
         self
     }
 
@@ -773,6 +855,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/font-size#setting-the-font-size)
     fn text_sm(mut self) -> Self {
         self.text_style().font_size = Some(rems(0.875).into());
+
         self
     }
 
@@ -780,6 +863,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/font-size#setting-the-font-size)
     fn text_base(mut self) -> Self {
         self.text_style().font_size = Some(rems(1.0).into());
+
         self
     }
 
@@ -787,6 +871,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/font-size#setting-the-font-size)
     fn text_lg(mut self) -> Self {
         self.text_style().font_size = Some(rems(1.125).into());
+
         self
     }
 
@@ -794,6 +879,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/font-size#setting-the-font-size)
     fn text_xl(mut self) -> Self {
         self.text_style().font_size = Some(rems(1.25).into());
+
         self
     }
 
@@ -801,6 +887,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/font-size#setting-the-font-size)
     fn text_2xl(mut self) -> Self {
         self.text_style().font_size = Some(rems(1.5).into());
+
         self
     }
 
@@ -808,6 +895,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/font-size#setting-the-font-size)
     fn text_3xl(mut self) -> Self {
         self.text_style().font_size = Some(rems(1.875).into());
+
         self
     }
 
@@ -815,6 +903,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/font-style#italicizing-text)
     fn italic(mut self) -> Self {
         self.text_style().font_style = Some(FontStyle::Italic);
+
         self
     }
 
@@ -822,6 +911,7 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/font-style#displaying-text-normally)
     fn not_italic(mut self) -> Self {
         self.text_style().font_style = Some(FontStyle::Normal);
+
         self
     }
 
@@ -829,10 +919,12 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/text-decoration-line#underling-text)
     fn underline(mut self) -> Self {
         let style = self.text_style();
+
         style.underline = Some(UnderlineStyle {
             thickness: px(1.),
             ..Default::default()
         });
+
         self
     }
 
@@ -840,10 +932,12 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/text-decoration-line#adding-a-line-through-text)
     fn line_through(mut self) -> Self {
         let style = self.text_style();
+
         style.strikethrough = Some(StrikethroughStyle {
             thickness: px(1.),
             ..Default::default()
         });
+
         self
     }
 
@@ -852,6 +946,7 @@ pub trait Styled: Sized {
     /// This value cascades to its child elements.
     fn text_decoration_none(mut self) -> Self {
         self.text_style().underline = None;
+
         self
     }
 
@@ -859,7 +954,9 @@ pub trait Styled: Sized {
     fn text_decoration_color(mut self, color: impl IntoColor<Hsla>) -> Self {
         let style = self.text_style();
         let underline = style.underline.get_or_insert_with(Default::default);
+
         underline.color = Some(color.into_color());
+
         self
     }
 
@@ -868,7 +965,9 @@ pub trait Styled: Sized {
     fn text_decoration_solid(mut self) -> Self {
         let style = self.text_style();
         let underline = style.underline.get_or_insert_with(Default::default);
+
         underline.wavy = false;
+
         self
     }
 
@@ -877,7 +976,9 @@ pub trait Styled: Sized {
     fn text_decoration_wavy(mut self) -> Self {
         let style = self.text_style();
         let underline = style.underline.get_or_insert_with(Default::default);
+
         underline.wavy = true;
+
         self
     }
 
@@ -886,7 +987,9 @@ pub trait Styled: Sized {
     fn text_decoration_0(mut self) -> Self {
         let style = self.text_style();
         let underline = style.underline.get_or_insert_with(Default::default);
+
         underline.thickness = px(0.);
+
         self
     }
 
@@ -895,7 +998,9 @@ pub trait Styled: Sized {
     fn text_decoration_1(mut self) -> Self {
         let style = self.text_style();
         let underline = style.underline.get_or_insert_with(Default::default);
+
         underline.thickness = px(1.);
+
         self
     }
 
@@ -904,7 +1009,9 @@ pub trait Styled: Sized {
     fn text_decoration_2(mut self) -> Self {
         let style = self.text_style();
         let underline = style.underline.get_or_insert_with(Default::default);
+
         underline.thickness = px(2.);
+
         self
     }
 
@@ -913,7 +1020,9 @@ pub trait Styled: Sized {
     fn text_decoration_4(mut self) -> Self {
         let style = self.text_style();
         let underline = style.underline.get_or_insert_with(Default::default);
+
         underline.thickness = px(4.);
+
         self
     }
 
@@ -922,19 +1031,23 @@ pub trait Styled: Sized {
     fn text_decoration_8(mut self) -> Self {
         let style = self.text_style();
         let underline = style.underline.get_or_insert_with(Default::default);
+
         underline.thickness = px(8.);
+
         self
     }
 
     /// Sets the font family of this element and its children.
     fn font_family(mut self, family_name: impl Into<SharedString>) -> Self {
         self.text_style().font_family = Some(family_name.into());
+
         self
     }
 
     /// Sets the font features of this element and its children.
     fn font_features(mut self, features: FontFeatures) -> Self {
         self.text_style().font_features = Some(features);
+
         self
     }
 
@@ -950,6 +1063,7 @@ pub trait Styled: Sized {
         } = font;
 
         let text_style = self.text_style();
+
         text_style.font_family = Some(family);
         text_style.font_features = Some(features);
         text_style.font_weight = Some(weight);
@@ -963,12 +1077,14 @@ pub trait Styled: Sized {
     /// Sets the line height of this element and its children.
     fn line_height(mut self, line_height: impl Into<DefiniteLength>) -> Self {
         self.text_style().line_height = Some(line_height.into());
+
         self
     }
 
     /// Sets the opacity of this element and its children, composited together as one group.
     fn opacity(mut self, opacity: f32) -> Self {
         self.style().opacity = Some(opacity);
+
         self
     }
 
@@ -978,6 +1094,7 @@ pub trait Styled: Sized {
             repeat: cols,
             min_size: GridTemplateMinSize::Zero,
         });
+
         self
     }
 
@@ -988,6 +1105,7 @@ pub trait Styled: Sized {
             repeat: cols,
             min_size: GridTemplateMinSize::MinContent,
         });
+
         self
     }
 
@@ -997,6 +1115,7 @@ pub trait Styled: Sized {
             repeat: cols,
             min_size: GridTemplateMinSize::MaxContent,
         });
+
         self
     }
 
@@ -1006,6 +1125,7 @@ pub trait Styled: Sized {
             repeat: rows,
             min_size: GridTemplateMinSize::Zero,
         });
+
         self
     }
 
@@ -1016,6 +1136,7 @@ pub trait Styled: Sized {
             repeat: rows,
             min_size: GridTemplateMinSize::MinContent,
         });
+
         self
     }
 
@@ -1025,90 +1146,115 @@ pub trait Styled: Sized {
             repeat: rows,
             min_size: GridTemplateMinSize::MaxContent,
         });
+
         self
     }
 
     /// Sets the column start of this element.
     fn col_start(mut self, start: i16) -> Self {
         let grid_location = self.style().grid_location_mut();
+
         grid_location.column.start = GridPlacement::Line(start);
+
         self
     }
 
     /// Sets the column start of this element to auto.
     fn col_start_auto(mut self) -> Self {
         let grid_location = self.style().grid_location_mut();
+
         grid_location.column.start = GridPlacement::Auto;
+
         self
     }
 
     /// Sets the column end of this element.
     fn col_end(mut self, end: i16) -> Self {
         let grid_location = self.style().grid_location_mut();
+
         grid_location.column.end = GridPlacement::Line(end);
+
         self
     }
 
     /// Sets the column end of this element to auto.
     fn col_end_auto(mut self) -> Self {
         let grid_location = self.style().grid_location_mut();
+
         grid_location.column.end = GridPlacement::Auto;
+
         self
     }
 
     /// Sets the column span of this element.
     fn col_span(mut self, span: u16) -> Self {
         let grid_location = self.style().grid_location_mut();
+
         grid_location.column = GridPlacement::Span(span)..GridPlacement::Span(span);
+
         self
     }
 
     /// Sets the row span of this element.
     fn col_span_full(mut self) -> Self {
         let grid_location = self.style().grid_location_mut();
+
         grid_location.column = GridPlacement::Line(1)..GridPlacement::Line(-1);
+
         self
     }
 
     /// Sets the row start of this element.
     fn row_start(mut self, start: i16) -> Self {
         let grid_location = self.style().grid_location_mut();
+
         grid_location.row.start = GridPlacement::Line(start);
+
         self
     }
 
     /// Sets the row start of this element to "auto"
     fn row_start_auto(mut self) -> Self {
         let grid_location = self.style().grid_location_mut();
+
         grid_location.row.start = GridPlacement::Auto;
+
         self
     }
 
     /// Sets the row end of this element.
     fn row_end(mut self, end: i16) -> Self {
         let grid_location = self.style().grid_location_mut();
+
         grid_location.row.end = GridPlacement::Line(end);
+
         self
     }
 
     /// Sets the row end of this element to "auto"
     fn row_end_auto(mut self) -> Self {
         let grid_location = self.style().grid_location_mut();
+
         grid_location.row.end = GridPlacement::Auto;
+
         self
     }
 
     /// Sets the row span of this element.
     fn row_span(mut self, span: u16) -> Self {
         let grid_location = self.style().grid_location_mut();
+
         grid_location.row = GridPlacement::Span(span)..GridPlacement::Span(span);
+
         self
     }
 
     /// Sets the row span of this element.
     fn row_span_full(mut self) -> Self {
         let grid_location = self.style().grid_location_mut();
+
         grid_location.row = GridPlacement::Line(1)..GridPlacement::Line(-1);
+
         self
     }
 
@@ -1116,6 +1262,7 @@ pub trait Styled: Sized {
     #[cfg(debug_assertions)]
     fn debug(mut self) -> Self {
         self.style().debug = Some(true);
+
         self
     }
 
@@ -1123,6 +1270,7 @@ pub trait Styled: Sized {
     #[cfg(debug_assertions)]
     fn debug_below(mut self) -> Self {
         self.style().debug_below = Some(true);
+
         self
     }
 
@@ -1133,13 +1281,16 @@ pub trait Styled: Sized {
             (0.0..=1.0).contains(&amount),
             "corner smoothing must be between 0 and 1"
         );
+
         self.style().corner_smoothing = Some(amount);
+
         self
     }
 
     /// Sets corner smoothing to `0.6` for iOS-style corners.
     fn rounded_smoothing_ios(mut self) -> Self {
         self.style().corner_smoothing = Some(0.6);
+
         self
     }
 }

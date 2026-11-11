@@ -5,6 +5,7 @@ use crate::{
     Pixels, Platform, Point, Render, Result, Size, Task, TestDispatcher, TextSystem,
     VisualTestPlatform, Window, WindowBounds, WindowHandle, WindowOptions, app::GpuiMode,
 };
+
 use anyhow::anyhow;
 use image::RgbaImage;
 use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
@@ -35,12 +36,16 @@ use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
 pub struct VisualTestAppContext {
     /// The underlying app cell
     pub app: Rc<AppCell>,
+
     /// The background executor for running async tasks
     pub background_executor: BackgroundExecutor,
+
     /// The foreground executor for running tasks on the main thread
     pub foreground_executor: ForegroundExecutor,
+
     /// The test dispatcher for deterministic task scheduling
     dispatcher: TestDispatcher,
+
     platform: Rc<dyn Platform>,
     text_system: Arc<TextSystem>,
 }
@@ -88,6 +93,7 @@ impl VisualTestAppContext {
             gpui::AssetRegistry::from(asset_source).into(),
             http_client,
         );
+
         app.borrow_mut().mode = GpuiMode::test();
 
         Self {
@@ -121,6 +127,7 @@ impl VisualTestAppContext {
         };
 
         let mut cx = self.app.borrow_mut();
+
         cx.open_window(
             WindowOptions::new()
                 .window_bounds(Some(WindowBounds::Windowed(bounds)))
@@ -138,6 +145,7 @@ impl VisualTestAppContext {
         build_root: impl FnOnce(&mut Window, &mut App) -> Entity<V>,
     ) -> Result<WindowHandle<V>> {
         use crate::{px, size};
+
         self.open_offscreen_window(size(px(1280.0), px(800.0)), build_root)
     }
 
@@ -178,12 +186,14 @@ impl VisualTestAppContext {
     /// Runs `f` with mutable access to the [`App`]. This doesn't run pending tasks.
     pub fn update<R>(&mut self, f: impl FnOnce(&mut App) -> R) -> R {
         let mut app = self.app.borrow_mut();
+
         f(&mut app)
     }
 
     /// Runs `f` with read-only access to the [`App`].
     pub fn read<R>(&self, f: impl FnOnce(&App) -> R) -> R {
         let app = self.app.borrow();
+
         f(&app)
     }
 
@@ -197,6 +207,7 @@ impl VisualTestAppContext {
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
     {
         let mut lock = self.app.borrow_mut();
+
         lock.update_window(window, f)
     }
 
@@ -212,6 +223,7 @@ impl VisualTestAppContext {
     /// Returns whether a global of type `G` is set.
     pub fn has_global<G: Global>(&self) -> bool {
         let app = self.app.borrow();
+
         app.has_global::<G>()
     }
 
@@ -222,12 +234,14 @@ impl VisualTestAppContext {
     /// Panics if no global of type `G` is set.
     pub fn read_global<G: Global, R>(&self, f: impl FnOnce(&G, &App) -> R) -> R {
         let app = self.app.borrow();
+
         f(app.global::<G>(), &app)
     }
 
     /// Sets the global of type `G`, replacing any previous value.
     pub fn set_global<G: Global>(&mut self, global: G) {
         let mut app = self.app.borrow_mut();
+
         app.set_global(global);
     }
 
@@ -238,10 +252,13 @@ impl VisualTestAppContext {
     /// Panics if no global of type `G` is set.
     pub fn update_global<G: Global, R>(&mut self, f: impl FnOnce(&mut G, &mut App) -> R) -> R {
         let mut lock = self.app.borrow_mut();
+
         lock.update(|cx| {
             let mut global = cx.lease_global::<G>();
             let result = f(&mut global, cx);
+
             cx.end_global_lease(global);
+
             result
         })
     }
@@ -258,8 +275,10 @@ impl VisualTestAppContext {
         for keystroke_text in keystrokes.split_whitespace() {
             let keystroke = Keystroke::parse(keystroke_text)
                 .unwrap_or_else(|_| panic!("Invalid keystroke: {}", keystroke_text));
+
             self.dispatch_keystroke(window, keystroke);
         }
+
         self.run_until_parked();
     }
 
@@ -280,13 +299,16 @@ impl VisualTestAppContext {
     pub fn simulate_input(&mut self, window: AnyWindowHandle, input: &str) {
         for char in input.chars() {
             let key = char.to_string();
+
             let keystroke = Keystroke {
                 modifiers: Modifiers::default(),
                 key: key.clone(),
                 key_char: Some(key),
             };
+
             self.dispatch_keystroke(window, keystroke);
         }
+
         self.run_until_parked();
     }
 
@@ -366,6 +388,7 @@ impl VisualTestAppContext {
             window.dispatch_event(event.to_platform_input(), cx);
         })
         .ok();
+
         self.run_until_parked();
     }
 
@@ -377,6 +400,7 @@ impl VisualTestAppContext {
             window.dispatch_action(action.boxed_clone(), cx);
         })
         .ok();
+
         self.run_until_parked();
     }
 
@@ -405,9 +429,11 @@ impl VisualTestAppContext {
         timeout: Duration,
     ) -> Result<()> {
         let start = web_time::Instant::now();
+
         loop {
             {
                 let app = self.app.borrow();
+
                 if predicate(entity.read(&app)) {
                     return Ok(());
                 }
@@ -418,6 +444,7 @@ impl VisualTestAppContext {
             }
 
             self.run_until_parked();
+
             self.background_executor
                 .timer(Duration::from_millis(10))
                 .await;
@@ -442,6 +469,7 @@ impl VisualTestAppContext {
         self.background_executor
             .timer(Duration::from_millis(32))
             .await;
+
         self.run_until_parked();
     }
 }
@@ -449,11 +477,13 @@ impl VisualTestAppContext {
 impl AppContext for VisualTestAppContext {
     fn new<T: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T> {
         let mut app = self.app.borrow_mut();
+
         app.new(build_entity)
     }
 
     fn reserve_entity<T: 'static>(&mut self) -> crate::Reservation<T> {
         let mut app = self.app.borrow_mut();
+
         app.reserve_entity()
     }
 
@@ -463,6 +493,7 @@ impl AppContext for VisualTestAppContext {
         build_entity: impl FnOnce(&mut Context<T>) -> T,
     ) -> Entity<T> {
         let mut app = self.app.borrow_mut();
+
         app.insert_entity(reservation, build_entity)
     }
 
@@ -472,6 +503,7 @@ impl AppContext for VisualTestAppContext {
         update: impl FnOnce(&mut T, &mut Context<T>) -> R,
     ) -> R {
         let mut app = self.app.borrow_mut();
+
         app.update_entity(handle, update)
     }
 
@@ -487,11 +519,13 @@ impl AppContext for VisualTestAppContext {
         T: 'static,
     {
         let app = self.app.borrow();
+
         app.read_entity(handle, read)
     }
 
     fn notify(&mut self, entity_id: EntityId) {
         let mut app = self.app.borrow_mut();
+
         app.notify(entity_id)
     }
 
@@ -501,6 +535,7 @@ impl AppContext for VisualTestAppContext {
         EventType: 'static,
     {
         let mut app = self.app.borrow_mut();
+
         app.emit(entity, event)
     }
 
@@ -509,6 +544,7 @@ impl AppContext for VisualTestAppContext {
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
     {
         let mut lock = self.app.borrow_mut();
+
         lock.update_window(window, f)
     }
 
@@ -518,6 +554,7 @@ impl AppContext for VisualTestAppContext {
         f: impl FnOnce(&mut Window, &mut App) -> R,
     ) -> Option<R> {
         let mut lock = self.app.borrow_mut();
+
         lock.with_window(entity_id, f)
     }
 
@@ -530,6 +567,7 @@ impl AppContext for VisualTestAppContext {
         T: 'static,
     {
         let app = self.app.borrow();
+
         app.read_window(window, read)
     }
 
@@ -545,22 +583,26 @@ impl AppContext for VisualTestAppContext {
         G: Global,
     {
         let app = self.app.borrow();
+
         callback(app.global::<G>(), &app)
     }
 
     fn insert_global_entity<E: 'static>(&mut self, entity: Entity<E>) {
         let mut app = self.app.borrow_mut();
+
         app.insert_global_entity(entity)
     }
 
     fn remove_global_entity<E: 'static>(&mut self, entity: &Entity<E>) {
         let mut app = self.app.borrow_mut();
+
         app.remove_global_entity(entity)
     }
 
     fn global_entities<E: 'static>(&self) -> impl Iterator<Item = Entity<E>> {
         let app = self.app.borrow();
         let iter = app.global_entities();
+
         // Cloning the iterator here so that lock can be released when function is going out of scope
         iter.collect::<Vec<_>>().into_iter()
     }

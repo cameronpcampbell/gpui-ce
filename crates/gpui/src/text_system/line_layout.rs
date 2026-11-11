@@ -4,10 +4,12 @@ use crate::{
     SharedString, Size, StrikethroughStyle, TextLayoutOptions, TextLayoutRequest, TextRun,
     UnderlineStyle, VerticalAlign,
 };
+
 use collections::FxHashMap;
 use palette::Hsla;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
 use smallvec::SmallVec;
+
 use std::{
     borrow::Borrow,
     hash::{Hash, Hasher},
@@ -23,18 +25,25 @@ use std::{
 pub struct LineLayout {
     /// The document's base font size.
     pub font_size: Pixels,
+
     /// The width of the widest visual line.
     pub width: Pixels,
+
     /// The document's ascent.
     pub ascent: Pixels,
+
     /// The document's descent.
     pub descent: Pixels,
+
     /// Visual lines in paint order. Unwrapped layouts contain one line.
     pub visual_lines: SmallVec<[VisualLine; 1]>,
+
     /// Style-specific paint runs referenced by `visual_lines`.
     pub paint_fragments: Vec<PaintFragment>,
+
     /// The length of the source text in UTF-8 bytes.
     pub len: usize,
+
     /// Backend-native interaction model.
     pub platform_layout: Arc<dyn PlatformTextLayout>,
 }
@@ -44,8 +53,10 @@ pub struct LineLayout {
 pub struct PositionedInlineBox {
     /// The caller-provided box identifier.
     pub id: u64,
+
     /// Index of the visual line containing this box.
     pub line_index: usize,
+
     /// The box bounds relative to the complete inline layout.
     pub bounds: Bounds<Pixels>,
 }
@@ -55,6 +66,7 @@ pub struct PositionedInlineBox {
 pub struct InlineRangeGeometry {
     /// Bounds relative to the complete text layout.
     pub bounds: Bounds<Pixels>,
+
     /// Index of the visual line containing these bounds.
     pub visual_line_index: usize,
 }
@@ -64,12 +76,16 @@ pub struct InlineRangeGeometry {
 pub struct InlineLayout {
     /// The shaped text shared with the ordinary GPUI paint pipeline.
     pub layout: Arc<LineLayout>,
+
     /// Per-row block geometry from the text backend.
     pub lines: Vec<InlineVisualLine>,
+
     /// Positioned element boxes.
     pub boxes: Vec<PositionedInlineBox>,
+
     /// Shared horizontal anchor used to align every visual line.
     pub alignment_offset: Pixels,
+
     /// Natural size of the complete inline layout.
     pub size: Size<Pixels>,
 }
@@ -94,11 +110,14 @@ fn expand_inline_line_for_box(
 ) {
     match align {
         VerticalAlign::Baseline => *top = (*top).min(-height),
+
         VerticalAlign::Middle => {
             let middle = -metrics.x_height / 2.;
+
             *top = (*top).min(middle - height / 2.);
             *bottom = (*bottom).max(middle + height / 2.);
         }
+
         VerticalAlign::Top => *top_box_height = (*top_box_height).max(height),
         VerticalAlign::Bottom => *bottom_box_height = (*bottom_box_height).max(height),
     }
@@ -133,6 +152,7 @@ pub fn align_inline_boxes(
         .iter()
         .map(|request| (request.id, request.vertical_align))
         .collect::<FxHashMap<_, _>>();
+
     let mut boxes_by_line: FxHashMap<_, Vec<_>> = FxHashMap::default();
 
     for inline_box in boxes
@@ -154,14 +174,17 @@ pub fn align_inline_boxes(
 
     for (line_index, line) in lines.iter_mut().enumerate() {
         let line_boxes = boxes_by_line.remove(&line_index).unwrap_or_default();
+
         let metrics = line_metrics
             .get(line_index)
             .copied()
             .unwrap_or(fallback_metrics);
+
         let (mut top, mut bottom) = text_bounds
             .get(line_index)
             .copied()
             .unwrap_or_else(|| base_inline_line_bounds(metrics, line_height));
+
         let mut top_box_height = Pixels::ZERO;
         let mut bottom_box_height = Pixels::ZERO;
 
@@ -356,6 +379,7 @@ pub enum TextBoundary {
 pub struct TextMovement {
     /// The direction in which to move.
     pub direction: TextDirection,
+
     /// The boundary at which to stop.
     pub boundary: TextBoundary,
 }
@@ -387,15 +411,19 @@ pub enum TextSelectionKind {
 pub struct VisualLine {
     /// The logical UTF-8 byte range assigned to this row.
     pub text_range: Range<usize>,
+
     /// Indices into [`LineLayout::paint_fragments`] for the positioned glyph runs
     /// painted on this row, ordered by visual position.
     pub paint_fragment_range: Range<usize>,
+
     /// Horizontal distance consumed by the row's shaped content before alignment,
     /// measured to the backend's final text pen position. Inline layouts include
     /// advances from embedded boxes.
     pub advance_width: Pixels,
+
     /// Horizontal offset assigned by backend layout.
     pub offset: Pixels,
+
     /// Base direction used to order and align this visual line.
     pub direction: crate::ResolvedDirection,
 }
@@ -405,10 +433,13 @@ pub struct VisualLine {
 pub struct PaintStyle {
     /// Glyph foreground color.
     pub color: Hsla,
+
     /// Optional background color.
     pub background_color: Option<Hsla>,
+
     /// Optional underline style.
     pub underline: Option<UnderlineStyle>,
+
     /// Optional strikethrough style.
     pub strikethrough: Option<StrikethroughStyle>,
 }
@@ -429,18 +460,25 @@ impl From<&TextRun> for PaintStyle {
 pub struct PaintFragment {
     /// Index of the input text run that supplies paint properties.
     pub source_run: usize,
+
     /// Canonical font used by the glyphs.
     pub font_id: FontId,
+
     /// Resolved size of this shaped run.
     pub font_size: Pixels,
+
     /// Positioned glyphs local to the visual line.
     pub glyphs: Arc<[ShapedGlyph]>,
+
     /// Horizontal bounds of this fragment.
     pub x_range: Range<Pixels>,
+
     /// Paint properties shared by every glyph in the fragment.
     pub style: PaintStyle,
+
     /// Resolved underline offset from the baseline.
     pub underline_offset: Option<Pixels>,
+
     /// Resolved strikethrough offset from the baseline.
     pub strikethrough_offset: Option<Pixels>,
 }
@@ -518,6 +556,7 @@ impl From<&str> for CaretAffinity {
 pub struct CaretPosition {
     /// The logical UTF-8 byte index.
     pub index: usize,
+
     /// The logical neighbor that owns this position.
     pub affinity: CaretAffinity,
 }
@@ -554,6 +593,7 @@ impl CaretPosition {
 pub struct CaretSelection {
     /// The fixed position of the selection, which may be its logical start or end.
     pub anchor: CaretPosition,
+
     /// The active position of the selection. When it equals `anchor`, the selection is empty.
     pub caret: CaretPosition,
 }
@@ -621,6 +661,7 @@ impl CaretSelection {
 pub struct CaretMovement<T = CaretPosition> {
     /// The value at the requested destination.
     pub result: T,
+
     /// The horizontal coordinate from the layout's left edge retained across consecutive vertical
     /// movements.
     pub vertical_navigation_x: Option<Pixels>,
@@ -846,6 +887,7 @@ impl ShapedTextLayout {
         line_height: Pixels,
     ) -> CaretSelectionMovement {
         let forward = movement.direction == TextDirection::Right;
+
         let horizontal = matches!(
             movement.direction,
             TextDirection::Left | TextDirection::Right
@@ -857,8 +899,10 @@ impl ShapedTextLayout {
         if !extend && !selection.is_empty() && horizontal {
             let caret_visual_position =
                 self.visual_position_for_caret(selection.caret, line_height);
+
             let anchor_visual_position =
                 self.visual_position_for_caret(selection.anchor, line_height);
+
             let (visual_start, visual_end) = caret_visual_position
                 .zip(anchor_visual_position)
                 .map(|(caret_visual_position, anchor_visual_position)| {
@@ -930,6 +974,7 @@ impl ShapedTextLayout {
                 .platform_layout
                 .selection_bounds(byte_range, line_height),
         );
+
         result
     }
 }
@@ -1058,6 +1103,7 @@ pub(crate) struct LineLayoutIndex {
 impl LineLayoutCache {
     pub fn new(platform_text_system: Arc<dyn PlatformTextSystem>) -> Self {
         let font_generation = platform_text_system.font_generation();
+
         Self {
             previous_frame: Mutex::default(),
             current_frame: RwLock::default(),
@@ -1068,6 +1114,7 @@ impl LineLayoutCache {
 
     pub fn layout_index(&self) -> LineLayoutIndex {
         let frame = self.current_frame.read();
+
         LineLayoutIndex {
             lines_index: frame.lines.used.len(),
             shaped_texts_index: frame.shaped_texts.used.len(),
@@ -1083,6 +1130,7 @@ impl LineLayoutCache {
 
     fn sync_font_generation(&self) {
         let generation = self.platform_text_system.font_generation();
+
         if self.font_generation.load(Ordering::Acquire) != generation {
             self.clear();
             self.font_generation.store(generation, Ordering::Release);
@@ -1097,10 +1145,12 @@ impl LineLayoutCache {
             &mut previous_frame.lines,
             range.start.lines_index..range.end.lines_index,
         );
+
         current_frame.shaped_texts.reuse(
             &mut previous_frame.shaped_texts,
             range.start.shaped_texts_index..range.end.shaped_texts_index,
         );
+
         current_frame.inline_layouts.reuse(
             &mut previous_frame.inline_layouts,
             range.start.inline_layouts_index..range.end.inline_layouts_index,
@@ -1109,11 +1159,14 @@ impl LineLayoutCache {
 
     pub fn truncate_layouts(&self, index: LineLayoutIndex) {
         let mut current_frame = &mut *self.current_frame.write();
+
         current_frame.lines.used.truncate(index.lines_index);
+
         current_frame
             .shaped_texts
             .used
             .truncate(index.shaped_texts_index);
+
         current_frame
             .inline_layouts
             .used
@@ -1123,7 +1176,9 @@ impl LineLayoutCache {
     pub fn finish_frame(&self) {
         let mut prev_frame = self.previous_frame.lock();
         let mut curr_frame = self.current_frame.write();
+
         std::mem::swap(&mut *prev_frame, &mut *curr_frame);
+
         curr_frame.lines.clear();
         curr_frame.shaped_texts.clear();
         curr_frame.inline_layouts.clear();
@@ -1141,8 +1196,10 @@ impl LineLayoutCache {
         SharedString: From<Text>,
     {
         self.sync_font_generation();
+
         let wrap_width = options.wrap_width;
         let shaping_runs = runs.iter().map(ShapingRun::from).collect::<SmallVec<_>>();
+
         let key = &CacheKeyRef {
             text: text.as_ref(),
             font_size,
@@ -1151,18 +1208,25 @@ impl LineLayoutCache {
         } as &dyn AsCacheKeyRef;
 
         let current_frame = self.current_frame.upgradable_read();
+
         if let Some(layout) = current_frame.shaped_texts.get(key) {
             return repaint_shaped_text_layout(layout.clone(), runs);
         }
 
         let previous_frame_entry = self.previous_frame.lock().shaped_texts.remove_entry(key);
+
         if let Some((key, layout)) = previous_frame_entry {
             let mut current_frame = RwLockUpgradableReadGuard::upgrade(current_frame);
+
             current_frame.shaped_texts.insert(key, layout.clone());
+
             repaint_shaped_text_layout(layout, runs)
+
         } else {
             drop(current_frame);
+
             let text = SharedString::from(text);
+
             let document_layout = if options != TextLayoutOptions::default() || text.contains('\n')
             {
                 Arc::new(self.platform_text_system.layout_text(TextLayoutRequest {
@@ -1171,6 +1235,7 @@ impl LineLayoutCache {
                     runs,
                     options,
                 }))
+
             } else {
                 self.layout_line::<&SharedString>(&text, font_size, runs)
             };
@@ -1179,6 +1244,7 @@ impl LineLayoutCache {
                 layout: document_layout,
                 wrap_width,
             });
+
             let key = Arc::new(CacheKey {
                 text,
                 font_size,
@@ -1187,6 +1253,7 @@ impl LineLayoutCache {
             });
 
             let mut current_frame = self.current_frame.write();
+
             current_frame.shaped_texts.insert(key, layout.clone());
 
             layout
@@ -1204,7 +1271,9 @@ impl LineLayoutCache {
         SharedString: From<Text>,
     {
         self.sync_font_generation();
+
         let shaping_runs = runs.iter().map(ShapingRun::from).collect::<SmallVec<_>>();
+
         let key = &CacheKeyRef {
             text: text.as_ref(),
             font_size,
@@ -1213,36 +1282,46 @@ impl LineLayoutCache {
         } as &dyn AsCacheKeyRef;
 
         let current_frame = self.current_frame.upgradable_read();
+
         if let Some(layout) = current_frame.lines.get(key) {
             return repaint_line_layout(layout.clone(), runs);
         }
 
         let mut current_frame = RwLockUpgradableReadGuard::upgrade(current_frame);
+
         if let Some((key, layout)) = self.previous_frame.lock().lines.remove_entry(key) {
             current_frame.lines.insert(key, layout.clone());
+
             repaint_line_layout(layout, runs)
+
         } else {
             let text = SharedString::from(text);
+
             let layout = self.platform_text_system.layout_text(TextLayoutRequest {
                 text: &text,
                 font_size,
                 runs,
                 options: TextLayoutOptions::default(),
             });
+
             let key = Arc::new(CacheKey {
                 text,
                 font_size,
                 runs: shaping_runs,
                 options: TextLayoutOptions::default(),
             });
+
             let layout = Arc::new(layout);
+
             current_frame.lines.insert(key, layout.clone());
+
             layout
         }
     }
 
     pub fn layout_inline(&self, request: InlineLayoutRequest<'_>) -> Arc<InlineLayout> {
         self.sync_font_generation();
+
         let key = &request as &dyn AsInlineCacheKeyRef;
         let current_frame = self.current_frame.upgradable_read();
 
@@ -1254,16 +1333,19 @@ impl LineLayoutCache {
 
         if let Some((key, layout)) = previous_frame_entry {
             let mut current_frame = RwLockUpgradableReadGuard::upgrade(current_frame);
+
             current_frame.inline_layouts.insert(key, layout.clone());
 
             return layout;
         }
 
         drop(current_frame);
+
         let layout = Arc::new(self.platform_text_system.layout_inline(request));
         let key = Arc::new(InlineCacheKey::from(request));
 
         let mut current_frame = self.current_frame.write();
+
         current_frame.inline_layouts.insert(key, layout.clone());
 
         layout
@@ -1444,6 +1526,7 @@ mod tests {
             ),
         ] {
             let selection = CaretSelection { anchor, caret };
+
             assert_eq!(selection.endpoint_ordering(), expected);
         }
     }
@@ -1477,6 +1560,7 @@ mod tests {
             ("\nordinary text", CaretAffinity::Upstream),
         ] {
             assert_eq!(CaretAffinity::from(text), expected, "From({text:?})");
+
             assert_eq!(
                 CaretAffinity::for_inserted_text(text),
                 expected,
@@ -1488,6 +1572,7 @@ mod tests {
     #[test]
     fn inline_box_alignment_preserves_unsorted_boxes_and_empty_lines() {
         let mut lines = [InlineVisualLine::default(); 3];
+
         let mut boxes =
             [(20, 2, 14.), (10, 0, 18.), (90, 3, 100.)].map(|(id, line_index, height)| {
                 PositionedInlineBox {
@@ -1496,6 +1581,7 @@ mod tests {
                     bounds: Bounds::new(point(px(7.), px(99.)), size(px(5.), px(height))),
                 }
             });
+
         let mut layout_size = size(px(100.), px(999.));
         let original_lines = lines;
         let original_boxes = boxes;
@@ -1506,6 +1592,7 @@ mod tests {
             size: boxes[0].bounds.size,
             vertical_align: VerticalAlign::Top,
         }];
+
         let metrics = InlineTextMetrics {
             ascent: px(8.),
             descent: px(2.),
@@ -1531,6 +1618,7 @@ mod tests {
             expected_line.origin.y = px(origin_y);
             expected_line.size.height = px(height);
             expected_line.baseline = px(baseline);
+
             assert_eq!(*line, expected_line);
         }
 
@@ -1538,6 +1626,7 @@ mod tests {
             boxes.iter().zip(original_boxes).zip([36., 0., 99.])
         {
             expected_box.bounds.origin.y = px(origin_y);
+
             assert_eq!(*inline_box, expected_box);
         }
 

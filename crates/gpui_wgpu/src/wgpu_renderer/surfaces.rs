@@ -1,4 +1,5 @@
 use gpui::PaintSurface;
+
 #[cfg(any(
     all(target_family = "wasm", feature = "custom-gpu"),
     target_os = "macos",
@@ -74,9 +75,11 @@ impl SurfaceBinding {
 
     fn refresh(&mut self, renderer: &WgpuRenderer) {
         let generation = renderer.resources().surface_uniforms.generation();
+
         if self.uniform_generation != generation {
             self.bind_group =
                 renderer.create_surface_bind_group(&self.color_view, &self.chroma_view);
+
             self.uniform_generation = generation;
         }
     }
@@ -100,6 +103,7 @@ impl WgpuRenderer {
         chroma_view: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         let resources = self.resources();
+
         resources.bind_group_layouts.create_surface(
             &resources.device,
             wgpu::BufferBinding {
@@ -128,6 +132,7 @@ impl WgpuRenderer {
         pass: &mut wgpu::RenderPass<'_>,
     ) -> frame::DrawResult {
         binding.refresh(self);
+
         let uniforms = SurfaceUniforms {
             bounds: surface.bounds.into(),
             content_mask: surface.content_mask.into(),
@@ -140,16 +145,20 @@ impl WgpuRenderer {
             padding4: 0,
             padding5: 0,
         };
+
         let resources = self.resources();
         let uniform_offset = resources.surface_uniforms.write(&uniforms);
 
         pass.set_pipeline(&resources.pipelines.surfaces);
+
         pass.set_bind_group(
             shader_interface::DATA_BIND_GROUP,
             &binding.bind_group,
             &[uniform_offset],
         );
+
         pass.draw(0..resources.pipelines.surfaces.fixed_vertex_count(), 0..1);
+
         Ok(())
     }
 

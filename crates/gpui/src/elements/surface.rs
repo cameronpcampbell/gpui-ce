@@ -1,9 +1,11 @@
 #[cfg(target_os = "windows")]
 use crate::WindowsScreenCaptureFrame;
+
 use crate::{
     App, Bounds, DevicePixels, Element, ElementId, GlobalElementId, InspectorElementId,
     IntoElement, LayoutId, ObjectFit, Pixels, Size, Style, StyleRefinement, Styled, Window,
 };
+
 #[cfg(target_os = "macos")]
 use core_video::pixel_buffer::CVPixelBuffer;
 use refineable::Refineable;
@@ -25,11 +27,13 @@ pub enum SurfaceSource {
         /// The GPU texture, type-erased (expected to be `Arc<wgpu::Texture>`)
         #[cfg(not(target_family = "wasm"))]
         texture: std::sync::Arc<dyn std::any::Any + Send + Sync>,
+
         /// The GPU texture, type-erased (expected to be `Arc<wgpu::Texture>`).
         ///
         /// WGPU handles are intentionally thread-local in browser builds.
         #[cfg(target_family = "wasm")]
         texture: std::sync::Arc<dyn std::any::Any>,
+
         /// Dimensions of the texture in device pixels
         size: Size<DevicePixels>,
     },
@@ -46,6 +50,7 @@ impl std::fmt::Debug for SurfaceSource {
         match *self {
             #[cfg(target_os = "macos")]
             SurfaceSource::Surface(ref buf) => _f.debug_tuple("Surface").field(buf).finish(),
+
             #[cfg(any(
                 target_os = "linux",
                 target_os = "freebsd",
@@ -56,6 +61,7 @@ impl std::fmt::Debug for SurfaceSource {
                 .debug_struct("Texture")
                 .field("size", &size)
                 .finish_non_exhaustive(),
+
             #[cfg(target_os = "windows")]
             SurfaceSource::WindowsCapture(ref frame) => frame.fmt(_f),
             SurfaceSource::Unsupported(size) => _f.debug_tuple("Unsupported").field(&size).finish(),
@@ -70,6 +76,7 @@ impl SurfaceSource {
             SurfaceSource::Surface(buffer) => {
                 crate::size(buffer.get_width().into(), buffer.get_height().into())
             }
+
             #[cfg(any(
                 target_os = "linux",
                 target_os = "freebsd",
@@ -125,6 +132,7 @@ impl Surface {
     /// Set the object fit for the image.
     pub fn object_fit(mut self, object_fit: ObjectFit) -> Self {
         self.object_fit = object_fit;
+
         self
     }
 }
@@ -149,8 +157,11 @@ impl Element for Surface {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
+
         style.refine(&self.style);
+
         let layout_id = window.request_layout(style, [], cx);
+
         (layout_id, ())
     }
 
@@ -178,7 +189,9 @@ impl Element for Surface {
         let new_bounds = self.object_fit.get_bounds(_bounds, self.source.size());
         // TODO: Add support for corner_radii.
         let mut style = Style::default();
+
         style.refine(&self.style);
+
         _window.with_element_opacity(style.opacity, |window| {
             window.paint_surface(new_bounds, self.source.clone());
         });

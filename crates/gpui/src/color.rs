@@ -9,6 +9,7 @@ pub use palette::{Hsla, rgb::Rgba};
 /// Convert an RGB hex color code number to a color type
 pub fn rgb(hex: u32) -> Rgba {
     let [_, r, g, b] = hex.to_be_bytes().map(|b| (b as f32) / 255.0);
+
     Rgba {
         color: palette::rgb::Rgb::new(r, g, b),
         alpha: 1.0,
@@ -18,6 +19,7 @@ pub fn rgb(hex: u32) -> Rgba {
 /// Convert an RGBA hex color code number to [`Rgba`]
 pub fn rgba(hex: u32) -> Rgba {
     let [r, g, b, a] = hex.to_be_bytes().map(|b| (b as f32) / 255.0);
+
     Rgba::new(r, g, b, a)
 }
 
@@ -37,8 +39,10 @@ pub fn hsla_to_rgba(color: Hsla) -> Rgba {
 /// Swap from RGBA with premultiplied alpha to BGRA
 pub fn swap_rgba_pa_to_bgra(color: &mut [u8]) {
     color.swap(0, 2);
+
     if color[3] > 0 {
         let a = color[3] as f32 / 255.;
+
         color[0] = (color[0] as f32 / a) as u8;
         color[1] = (color[1] as f32 / a) as u8;
         color[2] = (color[2] as f32 / a) as u8;
@@ -208,11 +212,14 @@ pub trait ColorExt {
     where
         Self: Sized;
 }
+
 impl ColorExt for Rgba {
     fn blend(&self, other: &Self) -> Self {
         use palette::blend::{BlendFunction, Equation, Equations, Parameter, Parameters, PreAlpha};
+
         let src = self.with_alpha(self.alpha.clamp(0f32, 1f32));
         let dst = other.with_alpha(other.alpha.clamp(0f32, 1f32));
+
         let blend_mode = Equations {
             color_equation: Equation::Add,
             alpha_equation: Equation::Add,
@@ -227,6 +234,7 @@ impl ColorExt for Rgba {
                     source: Parameter::One,
                     destination: Parameter::Zero,
                 },
+
                 // alpha = [src.alpha * (1 - dst.alpha)] + [dst.alpha * dst.alpha]
                 //		=> dst.alpha when dst.alpha == 1
                 //		=> src.alpha when dst.alpha == 0
@@ -236,16 +244,20 @@ impl ColorExt for Rgba {
                 },
             },
         };
+
         // in order to match original/upstream behavior, this blend does /not/ premultiply (as palette standard is)
         let src = PreAlpha {
             color: src.color,
             alpha: src.alpha,
         };
+
         let dst = PreAlpha {
             color: dst.color,
             alpha: dst.alpha,
         };
+
         let premul = blend_mode.apply_to(src, dst);
+
         Rgba {
             color: premul.color,
             alpha: premul.alpha,
@@ -258,14 +270,18 @@ impl ColorExt for Rgba {
 
     fn opacity(&self, factor: f32) -> Self {
         let mut color = *self;
+
         color.alpha *= factor.clamp(0., 1.);
+
         color
     }
 }
+
 impl ColorExt for Hsla {
     fn blend(&self, other: &Self) -> Self {
         let this: Rgba = (*self).into_color();
         let other: Rgba = (*other).into_color();
+
         this.blend(&other).into_color()
     }
 
@@ -275,7 +291,9 @@ impl ColorExt for Hsla {
 
     fn opacity(&self, factor: f32) -> Self {
         let mut color = *self;
+
         color.alpha *= factor.clamp(0., 1.);
+
         color
     }
 }
@@ -327,6 +345,7 @@ pub struct Background {
     pub(crate) solid: crate::SceneHsla,
     pub(crate) gradient_angle_or_pattern_height: f32,
     pub(crate) colors: [LinearColorStop; 2],
+
     /// Padding for alignment for repr(C) layout.
     pub(crate) padding: u32,
 }
@@ -335,16 +354,19 @@ impl std::fmt::Debug for Background {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.tag {
             BackgroundTag::Solid => write!(f, "Solid({:?})", self.solid),
+
             BackgroundTag::LinearGradient => write!(
                 f,
                 "LinearGradient({}, {:?}, {:?})",
                 self.gradient_angle_or_pattern_height, self.colors[0], self.colors[1]
             ),
+
             BackgroundTag::PatternSlash => write!(
                 f,
                 "PatternSlash({:?}, {})",
                 self.solid, self.gradient_angle_or_pattern_height
             ),
+
             BackgroundTag::Checkerboard => write!(
                 f,
                 "Checkerboard({:?}, {})",
@@ -355,6 +377,7 @@ impl std::fmt::Debug for Background {
 }
 
 impl Eq for Background {}
+
 impl Default for Background {
     fn default() -> Self {
         Self {
@@ -432,6 +455,7 @@ pub fn linear_gradient(
 pub struct LinearColorStop {
     /// The color of the color stop.
     pub color: crate::SceneHsla,
+
     /// The percentage of the gradient, in the range 0.0 to 1.0.
     pub percentage: f32,
 }
@@ -450,6 +474,7 @@ impl LinearColorStop {
     /// Returns a new color stop with the same color, but with a modified alpha value.
     pub fn opacity(&self, factor: f32) -> Self {
         let color: Hsla = self.color.into();
+
         Self {
             percentage: self.percentage,
             color: color.opacity(factor).into(),
@@ -466,6 +491,7 @@ pub enum BackgroundKind {
     LinearGradient {
         /// The gradient line's angle in degrees, `0.0` pointing up, increasing clockwise.
         angle: f32,
+
         /// The two ends of the gradient.
         stops: [LinearColorStop; 2],
     },
@@ -473,8 +499,10 @@ pub enum BackgroundKind {
     PatternSlash {
         /// The stripe color.
         color: Hsla,
+
         /// The stripe width, in logical pixels.
         width: f32,
+
         /// The gap between stripes, in logical pixels.
         interval: f32,
     },
@@ -482,6 +510,7 @@ pub enum BackgroundKind {
     Checkerboard {
         /// The color of one set of squares. The other set is fully transparent.
         color: Hsla,
+
         /// The width and height of each square, in logical pixels.
         size: f32,
     },
@@ -501,10 +530,12 @@ impl Background {
     pub fn kind(&self) -> BackgroundKind {
         match self.tag {
             BackgroundTag::Solid => BackgroundKind::Solid(self.solid.into()),
+
             BackgroundTag::LinearGradient => BackgroundKind::LinearGradient {
                 angle: self.gradient_angle_or_pattern_height,
                 stops: self.colors,
             },
+
             BackgroundTag::PatternSlash => {
                 const PATTERN_COMPONENT_SCALE: f32 = u8::MAX as f32;
                 const PATTERN_PACKING_RADIX: f32 = u16::MAX as f32;
@@ -512,12 +543,14 @@ impl Background {
                 // `pattern_slash` packs both values into one exactly representable f32;
                 // floor + rem_euclid inverts it, since truncation and `%` give the wrong entry.
                 let packed = self.gradient_angle_or_pattern_height;
+
                 BackgroundKind::PatternSlash {
                     color: self.solid.into(),
                     width: (packed / PATTERN_PACKING_RADIX).floor() / PATTERN_COMPONENT_SCALE,
                     interval: (packed.rem_euclid(PATTERN_PACKING_RADIX)) / PATTERN_COMPONENT_SCALE,
                 }
             }
+
             BackgroundTag::Checkerboard => BackgroundKind::Checkerboard {
                 color: self.solid.into(),
                 size: self.gradient_angle_or_pattern_height,
@@ -530,6 +563,7 @@ impl Background {
     /// <https://developer.mozilla.org/en-US/docs/Web/CSS/color-interpolation-method>
     pub fn color_space(mut self, color_space: ColorSpace) -> Self {
         self.color_space = color_space;
+
         self
     }
 
@@ -542,11 +576,14 @@ impl Background {
     pub fn opacity(&self, factor: f32) -> Self {
         let mut background = *self;
         let solid: Hsla = background.solid.into();
+
         background.solid = solid.opacity(factor).into();
+
         background.colors = [
             self.colors[0].opacity(factor),
             self.colors[1].opacity(factor),
         ];
+
         background
     }
 
@@ -579,12 +616,15 @@ mod tests {
     fn test_background_solid() {
         let color: Hsla = rgba(0xff0099ff).into_color();
         let mut background = Background::from(color);
+
         assert_eq!(background.tag, BackgroundTag::Solid);
         assert_eq!(background.solid, color.into());
 
         assert_eq!(background.opacity(0.5).solid, color.opacity(0.5).into());
         assert!(!background.is_transparent());
+
         background.solid = hsla(0.0, 0.0, 0.0, 0.0).into();
+
         assert!(background.is_transparent());
     }
 
@@ -593,6 +633,7 @@ mod tests {
         let from = linear_color_stop(rgba(0xff0099ff), 0.0);
         let to = linear_color_stop(rgba(0x00ff99ff), 1.0);
         let background = linear_gradient(90.0, from, to);
+
         assert_eq!(background.tag, BackgroundTag::LinearGradient);
         assert_eq!(background.colors[0], from);
         assert_eq!(background.colors[1], to);
@@ -606,10 +647,12 @@ mod tests {
     #[test]
     fn test_background_kind() {
         let color: Hsla = rgba(0xff0099ff).into_color();
+
         assert_eq!(Background::from(color).kind(), BackgroundKind::Solid(color));
 
         let from = linear_color_stop(rgba(0xff0099ff), 0.0);
         let to = linear_color_stop(rgba(0x00ff99ff), 1.0);
+
         assert_eq!(
             linear_gradient(90.0, from, to).kind(),
             BackgroundKind::LinearGradient {
@@ -627,6 +670,7 @@ mod tests {
     #[test]
     fn test_background_kind_unpacks_pattern_slash() {
         let color: Hsla = rgba(0xff0099ff).into_color();
+
         // Both values survive to the 1/255 the constructor quantizes them to.
         for (width, interval) in [(1.0, 3.0), (0.5, 0.25), (2.0, 10.0)] {
             let BackgroundKind::PatternSlash {
@@ -637,6 +681,7 @@ mod tests {
             else {
                 panic!("pattern_slash did not produce a PatternSlash");
             };
+
             assert!((got_width - width).abs() <= 1.0 / 255.0);
             assert!((got_interval - interval).abs() <= 1.0 / 255.0);
         }
@@ -645,7 +690,9 @@ mod tests {
     #[test]
     fn test_rgba_alpha() {
         use palette::WithAlpha;
+
         let color = Rgba::<palette::Srgb>::new(0.2, 0.6, 1.0, 0.8);
+
         assert_eq!(color.with_alpha(0.25).alpha, 0.25);
         // NOTE: diverging from upstream, where Rgba::alpha clamps. palette does not clamp alpha
         assert_eq!(color.with_alpha(1.5).alpha, 1.5);
@@ -654,7 +701,9 @@ mod tests {
     #[test]
     fn test_rgba_opacity() {
         use super::ColorExt;
+
         let color = Rgba::new(0.2, 0.6, 1.0, 0.8);
+
         assert!((color.opacity(0.5).alpha - 0.4).abs() < 1e-6);
         assert_eq!(color.opacity(2.0).alpha, 0.8);
     }
@@ -672,6 +721,7 @@ mod tests {
         } else {
             (src.alpha * (1f32 - dst.alpha)) + (dst.alpha * dst.alpha)
         };
+
         Rgba::new(
             (src.red * (1f32 - dst.alpha)) + (dst.red * dst.alpha),
             (src.green * (1f32 - dst.alpha)) + (dst.green * dst.alpha),
@@ -686,6 +736,7 @@ mod tests {
         let src = Rgba::new(0f32, 0f32, 0f32, 0.5f32);
         let dst = Rgba::new(1f32, 1f32, 1f32, 1f32);
         let blended = src.blend(&dst);
+
         assert_eq!(blended, dst);
     }
 
@@ -695,6 +746,7 @@ mod tests {
         let src = Rgba::new(0f32, 0f32, 0f32, 0.5f32);
         let dst = Rgba::new(1f32, 1f32, 1f32, 0f32);
         let blended = src.blend(&dst);
+
         assert_eq!(blended, src);
     }
 
@@ -702,6 +754,7 @@ mod tests {
     fn test_blend_opaque_white_black() {
         let src = Rgba::new(0f32, 0f32, 0f32, 1f32);
         let dst = Rgba::new(1f32, 1f32, 1f32, 1f32);
+
         assert_eq!(src.blend(&dst), upstream_blend(src, dst));
     }
 
@@ -709,6 +762,7 @@ mod tests {
     fn test_blend_translucent_on_opaquewhite() {
         let src = Rgba::new(0f32, 0f32, 0f32, 1f32);
         let dst = Rgba::new(0.3f32, 0.6f32, 1f32, 0.5f32);
+
         assert_eq!(src.blend(&dst), upstream_blend(src, dst));
     }
 }

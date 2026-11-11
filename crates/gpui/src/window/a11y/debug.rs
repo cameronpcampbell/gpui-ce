@@ -34,13 +34,16 @@ pub(crate) struct NodeDebugInfo {
     /// [`crate::Element::a11y_synthetic_children`] rather than created from a
     /// real element with a role and ID.
     pub synthetic: bool,
+
     /// The type name of the `Render` view that was rendering when the node was
     /// created.
     pub view: Option<&'static str>,
+
     /// The [`ElementId`](crate::ElementId) of the creating element (the leaf of
     /// its `GlobalElementId`, not the full path). For a synthetic node, this is
     /// the real element whose `a11y_synthetic_children` produced it.
     pub element_id: Option<String>,
+
     /// Source location where the creating element was constructed.
     pub source_location: Option<&'static core::panic::Location<'static>>,
 }
@@ -58,14 +61,18 @@ pub(crate) struct A11yDebug {
     last_tree_update: Option<TreeUpdate>,
     last_gpui_focus: Option<NodeId>,
     last_active_descendant: Option<NodeId>,
+
     /// Monotonic counter incremented on each captured frame, so a re-dump makes
     /// it obvious whether the tree actually refreshed.
     frame_number: u64,
+
     /// Metadata about the most recently captured frame.
     last_frame: Option<CapturedFrame>,
+
     /// Window-space bounds of every node in the last update, retained here
     /// because the live map is cleared at the start of each frame.
     last_node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
+
     #[cfg(debug_assertions)]
     last_node_info: FxHashMap<NodeId, NodeDebugInfo>,
 }
@@ -85,6 +92,7 @@ impl A11yDebug {
         self.last_gpui_focus = gpui_focus;
         self.last_active_descendant = active_descendant;
         self.frame_number += 1;
+
         self.last_frame = Some(CapturedFrame {
             rendered_at: chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false),
             frame_number: self.frame_number,
@@ -122,16 +130,19 @@ impl A11yDebug {
         let update = self.last_tree_update.as_ref()?;
 
         let mut ephemeral: FxHashMap<NodeId, String> = FxHashMap::default();
+
         for (index, (id, _)) in update.nodes.iter().enumerate() {
             ephemeral.insert(*id, ephemeral_id(index));
         }
 
         let mut nodes = serde_json::Map::new();
+
         for (id, node) in &update.nodes {
             let key = ephemeral
                 .get(id)
                 .cloned()
                 .unwrap_or_else(|| id.0.to_string());
+
             #[cfg(debug_assertions)]
             let provenance = self
                 .last_node_info
@@ -145,8 +156,10 @@ impl A11yDebug {
                     synthetic: info.synthetic.then_some(true),
                 })
                 .unwrap_or_default();
+
             #[cfg(not(debug_assertions))]
             let provenance = NodeProvenance::default();
+
             let value = node_to_json(
                 *id,
                 node,
@@ -154,6 +167,7 @@ impl A11yDebug {
                 &provenance,
                 self.last_node_bounds.get(id).copied(),
             );
+
             nodes.insert(key, value);
         }
 
@@ -185,6 +199,7 @@ impl A11yDebug {
             "frame": frame,
             "nodes": nodes,
         });
+
         Some(serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string()))
     }
 }
@@ -207,7 +222,9 @@ fn node_to_json(
     use serde_json::json;
 
     let mut map = serde_json::Map::new();
+
     map.insert("accesskit_id".into(), json!(id.0.to_string()));
+
     if let Some(bounds) = bounds {
         map.insert(
             "bounds".into(),
@@ -230,6 +247,7 @@ fn node_to_json(
                 .unwrap_or_else(|| child.0.to_string())
         })
         .collect();
+
     if !children.is_empty() {
         map.insert("children".into(), json!(children));
     }
@@ -238,18 +256,22 @@ fn node_to_json(
     if let Some(element_id) = provenance.element_id {
         map.insert("element_id".into(), json!(element_id));
     }
+
     if let Some(view) = provenance.view {
         map.insert("view".into(), json!(view));
     }
+
     if let Some(source_location) = &provenance.source_location {
         map.insert("source_location".into(), json!(source_location));
     }
+
     if let Some(synthetic) = provenance.synthetic {
         map.insert("synthetic".into(), json!(synthetic));
     }
 
     // Accessibility semantics for this node, grouped together.
     let mut aria = serde_json::Map::new();
+
     aria.insert("role".into(), json!(format!("{:?}", node.role())));
 
     // Which action types the node supports. AccessKit keeps these in a private
@@ -258,14 +280,18 @@ fn node_to_json(
     // returning `None` past the last one - so this can't drift out of sync with
     // AccessKit's `Action` enum the way a hand-maintained list would.
     let mut next_action = 0u8;
+
     let on_action: Vec<String> = std::iter::from_fn(move || {
         let action = Action::n(next_action)?;
+
         next_action += 1;
+
         Some(action)
     })
     .filter(|action| node.supports_action(*action))
     .map(|action| format!("{action:?}"))
     .collect();
+
     if !on_action.is_empty() {
         aria.insert("on_action".into(), json!(on_action));
     }
@@ -274,33 +300,43 @@ fn node_to_json(
     if let Some(v) = node.label() {
         aria.insert("label".into(), json!(v));
     }
+
     if let Some(v) = node.description() {
         aria.insert("description".into(), json!(v));
     }
+
     if let Some(v) = node.value() {
         aria.insert("value".into(), json!(v));
     }
+
     if let Some(v) = node.keyboard_shortcut() {
         aria.insert("keyboard_shortcut".into(), json!(v));
     }
+
     if let Some(v) = node.access_key() {
         aria.insert("access_key".into(), json!(v));
     }
+
     if let Some(v) = node.placeholder() {
         aria.insert("placeholder".into(), json!(v));
     }
+
     if let Some(v) = node.tooltip() {
         aria.insert("tooltip".into(), json!(v));
     }
+
     if let Some(v) = node.role_description() {
         aria.insert("role_description".into(), json!(v));
     }
+
     if let Some(v) = node.author_id() {
         aria.insert("author_id".into(), json!(v));
     }
+
     if let Some(v) = node.url() {
         aria.insert("url".into(), json!(v));
     }
+
     if node.is_disabled() {
         aria.insert("disabled".into(), json!(true));
     }
@@ -313,12 +349,15 @@ fn node_to_json(
     if let Some(v) = node.is_selected() {
         aria.insert("selected".into(), json!(v));
     }
+
     if let Some(v) = node.is_expanded() {
         aria.insert("expanded".into(), json!(v));
     }
+
     if let Some(v) = node.toggled() {
         aria.insert("toggled".into(), json!(format!("{v:?}")));
     }
+
     if let Some(v) = node.orientation() {
         aria.insert("orientation".into(), json!(format!("{v:?}")));
     }
@@ -327,12 +366,15 @@ fn node_to_json(
     if let Some(v) = node.numeric_value() {
         aria.insert("numeric_value".into(), json!(v));
     }
+
     if let Some(v) = node.min_numeric_value() {
         aria.insert("min_numeric_value".into(), json!(v));
     }
+
     if let Some(v) = node.max_numeric_value() {
         aria.insert("max_numeric_value".into(), json!(v));
     }
+
     if let Some(v) = node.numeric_value_step() {
         aria.insert("numeric_value_step".into(), json!(v));
     }
@@ -341,21 +383,27 @@ fn node_to_json(
     if let Some(v) = node.level() {
         aria.insert("level".into(), json!(v));
     }
+
     if let Some(v) = node.position_in_set() {
         aria.insert("position_in_set".into(), json!(v));
     }
+
     if let Some(v) = node.size_of_set() {
         aria.insert("size_of_set".into(), json!(v));
     }
+
     if let Some(v) = node.row_index() {
         aria.insert("row_index".into(), json!(v));
     }
+
     if let Some(v) = node.column_index() {
         aria.insert("column_index".into(), json!(v));
     }
+
     if let Some(v) = node.row_count() {
         aria.insert("row_count".into(), json!(v));
     }
+
     if let Some(v) = node.column_count() {
         aria.insert("column_count".into(), json!(v));
     }
@@ -369,13 +417,17 @@ fn node_to_json(
 /// ...` (bijective base-26).
 fn ephemeral_id(mut index: usize) -> String {
     let mut bytes = Vec::new();
+
     loop {
         bytes.push(b'a' + (index % 26) as u8);
+
         if index < 26 {
             break;
         }
+
         index = index / 26 - 1;
     }
+
     bytes.reverse();
     String::from_utf8(bytes).unwrap_or_default()
 }
@@ -387,6 +439,7 @@ mod tests {
         ParentElement as _, Render, StatefulInteractiveElement as _, TestAppContext, Window, div,
         util::FluentBuilder as _,
     };
+
     use accesskit::{Role, TreeUpdate};
     use accesskit_consumer::{Tree, common_filter};
     use std::sync::atomic::Ordering;
@@ -418,6 +471,7 @@ mod tests {
             cx.update_window(window, |_, window, cx| {
                 window.a11y.active_flag.store(true, Ordering::SeqCst);
                 window.draw(cx).clear(cx);
+
                 window
                     .a11y
                     .debug
@@ -427,32 +481,41 @@ mod tests {
             })
             .unwrap()
         };
+
         let filtered_labels = |update| {
             let tree = Tree::new(update, false);
+
             tree.state()
                 .root()
                 .filtered_children(common_filter)
                 .filter_map(|node| node.label())
                 .collect::<Vec<_>>()
         };
+
         let set_hidden = |hidden, cx: &mut TestAppContext| {
             window
                 .update(cx, |view, _, cx| {
                     view.hidden = hidden;
+
                     cx.notify();
                 })
                 .unwrap();
         };
 
         let visible_update = draw_tree(any_window, &mut cx);
+
         assert_eq!(filtered_labels(visible_update), ["Inside", "Outside"]);
 
         set_hidden(true, &mut cx);
+
         let hidden_update = draw_tree(any_window, &mut cx);
+
         assert_eq!(filtered_labels(hidden_update), ["Outside"]);
 
         set_hidden(false, &mut cx);
+
         let restored_update = draw_tree(any_window, &mut cx);
+
         assert_eq!(filtered_labels(restored_update), ["Inside", "Outside"]);
     }
 }

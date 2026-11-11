@@ -5,6 +5,7 @@ use crate::{
     Pixels, Point, PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled,
     TextRun, Window, black, phi, point, px, rems, size,
 };
+
 use collections::HashSet;
 use palette::{Hsla, IntoColor, rgb::Rgba};
 use refineable::Refineable;
@@ -48,12 +49,14 @@ impl ObjectFit {
 
         match self {
             ObjectFit::Fill => bounds,
+
             ObjectFit::Contain => {
                 let new_size = if bounds_ratio > image_ratio {
                     size(
                         image_size.width * (bounds.size.height / image_size.height),
                         bounds.size.height,
                     )
+
                 } else {
                     size(
                         bounds.size.width,
@@ -69,6 +72,7 @@ impl ObjectFit {
                     size: new_size,
                 }
             }
+
             ObjectFit::ScaleDown => {
                 // Check if the image is larger than the bounds in either dimension.
                 if image_size.width > bounds.size.width || image_size.height > bounds.size.height {
@@ -78,6 +82,7 @@ impl ObjectFit {
                             image_size.width * (bounds.size.height / image_size.height),
                             bounds.size.height,
                         )
+
                     } else {
                         size(
                             bounds.size.width,
@@ -92,10 +97,12 @@ impl ObjectFit {
                         ),
                         size: new_size,
                     }
+
                 } else {
                     // If the image is smaller than or equal to the container, display it at its original size,
                     // centered within the container.
                     let original_size = size(image_size.width, image_size.height);
+
                     Bounds {
                         origin: point(
                             bounds.origin.x + (bounds.size.width - original_size.width) / 2.0,
@@ -105,12 +112,14 @@ impl ObjectFit {
                     }
                 }
             }
+
             ObjectFit::Cover => {
                 let new_size = if bounds_ratio > image_ratio {
                     size(
                         bounds.size.width,
                         image_size.height * (bounds.size.width / image_size.width),
                     )
+
                 } else {
                     size(
                         image_size.width * (bounds.size.height / image_size.height),
@@ -126,6 +135,7 @@ impl ObjectFit {
                     size: new_size,
                 }
             }
+
             ObjectFit::None => Bounds {
                 origin: bounds.origin,
                 size: image_size,
@@ -166,6 +176,7 @@ pub enum GridTemplateMinSize {
 pub struct GridTemplate {
     /// How this template directive should be repeated
     pub repeat: u16,
+
     /// The minimum size in the repeat(<>, minmax(_, 1fr)) equation
     pub min_size: GridTemplateMinSize,
 }
@@ -195,6 +206,7 @@ impl RingColor {
 pub struct RingStyle {
     /// The width of the ring. A zero width disables it.
     pub width: Pixels,
+
     /// The ring color or gradient.
     pub color: RingColor,
 }
@@ -249,13 +261,17 @@ pub struct Style {
     /// How children overflowing their container should affect layout
     #[refineable]
     pub overflow: Point<Overflow>,
+
     /// Edge fade distances for overflow masking.
     #[refineable]
     pub overflow_fade: Edges<AbsoluteLength>,
+
     /// How much space (in points) should be reserved for the scrollbars of `Overflow::Scroll` and `Overflow::Auto` nodes.
     pub scrollbar_width: AbsoluteLength,
+
     /// Whether both x and y axis should be scrollable at the same time.
     pub allow_concurrent_scroll: bool,
+
     /// Whether scrolling should be restricted to the input gesture's axis.
     ///
     /// Pixel-based scroll gestures are locked to their initially dominant axis. The lock may be
@@ -286,6 +302,7 @@ pub struct Style {
     // Position properties
     /// What should the `position` value of this struct use as a base offset?
     pub position: Position,
+
     /// How should the position of this element be tweaked relative to the layout defined?
     #[refineable]
     pub inset: Edges<Length>,
@@ -294,12 +311,15 @@ pub struct Style {
     /// Sets the initial size of the item
     #[refineable]
     pub size: Size<Length>,
+
     /// Controls the minimum size of the item
     #[refineable]
     pub min_size: Size<Length>,
+
     /// Controls the maximum size of the item
     #[refineable]
     pub max_size: Size<Length>,
+
     /// Sets the preferred aspect ratio for the item. The ratio is calculated as width divided by height.
     pub aspect_ratio: Option<f32>,
 
@@ -307,9 +327,11 @@ pub struct Style {
     /// How large should the margin be on each side?
     #[refineable]
     pub margin: Edges<Length>,
+
     /// How large should the padding be on each side?
     #[refineable]
     pub padding: Edges<DefiniteLength>,
+
     /// How large should the border be on each side?
     #[refineable]
     pub border_widths: Edges<AbsoluteLength>,
@@ -317,14 +339,19 @@ pub struct Style {
     // Alignment properties
     /// How this node's children aligned in the cross/block axis?
     pub align_items: Option<AlignItems>,
+
     /// How this node should be aligned in the cross/block axis. Falls back to the parents [`AlignItems`] if not set
     pub align_self: Option<AlignSelf>,
+
     /// How this element aligns vertically when it participates in an inline formatting context.
     pub vertical_align: VerticalAlign,
+
     /// How should content contained within this item be aligned in the cross/block axis
     pub align_content: Option<AlignContent>,
+
     /// How should contained within this item be aligned in the main/inline axis
     pub justify_content: Option<JustifyContent>,
+
     /// How large should the gaps between items in a flex container be?
     #[refineable]
     pub gap: Size<DefiniteLength>,
@@ -332,12 +359,16 @@ pub struct Style {
     // Flexbox properties
     /// Which direction does the main axis flow in?
     pub flex_direction: FlexDirection,
+
     /// Should elements wrap, or stay in a single line?
     pub flex_wrap: FlexWrap,
+
     /// Sets the initial main axis size of the item
     pub flex_basis: Length,
+
     /// The relative rate at which this item grows when it is expanding to fill space, 0.0 is the default value, and this value must be positive.
     pub flex_grow: f32,
+
     /// The relative rate at which this item shrinks when it is contracting to fit into space, 1.0 is the default value, and this value must be positive.
     pub flex_shrink: f32,
 
@@ -501,14 +532,18 @@ pub enum UnicodeBidi {
 pub struct BoxShadow {
     /// The shadow color or gradient.
     pub color: Background,
+
     /// How should it be offset from its element?
     pub offset: Point<Pixels>,
+
     /// How much should the shadow be blurred?
     #[setters(generate)]
     pub blur_radius: Pixels,
+
     /// How much should the shadow spread?
     #[setters(generate)]
     pub spread_radius: Pixels,
+
     /// Whether this is an inset shadow (drawn inside the element's bounds).
     #[setters(generate, bool)]
     pub inset: bool,
@@ -737,6 +772,7 @@ impl TextStyle {
     /// Create a new text style with the given highlighting applied.
     pub fn highlight(mut self, style: impl Into<HighlightStyle>) -> Self {
         let style = style.into();
+
         if let Some(weight) = style.font_weight {
             self.font_weight = weight;
         }
@@ -885,6 +921,7 @@ impl Style {
                 x: Overflow::Visible,
                 y: Overflow::Visible,
             } => None,
+
             _ => {
                 let mut min = bounds.origin;
                 let mut max = bounds.bottom_right();
@@ -905,25 +942,30 @@ impl Style {
                 ) {
                     // x and y both visible
                     (true, true) => return None,
+
                     // x visible, y hidden
                     (true, false) => Bounds::from_corners(
                         point(min.x, bounds.origin.y),
                         point(max.x, bounds.bottom_right().y),
                     ),
+
                     // x hidden, y visible
                     (false, true) => Bounds::from_corners(
                         point(bounds.origin.x, min.y),
                         point(bounds.bottom_right().x, max.y),
                     ),
+
                     // both hidden
                     (false, false) => Bounds::from_corners(min, max),
                 };
 
                 let mut fade_out = self.overflow_fade.to_pixels(rem_size);
+
                 if self.overflow.x == Overflow::Visible {
                     fade_out.left = Pixels::ZERO;
                     fade_out.right = Pixels::ZERO;
                 }
+
                 if self.overflow.y == Overflow::Visible {
                     fade_out.top = Pixels::ZERO;
                     fade_out.bottom = Pixels::ZERO;
@@ -950,6 +992,7 @@ impl Style {
             overflow_fade: self.overflow_fade,
             ..Style::default()
         };
+
         scroll_style
             .overflow_mask(bounds, rem_size)
             .expect("vertical scrolling always clips")
@@ -1000,10 +1043,12 @@ impl Style {
         }
 
         let rem_size = window.rem_size();
+
         let corner_radii = self
             .corner_radii
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
+
         let corner_smoothing = self.corner_smoothing.unwrap_or_default();
 
         let current_color = self.text.color.unwrap_or_else(|| window.text_style().color);
@@ -1030,8 +1075,10 @@ impl Style {
         // and its children together as one group; without a filter it paints directly.
         let paint_box = |window: &mut Window, cx: &mut App| {
             let background_color = self.background.as_ref().and_then(Fill::color);
+
             if background_color.is_some_and(|color| !color.is_transparent()) {
                 let background_color = background_color.unwrap_or_default();
+
                 window.paint_quad(
                     PaintQuad::new(bounds)
                         .corner_radii(corner_radii)
@@ -1050,6 +1097,7 @@ impl Style {
                     std::slice::from_ref(&ring),
                 );
             }
+
             window.paint_inset_shadows(bounds, corner_radii, corner_smoothing, &self.box_shadow);
 
             continuation(window, cx);
@@ -1057,6 +1105,7 @@ impl Style {
             if self.is_border_visible() {
                 let border_widths = self.border_widths.to_pixels(rem_size);
                 let border_color = self.border_color.unwrap_or_default();
+
                 window.paint_quad(
                     PaintQuad::new(bounds)
                         .corner_radii(corner_radii)
@@ -1245,6 +1294,7 @@ impl HighlightStyle {
             ..Default::default()
         }
     }
+
     /// Blend this highlight style with another.
     /// Non-continuous properties, like font_weight and font_style, are overwritten.
     #[must_use]
@@ -1321,28 +1371,35 @@ pub fn combine_highlights(
 ) -> impl Iterator<Item = (Range<usize>, HighlightStyle)> {
     let mut endpoints = Vec::new();
     let mut highlights = Vec::new();
+
     for (range, highlight) in a.into_iter().chain(b) {
         if !range.is_empty() {
             let highlight_id = highlights.len();
+
             endpoints.push((range.start, highlight_id, true));
             endpoints.push((range.end, highlight_id, false));
             highlights.push(highlight);
         }
     }
+
     endpoints.sort_unstable_by_key(|(position, _, _)| *position);
+
     let mut endpoints = endpoints.into_iter().peekable();
 
     let mut active_styles = HashSet::default();
     let mut ix = 0;
+
     iter::from_fn(move || {
         while let Some((endpoint_ix, highlight_id, is_start)) = endpoints.peek() {
             let prev_index = mem::replace(&mut ix, *endpoint_ix);
+
             if ix > prev_index && !active_styles.is_empty() {
                 let current_style = active_styles
                     .iter()
                     .fold(HighlightStyle::default(), |acc, highlight_id| {
                         acc.highlight(highlights[*highlight_id])
                     });
+
                 return Some((prev_index..ix, current_style));
             }
 
@@ -1351,8 +1408,10 @@ pub fn combine_highlights(
             } else {
                 active_styles.remove(highlight_id);
             }
+
             endpoints.next();
         }
+
         None
     })
 }
@@ -1386,6 +1445,7 @@ pub enum AlignItems {
     /// Stretch to fill the container
     Stretch,
 }
+
 /// Used to control how child nodes are aligned.
 /// Does not apply to Flexbox, and will be ignored if specified on a flex container
 /// For Grid it controls alignment in the inline axis
@@ -1706,10 +1766,13 @@ mod tests {
             linear_color_stop(red(), 0.0),
             linear_color_stop(blue(), 1.0),
         );
+
         let gradient_style = StyleRefinement::default().border_color(gradient);
+
         assert_eq!(gradient_style.border_color, Some(gradient));
 
         let solid_style = StyleRefinement::default().border_color(red());
+
         assert_eq!(solid_style.border_color, Some(red().into()));
     }
 
@@ -1718,6 +1781,7 @@ mod tests {
         let style_a = HighlightStyle::default();
         let style_b = HighlightStyle::default();
         let style_a = style_a.highlight(style_b);
+
         assert_eq!(
             style_a,
             HighlightStyle::default(),
@@ -1741,6 +1805,7 @@ mod tests {
                 wavy: true,
             }),
         };
+
         let expected_style = style_b;
 
         assert_eq!(
@@ -1749,12 +1814,14 @@ mod tests {
         );
 
         let style_a = style_a.highlight(style_b);
+
         assert_eq!(
             style_a, expected_style,
             "Blending an empty style with another style should return the other style"
         );
 
         let style_b = style_b.highlight(Default::default());
+
         assert_eq!(
             style_b, expected_style,
             "Blending a style with an empty style should not change the style."
@@ -1800,6 +1867,7 @@ mod tests {
         };
 
         let style_c = style_c.highlight(style_d);
+
         assert_eq!(
             style_c, expected_style,
             "Blending styles should blend properties where possible and override all others"
@@ -1898,6 +1966,7 @@ mod tests {
     #[test]
     fn test_text_style_refinement() {
         let mut style = Style::default();
+
         style.refine(&StyleRefinement::default().text_size(px(20.0)));
         style.refine(&StyleRefinement::default().font_weight(FontWeight::SEMIBOLD));
         style.refine(&StyleRefinement::default().font_width(87.5));
@@ -1913,11 +1982,14 @@ mod tests {
         );
 
         let mut resolved = TextStyle::default();
+
         resolved.refine(style.text_style().unwrap());
+
         let inherited = resolved.highlight(HighlightStyle::color(red()));
 
         assert_eq!(inherited.font().width, FontWidth::SEMI_CONDENSED);
         assert_eq!(inherited.to_run(4).font.width, FontWidth::SEMI_CONDENSED);
+
         assert_eq!(
             HighlightStyle::from(&inherited).font_width,
             Some(FontWidth::SEMI_CONDENSED)
@@ -1926,6 +1998,7 @@ mod tests {
         let mut element = crate::div()
             .font_width(FontWidth::CONDENSED)
             .font(crate::font("IBM Plex Sans"));
+
         assert_eq!(element.text_style().font_width, Some(FontWidth::NORMAL));
     }
 
@@ -1937,6 +2010,7 @@ mod tests {
             style.border_dashed_length,
             crate::scene::DEFAULT_BORDER_DASHED_LENGTH
         );
+
         assert_eq!(
             style.border_dashed_gap,
             crate::scene::DEFAULT_BORDER_DASHED_GAP
@@ -1953,6 +2027,7 @@ mod tests {
         assert_eq!(style.border_style, BorderStyle::Solid);
 
         style.refine(&StyleRefinement::default().border_dashed());
+
         assert_eq!(style.border_style, BorderStyle::Dashed);
     }
 
@@ -1960,23 +2035,29 @@ mod tests {
     fn outer_ring_is_hollow_and_composes_with_shadows() {
         let drop_shadow = BoxShadow::new(px(0.), px(2.), blue()).blur_radius(px(4.));
         let mut style = Style::default();
+
         style.refine(
             &StyleRefinement::default()
                 .ring_2()
                 .shadow(vec![drop_shadow.clone()]),
         );
+
         let current_color = hsla(0.7, 0.5, 0.4, 0.8);
+
         style.refine(&StyleRefinement::default().ring(px(3.5)));
+
         let element_bounds = Bounds {
             origin: point(px(10.), px(20.)),
             size: size(px(100.), px(40.)),
         };
+
         let element_radii = Corners {
             top_left: px(0.),
             top_right: px(4.),
             bottom_right: px(10.),
             bottom_left: px(20.),
         };
+
         let ring = style
             .ring
             .outer_quad(element_bounds, element_radii, current_color)
@@ -1984,17 +2065,21 @@ mod tests {
 
         assert_eq!(ring.bounds.dilate(-px(3.5)), element_bounds);
         assert_eq!(ring.border_widths, Edges::all(px(3.5)));
+
         assert_eq!(
             ring.corner_radii.map(|radius| *radius - px(3.5)),
             element_radii
         );
+
         assert!(ring.background.is_transparent());
         assert_eq!(ring.border_color, current_color.into());
         assert_eq!(ring.border_style, BorderStyle::Solid);
         assert_eq!(style.box_shadow, vec![drop_shadow]);
 
         let gradient = ring_gradient();
+
         style.refine(&StyleRefinement::default().ring_color(gradient));
+
         assert_eq!(
             style
                 .ring
@@ -2005,12 +2090,14 @@ mod tests {
         );
 
         style.refine(&StyleRefinement::default().ring_0());
+
         assert!(
             style
                 .ring
                 .outer_quad(element_bounds, element_radii, current_color)
                 .is_none()
         );
+
         assert_eq!(style.box_shadow.len(), 1);
     }
 
@@ -2018,11 +2105,13 @@ mod tests {
     fn inset_ring_utility_refines_independently_and_lowers_to_an_inset_shadow() {
         let gradient = ring_gradient();
         let mut style = Style::default();
+
         style.refine(
             &StyleRefinement::default()
                 .inset_ring(px(1.))
                 .inset_ring_color(gradient),
         );
+
         style.refine(&StyleRefinement::default().inset_ring_4());
 
         let inset = style.inset_ring.inset_shadow(blue()).unwrap();

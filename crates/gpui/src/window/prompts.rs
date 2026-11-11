@@ -40,12 +40,15 @@ impl PromptHandle {
         let mut sender = Some(self.sender);
         let previous_focus = window.focused(cx);
         let window_handle = window.window_handle();
+
         cx.subscribe(&view, move |_: Entity<V>, e: &PromptResponse, cx| {
             if let Some(sender) = sender.take() {
                 sender.send(e.0).ok();
+
                 window_handle
                     .update(cx, |_, window, cx| {
                         window.prompt.take();
+
                         if let Some(previous_focus) = &previous_focus {
                             window.focus(previous_focus, cx);
                         }

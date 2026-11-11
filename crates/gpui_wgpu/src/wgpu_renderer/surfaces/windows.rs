@@ -1,6 +1,7 @@
 use super::*;
 use anyhow::Result;
 use collections::FxHashMap;
+
 use windows_061::{
     Win32::Graphics::Direct3D11::{D3D11_TEXTURE2D_DESC, ID3D11Texture2D},
     core::Interface as _,
@@ -31,6 +32,7 @@ pub(super) fn retain_surface_cache(renderer: &WgpuRenderer, surfaces: &[PaintSur
         .iter()
         .filter_map(|surface| capture_frame(surface).map(CaptureFrameKey::from_frame))
         .collect::<smallvec::SmallVec<[CaptureFrameKey; 4]>>();
+
     renderer
         .resources()
         .surface_cache
@@ -46,14 +48,18 @@ pub(super) fn draw_surfaces(
 ) -> frame::DrawResult {
     let resources = renderer.resources();
     let mut cache = resources.surface_cache.borrow_mut();
+
     for surface in surfaces {
         let Some(frame) = capture_frame(surface) else {
             log::error!("surface source cannot be imported by the Windows renderer");
+
             return Err(frame::DrawError::ExternalSurface);
         };
+
         let source = frame.texture();
         let key = CaptureFrameKey::from_frame(frame);
         let size = source_size(source);
+
         if cache
             .textures
             .get(&key)
@@ -67,8 +73,10 @@ pub(super) fn draw_surfaces(
 
         let Some(cached) = cache.textures.get_mut(&key) else {
             log::error!("capture texture cache insertion failed");
+
             return Err(frame::DrawError::ExternalSurface);
         };
+
         // A frame can be painted more than once (for clipping, filters, or repeated content).
         // The cache key includes the capture timestamp, so each frame gets its own destination;
         // `updated` prevents duplicate GPU copies/uploads for repeated uses of that frame.
@@ -77,14 +85,18 @@ pub(super) fn draw_surfaces(
                 if !cached.is_shared() {
                     return Err(surface_error(error));
                 }
+
                 log::warn!("shared capture update failed, switching to CPU upload: {error:#}");
+
                 *cached = CachedTexture::new_uploaded(renderer, source)
                     .and_then(|mut cached| {
                         cached.update(&resources.queue, source)?;
+
                         Ok(cached)
                     })
                     .map_err(surface_error)?;
             }
+
             cached.updated = true;
         }
 
@@ -95,6 +107,7 @@ pub(super) fn draw_surfaces(
             pass,
         )?;
     }
+
     Ok(())
 }
 
@@ -102,6 +115,7 @@ fn capture_frame(surface: &PaintSurface) -> Option<&gpui::WindowsScreenCaptureFr
     let gpui::SurfaceSource::WindowsCapture(frame) = &surface.source else {
         return None;
     };
+
     Some(frame)
 }
 
@@ -122,6 +136,7 @@ impl CaptureFrameKey {
 
 fn surface_error(error: anyhow::Error) -> frame::DrawError {
     log::error!("failed to import Windows capture frame: {error:#}");
+
     frame::DrawError::ExternalSurface
 }
 
@@ -136,21 +151,25 @@ struct CachedTexture {
 impl CachedTexture {
     fn new(renderer: &WgpuRenderer, source: &ID3D11Texture2D) -> Result<Self> {
         let device = &renderer.resources().device;
+
         if let Some(hal_device) = unsafe { device.as_hal::<wgpu::hal::api::Dx12>() } {
             match SharedTexture::new(device, &hal_device, source) {
                 Ok((backend, texture)) => {
                     return Ok(Self::from_backend(renderer, backend.into(), texture));
                 }
+
                 Err(error) => {
                     log::warn!("D3D12 capture sharing is unavailable, using CPU upload: {error:#}");
                 }
             }
         }
+
         Self::new_uploaded(renderer, source)
     }
 
     fn new_uploaded(renderer: &WgpuRenderer, source: &ID3D11Texture2D) -> Result<Self> {
         let (backend, texture) = UploadedTexture::new(&renderer.resources().device, source)?;
+
         Ok(Self::from_backend(renderer, backend.into(), texture))
     }
 
@@ -161,6 +180,7 @@ impl CachedTexture {
     ) -> Self {
         let size = backend.size();
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         Self {
             size,
             updated: false,
@@ -210,7 +230,9 @@ impl From<UploadedTexture> for CaptureBackend {
 
 fn source_descriptor(source: &ID3D11Texture2D) -> D3D11_TEXTURE2D_DESC {
     let mut descriptor = D3D11_TEXTURE2D_DESC::default();
+
     unsafe { source.GetDesc(&mut descriptor) };
+
     descriptor
 }
 
@@ -227,16 +249,19 @@ fn validate_capture_descriptor(descriptor: &D3D11_TEXTURE2D_DESC) -> Result<()> 
         descriptor.Width > 0 && descriptor.Height > 0,
         "capture texture has empty dimensions"
     );
+
     anyhow::ensure!(
         descriptor.MipLevels == 1 && descriptor.ArraySize == 1 && descriptor.SampleDesc.Count == 1,
         "capture texture layout is unsupported"
     );
+
     anyhow::ensure!(
         descriptor.Format == DXGI_FORMAT_B8G8R8A8_UNORM
             || descriptor.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
         "capture texture format {} is not BGRA8",
         descriptor.Format.0
     );
+
     Ok(())
 }
 
@@ -278,19 +303,23 @@ mod tests {
             texture: 42,
             display_time: 1,
         };
+
         let second = CaptureFrameKey {
             texture: 42,
             display_time: 2,
         };
+
         assert_ne!(first, second);
 
         let mut cache = FxHashMap::default();
+
         assert_eq!(cache.insert(first, 1), None);
         assert_eq!(cache.insert(second, 2), None);
         assert_eq!(cache.insert(first, 3), Some(1));
         assert_eq!(cache.len(), 2);
 
         cache.retain(|key, _| *key == second);
+
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.get(&second), Some(&2));
     }

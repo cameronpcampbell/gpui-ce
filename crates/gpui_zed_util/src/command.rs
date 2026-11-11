@@ -34,16 +34,21 @@ impl Command {
         #[cfg(target_os = "windows")]
         {
             use smol::process::windows::CommandExt;
+
             let mut cmd = smol::process::Command::new(program);
+
             cmd.creation_flags(CREATE_NO_WINDOW);
+
             Self(cmd)
         }
+
         #[cfg(not(target_os = "windows"))]
         Self(smol::process::Command::new(program))
     }
 
     pub fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
         self.0.arg(arg);
+
         self
     }
 
@@ -53,6 +58,7 @@ impl Command {
         S: AsRef<OsStr>,
     {
         self.0.args(args);
+
         self
     }
 
@@ -62,6 +68,7 @@ impl Command {
 
     pub fn env(&mut self, key: impl AsRef<OsStr>, val: impl AsRef<OsStr>) -> &mut Self {
         self.0.env(key, val);
+
         self
     }
 
@@ -72,41 +79,49 @@ impl Command {
         V: AsRef<OsStr>,
     {
         self.0.envs(vars);
+
         self
     }
 
     pub fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
         self.0.env_remove(key);
+
         self
     }
 
     pub fn env_clear(&mut self) -> &mut Self {
         self.0.env_clear();
+
         self
     }
 
     pub fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
         self.0.current_dir(dir);
+
         self
     }
 
     pub fn stdin(&mut self, cfg: impl Into<Stdio>) -> &mut Self {
         self.0.stdin(cfg.into());
+
         self
     }
 
     pub fn stdout(&mut self, cfg: impl Into<Stdio>) -> &mut Self {
         self.0.stdout(cfg.into());
+
         self
     }
 
     pub fn stderr(&mut self, cfg: impl Into<Stdio>) -> &mut Self {
         self.0.stderr(cfg.into());
+
         self
     }
 
     pub fn kill_on_drop(&mut self, kill_on_drop: bool) -> &mut Self {
         self.0.kill_on_drop(kill_on_drop);
+
         self
     }
 

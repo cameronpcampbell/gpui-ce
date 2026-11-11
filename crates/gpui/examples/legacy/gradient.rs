@@ -7,6 +7,7 @@ use gpui::{
     App, Bounds, ColorSpace, Context, Half, Render, Window, WindowOptions, canvas, div,
     linear_color_stop, linear_gradient, point, prelude::*, px, size,
 };
+
 use gpui_platform::application;
 
 struct GradientViewer {
@@ -56,6 +57,7 @@ impl Render for GradientViewer {
                                         ColorSpace::Oklab => ColorSpace::Srgb,
                                         ColorSpace::Srgb => ColorSpace::Oklab,
                                     };
+
                                     cx.notify();
                                 })),
                         ),
@@ -213,6 +215,7 @@ impl Render for GradientViewer {
                 move |_, _, _| {},
                 move |bounds, _, window, _| {
                     let size = size(bounds.size.width * 0.8, px(80.));
+
                     let square_bounds = Bounds {
                         origin: point(
                             bounds.size.width.half() - size.width.half(),
@@ -220,20 +223,26 @@ impl Render for GradientViewer {
                         ),
                         size,
                     };
+
                     let height = square_bounds.size.height;
                     let horizontal_offset = height;
                     let vertical_offset = px(30.);
                     let mut builder = gpui::PathBuilder::fill();
+
                     builder.move_to(square_bounds.bottom_left());
+
                     builder
                         .line_to(square_bounds.origin + point(horizontal_offset, vertical_offset));
+
                     builder.line_to(
                         square_bounds.top_right() + point(-horizontal_offset, vertical_offset),
                     );
 
                     builder.line_to(square_bounds.bottom_right());
                     builder.line_to(square_bounds.bottom_left());
+
                     let path = builder.build().unwrap();
+
                     window.paint_path(
                         path,
                         linear_gradient(
@@ -253,10 +262,12 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         cx.open_window(WindowOptions::new().focus(true), |_, cx| {
             cx.new(|_| GradientViewer::new())
         })
         .unwrap();
+
         cx.activate(true);
     });
 }

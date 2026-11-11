@@ -1,6 +1,7 @@
 use gpui::{
     PlatformDispatcher, Priority, PriorityQueueReceiver, PriorityQueueSender, RunnableVariant,
 };
+
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
@@ -15,15 +16,20 @@ fn shared_memory_supported() -> bool {
     #[cfg(feature = "multithreaded")]
     {
         let global = js_sys::global();
+
         let has_shared_array_buffer =
             js_sys::Reflect::has(&global, &JsValue::from_str("SharedArrayBuffer")).unwrap_or(false);
+
         let has_atomics =
             js_sys::Reflect::has(&global, &JsValue::from_str("Atomics")).unwrap_or(false);
+
         let memory = js_sys::WebAssembly::Memory::from(wasm_bindgen::memory());
         let buffer = memory.buffer();
         let is_shared_buffer = buffer.is_instance_of::<js_sys::SharedArrayBuffer>();
+
         has_shared_array_buffer && has_atomics && is_shared_buffer
     }
+
     #[cfg(not(feature = "multithreaded"))]
     {
         false
@@ -32,9 +38,11 @@ fn shared_memory_supported() -> bool {
 
 fn wait_async_supported() -> bool {
     let global = js_sys::global();
+
     let Ok(atomics) = js_sys::Reflect::get(&global, &JsValue::from_str("Atomics")) else {
         return false;
     };
+
     let Ok(wait_async) = js_sys::Reflect::get(&atomics, &JsValue::from_str("waitAsync")) else {
         return false;
     };
@@ -65,6 +73,7 @@ struct MainThreadMailbox {
 impl MainThreadMailbox {
     fn new() -> Self {
         let (sender, receiver) = PriorityQueueReceiver::new();
+
         Self {
             sender,
             receiver: parking_lot::Mutex::new(receiver),
@@ -79,12 +88,14 @@ impl MainThreadMailbox {
 
         // TODO-Wasm: Verify this lock-free protocol
         let view = self.signal_view();
+
         js_sys::Atomics::store(&view, 0, 1).ok();
         js_sys::Atomics::notify(&view, 0).ok();
     }
 
     fn drain(&self, window: &web_sys::Window) {
         let mut receiver = self.receiver.lock();
+
         loop {
             // We need these `spin` variants because we can't acquire a lock on the main thread.
             // TODO-WASM: Should we do something different?
@@ -99,18 +110,22 @@ impl MainThreadMailbox {
     fn signal_view(&self) -> js_sys::Int32Array {
         let byte_offset = self.signal.as_ptr() as u32;
         let memory = js_sys::WebAssembly::Memory::from(wasm_bindgen::memory());
+
         js_sys::Int32Array::new_with_byte_offset_and_length(&memory.buffer(), byte_offset, 1)
     }
 
     fn run_waker_loop(self: &Arc<Self>, window: web_sys::Window) {
         if !shared_memory_supported() {
             log::warn!("SharedArrayBuffer not available; main thread mailbox waker loop disabled");
+
             return;
         }
 
         let mailbox = Arc::clone(self);
+
         wasm_bindgen_futures::spawn_local(async move {
             let view = mailbox.signal_view();
+
             loop {
                 js_sys::Atomics::store(&view, 0, 0).expect("Atomics.store failed");
 
@@ -121,8 +136,10 @@ impl MainThreadMailbox {
 
                 let result = match js_sys::Atomics::wait_async(&view, 0, 0) {
                     Ok(result) => result,
+
                     Err(error) => {
                         log::error!("Atomics.waitAsync failed: {error:?}");
+
                         break;
                     }
                 };
@@ -155,6 +172,7 @@ pub struct WebDispatcher {
     background_sender: PriorityQueueSender<RunnableVariant>,
     main_thread_mailbox: Arc<MainThreadMailbox>,
     supports_threads: bool,
+
     #[cfg(feature = "multithreaded")]
     _background_threads: Vec<wasm_thread::JoinHandle<()>>,
 }
@@ -192,16 +210,19 @@ impl WebDispatcher {
             (0..thread_count)
                 .map(|i| {
                     let mut receiver = background_receiver.clone();
+
                     wasm_thread::Builder::new()
                         .name(format!("background-worker-{i}"))
                         .spawn(move || {
                             loop {
                                 let runnable: RunnableVariant = match receiver.pop() {
                                     Ok(runnable) => runnable,
+
                                     Err(_) => {
                                         log::info!(
                                             "background-worker-{i}: channel disconnected, exiting"
                                         );
+
                                         break;
                                     }
                                 };
@@ -212,6 +233,7 @@ impl WebDispatcher {
                         .expect("failed to spawn background worker thread")
                 })
                 .collect::<Vec<_>>()
+
         } else {
             Vec::new()
         };
@@ -239,6 +261,7 @@ impl PlatformDispatcher for WebDispatcher {
     fn dispatch(&self, runnable: RunnableVariant, priority: Priority) {
         if !self.supports_threads {
             self.dispatch_on_main_thread(runnable, priority);
+
             return;
         }
 
@@ -264,16 +287,19 @@ impl PlatformDispatcher for WebDispatcher {
 
     fn dispatch_after(&self, duration: Duration, runnable: RunnableVariant) {
         let millis = duration.as_millis().min(i32::MAX as u128) as i32;
+
         if self.on_main_thread() {
             let callback = Closure::once_into_js(move || {
                 runnable.run();
             });
+
             browser_window()
                 .set_timeout_with_callback_and_timeout_and_arguments_0(
                     callback.unchecked_ref(),
                     millis,
                 )
                 .ok();
+
         } else {
             self.main_thread_mailbox
                 .post(Priority::High, MainThreadItem::Delayed { runnable, millis });
@@ -285,7 +311,9 @@ impl PlatformDispatcher for WebDispatcher {
             let callback = Closure::once_into_js(move || {
                 function();
             });
+
             browser_window().queue_microtask(callback.unchecked_ref());
+
         } else {
             self.main_thread_mailbox
                 .post(Priority::High, MainThreadItem::RealtimeFunction(function));
@@ -309,6 +337,7 @@ impl PlatformDispatcher for WebDispatcher {
         if !self.on_main_thread() {
             return None;
         }
+
         IDLE_DEADLINE.with(|deadline| {
             deadline
                 .borrow()
@@ -331,13 +360,16 @@ fn execute_on_main_thread(window: &web_sys::Window, item: MainThreadItem) {
         MainThreadItem::Runnable(runnable) => {
             runnable.run();
         }
+
         MainThreadItem::Idle { runnable, timeout } => {
             schedule_idle_runnable(window, runnable, timeout);
         }
+
         MainThreadItem::Delayed { runnable, millis } => {
             let callback = Closure::once_into_js(move || {
                 runnable.run();
             });
+
             window
                 .set_timeout_with_callback_and_timeout_and_arguments_0(
                     callback.unchecked_ref(),
@@ -345,6 +377,7 @@ fn execute_on_main_thread(window: &web_sys::Window, item: MainThreadItem) {
                 )
                 .ok();
         }
+
         MainThreadItem::RealtimeFunction(function) => {
             function();
         }
@@ -376,21 +409,27 @@ fn schedule_idle_runnable(
         // deadline, `idle_time_remaining` stays `None` and idle tasks bound
         // their own slices.
         schedule_runnable(window, runnable, Priority::Low);
+
         return;
     }
+
     let callback = Closure::once_into_js(move |deadline: web_sys::IdleDeadline| {
         IDLE_DEADLINE.with(|current| *current.borrow_mut() = Some(deadline));
         runnable.run();
         IDLE_DEADLINE.with(|current| *current.borrow_mut() = None);
     });
+
     let result = match timeout {
         Some(timeout) => {
             let options = web_sys::IdleRequestOptions::new();
+
             options.set_timeout(timeout.as_millis().min(u32::MAX as u128) as u32);
             window.request_idle_callback_with_options(callback.unchecked_ref(), &options)
         }
+
         None => window.request_idle_callback(callback.unchecked_ref()),
     };
+
     if let Err(error) = result {
         log::error!("requestIdleCallback failed: {error:?}");
     }
@@ -401,10 +440,13 @@ fn idle_callback_supported(window: &web_sys::Window) -> bool {
         if let Some(supported) = supported.get() {
             return supported;
         }
+
         let probed =
             js_sys::Reflect::has(window.as_ref(), &JsValue::from_str("requestIdleCallback"))
                 .unwrap_or(false);
+
         supported.set(Some(probed));
+
         probed
     })
 }
@@ -413,12 +455,14 @@ fn schedule_runnable(window: &web_sys::Window, runnable: RunnableVariant, priori
     let callback = Closure::once_into_js(move || {
         runnable.run();
     });
+
     let callback: &js_sys::Function = callback.unchecked_ref();
 
     match priority {
         Priority::RealtimeAudio => {
             window.queue_microtask(callback);
         }
+
         _ => {
             // TODO-Wasm: this ought to enqueue so we can dequeue with proper priority
             window

@@ -2,10 +2,12 @@ use crate::{
     AssetRegistry, DevicePixels, IsZero, RenderImage, Result, SharedString, Size,
     swap_rgba_pa_to_bgra,
 };
+
 use image::Frame;
 use resvg::tiny_skia::Pixmap;
 use skrifa::{FontRef, MetadataProvider};
 use smallvec::SmallVec;
+
 use std::{
     hash::Hash,
     sync::{Arc, LazyLock, OnceLock},
@@ -36,7 +38,9 @@ const EMOJI_FONT_FAMILIES: &[&str] = &[];
 fn is_emoji_presentation(c: char) -> bool {
     static EMOJI_PRESENTATION_REGEX: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new("\\p{Emoji_Presentation}").unwrap());
+
     let mut buf = [0u8; 4];
+
     EMOJI_PRESENTATION_REGEX.is_match(c.encode_utf8(&mut buf))
 }
 
@@ -125,7 +129,9 @@ impl SvgRenderer {
     pub fn new(asset_registry: Arc<AssetRegistry>) -> Self {
         static SYSTEM_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
             let mut db = usvg::fontdb::Database::new();
+
             db.load_system_fonts();
+
             Arc::new(db)
         });
 
@@ -136,32 +142,41 @@ impl SvgRenderer {
         let enriched_fontdb: Arc<OnceLock<Arc<usvg::fontdb::Database>>> = Arc::new(OnceLock::new());
 
         let default_font_resolver = usvg::FontResolver::default_font_selector();
+
         let font_resolver = Box::new({
             let asset_database = asset_registry.clone();
+
             move |font: &usvg::Font, db: &mut Arc<usvg::fontdb::Database>| {
                 if db.is_empty() {
                     let fontdb = enriched_fontdb.get_or_init(|| {
                         let mut db = (**SYSTEM_FONT_DB).clone();
+
                         load_bundled_fonts(&asset_database, &mut db);
                         fix_generic_font_families(&mut db);
                         Arc::new(db)
                     });
+
                     *db = fontdb.clone();
                 }
+
                 if let Some(id) = default_font_resolver(font, db) {
                     return Some(id);
                 }
+
                 // fontdb doesn't recognize CSS system font keywords like "system-ui"
                 // or "ui-sans-serif", so fall back to sans-serif before any face.
                 let sans_query = usvg::fontdb::Query {
                     families: &[usvg::fontdb::Family::SansSerif],
                     ..Default::default()
                 };
+
                 db.query(&sans_query)
                     .or_else(|| db.faces().next().map(|f| f.id))
             }
         });
+
         let default_fallback_selection = usvg::FontResolver::default_fallback_selector();
+
         let fallback_selection = Box::new(
             move |ch: char, fonts: &[usvg::fontdb::ID], db: &mut Arc<usvg::fontdb::Database>| {
                 if is_emoji_presentation(ch) {
@@ -174,6 +189,7 @@ impl SvgRenderer {
                 default_fallback_selection(ch, fonts, db)
             },
         );
+
         let options = usvg::Options {
             font_resolver: usvg::FontResolver {
                 select_font: font_resolver,
@@ -181,6 +197,7 @@ impl SvgRenderer {
             },
             ..Default::default()
         };
+
         Self {
             asset_registry,
             usvg_options: Arc::new(options),
@@ -203,12 +220,15 @@ impl SvgRenderer {
         let (size, image_scale_factor) = match size.into() {
             SvgSize::Size(size) => (SvgSize::Size(size), 1.0),
             SvgSize::ExactSize(size) => (SvgSize::ExactSize(size), 1.0),
+
             SvgSize::ScaleFactor(scale_factor) => (
                 SvgSize::ScaleFactor(scale_factor * SMOOTH_SVG_SCALE_FACTOR),
                 SMOOTH_SVG_SCALE_FACTOR,
             ),
         };
+
         let pixmap = rasterize_tree(&svg.0, size)?;
+
         let mut buffer =
             image::ImageBuffer::from_raw(pixmap.width(), pixmap.height(), pixmap.take()).unwrap();
 
@@ -217,7 +237,9 @@ impl SvgRenderer {
         }
 
         let mut image = RenderImage::new(SmallVec::from_const([Frame::new(buffer)]));
+
         image.scale_factor = image_scale_factor;
+
         Ok(Arc::new(image))
     }
 
@@ -228,6 +250,7 @@ impl SvgRenderer {
         scale_factor: f32,
     ) -> Result<Arc<RenderImage>, usvg::Error> {
         let svg = self.parse_svg(bytes)?;
+
         self.render_parsed(&svg, scale_factor)
     }
 
@@ -246,6 +269,7 @@ impl SvgRenderer {
                 DevicePixels(pixmap.width() as i32),
                 DevicePixels(pixmap.height() as i32),
             );
+
             let alpha_mask = pixmap
                 .pixels()
                 .iter()
@@ -266,6 +290,7 @@ impl SvgRenderer {
 
     fn render_pixmap(&self, bytes: &[u8], size: SvgSize) -> Result<Pixmap, usvg::Error> {
         let tree = usvg::Tree::from_data(bytes, &self.usvg_options)?;
+
         rasterize_tree(&tree, size)
     }
 }
@@ -276,11 +301,14 @@ fn rasterize_tree(tree: &usvg::Tree, size: SvgSize) -> Result<Pixmap, usvg::Erro
     const MAX_SIZE: f32 = 8192.0;
 
     let svg_size = tree.size();
+
     let (mut width, mut height) = match size {
         SvgSize::Size(size) => {
             let scale = i32::from(size.width) as f32 / svg_size.width();
+
             (svg_size.width() * scale, svg_size.height() * scale)
         }
+
         SvgSize::ExactSize(size) => (i32::from(size.width) as f32, i32::from(size.height) as f32),
         SvgSize::ScaleFactor(scale) => (svg_size.width() * scale, svg_size.height() * scale),
     };
@@ -288,10 +316,13 @@ fn rasterize_tree(tree: &usvg::Tree, size: SvgSize) -> Result<Pixmap, usvg::Erro
     if width > MAX_SIZE {
         log::warn!("Attempted to render pixmap where width ({width}) > MAX_SIZE ({MAX_SIZE})");
     }
+
     if height > MAX_SIZE {
         log::warn!("Attempted to render pixmap where height ({height}) > MAX_SIZE ({MAX_SIZE})");
     }
+
     let scale = (MAX_SIZE / width).min(MAX_SIZE / height).min(1.0);
+
     width *= scale;
     height *= scale;
 
@@ -314,6 +345,7 @@ fn load_bundled_fonts(asset_database: &AssetRegistry, db: &mut usvg::fontdb::Dat
         "fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf",
         "fonts/lilex/Lilex-Regular.ttf",
     ];
+
     for path in font_paths {
         match asset_database.load(path) {
             Some(data) => db.load_font_data(data.into_owned()),
@@ -342,6 +374,7 @@ fn fix_generic_font_families(db: &mut usvg::fontdb::Database) {
             families: &[*family],
             ..Default::default()
         };
+
         if db.query(&query).is_none() {
             match family {
                 Family::SansSerif => db.set_sans_serif_family(*fallback_name),
@@ -363,43 +396,53 @@ mod tests {
     #[test]
     fn renders_parsed_svg_at_requested_size() -> Result<()> {
         let renderer = SvgRenderer::new(Arc::new(AssetRegistry::default()));
+
         let svg = renderer.parse_svg(
             br#"<svg xmlns="http://www.w3.org/2000/svg" width="24pt" height="12pt"></svg>"#,
         )?;
+
         let requested_size = Size::new(DevicePixels(24), DevicePixels(12));
         let image = renderer.render_parsed(&svg, SvgSize::ExactSize(requested_size))?;
 
         assert_eq!(image.size(0), requested_size);
+
         Ok(())
     }
 
     #[test]
     fn preserves_aspect_ratio_for_width_constrained_size() -> Result<()> {
         let renderer = SvgRenderer::new(Arc::new(AssetRegistry::default()));
+
         let svg = renderer.parse_svg(
             br#"<svg xmlns="http://www.w3.org/2000/svg" width="24pt" height="12pt"></svg>"#,
         )?;
+
         let image = renderer.render_parsed(
             &svg,
             SvgSize::Size(Size::new(DevicePixels(24), DevicePixels(24))),
         )?;
 
         assert_eq!(image.size(0), Size::new(DevicePixels(24), DevicePixels(12)));
+
         Ok(())
     }
 
     fn db_with_bundled_fonts() -> Database {
         let mut db = Database::new();
+
         db.load_font_data(gpui_fonts::IBM_PLEX.to_vec());
         db.load_font_data(gpui_fonts::LILEX.to_vec());
+
         db
     }
 
     #[test]
     fn text_with_split_glyph_clusters_in_mixed_fonts_does_not_panic() {
         let mut db = Database::new();
+
         db.load_font_data(gpui_fonts::IBM_PLEX.to_vec());
         db.load_font_data(gpui_fonts::LILEX.to_vec());
+
         let options = usvg::Options {
             fontdb: std::sync::Arc::new(db),
             ..Default::default()
@@ -410,6 +453,7 @@ mod tests {
         // which is the "glyph splitting" condition that triggered the panic. The
         // chunk must use two different fonts so the buggy merge path runs.
         let zalgo = "e\u{0301}\u{0302}\u{0303}\u{0304}\u{0306}\u{0307}\u{0308}\u{030a}";
+
         let svg = format!(
             r#"<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><text font-family="Lilex" font-size="32">{zalgo}<tspan font-family="IBM Plex Sans">{zalgo}</tspan></text></svg>"#
         );
@@ -441,6 +485,7 @@ mod tests {
             ("♥️", false),
             ("1️⃣", false),
         ];
+
         for (s, expected) in cases {
             assert_eq!(
                 is_emoji_presentation(s.chars().next().unwrap()),
@@ -454,6 +499,7 @@ mod tests {
     #[test]
     fn fix_generic_font_families_sets_all_families() {
         let mut db = db_with_bundled_fonts();
+
         fix_generic_font_families(&mut db);
 
         let families = [
@@ -469,6 +515,7 @@ mod tests {
                 families: &[family],
                 ..Default::default()
             };
+
             assert!(
                 db.query(&query).is_some(),
                 "Expected generic family {family:?} to resolve after fix_generic_font_families"
@@ -488,6 +535,7 @@ mod tests {
                 style: usvg::fontdb::Style::Normal,
             })
             .unwrap();
+
         let lilex = db
             .query(&usvg::fontdb::Query {
                 families: &[usvg::fontdb::Family::Name("Lilex")],
@@ -496,6 +544,7 @@ mod tests {
                 style: usvg::fontdb::Style::Normal,
             })
             .unwrap();
+
         let selected = select_emoji_font('│', &[], &db, &["IBM Plex Sans", "Lilex"]).unwrap();
 
         assert_eq!(selected, lilex);
@@ -506,14 +555,17 @@ mod tests {
     #[test]
     fn fix_generic_font_families_monospace_resolves_to_lilex() {
         let mut db = db_with_bundled_fonts();
+
         fix_generic_font_families(&mut db);
 
         let query = Query {
             families: &[Family::Monospace],
             ..Default::default()
         };
+
         let id = db.query(&query).expect("Monospace should resolve");
         let face = db.face(id).expect("Face should exist");
+
         assert!(
             face.families.iter().any(|(name, _)| name.contains("Lilex")),
             "Monospace should map to Lilex, got {:?}",

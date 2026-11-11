@@ -7,8 +7,10 @@ use crate::{
         round_to_device_pixel,
     },
 };
+
 use collections::{FxHashMap, FxHashSet};
 use std::{cell::Cell, fmt::Debug, ops::Range, rc::Rc, sync::Arc};
+
 use taffy::{
     TaffyTree, TraversePartialTree as _,
     geometry::{Point as TaffyPoint, Rect as TaffyRect, Size as TaffySize},
@@ -24,6 +26,7 @@ type StackSafe<T> = T;
 
 type MeasureFn =
     dyn FnMut(Size<Option<Pixels>>, Size<AvailableSpace>, &mut Window, &mut App) -> Size<Pixels>;
+
 type NodeMeasureFn = StackSafe<Box<MeasureFn>>;
 
 struct NodeContext {
@@ -60,8 +63,10 @@ struct DirectionMetadata {
 pub struct TaffyLayoutEngine {
     taffy: TaffyTree<NodeContext>,
     absolute_layout_bounds: FxHashMap<LayoutId, Bounds<Pixels>>,
+
     /// Unrounded absolute border-box top-left per-node coordinate in device pixels.
     absolute_outer_origins: FxHashMap<LayoutId, Point<f32>>,
+
     computed_available_spaces: FxHashMap<LayoutId, Size<AvailableSpace>>,
     vertical_alignments: FxHashMap<LayoutId, VerticalAlign>,
     pub(crate) inline_content: FxHashMap<LayoutId, Arc<InlineContent>>,
@@ -76,7 +81,9 @@ const EXPECT_MESSAGE: &str = "we should avoid taffy layout errors by constructio
 impl TaffyLayoutEngine {
     pub fn new() -> Self {
         let mut taffy = TaffyTree::new();
+
         taffy.disable_rounding();
+
         TaffyLayoutEngine {
             taffy,
             absolute_layout_bounds: FxHashMap::default(),
@@ -117,6 +124,7 @@ impl TaffyLayoutEngine {
                 .new_leaf(taffy_style)
                 .expect(EXPECT_MESSAGE)
                 .into()
+
         } else {
             self.taffy
                 // This is safe because LayoutId is repr(transparent) to taffy::tree::NodeId.
@@ -159,6 +167,7 @@ impl TaffyLayoutEngine {
             )
             .expect(EXPECT_MESSAGE)
             .into();
+
         self.record_style(node_id, &style);
 
         node_id
@@ -172,6 +181,7 @@ impl TaffyLayoutEngine {
 
         self.display_and_position
             .insert(node_id, (style.display, style.position));
+
         self.directions.insert(
             node_id,
             DirectionMetadata {
@@ -187,6 +197,7 @@ impl TaffyLayoutEngine {
 
     pub(crate) fn set_logical_children(&mut self, node_id: LayoutId, children: &[LayoutId]) {
         let actual_children = self.taffy.children(node_id.into()).expect(EXPECT_MESSAGE);
+
         let logical_children = (actual_children.as_slice() != LayoutId::to_taffy_slice(children))
             .then(|| children.to_vec());
 
@@ -259,7 +270,9 @@ impl TaffyLayoutEngine {
     ) -> Vec<LayoutId> {
         let mut visited = FxHashSet::default();
         let mut changed = Vec::new();
+
         self.resolve_direction_subtree(root_id, inherited, &mut visited, &mut changed);
+
         changed
     }
 
@@ -277,25 +290,31 @@ impl TaffyLayoutEngine {
         let Some(metadata) = self.directions.get(&node_id) else {
             return;
         };
+
         let resolved = match metadata.authored {
             LayoutDirection::Inherit => inherited,
             LayoutDirection::LeftToRight => ResolvedDirection::LeftToRight,
             LayoutDirection::RightToLeft => ResolvedDirection::RightToLeft,
+
             LayoutDirection::Auto => self
                 .auto_direction(node_id)
                 .unwrap_or(ResolvedDirection::LeftToRight),
         };
+
         let actual_children = self.taffy.children(node_id.into()).expect(EXPECT_MESSAGE);
         let logical_children = metadata.logical_children.clone().unwrap_or_default();
+
         if metadata.resolved.get() != resolved {
             changed.push(node_id);
         }
+
         metadata.resolved.set(resolved);
 
         let taffy_direction = match resolved {
             ResolvedDirection::LeftToRight => taffy::style::Direction::Ltr,
             ResolvedDirection::RightToLeft => taffy::style::Direction::Rtl,
         };
+
         if self
             .taffy
             .style(node_id.into())
@@ -308,7 +327,9 @@ impl TaffyLayoutEngine {
                 .style(node_id.into())
                 .expect(EXPECT_MESSAGE)
                 .clone();
+
             style.direction = taffy_direction;
+
             self.taffy
                 .set_style(node_id.into(), style)
                 .expect(EXPECT_MESSAGE);
@@ -339,6 +360,7 @@ impl TaffyLayoutEngine {
         self.clear_cached_bounds(node_id);
 
         self.absolute_layout_bounds.insert(node_id, bounds);
+
         self.absolute_outer_origins.insert(
             node_id,
             bounds.origin.map(|position| f32::from(position) * scale),
@@ -360,18 +382,23 @@ impl TaffyLayoutEngine {
         let style = self.taffy.style(id.0).expect(EXPECT_MESSAGE);
         let stretch_width = style.size.width.is_auto();
         let stretch_height = style.size.height.is_auto();
+
         if !stretch_width && !stretch_height {
             return;
         }
+
         let mut style = style.clone();
+
         if stretch_width {
             style.size.width =
                 taffy::style::Dimension::length(round_to_device_pixel(size.width.0, scale_factor));
         }
+
         if stretch_height {
             style.size.height =
                 taffy::style::Dimension::length(round_to_device_pixel(size.height.0, scale_factor));
         }
+
         self.taffy.set_style(id.0, style).expect(EXPECT_MESSAGE);
     }
 
@@ -469,10 +496,13 @@ impl TaffyLayoutEngine {
 
     fn clear_cached_bounds(&mut self, id: LayoutId) {
         let stack = &mut self.layout_bounds_scratch_space;
+
         stack.push(id);
+
         while let Some(id) = stack.pop() {
             self.absolute_layout_bounds.remove(&id);
             self.absolute_outer_origins.remove(&id);
+
             stack.extend(
                 self.taffy
                     .children(id.into())
@@ -496,9 +526,11 @@ impl TaffyLayoutEngine {
             AvailableSpace::Definite(pixels) => {
                 AvailableSpace::Definite(Pixels(pixels.0 * scale_factor))
             }
+
             AvailableSpace::MinContent => AvailableSpace::MinContent,
             AvailableSpace::MaxContent => AvailableSpace::MaxContent,
         };
+
         let available_space = size(
             transform(available_space.width),
             transform(available_space.height),
@@ -519,13 +551,16 @@ impl TaffyLayoutEngine {
                     };
 
                     let available_space: Size<AvailableSpace> = available_space.into();
+
                     let untransform = |ev: AvailableSpace| match ev {
                         AvailableSpace::Definite(pixels) => {
                             AvailableSpace::Definite(Pixels(pixels.0 / scale_factor))
                         }
+
                         AvailableSpace::MinContent => AvailableSpace::MinContent,
                         AvailableSpace::MaxContent => AvailableSpace::MaxContent,
                     };
+
                     let available_space = size(
                         untransform(available_space.width),
                         untransform(available_space.height),
@@ -535,14 +570,18 @@ impl TaffyLayoutEngine {
                         taffy::style::Direction::Ltr => ResolvedDirection::LeftToRight,
                         taffy::style::Direction::Rtl => ResolvedDirection::RightToLeft,
                     };
+
                     let previous_direction =
                         std::mem::replace(&mut window.measurement_direction, resolved_direction);
+
                     let previous_unicode_bidi = std::mem::replace(
                         &mut window.measurement_unicode_bidi,
                         node_context.unicode_bidi,
                     );
+
                     let measured_size: Size<Pixels> =
                         (node_context.measure)(known_dimensions, available_space, window, cx);
+
                     window.measurement_direction = previous_direction;
                     window.measurement_unicode_bidi = previous_unicode_bidi;
 
@@ -640,26 +679,34 @@ impl TaffyLayoutEngine {
         let absolute_outer_origin = match parent {
             Some(parent_id) => {
                 let parent_id = LayoutId::from(parent_id);
+
                 self.layout_bounds(parent_id, scale_factor);
+
                 let parent_origin = *self
                     .absolute_outer_origins
                     .get(&parent_id)
                     .expect("parent absolute outer origin should be cached");
+
                 parent_origin + Point::from(layout_location)
             }
+
             None => Point::from(layout_location),
         };
+
         self.absolute_outer_origins
             .insert(id, absolute_outer_origin);
 
         let absolute_far = absolute_outer_origin + Point::from(Size::from(layout_size));
+
         let snapped_bounds = Bounds::from_corners(
             absolute_outer_origin.map(round_half_toward_zero),
             absolute_far.map(round_half_toward_zero),
         );
 
         let bounds = (snapped_bounds / scale_factor).map(Pixels);
+
         self.absolute_layout_bounds.insert(id, bounds);
+
         bounds
     }
 
@@ -680,6 +727,7 @@ impl TaffyLayoutEngine {
         let Some(parent_id) = self.taffy.parent(node_id.0).map(LayoutId::from) else {
             return self.layout_bounds(node_id, scale_factor);
         };
+
         let parent_bounds = self.layout_bounds(parent_id, scale_factor);
         let layout = self.taffy.layout(node_id.into()).expect(EXPECT_MESSAGE);
         let local_origin = Point::from(layout.location).map(round_half_toward_zero);
@@ -737,6 +785,7 @@ fn border_widths_to_taffy(
             scale_factor,
         ))
     };
+
     TaffyRect {
         top: snap(&widths.top),
         right: snap(&widths.right),
@@ -798,6 +847,7 @@ fn padding_to_taffy(
                 taffy::style::LengthPercentage::length(first),
                 taffy::style::LengthPercentage::length(second),
             )
+
         } else {
             (
                 first.to_taffy(rem_size, scale_factor),
@@ -813,6 +863,7 @@ fn padding_to_taffy(
         scale_factor,
         proportional_horizontal,
     );
+
     let (top, bottom) = convert_pair(
         &padding.top,
         &padding.bottom,
@@ -858,6 +909,7 @@ impl ToTaffy<taffy::style::Style> for Style {
                             vec![minmax(length(0.0_f32), fr(1.0_f32))],
                         )]
                     }
+
                     // grid-template-*: repeat(<number>, minmax(min-content, 1fr));
                     crate::GridTemplateMinSize::MinContent => {
                         vec![repeat(
@@ -865,6 +917,7 @@ impl ToTaffy<taffy::style::Style> for Style {
                             vec![minmax(min_content(), fr(1.0_f32))],
                         )]
                     }
+
                     // grid-template-*: repeat(<number>, minmax(0, max-content))
                     crate::GridTemplateMinSize::MaxContent => {
                         vec![repeat(
@@ -956,6 +1009,7 @@ impl ToTaffy<taffy::style::LengthPercentage> for DefiniteLength {
     fn to_taffy(&self, rem_size: Pixels, scale_factor: f32) -> taffy::style::LengthPercentage {
         match self {
             DefiniteLength::Absolute(length) => length.to_taffy(rem_size, scale_factor),
+
             DefiniteLength::Relative(relative) => {
                 taffy::style::LengthPercentage::percent(relative.0)
             }
@@ -967,6 +1021,7 @@ impl ToTaffy<taffy::style::LengthPercentageAuto> for DefiniteLength {
     fn to_taffy(&self, rem_size: Pixels, scale_factor: f32) -> taffy::style::LengthPercentageAuto {
         match self {
             DefiniteLength::Absolute(length) => length.to_taffy(rem_size, scale_factor),
+
             DefiniteLength::Relative(relative) => {
                 taffy::style::LengthPercentageAuto::percent(relative.0)
             }
@@ -1161,18 +1216,21 @@ mod tests {
     #[test]
     fn direction_defaults_to_ltr_and_inherits_through_overrides() {
         let mut engine = TaffyLayoutEngine::new();
+
         let inherited_grandchild = engine.request_layout(
             direction_style(LayoutDirection::Inherit),
             px(16.0),
             1.0,
             &[],
         );
+
         let rtl_child = engine.request_layout(
             direction_style(LayoutDirection::RightToLeft),
             px(16.0),
             1.0,
             &[inherited_grandchild],
         );
+
         let root = engine.request_layout(
             direction_style(LayoutDirection::Inherit),
             px(16.0),
@@ -1186,14 +1244,17 @@ mod tests {
             engine.direction_handle(root).get(),
             ResolvedDirection::LeftToRight
         );
+
         assert_eq!(
             engine.direction_handle(rtl_child).get(),
             ResolvedDirection::RightToLeft
         );
+
         assert_eq!(
             engine.taffy.style(rtl_child.into()).unwrap().direction,
             taffy::style::Direction::Rtl
         );
+
         assert_eq!(
             engine.direction_handle(inherited_grandchild).get(),
             ResolvedDirection::RightToLeft
@@ -1203,20 +1264,25 @@ mod tests {
     #[test]
     fn auto_direction_uses_first_eligible_strong_descendant() {
         let mut engine = TaffyLayoutEngine::new();
+
         let neutral = engine.request_layout(
             direction_style(LayoutDirection::Inherit),
             px(16.0),
             1.0,
             &[],
         );
+
         engine.set_direction_text(neutral, "123 …".into());
+
         let arabic = engine.request_layout(
             direction_style(LayoutDirection::Inherit),
             px(16.0),
             1.0,
             &[],
         );
+
         engine.set_direction_text(arabic, "مرحبا".into());
+
         let root = engine.request_layout(
             direction_style(LayoutDirection::Auto),
             px(16.0),
@@ -1230,6 +1296,7 @@ mod tests {
             engine.direction_handle(root).get(),
             ResolvedDirection::RightToLeft
         );
+
         assert_eq!(
             engine.direction_handle(neutral).get(),
             ResolvedDirection::RightToLeft
@@ -1239,13 +1306,16 @@ mod tests {
     #[test]
     fn auto_direction_excludes_directional_subtrees_and_falls_back_to_ltr() {
         let mut engine = TaffyLayoutEngine::new();
+
         let explicit_child = engine.request_layout(
             direction_style(LayoutDirection::RightToLeft),
             px(16.0),
             1.0,
             &[],
         );
+
         engine.set_direction_text(explicit_child, "مرحبا".into());
+
         let root = engine.request_layout(
             direction_style(LayoutDirection::Auto),
             px(16.0),
@@ -1259,6 +1329,7 @@ mod tests {
             engine.direction_handle(root).get(),
             ResolvedDirection::LeftToRight
         );
+
         assert_eq!(
             engine.direction_handle(explicit_child).get(),
             ResolvedDirection::RightToLeft
@@ -1268,28 +1339,36 @@ mod tests {
     #[test]
     fn auto_direction_updates_when_source_text_changes() {
         let mut engine = TaffyLayoutEngine::new();
+
         let text = engine.request_layout(
             direction_style(LayoutDirection::Inherit),
             px(16.0),
             1.0,
             &[],
         );
+
         let root = engine.request_layout(
             direction_style(LayoutDirection::Auto),
             px(16.0),
             1.0,
             &[text],
         );
+
         engine.set_direction_text(text, "English".into());
+
         let _ = engine.resolve_directions(root, ResolvedDirection::LeftToRight);
+
         assert_eq!(
             engine.direction_handle(root).get(),
             ResolvedDirection::LeftToRight
         );
 
         engine.set_direction_text(text, "مرحبا".into());
+
         let changed = engine.resolve_directions(root, ResolvedDirection::LeftToRight);
+
         assert!(changed.contains(&root));
+
         assert_eq!(
             engine.direction_handle(root).get(),
             ResolvedDirection::RightToLeft
@@ -1312,13 +1391,16 @@ mod tests {
 
         let padding = style.to_taffy(Pixels(16.0), 1.0).padding;
         let expected_left = 7.0 * (2.5 / 7.5);
+
         assert_eq!(padding.left, LengthPercentage::length(expected_left));
         assert_eq!(padding.right, LengthPercentage::length(7.0 - expected_left));
         assert_eq!(padding.top, LengthPercentage::length(6.5));
         assert_eq!(padding.bottom, LengthPercentage::length(6.5));
 
         style.size.width = Length::Definite(Pixels(100.0).into());
+
         let padding = style.to_taffy(Pixels(16.0), 1.0).padding;
+
         assert_eq!(padding.left, LengthPercentage::length(2.0));
         assert_eq!(padding.right, LengthPercentage::length(5.0));
         assert_eq!(padding.top, LengthPercentage::length(6.5));
@@ -1327,7 +1409,9 @@ mod tests {
         style.size.width = Length::Auto;
         style.padding.top = Pixels(6.75).into();
         style.padding.bottom = Pixels(6.75).into();
+
         let padding = style.to_taffy(Pixels(16.0), 2.0).padding;
+
         assert_eq!(padding.top, LengthPercentage::length(13.5));
         assert_eq!(padding.bottom, LengthPercentage::length(13.5));
     }
@@ -1340,20 +1424,24 @@ mod tests {
             bottom: Pixels(0.5).into(),
             left: Pixels(1.6).into(),
         };
+
         let taffy_border = border_widths_to_taffy(&border_widths, Pixels(16.0), 1.0);
 
         assert_eq!(
             taffy_border.top,
             taffy::style::LengthPercentage::length(0.0)
         );
+
         assert_eq!(
             taffy_border.right,
             taffy::style::LengthPercentage::length(1.0)
         );
+
         assert_eq!(
             taffy_border.bottom,
             taffy::style::LengthPercentage::length(1.0)
         );
+
         assert_eq!(
             taffy_border.left,
             taffy::style::LengthPercentage::length(2.0)

@@ -11,7 +11,9 @@ pub mod core_media {
         CMItemIndex, CMSampleTimingInfo, CMTime, CMTimeMake, CMVideoCodecType,
         kCMSampleAttachmentKey_NotSync, kCMTimeInvalid, kCMVideoCodecType_H264,
     };
+
     use anyhow::Result;
+
     use core_foundation::{
         array::{CFArray, CFArrayRef},
         base::{CFTypeID, OSStatus, TCFType},
@@ -20,11 +22,13 @@ pub mod core_media {
         impl_CFTypeDescription, impl_TCFType,
         string::CFString,
     };
+
     use core_video::image_buffer::{CVImageBuffer, CVImageBufferRef};
     use std::{ffi::c_void, ptr};
 
     #[repr(C)]
     pub struct __CMSampleBuffer(c_void);
+
     // The ref type must be a pointer to the underlying struct.
     pub type CMSampleBufferRef = *const __CMSampleBuffer;
 
@@ -37,6 +41,7 @@ pub mod core_media {
             unsafe {
                 let attachments =
                     CMSampleBufferGetSampleAttachmentsArray(self.as_concrete_TypeRef(), true);
+
                 CFArray::<CFDictionary>::wrap_under_get_rule(attachments)
                     .into_iter()
                     .map(|attachments| {
@@ -49,6 +54,7 @@ pub mod core_media {
         pub fn image_buffer(&self) -> Option<CVImageBuffer> {
             unsafe {
                 let ptr = CMSampleBufferGetImageBuffer(self.as_concrete_TypeRef());
+
                 if ptr.is_null() {
                     None
                 } else {
@@ -64,15 +70,18 @@ pub mod core_media {
                     presentationTimeStamp: kCMTimeInvalid,
                     decodeTimeStamp: kCMTimeInvalid,
                 };
+
                 let result = CMSampleBufferGetSampleTimingInfo(
                     self.as_concrete_TypeRef(),
                     index as CMItemIndex,
                     &mut timing_info,
                 );
+
                 anyhow::ensure!(
                     result == 0,
                     "error getting sample timing info, code {result}"
                 );
+
                 Ok(timing_info)
             }
         }
@@ -97,36 +106,44 @@ pub mod core_media {
     #[link(name = "CoreMedia", kind = "framework")]
     unsafe extern "C" {
         fn CMSampleBufferGetTypeID() -> CFTypeID;
+
         fn CMSampleBufferGetSampleAttachmentsArray(
             buffer: CMSampleBufferRef,
             create_if_necessary: bool,
         ) -> CFArrayRef;
+
         fn CMSampleBufferGetImageBuffer(buffer: CMSampleBufferRef) -> CVImageBufferRef;
+
         fn CMSampleBufferGetSampleTimingInfo(
             buffer: CMSampleBufferRef,
             index: CMItemIndex,
             timing_info_out: *mut CMSampleTimingInfo,
         ) -> OSStatus;
+
         fn CMSampleBufferGetFormatDescription(buffer: CMSampleBufferRef) -> CMFormatDescriptionRef;
         fn CMSampleBufferGetDataBuffer(sample_buffer: CMSampleBufferRef) -> CMBlockBufferRef;
     }
 
     #[repr(C)]
     pub struct __CMFormatDescription(c_void);
+
     pub type CMFormatDescriptionRef = *const __CMFormatDescription;
 
     declare_TCFType!(CMFormatDescription, CMFormatDescriptionRef);
+
     impl_TCFType!(
         CMFormatDescription,
         CMFormatDescriptionRef,
         CMFormatDescriptionGetTypeID
     );
+
     impl_CFTypeDescription!(CMFormatDescription);
 
     impl CMFormatDescription {
         pub fn h264_parameter_set_count(&self) -> usize {
             unsafe {
                 let mut count = 0;
+
                 let result = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
                     self.as_concrete_TypeRef(),
                     0,
@@ -135,7 +152,9 @@ pub mod core_media {
                     &mut count,
                     ptr::null_mut(),
                 );
+
                 assert_eq!(result, 0);
+
                 count
             }
         }
@@ -144,6 +163,7 @@ pub mod core_media {
             unsafe {
                 let mut bytes = ptr::null();
                 let mut len = 0;
+
                 let result = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
                     self.as_concrete_TypeRef(),
                     index,
@@ -152,7 +172,9 @@ pub mod core_media {
                     ptr::null_mut(),
                     ptr::null_mut(),
                 );
+
                 anyhow::ensure!(result == 0, "error getting parameter set, code: {result}");
+
                 Ok(std::slice::from_raw_parts(bytes, len))
             }
         }
@@ -161,6 +183,7 @@ pub mod core_media {
     #[link(name = "CoreMedia", kind = "framework")]
     unsafe extern "C" {
         fn CMFormatDescriptionGetTypeID() -> CFTypeID;
+
         fn CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
             video_desc: CMFormatDescriptionRef,
             parameter_set_index: usize,
@@ -173,6 +196,7 @@ pub mod core_media {
 
     #[repr(C)]
     pub struct __CMBlockBuffer(c_void);
+
     pub type CMBlockBufferRef = *const __CMBlockBuffer;
 
     declare_TCFType!(CMBlockBuffer, CMBlockBufferRef);
@@ -184,6 +208,7 @@ pub mod core_media {
             unsafe {
                 let mut bytes = ptr::null();
                 let mut len = 0;
+
                 let result = CMBlockBufferGetDataPointer(
                     self.as_concrete_TypeRef(),
                     0,
@@ -191,7 +216,9 @@ pub mod core_media {
                     &mut len,
                     &mut bytes,
                 );
+
                 assert!(result == 0, "could not get block buffer data");
+
                 std::slice::from_raw_parts(bytes, len)
             }
         }
@@ -200,6 +227,7 @@ pub mod core_media {
     #[link(name = "CoreMedia", kind = "framework")]
     unsafe extern "C" {
         fn CMBlockBufferGetTypeID() -> CFTypeID;
+
         fn CMBlockBufferGetDataPointer(
             buffer: CMBlockBufferRef,
             offset: usize,
@@ -219,18 +247,23 @@ pub mod core_video {
         base::{CFTypeID, TCFType},
         declare_TCFType, impl_CFTypeDescription, impl_TCFType,
     };
+
     #[cfg(target_os = "macos")]
     use std::ffi::c_void;
 
     use crate::bindings::{CVReturn, kCVReturnSuccess};
+
     pub use crate::bindings::{
         kCVPixelFormatType_32BGRA, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
         kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVPixelFormatType_420YpCbCr8Planar,
     };
+
     use anyhow::Result;
+
     use core_foundation::{
         base::kCFAllocatorDefault, dictionary::CFDictionaryRef, mach_port::CFAllocatorRef,
     };
+
     use foreign_types::ForeignTypeRef;
 
     use metal::{MTLDevice, MTLPixelFormat};
@@ -238,14 +271,17 @@ pub mod core_video {
 
     #[repr(C)]
     pub struct __CVMetalTextureCache(c_void);
+
     pub type CVMetalTextureCacheRef = *const __CVMetalTextureCache;
 
     declare_TCFType!(CVMetalTextureCache, CVMetalTextureCacheRef);
+
     impl_TCFType!(
         CVMetalTextureCache,
         CVMetalTextureCacheRef,
         CVMetalTextureCacheGetTypeID
     );
+
     impl_CFTypeDescription!(CVMetalTextureCache);
 
     impl CVMetalTextureCache {
@@ -254,6 +290,7 @@ pub mod core_video {
         /// metal_device must be valid according to CVMetalTextureCacheCreate
         pub unsafe fn new(metal_device: *mut MTLDevice) -> Result<Self> {
             let mut this = ptr::null();
+
             let result = unsafe {
                 CVMetalTextureCacheCreate(
                     kCFAllocatorDefault,
@@ -263,10 +300,12 @@ pub mod core_video {
                     &mut this,
                 )
             };
+
             anyhow::ensure!(
                 result == kCVReturnSuccess,
                 "could not create texture cache, code: {result}"
             );
+
             unsafe { Ok(CVMetalTextureCache::wrap_under_create_rule(this)) }
         }
 
@@ -283,6 +322,7 @@ pub mod core_video {
             plane_index: usize,
         ) -> Result<CVMetalTexture> {
             let mut this = ptr::null();
+
             let result = unsafe {
                 CVMetalTextureCacheCreateTextureFromImage(
                     kCFAllocatorDefault,
@@ -296,10 +336,12 @@ pub mod core_video {
                     &mut this,
                 )
             };
+
             anyhow::ensure!(
                 result == kCVReturnSuccess,
                 "could not create texture, code: {result}"
             );
+
             unsafe { Ok(CVMetalTexture::wrap_under_create_rule(this)) }
         }
     }
@@ -307,6 +349,7 @@ pub mod core_video {
     #[link(name = "CoreVideo", kind = "framework")]
     unsafe extern "C" {
         fn CVMetalTextureCacheGetTypeID() -> CFTypeID;
+
         fn CVMetalTextureCacheCreate(
             allocator: CFAllocatorRef,
             cache_attributes: CFDictionaryRef,
@@ -314,6 +357,7 @@ pub mod core_video {
             texture_attributes: CFDictionaryRef,
             cache_out: *mut CVMetalTextureCacheRef,
         ) -> CVReturn;
+
         fn CVMetalTextureCacheCreateTextureFromImage(
             allocator: CFAllocatorRef,
             texture_cache: CVMetalTextureCacheRef,
@@ -329,6 +373,7 @@ pub mod core_video {
 
     #[repr(C)]
     pub struct __CVMetalTexture(c_void);
+
     pub type CVMetalTextureRef = *const __CVMetalTexture;
 
     declare_TCFType!(CVMetalTexture, CVMetalTextureRef);
@@ -339,6 +384,7 @@ pub mod core_video {
         pub fn as_texture_ref(&self) -> &metal::TextureRef {
             unsafe {
                 let texture = CVMetalTextureGetTexture(self.as_concrete_TypeRef());
+
                 metal::TextureRef::from_ptr(texture as *mut _)
             }
         }

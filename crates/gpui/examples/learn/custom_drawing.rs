@@ -8,11 +8,13 @@
 //! 4. Interactive drawing - Responding to mouse events
 
 use gpui::colors::Colors;
+
 use gpui::{
     App, Bounds, ColorExt, Context, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, PaintQuad, Path, PathBuilder, Pixels, Point, Render, Rgba, Window, WindowBounds,
     WindowOptions, canvas, div, point, prelude::*, px, rgb, size,
 };
+
 use palette::IntoColor;
 
 #[path = "../shared/prelude.rs"]
@@ -78,6 +80,7 @@ fn create_star(center: Point<Pixels>, outer_radius: f32, inner_radius: f32) -> P
     for i in 0..points * 2 {
         let angle =
             std::f32::consts::PI / 2.0 - (i as f32) * std::f32::consts::PI / (points as f32);
+
         let radius = if i % 2 == 0 {
             outer_radius
         } else {
@@ -100,6 +103,7 @@ fn create_star(center: Point<Pixels>, outer_radius: f32, inner_radius: f32) -> P
 
 fn create_triangle(p1: Point<Pixels>, p2: Point<Pixels>, p3: Point<Pixels>) -> Path<Pixels> {
     let mut builder = PathBuilder::fill();
+
     builder.move_to(p1);
     builder.line_to(p2);
     builder.line_to(p3);
@@ -119,20 +123,24 @@ fn custom_paths_canvas(colors: &Colors) -> impl IntoElement {
             // Draw a star
             let star_center = point(bounds.origin.x + px(50.), center_y);
             let star = create_star(star_center, 30., 15.);
+
             window.paint_path(star, warning);
 
             // Draw a triangle
             let tri_base_x = bounds.origin.x + px(120.);
+
             let triangle = create_triangle(
                 point(tri_base_x + px(30.), center_y - px(25.)),
                 point(tri_base_x, center_y + px(25.)),
                 point(tri_base_x + px(60.), center_y + px(25.)),
             );
+
             window.paint_path(triangle, rgb(0x8b5cf6)); // Purple
 
             // Draw a custom shape (arrow)
             let arrow_x = bounds.origin.x + px(200.);
             let mut arrow_builder = PathBuilder::fill();
+
             arrow_builder.move_to(point(arrow_x, center_y));
             arrow_builder.line_to(point(arrow_x + px(20.), center_y - px(20.)));
             arrow_builder.line_to(point(arrow_x + px(20.), center_y - px(10.)));
@@ -141,7 +149,9 @@ fn custom_paths_canvas(colors: &Colors) -> impl IntoElement {
             arrow_builder.line_to(point(arrow_x + px(20.), center_y + px(10.)));
             arrow_builder.line_to(point(arrow_x + px(20.), center_y + px(20.)));
             arrow_builder.close();
+
             let arrow = arrow_builder.build().unwrap();
+
             window.paint_path(arrow, accent);
         },
     )
@@ -182,11 +192,13 @@ impl DrawingCanvas {
 
     fn current_color(&self, colors: &Colors) -> Rgba {
         let palette = Self::get_colors(colors);
+
         palette[self.color_index % palette.len()]
     }
 
     fn next_color(&mut self, colors: &Colors) {
         let palette = Self::get_colors(colors);
+
         self.color_index = (self.color_index + 1) % palette.len();
     }
 
@@ -199,6 +211,7 @@ impl DrawingCanvas {
         if event.button == MouseButton::Left {
             self.is_drawing = true;
             self.current_line = vec![event.position];
+
             cx.notify();
         }
     }
@@ -218,10 +231,14 @@ impl DrawingCanvas {
     fn on_mouse_up(&mut self, _event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_drawing && self.current_line.len() > 1 {
             self.lines.push(std::mem::take(&mut self.current_line));
+
             let colors = Colors::for_appearance(window);
+
             self.next_color(&colors);
         }
+
         self.is_drawing = false;
+
         self.current_line.clear();
         cx.notify();
     }
@@ -229,7 +246,9 @@ impl DrawingCanvas {
     fn clear(&mut self, cx: &mut Context<Self>) {
         self.lines.clear();
         self.current_line.clear();
+
         self.color_index = 0;
+
         cx.notify();
     }
 
@@ -258,6 +277,7 @@ impl DrawingCanvas {
             let py_offset = px(dx_f / len * thickness / 2.0);
 
             let mut builder = PathBuilder::fill();
+
             builder.move_to(point(start.x + px_offset, start.y + py_offset));
             builder.line_to(point(end.x + px_offset, end.y + py_offset));
             builder.line_to(point(end.x - px_offset, end.y - py_offset));
@@ -309,6 +329,7 @@ impl Render for DrawingCanvas {
                             move |_bounds, _, window, _cx| {
                                 for (i, line) in lines.iter().enumerate() {
                                     let color = palette[i % palette.len()];
+
                                     DrawingCanvas::draw_line(window, line, color);
                                 }
 
@@ -467,6 +488,7 @@ fn section(
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(550.), px(800.)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(|cx| CustomDrawingExample::new(cx)),

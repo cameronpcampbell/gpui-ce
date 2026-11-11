@@ -5,6 +5,7 @@ use http::StatusCode;
 pub struct HttpResponse {
     /// The HTTP status code.
     pub status: StatusCode,
+
     /// The response body bytes.
     pub body: Vec<u8>,
 }
@@ -95,6 +96,7 @@ impl HttpClient for FakeHttpClient {
         _follow_redirects: bool,
     ) -> BoxFuture<'static, anyhow::Result<HttpResponse>> {
         let status = self.status;
+
         Box::pin(async move {
             Ok(HttpResponse {
                 status,

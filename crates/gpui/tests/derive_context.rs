@@ -5,6 +5,7 @@ use gpui_macros::{AppContext, VisualContext};
 struct CustomContext<'a, 'b> {
     #[app]
     app: &'a mut App,
+
     #[window]
     window: &'b mut Window,
 }

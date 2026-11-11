@@ -17,8 +17,10 @@ pub enum Shell {
     WithArguments {
         /// The program to run.
         program: String,
+
         /// The arguments to pass to the program.
         args: Vec<String>,
+
         /// An optional string to override the title of the terminal tab
         title_override: Option<String>,
     },
@@ -103,13 +105,16 @@ pub fn get_windows_bash() -> Option<String> {
         if !install_root.join("git-bash.exe").is_file() {
             return None;
         }
+
         let bash = install_root.join("bin").join("bash.exe");
+
         bash.is_file().then_some(bash)
     }
 
     fn find_bash_in_scoop() -> Option<PathBuf> {
         let bash_exe =
             PathBuf::from(std::env::var_os("USERPROFILE")?).join("scoop\\shims\\bash.exe");
+
         bash_exe.exists().then_some(bash_exe)
     }
 
@@ -120,9 +125,11 @@ pub fn get_windows_bash() -> Option<String> {
         {
             return Some(bash);
         }
+
         let git = which::which("git").ok()?;
         let binary_directory = git.parent()?;
         let parent = binary_directory.parent()?;
+
         find_bash_in_installation(parent).or_else(|| find_bash_in_installation(parent.parent()?))
     }
 
@@ -130,9 +137,11 @@ pub fn get_windows_bash() -> Option<String> {
         let bash = find_bash_in_scoop()
             .or_else(find_bash_in_git)
             .map(|p| p.to_string_lossy().into_owned());
+
         if let Some(ref path) = bash {
             log::info!("Found bash at {}", path);
         }
+
         bash
     });
 
@@ -212,6 +221,7 @@ impl ShellKind {
 
     pub fn new(program: impl AsRef<Path>, is_windows: bool) -> Self {
         let program = program.as_ref();
+
         let program = program
             .file_stem()
             .unwrap_or(program.as_os_str())
@@ -257,13 +267,16 @@ impl ShellKind {
                 Some(var_name) if !var_name.is_empty() && !var_name.contains(':') => {
                     format!("%{var_name}%")
                 }
+
                 // `${SOME_VAR:-SOME_DEFAULT}`, we currently do not handle this situation,
                 // which will result in the task failing to run in such cases.
                 _ => input.into(),
             }
+
         } else if let Some(var_str) = input.strip_prefix('$') {
             // If the input starts with "$", directly append to "$env:"
             format!("%{}%", var_str)
+
         } else {
             // If no prefix is found, return the input as is
             input.into()
@@ -276,13 +289,16 @@ impl ShellKind {
                 Some(var_name) if !var_name.is_empty() && !var_name.contains(':') => {
                     format!("$env:{var_name}")
                 }
+
                 // `${SOME_VAR:-SOME_DEFAULT}`, we currently do not handle this situation,
                 // which will result in the task failing to run in such cases.
                 _ => input.into(),
             }
+
         } else if let Some(var_str) = input.strip_prefix('$') {
             // If the input starts with "$", directly append to "$env:"
             format!("$env:{}", var_str)
+
         } else {
             // If no prefix is found, return the input as is
             input.into()
@@ -297,15 +313,20 @@ impl ShellKind {
         loop {
             match source.chars().next() {
                 None => return result,
+
                 Some('$') => {
                     source = Self::parse_nushell_var(&source[1..], &mut result, is_start);
                     is_start = false;
                 }
+
                 Some(_) => {
                     is_start = false;
+
                     let chunk_end = source.find('$').unwrap_or(source.len());
                     let (chunk, rest) = source.split_at(chunk_end);
+
                     result.push_str(chunk);
+
                     source = rest;
                 }
             }
@@ -315,50 +336,68 @@ impl ShellKind {
     fn parse_nushell_var<'a>(source: &'a str, text: &mut String, is_start: bool) -> &'a str {
         if source.starts_with("env.") {
             text.push('$');
+
             return source;
         }
 
         match source.chars().next() {
             Some('{') => {
                 let source = &source[1..];
+
                 if let Some(end) = source.find('}') {
                     let var_name = &source[..end];
+
                     if !var_name.is_empty() {
                         if !is_start {
                             text.push('(');
                         }
+
                         text.push_str("$env.");
                         text.push_str(var_name);
+
                         if !is_start {
                             text.push(')');
                         }
+
                         &source[end + 1..]
+
                     } else {
                         text.push_str("${}");
+
                         &source[end + 1..]
                     }
+
                 } else {
                     text.push_str("${");
+
                     source
                 }
             }
+
             Some(c) if c.is_alphabetic() || c == '_' => {
                 let end = source
                     .find(|c: char| !c.is_alphanumeric() && c != '_')
                     .unwrap_or(source.len());
+
                 let var_name = &source[..end];
+
                 if !is_start {
                     text.push('(');
                 }
+
                 text.push_str("$env.");
                 text.push_str(var_name);
+
                 if !is_start {
                     text.push(')');
                 }
+
                 &source[end..]
             }
+
             _ => {
                 text.push('$');
+
                 source
             }
         }
@@ -367,11 +406,13 @@ impl ShellKind {
     pub fn args_for_shell(&self, interactive: bool, combined_command: String) -> Vec<String> {
         match self {
             ShellKind::PowerShell | ShellKind::Pwsh => vec!["-C".to_owned(), combined_command],
+
             ShellKind::Cmd => vec![
                 "/S".to_owned(),
                 "/C".to_owned(),
                 format!("\"{combined_command}\""),
             ],
+
             ShellKind::Posix
             | ShellKind::Nushell
             | ShellKind::Fish
@@ -391,6 +432,7 @@ impl ShellKind {
         match self {
             ShellKind::PowerShell | ShellKind::Pwsh => Some('&'),
             ShellKind::Nushell => Some('^'),
+
             ShellKind::Posix
             | ShellKind::Csh
             | ShellKind::Tcsh
@@ -407,6 +449,7 @@ impl ShellKind {
             Some(prefix) if !command.starts_with(prefix) => {
                 Cow::Owned(format!("{prefix}{command}"))
             }
+
             _ => Cow::Borrowed(command),
         }
     }
@@ -414,6 +457,7 @@ impl ShellKind {
     pub const fn sequential_commands_separator(&self) -> char {
         match self {
             ShellKind::Cmd => '&',
+
             ShellKind::Posix
             | ShellKind::Csh
             | ShellKind::Tcsh
@@ -437,6 +481,7 @@ impl ShellKind {
             | ShellKind::Fish
             | ShellKind::Pwsh
             | ShellKind::Xonsh => "&&",
+
             ShellKind::PowerShell | ShellKind::Nushell | ShellKind::Elvish => ";",
         }
     }
@@ -446,6 +491,7 @@ impl ShellKind {
             ShellKind::PowerShell => Some(Self::quote_powershell(arg)),
             ShellKind::Pwsh => Some(Self::quote_pwsh(arg)),
             ShellKind::Cmd => Some(Self::quote_cmd(arg)),
+
             ShellKind::Posix
             | ShellKind::Csh
             | ShellKind::Tcsh
@@ -463,6 +509,7 @@ impl ShellKind {
         }
 
         let needs_quoting = arg.chars().any(|c| c == ' ' || c == '\t' || c == '"');
+
         if !needs_quoting {
             return Cow::Borrowed(arg);
         }
@@ -479,6 +526,7 @@ impl ShellKind {
         while i < chars.len() {
             if chars[i] == '\\' {
                 let mut num_backslashes = 0;
+
                 while i < chars.len() && chars[i] == '\\' {
                     num_backslashes += 1;
                     i += 1;
@@ -489,26 +537,34 @@ impl ShellKind {
                     for _ in 0..(num_backslashes * 2 + 1) {
                         result.push('\\');
                     }
+
                     result.push('"');
+
                     i += 1;
+
                 } else if i >= chars.len() {
                     // Trailing backslashes: double them (they precede the closing quote)
                     for _ in 0..(num_backslashes * 2) {
                         result.push('\\');
                     }
+
                 } else {
                     // Backslashes not followed by quote: output as-is
                     for _ in 0..num_backslashes {
                         result.push('\\');
                     }
                 }
+
             } else if chars[i] == '"' {
                 // Quote not preceded by backslash: escape it
                 result.push('\\');
                 result.push('"');
+
                 i += 1;
+
             } else {
                 result.push(chars[i]);
+
                 i += 1;
             }
         }
@@ -516,6 +572,7 @@ impl ShellKind {
         if enclose {
             result.push('"');
         }
+
         Cow::Owned(result)
     }
 
@@ -547,6 +604,7 @@ impl ShellKind {
 
     fn need_quotes_powershell(arg: &str) -> bool {
         let mut quote_count = 0;
+
         for c in arg.chars() {
             if c == '"' {
                 quote_count += 1;
@@ -554,19 +612,25 @@ impl ShellKind {
                 return true;
             }
         }
+
         false
     }
 
     fn escape_powershell_quotes(s: &str) -> String {
         let mut result = String::with_capacity(s.len() + 4);
+
         result.push('\'');
+
         for c in s.chars() {
             if c == '\'' {
                 result.push('\'');
             }
+
             result.push(c);
         }
+
         result.push('\'');
+
         result
     }
 
@@ -603,18 +667,22 @@ impl ShellKind {
         }
 
         let mut result = String::with_capacity(crt_quoted.len() * 2);
+
         for c in crt_quoted.chars() {
             match c {
                 '^' | '"' | '<' | '>' | '&' | '|' | '(' | ')' => {
                     result.push('^');
                     result.push(c);
                 }
+
                 '%' => {
                     result.push_str("%%cd:~,%");
                 }
+
                 _ => result.push(c),
             }
         }
+
         Cow::Owned(result)
     }
 
@@ -637,6 +705,7 @@ impl ShellKind {
                     // command. So strip the quotes, quote the command, and
                     // re-add the quotes if they are missing after requoting
                     let quoted = self.try_quote(arg)?;
+
                     return Some(if quoted.starts_with(['\'', '"']) {
                         Cow::Owned(self.prepend_command_prefix(&quoted).into_owned())
                     } else {
@@ -647,10 +716,12 @@ impl ShellKind {
                     });
                 }
             }
+
             return self
                 .try_quote(arg)
                 .map(|quoted| Cow::Owned(self.prepend_command_prefix(&quoted).into_owned()));
         }
+
         self.try_quote(arg).map(|quoted| match quoted {
             unquoted @ Cow::Borrowed(_) => unquoted,
             Cow::Owned(quoted) => Cow::Owned(self.prepend_command_prefix(&quoted).into_owned()),
@@ -666,6 +737,7 @@ impl ShellKind {
             ShellKind::Cmd => "",
             ShellKind::Nushell => "overlay use",
             ShellKind::PowerShell | ShellKind::Pwsh => ".",
+
             ShellKind::Fish
             | ShellKind::Csh
             | ShellKind::Tcsh
@@ -679,6 +751,7 @@ impl ShellKind {
     pub const fn clear_screen_command(&self) -> &'static str {
         match self {
             ShellKind::Cmd => "cls",
+
             ShellKind::Posix
             | ShellKind::Csh
             | ShellKind::Tcsh
@@ -698,6 +771,7 @@ impl ShellKind {
     pub const fn tty_escape_args(&self) -> bool {
         match self {
             ShellKind::Cmd => false,
+
             ShellKind::Posix
             | ShellKind::Csh
             | ShellKind::Tcsh
@@ -729,6 +803,7 @@ mod tests {
     #[test]
     fn test_try_quote_powershell() {
         let shell_kind = ShellKind::PowerShell;
+
         assert_eq!(
             shell_kind
                 .try_quote("C:\\Users\\johndoe\\dev\\python\\39007\\tests\\.venv\\Scripts\\python.exe -m pytest \"test_foo.py::test_foo\"")
@@ -741,6 +816,7 @@ mod tests {
     #[test]
     fn test_try_quote_cmd() {
         let shell_kind = ShellKind::Cmd;
+
         assert_eq!(
             shell_kind
                 .try_quote("C:\\Users\\johndoe\\dev\\python\\39007\\tests\\.venv\\Scripts\\python.exe -m pytest \"test_foo.py::test_foo\"")
@@ -859,10 +935,12 @@ mod tests {
     #[test]
     fn test_try_quote_nu_command() {
         let shell_kind = ShellKind::Nushell;
+
         assert_eq!(
             shell_kind.try_quote("'uname'").unwrap().into_owned(),
             "\"'uname'\"".to_string()
         );
+
         assert_eq!(
             shell_kind
                 .try_quote_prefix_aware("'uname'")
@@ -870,10 +948,12 @@ mod tests {
                 .into_owned(),
             "^\"'uname'\"".to_string()
         );
+
         assert_eq!(
             shell_kind.try_quote("^uname").unwrap().into_owned(),
             "'^uname'".to_string()
         );
+
         assert_eq!(
             shell_kind
                 .try_quote_prefix_aware("^uname")
@@ -881,10 +961,12 @@ mod tests {
                 .into_owned(),
             "^uname".to_string()
         );
+
         assert_eq!(
             shell_kind.try_quote("^'uname'").unwrap().into_owned(),
             "'^'\"'uname\'\"".to_string()
         );
+
         assert_eq!(
             shell_kind
                 .try_quote_prefix_aware("^'uname'")
@@ -892,10 +974,12 @@ mod tests {
                 .into_owned(),
             "^'uname'".to_string()
         );
+
         assert_eq!(
             shell_kind.try_quote("'uname a'").unwrap().into_owned(),
             "\"'uname a'\"".to_string()
         );
+
         assert_eq!(
             shell_kind
                 .try_quote_prefix_aware("'uname a'")
@@ -903,10 +987,12 @@ mod tests {
                 .into_owned(),
             "^\"'uname a'\"".to_string()
         );
+
         assert_eq!(
             shell_kind.try_quote("^'uname a'").unwrap().into_owned(),
             "'^'\"'uname a'\"".to_string()
         );
+
         assert_eq!(
             shell_kind
                 .try_quote_prefix_aware("^'uname a'")
@@ -914,10 +1000,12 @@ mod tests {
                 .into_owned(),
             "^'uname a'".to_string()
         );
+
         assert_eq!(
             shell_kind.try_quote("uname").unwrap().into_owned(),
             "uname".to_string()
         );
+
         assert_eq!(
             shell_kind
                 .try_quote_prefix_aware("uname")
@@ -930,6 +1018,7 @@ mod tests {
     #[test]
     fn test_try_quote_single_quote_paths() {
         let path_with_quote = r"C:\Temp\O'Brien\repo";
+
         let shlex_shells = [
             ShellKind::Posix,
             ShellKind::Fish,
@@ -943,7 +1032,9 @@ mod tests {
 
         for shell_kind in shlex_shells {
             let quoted = shell_kind.try_quote(path_with_quote).unwrap().into_owned();
+
             assert_ne!(quoted, path_with_quote);
+
             assert_eq!(
                 shlex::split(&quoted),
                 Some(vec![path_with_quote.to_string()])
@@ -951,12 +1042,14 @@ mod tests {
 
             if shell_kind == ShellKind::Nushell {
                 let prefixed = shell_kind.prepend_command_prefix(&quoted);
+
                 assert!(prefixed.starts_with('^'));
             }
         }
 
         for shell_kind in [ShellKind::PowerShell, ShellKind::Pwsh] {
             let quoted = shell_kind.try_quote(path_with_quote).unwrap().into_owned();
+
             assert!(quoted.starts_with('\''));
             assert!(quoted.ends_with('\''));
             assert!(quoted.contains("O''Brien"));
@@ -969,16 +1062,19 @@ mod tests {
             ShellKind::PowerShell.to_shell_variable("${FOO}"),
             "$env:FOO"
         );
+
         assert_eq!(ShellKind::Pwsh.to_shell_variable("${FOO}"), "$env:FOO");
         assert_eq!(ShellKind::Cmd.to_shell_variable("${FOO}"), "%FOO%");
         assert_eq!(ShellKind::Nushell.to_shell_variable("${FOO}"), "$env.FOO");
         assert_eq!(ShellKind::Posix.to_shell_variable("${FOO}"), "${FOO}");
 
         assert_eq!(ShellKind::PowerShell.to_shell_variable("$FOO"), "$env:FOO");
+
         assert_eq!(
             ShellKind::PowerShell.to_shell_variable("${日本}"),
             "$env:日本"
         );
+
         assert_eq!(
             ShellKind::PowerShell.to_shell_variable("${FOO:-bar}"),
             "${FOO:-bar}"

@@ -1,7 +1,9 @@
 use crate::display::WebDisplay;
+
 use crate::events::{
     ClickState, EventListenerHandle, TouchIds, WebEventListeners, is_mac_platform,
 };
+
 use crate::ime_mirror::ImeMirror;
 use crate::platform::WebWindowLifecycle;
 use std::sync::Arc;
@@ -15,6 +17,7 @@ use gpui::{
     WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
     WindowParams, px,
 };
+
 use gpui_wgpu::{WgpuContext, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 use wasm_bindgen::prelude::*;
 
@@ -61,28 +64,33 @@ pub(crate) struct WebWindowInner {
     pub(crate) last_physical_size: Cell<(u32, u32)>,
     pub(crate) notify_scale: Cell<bool>,
     pub(crate) is_composing: Cell<bool>,
+
     /// Set while `sync_virtual_keyboard` blur/focus-cycles the hidden input.
     /// The cycle is a keyboard-visibility hint, not a real activity change;
     /// letting the focus/blur listeners report it would re-enter GPUI
     /// synchronously from inside an input dispatch, and a `RefCell`
     /// double-borrow panic on wasm never unwinds, wedging the app.
     pub(crate) suppress_focus_status_events: Cell<bool>,
+
     /// The visual viewport's width and greatest height seen at that width,
     /// in layout pixels. The keyboard-visibility probe compares the current
     /// height against this maximum; the width detects rotation, which must
     /// restart the calibration.
     pub(crate) visual_viewport_probe: Cell<(f64, f64)>,
+
     /// The visual viewport height when the current pointer gesture began.
     /// A mid-gesture change means the software keyboard opened or closed and
     /// reflowed the layout, so the release position no longer refers to what
     /// the user aimed at.
     pub(crate) gesture_start_visual_viewport_height: Cell<f64>,
+
     /// A touch that may still resolve into a tap: its pointer id and starting
     /// position, cleared once it travels beyond touch slop. Virtual keyboard
     /// and IME focus may only change when a touch release completes a tap;
     /// pans must leave them untouched, or scrolling over editable content
     /// flickers the keyboard and drags the caret around.
     pub(crate) touch_tap_candidate: Cell<Option<(i32, Point<Pixels>)>>,
+
     mql_handle: RefCell<Option<MqlHandle>>,
     pending_physical_size: Cell<Option<(u32, u32)>>,
     raf_id: Cell<Option<i32>>,
@@ -107,14 +115,17 @@ impl WebWindow {
         let document = browser_window
             .document()
             .ok_or_else(|| anyhow::anyhow!("No `document` found on window"))?;
+
         let canvas: web_sys::HtmlCanvasElement = document
             .create_element("canvas")
             .map_err(|error| anyhow::anyhow!("Failed to create canvas element: {error:?}"))?
             .dyn_into()
             .map_err(|error| anyhow::anyhow!("Created element is not a canvas: {error:?}"))?;
+
         canvas.set_tab_index(-1);
 
         let style = canvas.style();
+
         for (property, value) in [
             ("width", "100%"),
             ("height", "100%"),
@@ -130,8 +141,10 @@ impl WebWindow {
         let body = document
             .body()
             .ok_or_else(|| anyhow::anyhow!("No `body` found on document"))?;
+
         body.append_child(&canvas)
             .map_err(|error| anyhow::anyhow!("Failed to append canvas to body: {error:?}"))?;
+
         Ok(canvas)
     }
 
@@ -149,12 +162,15 @@ impl WebWindow {
         let document = browser_window
             .document()
             .ok_or_else(|| anyhow::anyhow!("No `document` found on window"))?;
+
         let body = document
             .body()
             .ok_or_else(|| anyhow::anyhow!("No `body` found on document"))?;
+
         let dpr = browser_window.device_pixel_ratio() as f32;
         let max_texture_dimension = context.device.limits().max_texture_dimension_2d;
         let has_device_pixel_support = check_device_pixel_support();
+
         let renderer_config = WgpuSurfaceConfig {
             size: Size {
                 width: DevicePixels(0),
@@ -163,6 +179,7 @@ impl WebWindow {
             transparent: false,
             preferred_present_mode: None,
         };
+
         let renderer = WgpuRenderer::new_from_surface(context, surface, renderer_config)?;
 
         let ime_mirror = ImeMirror::new(&document, &body)?;
@@ -224,9 +241,11 @@ impl WebWindow {
         }
 
         let raf_closure = inner.create_raf_closure();
+
         inner.wake_frame_loop();
 
         let resize_observer_closure = Self::create_resize_observer_closure(Rc::clone(&inner));
+
         let resize_observer =
             web_sys::ResizeObserver::new(resize_observer_closure.as_ref().unchecked_ref()).ok();
 
@@ -267,11 +286,14 @@ impl WebWindow {
                         .device_pixel_content_box_size()
                         .get(0)
                         .unchecked_into();
+
                     let pw = size.inline_size() as u32;
                     let ph = size.block_size() as u32;
                     let lw = pw as f64 / dpr;
                     let lh = ph as f64 / dpr;
+
                     (pw, ph, lw as f32, lh as f32)
+
                 } else {
                     // Safari fallback: use contentRect (always CSS px).
                     let rect = entry.content_rect();
@@ -279,6 +301,7 @@ impl WebWindow {
                     let lh = rect.height() as f32;
                     let pw = (lw as f64 * dpr).round() as u32;
                     let ph = (lh as f64 * dpr).round() as u32;
+
                     (pw, ph, lw, lh)
                 };
 
@@ -289,6 +312,7 @@ impl WebWindow {
             if !scale_changed && !size_changed {
                 return;
             }
+
             inner
                 .last_physical_size
                 .set((physical_width, physical_height));
@@ -297,14 +321,17 @@ impl WebWindow {
             if physical_width == 0 || physical_height == 0 {
                 {
                     let mut s = inner.state.borrow_mut();
+
                     s.bounds.size = Size::default();
                     s.scale_factor = dpr_f32;
                 }
+
                 // Still fire the callback so GPUI knows the window is gone.
                 inner.with_callback(
                     |callbacks| &mut callbacks.resize,
                     |callback| callback(Size::default(), dpr_f32),
                 );
+
                 return;
             }
 
@@ -322,6 +349,7 @@ impl WebWindow {
                         (clamped_width as f64 / dpr) as f32,
                         (clamped_height as f64 / dpr) as f32,
                     )
+
                 } else {
                     (logical_width, logical_height)
                 };
@@ -332,10 +360,12 @@ impl WebWindow {
 
             {
                 let mut s = inner.state.borrow_mut();
+
                 s.bounds.size = Size {
                     width: px(logical_width),
                     height: px(logical_height),
                 };
+
                 s.scale_factor = dpr_f32;
             }
 
@@ -381,22 +411,27 @@ impl WebWindowInner {
     ) -> Option<R> {
         let mut callback = select(&mut self.callbacks.borrow_mut()).take()?;
         let result = invoke(&mut callback);
+
         *select(&mut self.callbacks.borrow_mut()) = Some(callback);
+
         Some(result)
     }
 
     fn create_raf_closure(self: &Rc<Self>) -> Closure<dyn FnMut()> {
         let this = Rc::clone(self);
+
         let closure = Closure::new(move || {
             // The request that fired is no longer pending; clear it before
             // running the frame so wakeups issued while the frame executes
             // (e.g. views invalidated during draw) schedule the next request
             // instead of being swallowed.
             this.raf_id.set(None);
+
             this.with_callback(
                 |callbacks| &mut callbacks.request_frame,
                 |callback| {
                     let force_render = this.state.borrow_mut().renderer.needs_redraw();
+
                     callback(RequestFrameOptions {
                         require_presentation: false,
                         force_render,
@@ -407,6 +442,7 @@ impl WebWindowInner {
 
         let js_func: js_sys::Function =
             closure.as_ref().unchecked_ref::<js_sys::Function>().clone();
+
         *self.raf_function.borrow_mut() = Some(js_func);
 
         closure
@@ -416,7 +452,9 @@ impl WebWindowInner {
         if self.raf_id.get().is_some() {
             return;
         }
+
         let raf_function = self.raf_function.borrow();
+
         if let Some(func) = raf_function.as_ref() {
             self.raf_id
                 .set(self.browser_window.request_animation_frame(func).ok());
@@ -425,10 +463,13 @@ impl WebWindowInner {
 
     fn observe_canvas(&self, observer: &web_sys::ResizeObserver) {
         observer.unobserve(&self.canvas);
+
         if self.has_device_pixel_support {
             let options = web_sys::ResizeObserverOptions::new();
+
             options.set_box(web_sys::ResizeObserverBoxOptions::DevicePixelContentBox);
             observer.observe_with_options(&self.canvas, &options);
+
         } else {
             observer.observe(&self.canvas);
         }
@@ -436,8 +477,10 @@ impl WebWindowInner {
 
     fn watch_dpr_changes(self: &Rc<Self>, observer: &web_sys::ResizeObserver) {
         let current_dpr = self.browser_window.device_pixel_ratio();
+
         let media_query =
             format!("(resolution: {current_dpr}dppx), (-webkit-device-pixel-ratio: {current_dpr})");
+
         let Some(mql) = self.browser_window.match_media(&media_query).ok().flatten() else {
             return;
         };
@@ -477,14 +520,17 @@ impl WebWindowInner {
                                 .ok()
                                 .and_then(|v| v.as_string())
                                 .unwrap_or_default();
+
                         state_str == "visible"
                     })
                     .unwrap_or(true);
 
                 {
                     let mut state = this.state.borrow_mut();
+
                     state.is_active = is_visible;
                 }
+
                 this.with_callback(
                     |callbacks| &mut callbacks.active_status_change,
                     |callback| callback(is_visible),
@@ -508,6 +554,7 @@ impl WebWindowInner {
                     .browser_window
                     .document()
                     .is_some_and(|document| document.fullscreen_element().is_some());
+
                 this.state.borrow_mut().is_fullscreen = is_fullscreen;
             },
         ))
@@ -519,7 +566,9 @@ impl WebWindowInner {
     ) -> Option<R> {
         let mut handler = self.state.borrow_mut().input_handler.take()?;
         let result = f(&mut handler);
+
         self.state.borrow_mut().input_handler = Some(handler);
+
         Some(result)
     }
 
@@ -530,6 +579,7 @@ impl WebWindowInner {
             .ok()??;
 
         let this = Rc::clone(self);
+
         Some(EventListenerHandle::add(
             mql.as_ref(),
             "change",
@@ -555,9 +605,11 @@ impl Drop for WebWindow {
                 .cancel_animation_frame(raf_id)
                 .ok();
         }
+
         // A frame waker that outlives this window must not re-schedule the
         // freed closure; without a stored function, `wake_frame_loop` no-ops.
         self.inner.raf_function.borrow_mut().take();
+
         if let Some(ref observer) = self._resize_observer {
             observer.disconnect();
         }
@@ -568,6 +620,7 @@ impl Drop for WebWindow {
         self.inner.mql_handle.borrow_mut().take();
 
         let canvas: &web_sys::Element = self.inner.canvas.as_ref();
+
         canvas.remove();
         self.inner.ime_mirror.remove();
         self.active_window.borrow_mut().take();
@@ -606,16 +659,20 @@ impl Drop for MqlHandle {
 // Safari does not support `devicePixelContentBoxSize`, so detect whether it's available.
 fn check_device_pixel_support() -> bool {
     let global: JsValue = js_sys::global().into();
+
     let Ok(constructor) = js_sys::Reflect::get(&global, &"ResizeObserverEntry".into()) else {
         return false;
     };
+
     let Ok(prototype) = js_sys::Reflect::get(&constructor, &"prototype".into()) else {
         return false;
     };
+
     let descriptor = js_sys::Object::get_own_property_descriptor(
         &prototype.unchecked_into::<js_sys::Object>(),
         &"devicePixelContentBoxSize".into(),
     );
+
     !descriptor.is_undefined()
 }
 
@@ -626,6 +683,7 @@ impl raw_window_handle::HasWindowHandle for WebWindow {
         let canvas_ref: &JsValue = self.inner.canvas.as_ref();
         let obj = std::ptr::NonNull::from(canvas_ref).cast::<std::ffi::c_void>();
         let handle = raw_window_handle::WebCanvasWindowHandle::new(obj);
+
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(handle.into()) })
     }
 }
@@ -657,9 +715,11 @@ impl PlatformWindow for WebWindow {
 
     fn resize(&mut self, size: Size<Pixels>) {
         let style = self.inner.canvas.style();
+
         style
             .set_property("width", &format!("{}px", f32::from(size.width)))
             .ok();
+
         style
             .set_property("height", &format!("{}px", f32::from(size.height)))
             .ok();
@@ -723,7 +783,9 @@ impl PlatformWindow for WebWindow {
         if token.is_some() {
             return false;
         }
+
         self.inner.state.borrow_mut().is_active = true;
+
         true
     }
 
@@ -741,6 +803,7 @@ impl PlatformWindow for WebWindow {
 
     fn set_title(&mut self, title: &str) {
         self.inner.state.borrow_mut().title = title.to_owned();
+
         if let Some(document) = self.inner.browser_window.document() {
             document.set_title(title);
         }
@@ -775,6 +838,7 @@ impl PlatformWindow for WebWindow {
             document.exit_fullscreen();
         } else {
             let canvas: &web_sys::Element = self.inner.canvas.as_ref();
+
             canvas.request_fullscreen().ok();
         }
     }
@@ -789,6 +853,7 @@ impl PlatformWindow for WebWindow {
         // invalidator, so a strong reference here would form a cycle and leak
         // the window on close.
         let inner = Rc::downgrade(&self.inner);
+
         Some(Rc::new(move || {
             if let Some(inner) = inner.upgrade() {
                 inner.wake_frame_loop();
@@ -844,10 +909,12 @@ impl PlatformWindow for WebWindow {
             }
 
             let mut state = self.inner.state.borrow_mut();
+
             state.renderer.update_drawable_size(Size {
                 width: DevicePixels(width as i32),
                 height: DevicePixels(height as i32),
             });
+
             drop(state);
         }
 

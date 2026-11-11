@@ -2,13 +2,16 @@ use crate::{
     App, Bounds, InlineLayout, LineLayout, PaintFragment, PaintQuad, Pixels, Point, Result,
     ShapedTextLayout, SharedString, TextAlign, TextSystem, VisualLine, Window, point, size,
 };
+
 use derive_more::{Deref, DerefMut};
+
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
 
 static GLYPH_PAINT_ERRORS: AtomicUsize = AtomicUsize::new(0);
+
 const MAX_LOGGED_GLYPH_PAINT_ERRORS: usize = 20;
 
 /// A line of text that has been shaped and decorated.
@@ -17,6 +20,7 @@ pub struct ShapedLine {
     #[deref]
     #[deref_mut]
     pub(crate) layout: Arc<LineLayout>,
+
     /// The text that was shaped for this line.
     pub text: SharedString,
 }
@@ -89,6 +93,7 @@ pub struct ShapedText {
     #[deref]
     #[deref_mut]
     pub(crate) layout: Arc<ShapedTextLayout>,
+
     /// The text that was shaped.
     pub text: SharedString,
 }
@@ -202,9 +207,11 @@ fn paint_inline_layout(
 
     let text_system = cx.text_system().clone();
     let placement = place_inline_layout(origin, inline.alignment_offset, window);
+
     window.paint_layer(Bounds::new(placement.origin, inline.size), |window| {
         for (line, visual_line) in inline.lines.iter().zip(&inline.layout.visual_lines) {
             let line_origin = origin + line.origin + placement.delta;
+
             paint_visual_line(
                 &inline.layout,
                 visual_line,
@@ -260,6 +267,7 @@ fn paint_visual_line(
         pass,
         text_system,
     };
+
     for fragment in &layout.paint_fragments[visual_line.paint_fragment_range.clone()] {
         paint_text_fragment(fragment, &context, window);
     }
@@ -279,6 +287,7 @@ fn paint_text_fragment(
         window,
         context.pass == TextPaintPass::Foreground,
     );
+
     if context.pass == TextPaintPass::Background {
         return;
     }
@@ -287,11 +296,13 @@ fn paint_text_fragment(
         .text_system
         .bounding_box(fragment.font_id, fragment.font_size)
         .size;
+
     for glyph in &*fragment.glyphs {
         let cull_origin = point(
             context.line_origin.x + glyph.position.x,
             context.line_origin.y,
         );
+
         if !Bounds::new(cull_origin, max_glyph_size).intersects(&window.content_mask().bounds) {
             continue;
         }
@@ -300,6 +311,7 @@ fn paint_text_fragment(
             context.line_origin.x + glyph.position.x,
             context.baseline_y + glyph.position.y,
         );
+
         let result = if glyph.is_emoji {
             window.paint_emoji_with_color(
                 glyph_origin,
@@ -308,6 +320,7 @@ fn paint_text_fragment(
                 fragment.font_size,
                 fragment.style.color,
             )
+
         } else {
             window.paint_glyph(
                 glyph_origin,
@@ -350,6 +363,7 @@ fn paint_visual_text(
     }
 
     let line_bounds = visual_text_bounds(origin, line_height, align, align_width, visual_lines);
+
     window.paint_layer(line_bounds, |window| {
         let padding_top = (line_height - layout.ascent - layout.descent) / 2.;
         let text_system = cx.text_system().clone();
@@ -359,6 +373,7 @@ fn paint_visual_text(
                 visual_line_origin_x(origin.x, align, align_width, line),
                 origin.y + line_index as f32 * line_height,
             );
+
             paint_visual_line(
                 layout,
                 line,
@@ -387,9 +402,11 @@ fn visual_text_bounds(
 
     for line in visual_lines {
         let line_left = visual_line_origin_x(origin.x, align, align_width, line);
+
         left = left.min(line_left);
         right = right.max(line_left + line.advance_width);
     }
+
     Bounds::new(
         point(left, origin.y),
         size(right - left, line_height * visual_lines.len() as f32),
@@ -422,9 +439,11 @@ fn paint_fragment_decorations_at(
     foreground: bool,
 ) {
     let range = line_origin.x + fragment.x_range.start..line_origin.x + fragment.x_range.end;
+
     if foreground {
         if let Some(mut underline) = fragment.style.underline {
             underline.color = Some(underline.color.unwrap_or(fragment.style.color));
+
             window.paint_underline(
                 point(
                     range.start,
@@ -434,18 +453,22 @@ fn paint_fragment_decorations_at(
                 &underline,
             );
         }
+
         if let Some(mut strike) = fragment.style.strikethrough {
             strike.color = Some(strike.color.unwrap_or(fragment.style.color));
+
             let strike_y = baseline_y
                 + fragment
                     .strikethrough_offset
                     .unwrap_or(-layout.ascent * 0.5);
+
             window.paint_strikethrough(
                 point(range.start, strike_y),
                 range.end - range.start,
                 &strike,
             );
         }
+
     } else if let Some(color) = fragment.style.background_color {
         window.paint_quad(
             PaintQuad::new(Bounds::new(

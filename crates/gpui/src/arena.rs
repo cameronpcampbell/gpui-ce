@@ -31,6 +31,7 @@ impl Drop for Chunk {
             let chunk_size = self.end.offset_from_unsigned(self.start);
             // SAFETY: This succeeded during allocation.
             let layout = alloc::Layout::from_size_align_unchecked(chunk_size, 1);
+
             alloc::dealloc(self.start, layout);
         }
     }
@@ -41,10 +42,13 @@ impl Chunk {
         // this only fails if chunk_size is unreasonably huge
         let layout = alloc::Layout::from_size_align(chunk_size.get(), 1).unwrap();
         let start = unsafe { alloc::alloc(layout) };
+
         if start.is_null() {
             handle_alloc_error(layout);
         }
+
         let end = unsafe { start.add(chunk_size.get()) };
+
         Self {
             start,
             end,
@@ -66,8 +70,11 @@ impl Chunk {
 
         if next_addr <= self.end.addr() {
             let aligned = self.offset.with_addr(aligned_addr);
+
             self.offset = self.offset.with_addr(next_addr);
+
             NonNull::new(aligned)
+
         } else {
             None
         }
@@ -96,6 +103,7 @@ impl Drop for Arena {
 impl Arena {
     pub fn new(chunk_size: usize) -> Self {
         let chunk_size = NonZeroUsize::try_from(chunk_size).unwrap();
+
         Self {
             chunks: vec![Chunk::new(chunk_size)],
             elements: Vec::new(),
@@ -149,11 +157,15 @@ impl Arena {
 
     fn force_clear(&mut self) {
         self.valid.set(false);
+
         self.valid = Rc::new(Cell::new(true));
+
         self.elements.clear();
+
         for chunk_index in 0..=self.current_chunk_index {
             self.chunks[chunk_index].reset();
         }
+
         self.current_chunk_index = 0;
     }
 
@@ -173,19 +185,25 @@ impl Arena {
 
         let layout = alloc::Layout::new::<T>();
         let mut current_chunk = &mut self.chunks[self.current_chunk_index];
+
         let ptr = if let Some(ptr) = current_chunk.allocate(layout) {
             ptr.as_ptr()
         } else {
             self.current_chunk_index += 1;
+
             if self.current_chunk_index >= self.chunks.len() {
                 self.chunks.push(Chunk::new(self.chunk_size));
+
                 assert_eq!(self.current_chunk_index, self.chunks.len() - 1);
+
                 log::trace!(
                     "increased element arena capacity to {}kb",
                     self.capacity() / 1024,
                 );
             }
+
             current_chunk = &mut self.chunks[self.current_chunk_index];
+
             if let Some(ptr) = current_chunk.allocate(layout) {
                 ptr.as_ptr()
             } else {
@@ -198,6 +216,7 @@ impl Arena {
         };
 
         unsafe { inner_writer(ptr.cast(), f) };
+
         self.elements.push(ArenaElement {
             value: ptr,
             drop: drop::<T>,
@@ -239,6 +258,7 @@ impl<T: ?Sized> Deref for ArenaBox<T> {
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
         self.validate();
+
         unsafe { &*self.ptr }
     }
 }
@@ -247,6 +267,7 @@ impl<T: ?Sized> DerefMut for ArenaBox<T> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.validate();
+
         unsafe { &mut *self.ptr }
     }
 }
@@ -264,16 +285,19 @@ mod tests {
         let b = arena.alloc(|| 2u32);
         let c = arena.alloc(|| 3u16);
         let d = arena.alloc(|| 4u8);
+
         assert_eq!(*a, 1);
         assert_eq!(*b, 2);
         assert_eq!(*c, 3);
         assert_eq!(*d, 4);
 
         arena.clear();
+
         let a = arena.alloc(|| 5u64);
         let b = arena.alloc(|| 6u32);
         let c = arena.alloc(|| 7u16);
         let d = arena.alloc(|| 8u8);
+
         assert_eq!(*a, 5);
         assert_eq!(*b, 6);
         assert_eq!(*c, 7);
@@ -281,20 +305,25 @@ mod tests {
 
         // Ensure drop gets called.
         let dropped = Rc::new(Cell::new(false));
+
         struct DropGuard(Rc<Cell<bool>>);
+
         impl Drop for DropGuard {
             fn drop(&mut self) {
                 self.0.set(true);
             }
         }
+
         arena.alloc(|| DropGuard(dropped.clone()));
         arena.clear();
+
         assert!(dropped.get());
     }
 
     #[test]
     fn test_arena_grow() {
         let mut arena = Arena::new(8);
+
         arena.alloc(|| 1u64);
         arena.alloc(|| 2u64);
 
@@ -332,12 +361,14 @@ mod tests {
         let value = arena.alloc(|| 1u64);
 
         arena.clear();
+
         let _read_value = *value;
     }
 
     #[test]
     fn test_clear_deferred_while_scope_active() {
         struct DropCounter(Rc<Cell<usize>>);
+
         impl Drop for DropCounter {
             fn drop(&mut self) {
                 self.0.set(self.0.get() + 1);
@@ -349,19 +380,26 @@ mod tests {
 
         // Outer draw starts and allocates.
         arena.begin_scope();
+
         let outer = arena.alloc(|| 42u64);
+
         arena.alloc({
             let drops = drops.clone();
+
             || DropCounter(drops)
         });
 
         // Nested draw runs to completion and requests a clear.
         arena.begin_scope();
+
         let inner = arena.alloc(|| 7u64);
+
         arena.alloc({
             let drops = drops.clone();
+
             || DropCounter(drops)
         });
+
         arena.end_scope();
         arena.clear();
 
@@ -373,6 +411,7 @@ mod tests {
         // Once the outer draw finishes, its clear drops both draws' allocations.
         arena.end_scope();
         arena.clear();
+
         assert_eq!(drops.get(), 2);
     }
 
@@ -380,8 +419,11 @@ mod tests {
     fn test_clear_without_scope_is_immediate() {
         let mut arena = Arena::new(1024);
         let value = arena.alloc(|| 1u64);
+
         assert_eq!(*value, 1);
+
         arena.clear();
+
         assert!(!value.valid.get());
     }
 
@@ -389,6 +431,7 @@ mod tests {
     #[should_panic(expected = "Arena::end_scope called without a matching begin_scope")]
     fn test_unbalanced_end_scope_panics() {
         let mut arena = Arena::new(1024);
+
         arena.begin_scope();
         arena.end_scope();
         arena.end_scope();

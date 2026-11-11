@@ -7,6 +7,7 @@ use gpui::{
     Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent, TouchEvent, TouchId, TouchPhase,
     point, px,
 };
+
 use wasm_bindgen::prelude::*;
 
 use crate::ime_mirror::ImeMirror;
@@ -35,9 +36,11 @@ impl EventListenerHandle {
         handler: impl FnMut(JsValue) + 'static,
     ) -> Self {
         let closure = Closure::<dyn FnMut(JsValue)>::new(handler);
+
         target
             .add_event_listener_with_callback(event_name, closure.as_ref().unchecked_ref())
             .ok();
+
         Self {
             target: target.clone(),
             event_name,
@@ -58,7 +61,9 @@ impl EventListenerHandle {
         let target_js: &JsValue = target.as_ref();
         let callback_js: &JsValue = closure.as_ref();
         let options = js_sys::Object::new();
+
         js_sys::Reflect::set(&options, &"passive".into(), &false.into()).ok();
+
         if let Ok(add_fn_val) = js_sys::Reflect::get(target_js, &"addEventListener".into()) {
             if let Ok(add_fn) = add_fn_val.dyn_into::<js_sys::Function>() {
                 add_fn
@@ -66,6 +71,7 @@ impl EventListenerHandle {
                     .ok();
             }
         }
+
         Self {
             target: target.clone(),
             event_name,
@@ -101,8 +107,11 @@ impl TouchIds {
     fn start(&mut self, pointer_id: i32) -> Option<TouchId> {
         let next = self.next.checked_add(1)?;
         let touch_id = TouchId(self.next);
+
         self.next = next;
+
         self.active.insert(pointer_id, touch_id);
+
         Some(touch_id)
     }
 
@@ -139,6 +148,7 @@ impl ClickState {
 
         self.last_position = position;
         self.last_time = time;
+
         self.current_count
     }
 }
@@ -168,6 +178,7 @@ impl WebWindowInner {
             self.register_blur(),
             self.register_pointer_enter(),
         ];
+
         handles.extend(self.register_selection_change());
         handles.extend(self.register_visibility_change());
         handles.extend(self.register_appearance_change());
@@ -210,19 +221,24 @@ impl WebWindowInner {
     fn update_modifiers(&self, modifiers: Modifiers, capslock: Capslock) -> bool {
         let mut current_state = self.state.borrow_mut();
         let changed = current_state.modifiers != modifiers || current_state.capslock != capslock;
+
         current_state.modifiers = modifiers;
         current_state.capslock = capslock;
+
         changed
     }
 
     fn register_pointer_down(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen("pointerdown", move |event: JsValue| {
             let event: web_sys::PointerEvent = event.unchecked_into();
+
             event.prevent_default();
 
             let pointer_type = event.pointer_type();
             let position = pointer_position_in_element(&event);
+
             this.gesture_start_visual_viewport_height
                 .set(this.visual_viewport_height());
 
@@ -235,13 +251,17 @@ impl WebWindowInner {
             if pointer_type == "touch" {
                 let Some(touch_id) = this.touch_ids.borrow_mut().start(event.pointer_id()) else {
                     log::error!("exhausted touch identifiers");
+
                     return;
                 };
+
                 this.state.borrow_mut().mouse_position = position;
+
                 if this.touch_tap_candidate.get().is_none() {
                     this.touch_tap_candidate
                         .set(Some((event.pointer_id(), position)));
                 }
+
                 this.dispatch_input(PlatformInput::Touch(TouchEvent {
                     id: touch_id,
                     phase: TouchPhase::Started,
@@ -249,6 +269,7 @@ impl WebWindowInner {
                     predicted_position: None,
                     force: None,
                 }));
+
                 // Keyboard and IME focus intentionally do not change here:
                 // whether this touch is a tap or a pan is only known at
                 // release, and only a tap may affect them (see
@@ -262,10 +283,12 @@ impl WebWindowInner {
             let time = js_sys::Date::now();
 
             this.pressed_button.set(Some(button));
+
             let click_count = this.click_state.borrow_mut().register_click(position, time);
 
             {
                 let mut current_state = this.state.borrow_mut();
+
                 current_state.mouse_position = position;
                 current_state.modifiers = modifiers;
             }
@@ -299,8 +322,10 @@ impl WebWindowInner {
 
     fn register_pointer_up(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen("pointerup", move |event: JsValue| {
             let event: web_sys::PointerEvent = event.unchecked_into();
+
             event.prevent_default();
 
             let position = pointer_position_in_element(&event);
@@ -309,15 +334,21 @@ impl WebWindowInner {
                 let Some(touch_id) = this.touch_ids.borrow_mut().end(event.pointer_id()) else {
                     return;
                 };
+
                 this.state.borrow_mut().mouse_position = position;
+
                 let completes_tap = match this.touch_tap_candidate.get() {
                     Some((pointer_id, _)) if pointer_id == event.pointer_id() => {
                         this.touch_tap_candidate.set(None);
+
                         true
                     }
+
                     _ => false,
                 };
+
                 let focused_input_accepted_text_before_tap = this.focused_input_accepts_text();
+
                 // A recognized tap is dispatched synchronously inside this
                 // call, so the text-input check below sees the state the tap
                 // produced.
@@ -338,17 +369,21 @@ impl WebWindowInner {
                 // keyboard or IME focus at all.
                 let viewport_stable = this.gesture_start_visual_viewport_height.get()
                     == this.visual_viewport_height();
+
                 if completes_tap && viewport_stable {
                     let preserve_focused_input = should_preserve_focused_input(
                         focused_input_accepted_text_before_tap,
                         this.focused_input_accepts_text(),
                         dispatch_result,
                     );
+
                     if !preserve_focused_input {
                         this.sync_virtual_keyboard(this.pointer_targets_text_input(position));
                     }
                 }
+
                 this.schedule_ime_mirror_sync();
+
                 return;
             }
 
@@ -356,10 +391,12 @@ impl WebWindowInner {
             let modifiers = modifiers_from_mouse_event(&event, this.is_mac);
 
             this.pressed_button.set(None);
+
             let click_count = this.click_state.borrow().current_count;
 
             {
                 let mut current_state = this.state.borrow_mut();
+
                 current_state.mouse_position = position;
                 current_state.modifiers = modifiers;
             }
@@ -405,21 +442,27 @@ impl WebWindowInner {
             .ok()
             .flatten()
             .is_some_and(|media_query_list| media_query_list.matches());
+
         if !coarse_pointer {
             return false;
         }
+
         let Some(viewport) = self.browser_window.visual_viewport() else {
             return false;
         };
+
         let width = viewport.width() * viewport.scale();
         let height = viewport.height() * viewport.scale();
         let (probe_width, probe_height) = self.visual_viewport_probe.get();
+
         let max_height = if width == probe_width {
             probe_height.max(height)
         } else {
             height
         };
+
         self.visual_viewport_probe.set((width, max_height));
+
         height >= max_height * 0.85
     }
 
@@ -428,17 +471,21 @@ impl WebWindowInner {
     /// gesture must unwind rather than complete.
     fn register_pointer_cancel(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen("pointercancel", move |event: JsValue| {
             let event: web_sys::PointerEvent = event.unchecked_into();
+
             if event.pointer_type() == "touch" {
                 let Some(touch_id) = this.touch_ids.borrow_mut().end(event.pointer_id()) else {
                     return;
                 };
+
                 if let Some((pointer_id, _)) = this.touch_tap_candidate.get()
                     && pointer_id == event.pointer_id()
                 {
                     this.touch_tap_candidate.set(None);
                 }
+
                 this.dispatch_input(PlatformInput::Touch(TouchEvent {
                     id: touch_id,
                     phase: TouchPhase::Cancelled,
@@ -446,6 +493,7 @@ impl WebWindowInner {
                     predicted_position: None,
                     force: None,
                 }));
+
             } else {
                 this.pressed_button.set(None);
             }
@@ -457,6 +505,7 @@ impl WebWindowInner {
     fn register_touch_end(self: &Rc<Self>) -> EventListenerHandle {
         self.listen_non_passive("touchend", move |event: JsValue| {
             let event: web_sys::Event = event.unchecked_into();
+
             event.prevent_default();
         })
     }
@@ -482,7 +531,9 @@ impl WebWindowInner {
     /// Chromium-only.
     pub(crate) fn sync_virtual_keyboard(self: &Rc<Self>, editable: bool) {
         let was_editable = !self.ime_mirror.read_only();
+
         self.ime_mirror.set_read_only(!editable);
+
         // Trigger a focus event only when the keyboard actually needs
         // summoning. Cycling focus on every tap would restart the IME
         // connection right as the keyboard reads the tapped caret's context,
@@ -492,8 +543,10 @@ impl WebWindowInner {
         // through the visual viewport and force a fresh focus event.
         let editable_needs_focus_event = editable
             && (!was_editable || !self.ime_mirror.is_focused() || self.keyboard_likely_dismissed());
+
         if editable_needs_focus_event || (!editable && was_editable) {
             self.suppress_focus_status_events.set(true);
+
             if editable {
                 // A same-task blur/focus cycle may be coalesced by iOS, but
                 // this branch only runs when the keyboard is already gone,
@@ -501,23 +554,29 @@ impl WebWindowInner {
                 if self.ime_mirror.is_focused() {
                     self.ime_mirror.blur();
                 }
+
                 self.ime_mirror.focus();
+
             } else {
                 self.ime_mirror.blur();
             }
+
             self.suppress_focus_status_events.set(false);
 
             if editable {
                 let callback = wasm_bindgen::closure::Closure::once_into_js({
                     let this = Rc::clone(self);
+
                     move || {
                         this.state.borrow_mut().is_active = true;
+
                         this.with_callback(
                             |callbacks| &mut callbacks.active_status_change,
                             |callback| callback(true),
                         );
                     }
                 });
+
                 if let Err(error) = self
                     .browser_window
                     .set_timeout_with_callback(callback.unchecked_ref())
@@ -538,18 +597,22 @@ impl WebWindowInner {
             key: key.to_string(),
             key_char: None,
         };
+
         self.dispatch_input(PlatformInput::KeyDown(KeyDownEvent {
             keystroke: keystroke.clone(),
             is_held: false,
             prefer_character_input: false,
         }));
+
         self.dispatch_input(PlatformInput::KeyUp(KeyUpEvent { keystroke }));
     }
 
     fn register_pointer_move(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen("pointermove", move |event: JsValue| {
             let event: web_sys::PointerEvent = event.unchecked_into();
+
             event.prevent_default();
 
             let position = pointer_position_in_element(&event);
@@ -558,7 +621,9 @@ impl WebWindowInner {
                 let Some(touch_id) = this.touch_ids.borrow().active(event.pointer_id()) else {
                     return;
                 };
+
                 this.state.borrow_mut().mouse_position = position;
+
                 // Mirror the slop rule of gpui's tap recognizer: once the
                 // touch travels beyond it, its release must not affect the
                 // keyboard. Only gpui knows what the gesture truly resolved
@@ -572,6 +637,7 @@ impl WebWindowInner {
                 {
                     this.touch_tap_candidate.set(None);
                 }
+
                 this.dispatch_input(PlatformInput::Touch(TouchEvent {
                     id: touch_id,
                     phase: TouchPhase::Moved,
@@ -579,6 +645,7 @@ impl WebWindowInner {
                     predicted_position: predicted_pointer_position(&event, position),
                     force: None,
                 }));
+
                 return;
             }
 
@@ -587,6 +654,7 @@ impl WebWindowInner {
 
             {
                 let mut current_state = this.state.borrow_mut();
+
                 current_state.mouse_position = position;
                 current_state.modifiers = modifiers;
             }
@@ -601,6 +669,7 @@ impl WebWindowInner {
 
     fn register_pointer_leave(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen("pointerleave", move |event: JsValue| {
             let event: web_sys::PointerEvent = event.unchecked_into();
 
@@ -610,6 +679,7 @@ impl WebWindowInner {
 
             {
                 let mut current_state = this.state.borrow_mut();
+
                 current_state.mouse_position = position;
                 current_state.modifiers = modifiers;
                 current_state.is_hovered = false;
@@ -630,8 +700,10 @@ impl WebWindowInner {
 
     fn register_wheel(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen_non_passive("wheel", move |event: JsValue| {
             let event: web_sys::WheelEvent = event.unchecked_into();
+
             event.prevent_default();
 
             let mouse_event: &web_sys::MouseEvent = event.as_ref();
@@ -639,6 +711,7 @@ impl WebWindowInner {
             let modifiers = modifiers_from_wheel_event(mouse_event, this.is_mac);
 
             let delta_mode = event.delta_mode();
+
             let delta = if delta_mode == 1 {
                 ScrollDelta::Lines(point(-event.delta_x() as f32, -event.delta_y() as f32))
             } else {
@@ -650,6 +723,7 @@ impl WebWindowInner {
 
             {
                 let mut current_state = this.state.borrow_mut();
+
                 current_state.modifiers = modifiers;
             }
 
@@ -665,6 +739,7 @@ impl WebWindowInner {
     fn register_context_menu(self: &Rc<Self>) -> EventListenerHandle {
         self.listen("contextmenu", move |event: JsValue| {
             let event: web_sys::Event = event.unchecked_into();
+
             event.prevent_default();
         })
     }
@@ -678,6 +753,7 @@ impl WebWindowInner {
     fn register_dragover(self: &Rc<Self>) -> EventListenerHandle {
         self.listen("dragover", move |event: JsValue| {
             let event: web_sys::DragEvent = event.unchecked_into();
+
             event.prevent_default();
         })
     }
@@ -685,12 +761,14 @@ impl WebWindowInner {
     fn register_drop(self: &Rc<Self>) -> EventListenerHandle {
         self.listen("drop", move |event: JsValue| {
             let event: web_sys::DragEvent = event.unchecked_into();
+
             event.prevent_default();
         })
     }
 
     fn register_key_down(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen_input("keydown", move |event: JsValue| {
             let event: web_sys::KeyboardEvent = event.unchecked_into();
 
@@ -740,6 +818,7 @@ impl WebWindowInner {
                 if !result.propagate {
                     event.prevent_default();
                     this.schedule_ime_mirror_sync();
+
                     return;
                 }
             }
@@ -750,18 +829,21 @@ impl WebWindowInner {
                 this.with_input_handler(|handler| {
                     handler.replace_text_in_range(None, &text);
                 });
+
                 // The character went into the input handler; suppress browser
                 // side-effects for the same keystroke (space scrolling the
                 // page, quick-find, etc.). Everything not handled above falls
                 // through so browser shortcuts keep their defaults.
                 event.prevent_default();
             }
+
             this.schedule_ime_mirror_sync();
         })
     }
 
     fn register_key_up(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen_input("keyup", move |event: JsValue| {
             let event: web_sys::KeyboardEvent = event.unchecked_into();
 
@@ -790,6 +872,7 @@ impl WebWindowInner {
             };
 
             let result = this.dispatch_input(PlatformInput::KeyUp(KeyUpEvent { keystroke }));
+
             if let Some(result) = result {
                 if !result.propagate {
                     event.prevent_default();
@@ -820,6 +903,7 @@ impl WebWindowInner {
     /// run between the query and the edit below.
     fn register_input(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen_input("input", move |event: JsValue| {
             let event: web_sys::InputEvent = event.unchecked_into();
 
@@ -831,6 +915,7 @@ impl WebWindowInner {
 
             let new_value = this.ime_mirror.value();
             let old_value = this.ime_mirror.stored_text();
+
             if new_value == old_value {
                 return;
             }
@@ -850,6 +935,7 @@ impl WebWindowInner {
                 .ime_mirror
                 .selection_start()
                 .map(|caret| caret as usize);
+
             let anchored_suffix_length = post_edit_caret
                 .map(|caret| new_units.len().saturating_sub(caret))
                 .filter(|&suffix_length| {
@@ -857,6 +943,7 @@ impl WebWindowInner {
                         && old_units[old_units.len() - suffix_length..]
                             == new_units[new_units.len() - suffix_length..]
                 });
+
             let suffix_length = anchored_suffix_length.unwrap_or_else(|| {
                 old_units
                     .iter()
@@ -865,6 +952,7 @@ impl WebWindowInner {
                     .take_while(|(old_unit, new_unit)| old_unit == new_unit)
                     .count()
             });
+
             let prefix_length = old_units
                 .iter()
                 .zip(&new_units)
@@ -876,6 +964,7 @@ impl WebWindowInner {
             let inserted_text = String::from_utf16_lossy(
                 &new_units[prefix_length..new_units.len() - suffix_length],
             );
+
             let replaced_old_end = old_units.len() - suffix_length;
 
             // The edit's shape relative to the element's pre-edit selection.
@@ -883,8 +972,10 @@ impl WebWindowInner {
             // stored selection is exact.
             let (element_selection_start, element_selection_end) =
                 this.ime_mirror.stored_selection();
+
             let removed_before_selection =
                 (element_selection_start as usize).saturating_sub(prefix_length);
+
             let removed_after_selection =
                 replaced_old_end.saturating_sub(element_selection_end as usize);
 
@@ -892,14 +983,18 @@ impl WebWindowInner {
                 let Some(selection) = handler.selected_text_range(false) else {
                     return false;
                 };
+
                 let range = selection
                     .range
                     .start
                     .saturating_sub(removed_before_selection)
                     ..selection.range.end + removed_after_selection;
+
                 handler.replace_text_in_range(Some(range), &inserted_text);
+
                 true
             });
+
             if applied != Some(true) {
                 return;
             }
@@ -929,6 +1024,7 @@ impl WebWindowInner {
     fn register_selection_change(self: &Rc<Self>) -> Option<EventListenerHandle> {
         let document = self.browser_window.document()?;
         let this = Rc::clone(self);
+
         Some(EventListenerHandle::add(
             document.as_ref(),
             "selectionchange",
@@ -936,42 +1032,54 @@ impl WebWindowInner {
                 if this.is_composing.get() || !this.ime_mirror.is_focused() {
                     return;
                 }
+
                 // An in-flight edit owns the selection; its import adopts it.
                 if this.ime_mirror.value() != this.ime_mirror.stored_text() {
                     return;
                 }
+
                 let Some(element_start) = this.ime_mirror.selection_start() else {
                     return;
                 };
+
                 let element_end = this
                     .ime_mirror
                     .element_selection_end()
                     .unwrap_or(element_start);
+
                 let (stored_start, stored_end) = this.ime_mirror.stored_selection();
+
                 if (element_start, element_end) == (stored_start, stored_end) {
                     return;
                 }
+
                 let applied = this.with_input_handler(|handler| {
                     let Some(selection) = handler.selected_text_range(false) else {
                         return false;
                     };
+
                     // The app range corresponding to the stored element
                     // selection is exactly `selection`; a single consistent
                     // alignment between the two maps the moved endpoints.
                     // Disagreeing alignments mean the app selection changed
                     // underneath and the pending resync owns the element.
                     let alignment = selection.range.start.checked_sub(stored_start as usize);
+
                     if alignment.is_none()
                         || alignment != selection.range.end.checked_sub(stored_end as usize)
                     {
                         return false;
                     }
+
                     let alignment = alignment.unwrap();
+
                     handler.set_selected_text_range(
                         alignment + element_start as usize..alignment + element_end as usize,
                     );
+
                     true
                 });
+
                 if applied == Some(true) {
                     this.ime_mirror.adopt_element_state();
                 } else {
@@ -995,6 +1103,7 @@ impl WebWindowInner {
     /// keystroke it inserts, which cancels the corresponding `beforeinput`.
     fn register_before_input(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen_input("beforeinput", move |event: JsValue| {
             let event: web_sys::InputEvent = event.unchecked_into();
 
@@ -1013,6 +1122,7 @@ impl WebWindowInner {
                     this.dispatch_synthetic_keystroke("enter", Modifiers::default());
                     this.schedule_ime_mirror_sync();
                 }
+
                 // Everything else (insertText, deleteContent*, autocorrect's
                 // insertReplacementText, ...) is left to the browser's
                 // default action on the mirror element; `register_input`
@@ -1035,11 +1145,14 @@ impl WebWindowInner {
     /// application-level paste action would behave.
     fn register_paste(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen_input("paste", move |event: JsValue| {
             let event: web_sys::ClipboardEvent = event.unchecked_into();
+
             let Some(clipboard_data) = event.clipboard_data() else {
                 return;
             };
+
             let text = clipboard_data
                 .get_data("text/plain")
                 .ok()
@@ -1050,16 +1163,20 @@ impl WebWindowInner {
             // while the `File`s themselves stay readable afterwards.
             let mut image_files = Vec::new();
             let items = clipboard_data.items();
+
             for index in 0..items.length() {
                 let Some(item) = items.get(index) else {
                     continue;
                 };
+
                 if item.kind() != "file" {
                     continue;
                 }
+
                 let Some(format) = ImageFormat::from_mime_type(&item.type_()) else {
                     continue;
                 };
+
                 if let Ok(Some(file)) = item.get_as_file() {
                     image_files.push((format, file));
                 }
@@ -1068,6 +1185,7 @@ impl WebWindowInner {
             if text.is_none() && image_files.is_empty() {
                 return;
             }
+
             event.prevent_default();
 
             if image_files.is_empty() {
@@ -1076,20 +1194,25 @@ impl WebWindowInner {
                         handler.paste(ClipboardItem::new_string(text));
                     });
                 }
+
                 return;
             }
 
             let this = Rc::clone(&this);
+
             wasm_bindgen_futures::spawn_local(async move {
                 let mut entries = Vec::new();
+
                 if let Some(text) = text {
                     entries.push(ClipboardEntry::String(ClipboardString::new(text)));
                 }
+
                 for (format, file) in image_files {
                     match crate::platform::read_blob_bytes(&file).await {
                         Ok(bytes) => {
                             entries.push(ClipboardEntry::Image(Image::from_bytes(format, bytes)));
                         }
+
                         Err(error) => {
                             log::error!(
                                 "failed to read pasted image: {}",
@@ -1098,9 +1221,11 @@ impl WebWindowInner {
                         }
                     }
                 }
+
                 if entries.is_empty() {
                     return;
                 }
+
                 this.with_input_handler(|handler| {
                     handler.paste(ClipboardItem { entries });
                 });
@@ -1110,6 +1235,7 @@ impl WebWindowInner {
 
     fn register_composition_start(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen_input("compositionstart", move |_event: JsValue| {
             this.is_composing.set(true);
         })
@@ -1117,10 +1243,13 @@ impl WebWindowInner {
 
     fn register_composition_update(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen_input("compositionupdate", move |event: JsValue| {
             let event: web_sys::CompositionEvent = event.unchecked_into();
             let data = event.data().unwrap_or_default();
+
             this.is_composing.set(true);
+
             this.with_input_handler(|handler| {
                 handler.replace_and_mark_text_in_range(None, &data, None);
             });
@@ -1129,10 +1258,13 @@ impl WebWindowInner {
 
     fn register_composition_end(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen_input("compositionend", move |event: JsValue| {
             let event: web_sys::CompositionEvent = event.unchecked_into();
             let data = event.data().unwrap_or_default();
+
             this.is_composing.set(false);
+
             this.with_input_handler(|handler| {
                 // Only commit the final text when a marked range still
                 // exists. When a caret move ended the composition, the
@@ -1142,8 +1274,10 @@ impl WebWindowInner {
                 if handler.marked_text_range().is_some() {
                     handler.replace_text_in_range(None, &data);
                 }
+
                 handler.unmark_text();
             });
+
             // Adopt the element's post-composition state as the mirror
             // baseline without writing anything: the browser applied the
             // commit to the element itself, and a write here would restart
@@ -1156,14 +1290,18 @@ impl WebWindowInner {
 
     fn register_focus(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen_input("focus", move |_event: JsValue| {
             if this.suppress_focus_status_events.get() {
                 return;
             }
+
             {
                 let mut state = this.state.borrow_mut();
+
                 state.is_active = true;
             }
+
             this.with_callback(
                 |callbacks| &mut callbacks.active_status_change,
                 |callback| callback(true),
@@ -1173,14 +1311,18 @@ impl WebWindowInner {
 
     fn register_blur(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen_input("blur", move |_event: JsValue| {
             if this.suppress_focus_status_events.get() {
                 return;
             }
+
             {
                 let mut state = this.state.borrow_mut();
+
                 state.is_active = false;
             }
+
             this.with_callback(
                 |callbacks| &mut callbacks.active_status_change,
                 |callback| callback(false),
@@ -1190,11 +1332,14 @@ impl WebWindowInner {
 
     fn register_pointer_enter(self: &Rc<Self>) -> EventListenerHandle {
         let this = Rc::clone(self);
+
         self.listen("pointerenter", move |_event: JsValue| {
             {
                 let mut state = this.state.borrow_mut();
+
                 state.is_hovered = true;
             }
+
             this.with_callback(
                 |callbacks| &mut callbacks.hover_status_change,
                 |callback| callback(true),
@@ -1205,6 +1350,7 @@ impl WebWindowInner {
 
 fn dom_key_to_gpui_key(event: &web_sys::KeyboardEvent) -> String {
     let key = event.key();
+
     match key.as_str() {
         "Enter" => "enter".to_string(),
         "Backspace" => "backspace".to_string(),
@@ -1226,6 +1372,7 @@ fn dom_key_to_gpui_key(event: &web_sys::KeyboardEvent) -> String {
         "Shift" => "shift".to_string(),
         "Meta" => "platform".to_string(),
         "CapsLock" => "capslock".to_string(),
+
         other => {
             if let Some(rest) = other.strip_prefix('F') {
                 if let Ok(number) = rest.parse::<u8>() {
@@ -1234,6 +1381,7 @@ fn dom_key_to_gpui_key(event: &web_sys::KeyboardEvent) -> String {
                     }
                 }
             }
+
             other.to_lowercase()
         }
     }
@@ -1262,6 +1410,7 @@ fn modifiers_from_keyboard_event(event: &web_sys::KeyboardEvent, _is_mac: bool) 
 
 fn modifiers_from_mouse_event(event: &web_sys::PointerEvent, _is_mac: bool) -> Modifiers {
     let mouse_event: &web_sys::MouseEvent = event.as_ref();
+
     Modifiers {
         control: mouse_event.ctrl_key(),
         alt: mouse_event.alt_key(),
@@ -1366,6 +1515,7 @@ fn compute_key_char(
 
 fn pointer_position_in_element(event: &web_sys::PointerEvent) -> Point<Pixels> {
     let mouse_event: &web_sys::MouseEvent = event.as_ref();
+
     mouse_position_in_element(mouse_event)
 }
 
@@ -1399,15 +1549,20 @@ fn predicted_pointer_position(
     let method = method.dyn_ref::<js_sys::Function>()?;
     let predicted_events: js_sys::Array = method.call0(event).ok()?.dyn_into().ok()?;
     let mut best: Option<(f64, web_sys::PointerEvent)> = None;
+
     for predicted in predicted_events.iter() {
         let Ok(predicted) = predicted.dyn_into::<web_sys::PointerEvent>() else {
             continue;
         };
+
         let lead = predicted.time_stamp() - event.time_stamp();
+
         if lead <= 0. {
             continue;
         }
+
         let distance_to_cap = (lead - MAX_PREDICTION_LEAD_MS).abs();
+
         if best
             .as_ref()
             .is_none_or(|(best_distance, _)| distance_to_cap < *best_distance)
@@ -1415,11 +1570,13 @@ fn predicted_pointer_position(
             best = Some((distance_to_cap, predicted));
         }
     }
+
     let (_, predicted) = best?;
     let lead = predicted.time_stamp() - event.time_stamp();
     let scale = (MAX_PREDICTION_LEAD_MS / lead).min(1.) as f32;
     let event: &web_sys::MouseEvent = event.as_ref();
     let predicted: &web_sys::MouseEvent = predicted.as_ref();
+
     Some(point(
         position.x + px((predicted.client_x() - event.client_x()) as f32 * scale),
         position.y + px((predicted.client_y() - event.client_y()) as f32 * scale),
@@ -1479,6 +1636,7 @@ mod tests {
         assert_eq!(touch_ids.active(7), None);
 
         let reused = touch_ids.start(7).expect("reused pointer touch id");
+
         assert_ne!(reused, first);
         assert_ne!(reused, concurrent);
     }

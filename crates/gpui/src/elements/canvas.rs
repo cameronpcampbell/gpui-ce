@@ -54,8 +54,11 @@ impl<T: 'static> Element for Canvas<T> {
         cx: &mut App,
     ) -> (crate::LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
+
         style.refine(&self.style);
+
         let layout_id = window.request_layout(style.clone(), [], cx);
+
         (layout_id, style)
     }
 
@@ -82,6 +85,7 @@ impl<T: 'static> Element for Canvas<T> {
         cx: &mut App,
     ) {
         let prepaint = prepaint.take().unwrap();
+
         style.paint(bounds, window, cx, |window, cx| {
             (self.paint.take().unwrap())(bounds, prepaint, window, cx)
         });

@@ -53,8 +53,10 @@ use crate::{
     Action, ActionRegistry, App, DispatchPhase, EntityId, FocusId, KeyBinding, KeyContext, Keymap,
     Keystroke, ModifiersChangedEvent, Window,
 };
+
 use collections::FxHashMap;
 use smallvec::SmallVec;
+
 use std::{
     any::{Any, TypeId},
     cell::RefCell,
@@ -104,6 +106,7 @@ impl ReusedSubtree {
             node_id.0,
             self.old_range
         );
+
         DispatchNodeId((node_id.0 - self.old_range.start) + self.new_range.start)
     }
 
@@ -171,38 +174,50 @@ impl DispatchTree {
             parent,
             ..Default::default()
         });
+
         self.node_stack.push(node_id);
+
         node_id
     }
 
     pub fn set_active_node(&mut self, node_id: DispatchNodeId) {
         let next_node_parent = self.nodes[node_id.0].parent;
+
         while self.node_stack.last().copied() != next_node_parent && !self.node_stack.is_empty() {
             self.pop_node();
         }
 
         if self.node_stack.last().copied() == next_node_parent {
             self.node_stack.push(node_id);
+
             let active_node = &self.nodes[node_id.0];
+
             if let Some(view_id) = active_node.view_id {
                 self.view_stack.push(view_id)
             }
+
             if let Some(context) = active_node.context.clone() {
                 self.context_stack.push(context);
             }
+
         } else {
             debug_assert_eq!(self.node_stack.len(), 0);
 
             let mut current_node_id = Some(node_id);
+
             while let Some(node_id) = current_node_id {
                 let node = &self.nodes[node_id.0];
+
                 if let Some(context) = node.context.clone() {
                     self.context_stack.push(context);
                 }
+
                 if let Some(view_id) = node.view_id {
                     self.view_stack.push(view_id);
                 }
+
                 self.node_stack.push(node_id);
+
                 current_node_id = node.parent;
             }
 
@@ -214,19 +229,24 @@ impl DispatchTree {
 
     pub fn set_key_context(&mut self, context: KeyContext) {
         self.active_node().context = Some(context.clone());
+
         self.context_stack.push(context);
     }
 
     pub fn set_focus_id(&mut self, focus_id: FocusId) {
         let node_id = *self.node_stack.last().unwrap();
+
         self.nodes[node_id.0].focus_id = Some(focus_id);
+
         self.focusable_node_ids.insert(focus_id, node_id);
     }
 
     pub fn set_view_id(&mut self, view_id: EntityId) {
         if self.view_stack.last().copied() != Some(view_id) {
             let node_id = *self.node_stack.last().unwrap();
+
             self.nodes[node_id.0].view_id = Some(view_id);
+
             self.view_node_ids.insert(view_id, node_id);
             self.view_stack.push(view_id);
         }
@@ -234,28 +254,35 @@ impl DispatchTree {
 
     pub fn pop_node(&mut self) {
         let node = &self.nodes[self.active_node_id().unwrap().0];
+
         if node.context.is_some() {
             self.context_stack.pop();
         }
+
         if node.view_id.is_some() {
             self.view_stack.pop();
         }
+
         self.node_stack.pop();
     }
 
     fn move_node(&mut self, source: &mut DispatchNode) {
         self.push_node();
+
         if let Some(context) = source.context.clone() {
             self.set_key_context(context);
         }
+
         if let Some(focus_id) = source.focus_id {
             self.set_focus_id(focus_id);
         }
+
         if let Some(view_id) = source.view_id {
             self.set_view_id(view_id);
         }
 
         let target = self.active_node();
+
         target.key_listeners = mem::take(&mut source.key_listeners);
         target.action_listeners = mem::take(&mut source.action_listeners);
         target.modifiers_changed_listeners = mem::take(&mut source.modifiers_changed_listeners);
@@ -271,6 +298,7 @@ impl DispatchTree {
 
         let mut contains_focus = false;
         let mut source_stack = vec![];
+
         for (source_node_id, source_node) in source
             .nodes
             .iter_mut()
@@ -279,6 +307,7 @@ impl DispatchTree {
             .take(old_range.len())
         {
             let source_node_id = DispatchNodeId(source_node_id);
+
             while let Some(source_ancestor) = source_stack.last() {
                 if source_node.parent == Some(*source_ancestor) {
                     break;
@@ -289,9 +318,11 @@ impl DispatchTree {
             }
 
             source_stack.push(source_node_id);
+
             if source_node.focus_id.is_some() && source_node.focus_id == focus {
                 contains_focus = true;
             }
+
             self.move_node(source_node);
         }
 
@@ -317,6 +348,7 @@ impl DispatchTree {
                 self.view_node_ids.remove(&view_id);
             }
         }
+
         self.nodes.truncate(index);
     }
 
@@ -350,38 +382,46 @@ impl DispatchTree {
 
         if let Some(parent_node_id) = self.focusable_node_ids.get(&parent) {
             let mut current_node_id = self.focusable_node_ids.get(&child).copied();
+
             while let Some(node_id) = current_node_id {
                 if node_id == *parent_node_id {
                     return true;
                 }
+
                 current_node_id = self.nodes[node_id.0].parent;
             }
         }
+
         false
     }
 
     pub fn available_actions(&self, target: DispatchNodeId) -> Vec<Box<dyn Action>> {
         let mut actions = Vec::<Box<dyn Action>>::new();
+
         for node_id in self.dispatch_path(target) {
             let node = &self.nodes[node_id.0];
+
             for DispatchActionListener { action_type, .. } in &node.action_listeners {
                 if let Err(ix) = actions.binary_search_by_key(action_type, |a| a.as_any().type_id())
                 {
                     // Intentionally silence these errors without logging.
                     // If an action cannot be built by default, it's not available.
                     let action = self.action_registry.build_action_type(action_type).ok();
+
                     if let Some(action) = action {
                         actions.insert(ix, action);
                     }
                 }
             }
         }
+
         actions
     }
 
     pub fn is_action_available(&self, action: &dyn Action, target: DispatchNodeId) -> bool {
         for node_id in self.dispatch_path(target) {
             let node = &self.nodes[node_id.0];
+
             if node
                 .action_listeners
                 .iter()
@@ -390,6 +430,7 @@ impl DispatchTree {
                 return true;
             }
         }
+
         false
     }
 
@@ -406,6 +447,7 @@ impl DispatchTree {
         // Ideally this would return a `DoubleEndedIterator` to avoid `highest_precedence_*`
         // methods, but this can't be done very cleanly since keymap must be borrowed.
         let keymap = self.keymap.borrow();
+
         keymap
             .bindings_for_action(action)
             .filter(|binding| {
@@ -423,6 +465,7 @@ impl DispatchTree {
         context_stack: &[KeyContext],
     ) -> Option<KeyBinding> {
         let keymap = self.keymap.borrow();
+
         keymap
             .bindings_for_action(action)
             .rev()
@@ -438,6 +481,7 @@ impl DispatchTree {
         context_stack: &[KeyContext],
     ) -> bool {
         let (bindings, _) = keymap.bindings_for_input(&binding.keystrokes, context_stack);
+
         if let Some(found) = bindings.iter().next() {
             found.action.partial_eq(binding.action.as_ref())
         } else {
@@ -459,6 +503,7 @@ impl DispatchTree {
             .keymap
             .borrow()
             .bindings_for_input(input, &context_stack);
+
         (bindings, partial, context_stack)
     }
 
@@ -487,6 +532,7 @@ impl DispatchTree {
         dispatch_path: &SmallVec<[DispatchNodeId; 32]>,
     ) -> DispatchResult {
         input.push(keystroke.clone());
+
         let (bindings, pending, context_stack) = self.bindings_for_input(&input, dispatch_path);
 
         if pending {
@@ -496,25 +542,31 @@ impl DispatchTree {
                 context_stack,
                 ..Default::default()
             };
+
         } else if !bindings.is_empty() {
             return DispatchResult {
                 bindings,
                 context_stack,
                 ..Default::default()
             };
+
         } else if input.len() == 1 {
             return DispatchResult {
                 context_stack,
                 ..Default::default()
             };
         }
+
         input.pop();
 
         let (suffix, mut to_replay) = self.replay_prefix(input, dispatch_path);
 
         let mut result = self.dispatch_key(suffix, keystroke, dispatch_path);
+
         to_replay.extend(result.to_replay);
+
         result.to_replay = to_replay;
+
         result
     }
 
@@ -541,47 +593,61 @@ impl DispatchTree {
         dispatch_path: &SmallVec<[DispatchNodeId; 32]>,
     ) -> (SmallVec<[Keystroke; 1]>, SmallVec<[Replay; 1]>) {
         let mut to_replay: SmallVec<[Replay; 1]> = Default::default();
+
         for last in (0..input.len()).rev() {
             let (bindings, _, _) = self.bindings_for_input(&input[0..=last], dispatch_path);
+
             if !bindings.is_empty() {
                 to_replay.push(Replay {
                     keystroke: input.drain(0..=last).next_back().unwrap(),
                     bindings,
                 });
+
                 break;
             }
         }
+
         if to_replay.is_empty() {
             to_replay.push(Replay {
                 keystroke: input.remove(0),
                 ..Default::default()
             });
         }
+
         (input, to_replay)
     }
 
     pub fn dispatch_path(&self, target: DispatchNodeId) -> SmallVec<[DispatchNodeId; 32]> {
         let mut dispatch_path: SmallVec<[DispatchNodeId; 32]> = SmallVec::new();
         let mut current_node_id = Some(target);
+
         while let Some(node_id) = current_node_id {
             dispatch_path.push(node_id);
+
             current_node_id = self.nodes.get(node_id.0).and_then(|node| node.parent);
         }
+
         dispatch_path.reverse(); // Reverse the path so it goes from the root to the focused node.
+
         dispatch_path
     }
 
     pub fn focus_path(&self, focus_id: FocusId) -> SmallVec<[FocusId; 8]> {
         let mut focus_path: SmallVec<[FocusId; 8]> = SmallVec::new();
         let mut current_node_id = self.focusable_node_ids.get(&focus_id).copied();
+
         while let Some(node_id) = current_node_id {
             let node = self.node(node_id);
+
             if let Some(focus_id) = node.focus_id {
                 focus_path.push(focus_id);
             }
+
             current_node_id = node.parent;
         }
+
         focus_path.reverse(); // Reverse the path so it goes from the root to the focused node.
+
         focus_path
     }
 
@@ -601,6 +667,7 @@ impl DispatchTree {
 
     fn active_node(&mut self) -> &mut DispatchNode {
         let active_node_id = self.active_node_id().unwrap();
+
         &mut self.nodes[active_node_id.0]
     }
 
@@ -610,6 +677,7 @@ impl DispatchTree {
 
     pub fn root_node_id(&self) -> DispatchNodeId {
         debug_assert!(!self.nodes.is_empty());
+
         DispatchNodeId(0)
     }
 
@@ -624,8 +692,10 @@ mod tests {
         self as gpui, AppContext, DispatchResult, Element, ElementId, GlobalElementId,
         InspectorElementId, Keystroke, LayoutId, Style,
     };
+
     use core::panic;
     use smallvec::SmallVec;
+
     use std::{
         cell::{Cell, RefCell},
         ops::Range,
@@ -690,12 +760,15 @@ mod tests {
         ];
 
         let bindings = tree.bindings_for_action(&TestAction, &contexts);
+
         assert!(bindings.is_empty());
 
         let highest = tree.highest_precedence_binding_for_action(&TestAction, &contexts);
+
         assert!(highest.is_none());
 
         let fallback_bindings = tree.bindings_for_action(&SecondaryTestAction, &contexts);
+
         assert_eq!(fallback_bindings.len(), 1);
         assert!(fallback_bindings[0].action.partial_eq(&SecondaryTestAction));
     }
@@ -722,10 +795,12 @@ mod tests {
         ];
 
         let bindings = tree.bindings_for_action(&TestAction, &contexts);
+
         assert_eq!(bindings.len(), 1);
         assert!(bindings[0].action.partial_eq(&TestAction));
 
         let highest = tree.highest_precedence_binding_for_action(&TestAction, &contexts);
+
         assert!(highest.is_some_and(|binding| binding.action.partial_eq(&TestAction)));
     }
 
@@ -753,7 +828,9 @@ mod tests {
             KeyBinding::new("ctrl-alt-down", TestAction, Some("Picker > Editor")),
             KeyBinding::new("ctrl-alt-down", SecondaryTestAction, Some("Editor")),
         ]);
+
         let highest = shadowed.highest_precedence_binding_for_action(&TestAction, &contexts);
+
         assert!(
             highest.is_none(),
             "picker binding should be shadowed by the base editor binding"
@@ -767,7 +844,9 @@ mod tests {
             // overlay loaded last:
             KeyBinding::new("ctrl-alt-down", TestAction, Some("Picker > Editor")),
         ]);
+
         let highest = fixed.highest_precedence_binding_for_action(&TestAction, &contexts);
+
         assert!(
             highest.is_some_and(|binding| binding.action.partial_eq(&TestAction)),
             "overlay loaded after base should restore the picker binding"
@@ -781,8 +860,10 @@ mod tests {
             KeyBinding::new("ctrl-alt-down", TestAction, Some("Picker > Editor")),
             KeyBinding::new("ctrl-alt-down", SecondaryTestAction, Some("Editor")),
         ]);
+
         let highest =
             override_before_base.highest_precedence_binding_for_action(&TestAction, &contexts);
+
         assert!(
             highest.is_none(),
             "an override loaded before the base binding cannot win the equal-depth tie"
@@ -796,9 +877,11 @@ mod tests {
             KeyBinding::new("space", TestAction, Some("ContextA")),
             KeyBinding::new("space f g", TestAction, Some("ContextB")),
         ];
+
         let mut tree = test_dispatch_tree(bindings);
 
         type DispatchPath = SmallVec<[super::DispatchNodeId; 32]>;
+
         fn dispatch(
             tree: &mut DispatchTree,
             pending: SmallVec<[Keystroke; 1]>,
@@ -810,15 +893,18 @@ mod tests {
 
         let dispatch_path: DispatchPath = SmallVec::new();
         let result = dispatch(&mut tree, SmallVec::new(), "ctrl-b", &dispatch_path);
+
         assert_eq!(result.pending.len(), 1);
         assert!(!result.pending_has_binding);
 
         let result = dispatch(&mut tree, result.pending, "h", &dispatch_path);
+
         assert_eq!(result.pending.len(), 0);
         assert_eq!(result.bindings.len(), 1);
         assert!(!result.pending_has_binding);
 
         let node_id = tree.push_node();
+
         tree.set_key_context(KeyContext::parse("ContextB").unwrap());
         tree.pop_node();
 
@@ -892,6 +978,7 @@ mod tests {
                 cx: &mut App,
             ) {
                 let mut key_context = KeyContext::default();
+
                 key_context.add("Terminal");
                 window.set_key_context(key_context);
                 window.handle_input(&self.focus_handle, self.clone(), cx);
@@ -941,6 +1028,7 @@ mod tests {
                 if replacement_range.is_some() {
                     unimplemented!()
                 }
+
                 self.text.borrow_mut().push_str(text)
             }
 
@@ -955,6 +1043,7 @@ mod tests {
                 if replacement_range.is_some() {
                     unimplemented!()
                 }
+
                 self.text.borrow_mut().push_str(new_text)
             }
 
@@ -1022,7 +1111,9 @@ mod tests {
 
         cx.update(|window, cx| {
             assert!(window.has_pending_keystrokes());
+
             *count_after_pending.borrow_mut() = *pending_input_changed_count.borrow();
+
             assert!(*count_after_pending.borrow() > 0);
 
             window.focus(&cx.focus_handle(), cx);
@@ -1034,16 +1125,20 @@ mod tests {
         // effect cycle, so the observer callback should run after the focus update completes.
         cx.update(|_, _| {
             let count_after_focus_change = *pending_input_changed_count.borrow();
+
             assert!(count_after_focus_change > *count_after_pending_for_assertion.borrow());
         });
 
         cx.update(|window, cx| window.focus(&focus_handle, cx));
         cx.simulate_keystrokes("ctrl-b");
+
         let count_before_blur = *pending_input_changed_count.borrow();
 
         cx.update(|window, cx| {
             assert!(window.has_pending_keystrokes());
+
             window.blur(cx);
+
             assert!(!window.has_pending_keystrokes());
             assert!(window.pending_input_is_none());
         });
@@ -1057,7 +1152,9 @@ mod tests {
 
         cx.update(|window, cx| {
             assert!(window.has_pending_keystrokes());
+
             window.blur(cx);
+
             assert!(window.pending_input_is_none());
         });
     }
@@ -1070,6 +1167,7 @@ mod tests {
             text: Rc<RefCell<String>>,
             action_count: Rc<Cell<usize>>,
         }
+
         impl CustomElement {
             fn new(cx: &mut Context<Self>) -> Self {
                 Self {
@@ -1079,6 +1177,7 @@ mod tests {
                 }
             }
         }
+
         impl Element for CustomElement {
             type RequestLayoutState = ();
 
@@ -1087,9 +1186,11 @@ mod tests {
             fn id(&self) -> Option<ElementId> {
                 Some("custom".into())
             }
+
             fn source_location(&self) -> Option<&'static panic::Location<'static>> {
                 None
             }
+
             fn request_layout(
                 &mut self,
                 _: Option<&GlobalElementId>,
@@ -1099,6 +1200,7 @@ mod tests {
             ) -> (LayoutId, Self::RequestLayoutState) {
                 (window.request_layout(Style::default(), [], cx), ())
             }
+
             fn prepaint(
                 &mut self,
                 _: Option<&GlobalElementId>,
@@ -1110,6 +1212,7 @@ mod tests {
             ) -> Self::PrepaintState {
                 window.set_focus_handle(&self.focus_handle, cx);
             }
+
             fn paint(
                 &mut self,
                 _: Option<&GlobalElementId>,
@@ -1121,10 +1224,13 @@ mod tests {
                 cx: &mut App,
             ) {
                 let mut key_context = KeyContext::default();
+
                 key_context.add("Terminal");
                 window.set_key_context(key_context);
                 window.handle_input(&self.focus_handle, self.clone(), cx);
+
                 let action_count = self.action_count.clone();
+
                 window.on_action(
                     std::any::TypeId::of::<TestAction>(),
                     move |_, phase, _, _| {
@@ -1135,6 +1241,7 @@ mod tests {
                 );
             }
         }
+
         impl IntoElement for CustomElement {
             type Element = Self;
 
@@ -1177,6 +1284,7 @@ mod tests {
                 if replacement_range.is_some() {
                     unimplemented!()
                 }
+
                 self.text.borrow_mut().push_str(text)
             }
 
@@ -1191,6 +1299,7 @@ mod tests {
                 if replacement_range.is_some() {
                     unimplemented!()
                 }
+
                 self.text.borrow_mut().push_str(new_text)
             }
 
@@ -1218,6 +1327,7 @@ mod tests {
                 None
             }
         }
+
         impl Render for CustomElement {
             fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
                 self.clone()
@@ -1229,8 +1339,10 @@ mod tests {
             cx.bind_keys([KeyBinding::new("ctrl-b h", TestAction, Some("Terminal"))]);
             cx.bind_keys([KeyBinding::new("ctrl-x k", TestAction, Some("Terminal"))]);
         });
+
         let (test, cx) = cx.add_window_view(|_, cx| CustomElement::new(cx));
         let focus_handle = test.update(cx, |test, _| test.focus_handle.clone());
+
         cx.update(|window, cx| {
             window.focus(&focus_handle, cx);
             window.activate();
@@ -1240,39 +1352,54 @@ mod tests {
             let mut platform_window = cx.test_window(cx.window_handle());
             let mut input_handler = platform_window.take_input_handler()?;
             let prefers_ime = input_handler.query_prefers_ime_for_printable_keys();
+
             platform_window.set_input_handler(input_handler);
+
             Some(prefers_ime)
         };
 
         assert_eq!(query_prefers_ime_for_printable_keys(cx), Some(true));
+
         cx.simulate_keystrokes("ctrl-x");
         cx.update(|window, _| assert!(window.has_pending_keystrokes()));
+
         assert_eq!(query_prefers_ime_for_printable_keys(cx), Some(false));
 
         let prefers_ime_after_blur = {
             let mut platform_window = cx.test_window(cx.window_handle());
             let mut input_handler = platform_window.take_input_handler();
+
             cx.update(|window, cx| {
                 window.blur(cx);
+
                 assert!(!window.has_pending_keystrokes());
                 assert!(window.pending_input_is_none());
             });
+
             let prefers_ime = input_handler
                 .as_mut()
                 .map(|input_handler| input_handler.query_prefers_ime_for_printable_keys());
+
             if let Some(input_handler) = input_handler {
                 platform_window.set_input_handler(input_handler);
             }
+
             prefers_ime
         };
+
         assert_eq!(prefers_ime_after_blur, Some(true));
+
         cx.update(|window, cx| window.focus(&focus_handle, cx));
 
         cx.simulate_keystrokes("ctrl-x");
+
         assert_eq!(query_prefers_ime_for_printable_keys(cx), Some(false));
+
         cx.simulate_keystrokes("k");
         cx.update(|window, _| assert!(!window.has_pending_keystrokes()));
+
         assert_eq!(query_prefers_ime_for_printable_keys(cx), Some(true));
+
         test.update(cx, |test, _| {
             assert_eq!(test.action_count.get(), 1);
             assert_eq!(test.text.borrow().as_str(), "");

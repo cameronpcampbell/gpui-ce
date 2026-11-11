@@ -4,4 +4,5 @@
 //! For usage documentation, see the docs on this crate's binary.
 
 mod implementation;
+
 pub use implementation::*;

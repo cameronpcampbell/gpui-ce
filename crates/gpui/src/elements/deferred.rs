@@ -22,10 +22,12 @@ pub fn deferred(child: impl IntoElement) -> Deferred {
 #[setters(generate = false)]
 pub struct Deferred {
     child: Option<AnyElement>,
+
     /// Sets a priority for the element. A higher priority means painting the element
     /// on top of deferred draws with a lower priority, closer to the viewer.
     #[setters(generate, into)]
     priority: DeferredPriority,
+
     /// When a content mask is provided, the deferred element will be clipped to that region during
     /// both prepaint and paint.
     #[setters(generate, strip_option)]
@@ -52,6 +54,7 @@ impl Element for Deferred {
         cx: &mut App,
     ) -> (LayoutId, ()) {
         let layout_id = self.child.as_mut().unwrap().request_layout(window, cx);
+
         (layout_id, ())
     }
 
@@ -67,6 +70,7 @@ impl Element for Deferred {
         let child = self.child.take().unwrap();
         let element_offset = window.element_offset();
         let priority = self.priority.evaluate(cx);
+
         window.defer_draw(child, element_offset, priority, self.content_mask);
     }
 
@@ -97,6 +101,7 @@ impl Deferred {
     /// Defaults to 1 when this is a deferred element caused by non-deferred elements.
     pub fn priority_auto(mut self) -> Self {
         self.priority = DeferredPriority::Auto;
+
         self
     }
 }
@@ -110,17 +115,20 @@ pub enum DeferredPriority {
     /// Takes an explicit priority value for the deferred element.
     Value(usize),
 }
+
 impl From<usize> for DeferredPriority {
     fn from(value: usize) -> Self {
         Self::Value(value)
     }
 }
+
 impl DeferredPriority {
     /// Calculates the new priority based on the current value in the [`DeferredPriorityStackCache`].
     /// Should only be called during prepaint of a [`Deferred`] element.
     fn evaluate(&self, cx: &App) -> usize {
         match self {
             DeferredPriority::Value(value) => *value,
+
             DeferredPriority::Auto => match DeferredPriorityStackCache::current_depth(cx) {
                 None => 1, // NOTE: functionality change. If using auto, we start at a priority of 1 instead of 0.
                 Some(prev_deferred_priority) => prev_deferred_priority.saturating_add(1),
@@ -132,7 +140,9 @@ impl DeferredPriority {
 /// Internal global to track the depth of deferred renders during prepaint.
 #[derive(Default)]
 pub(crate) struct DeferredPriorityStackCache(Vec<usize>);
+
 impl crate::Global for DeferredPriorityStackCache {}
+
 impl DeferredPriorityStackCache {
     pub(crate) fn push(priority: usize, cx: &mut App) {
         cx.default_global::<Self>().0.push(priority);
@@ -144,6 +154,7 @@ impl DeferredPriorityStackCache {
 
     fn current_depth(cx: &App) -> Option<usize> {
         let cache = cx.try_global::<Self>()?;
+
         cache.0.last().copied()
     }
 }
@@ -209,8 +220,10 @@ mod tests {
     fn test_nested_deferred_draws_with_reused_views(cx: &mut TestAppContext) {
         let window = cx.open_window(size(px(800.), px(600.)), |_, cx| {
             let panel = cx.new(|_| PanelView);
+
             RootView { panel }
         });
+
         cx.run_until_parked();
 
         let menu_bounds = window
@@ -223,6 +236,7 @@ mod tests {
             })
             .unwrap()
             .expect("NESTED_MENU debug bounds not found");
+
         assert_eq!(menu_bounds.size, size(px(50.), px(50.)));
 
         // Re-render only the root view; the panel is cached, so its subtree -
@@ -242,11 +256,13 @@ mod tests {
                 root.panel.update(cx, |_, cx| cx.notify());
             })
             .unwrap();
+
         cx.run_until_parked();
 
         window
             .update(cx, |_, window, _| {
                 assert_eq!(window.rendered_frame.deferred_draws.len(), 2);
+
                 assert!(
                     window
                         .rendered_frame

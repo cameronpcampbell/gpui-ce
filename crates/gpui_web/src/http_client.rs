@@ -44,6 +44,7 @@ impl<F: Future> Future for AssertSend<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         let inner = unsafe { self.map_unchecked_mut(|this| &mut this.0) };
+
         inner.poll(cx)
     }
 }
@@ -55,8 +56,10 @@ impl HttpClient for FetchHttpClient {
         follow_redirects: bool,
     ) -> futures::future::BoxFuture<'static, anyhow::Result<HttpResponse>> {
         let url = url.to_string();
+
         Box::pin(AssertSend(async move {
             let init = web_sys::RequestInit::new();
+
             init.set_method("GET");
 
             if !follow_redirects {
@@ -68,6 +71,7 @@ impl HttpClient for FetchHttpClient {
 
             let promise = global_fetch(&request)
                 .map_err(|error| anyhow!("fetch threw an error: {error:?}"))?;
+
             let response_value = wasm_bindgen_futures::JsFuture::from(promise)
                 .await
                 .map_err(|error| anyhow!("fetch failed: {error:?}"))?;
@@ -82,12 +86,15 @@ impl HttpClient for FetchHttpClient {
             let body_promise = web_response
                 .array_buffer()
                 .map_err(|error| anyhow!("failed to initiate response body read: {error:?}"))?;
+
             let body_value = wasm_bindgen_futures::JsFuture::from(body_promise)
                 .await
                 .map_err(|error| anyhow!("failed to read response body: {error:?}"))?;
+
             let array_buffer: js_sys::ArrayBuffer = body_value
                 .dyn_into()
                 .map_err(|error| anyhow!("response body is not an ArrayBuffer: {error:?}"))?;
+
             let body = js_sys::Uint8Array::new(&array_buffer).to_vec();
 
             Ok(HttpResponse {

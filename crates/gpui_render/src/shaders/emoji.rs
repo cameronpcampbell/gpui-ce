@@ -19,6 +19,7 @@ pub mod emoji_rasterization {
     pub struct EmojiRasterizationVarying {
         #[builtin(position)]
         pub position: Vec4f,
+
         #[location(0)]
         pub texture_coordinates: Vec2f,
     }
@@ -31,6 +32,7 @@ pub mod emoji_rasterization {
             ((vertex_id << 1u32) & 2u32) as f32,
             (vertex_id & 2u32) as f32,
         );
+
         EmojiRasterizationVarying {
             position: vec4f(
                 texture_coordinates.x * 2.0 - 1.0,
@@ -45,6 +47,7 @@ pub mod emoji_rasterization {
     #[fragment]
     pub fn fragment_emoji_rasterization(input: EmojiRasterizationVarying) -> Vec4f {
         let params = get!(GLYPH_LAYER_PARAMS);
+
         let sample = texture_sample_level(
             GLYPH_LAYER_TEXTURE,
             GLYPH_LAYER_SAMPLER,
@@ -52,12 +55,14 @@ pub mod emoji_rasterization {
             0.0,
         )
         .x;
+
         let alpha = apply_contrast_and_gamma_correction(
             sample,
             params.run_color.rgb(),
             params.grayscale_enhanced_contrast,
             params.gamma_ratios,
         ) * params.run_color.w;
+
         vec4f(
             params.run_color.x * alpha,
             params.run_color.y * alpha,

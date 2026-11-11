@@ -3,8 +3,10 @@
 use std::marker::PhantomData;
 
 pub const BASE_WGSL: &str = include_str!(concat!(env!("OUT_DIR"), "/gpui_base.wgsl"));
+
 pub const SUBPIXEL_DUAL_SOURCE_WGSL: &str =
     include_str!(concat!(env!("OUT_DIR"), "/gpui_subpixel_dual_source.wgsl"));
+
 /// Downlevel (WebGL2/GLES) dialect: scene arrays travel via an `rgba32uint` data texture.
 pub const BASE_DOWNLEVEL_WGSL: &str =
     include_str!(concat!(env!("OUT_DIR"), "/gpui_base_downlevel.wgsl"));
@@ -38,6 +40,7 @@ include!(concat!(env!("OUT_DIR"), "/shader_interface.rs"));
 pub struct Dx11Bytecode {
     pub vertex: &'static [u8],
     pub fragment: &'static [u8],
+
     /// Present for every pipeline whose vertex shader reads `instance_index`.
     ///
     /// Direct3D 11 does not add `StartInstanceLocation` to `SV_InstanceID`, so the
@@ -62,10 +65,13 @@ pub struct Dx11DrawConstantsBinding {
 pub struct Dx11DrawConstants {
     /// Added to `SV_VertexID` to form `vertex_index`.
     pub first_vertex: i32,
+
     /// Added to `SV_InstanceID` to form `instance_index`.
     pub first_instance: i32,
+
     /// Unused by graphics pipelines; Naga reserves it for compute dispatch sizes.
     pub other: u32,
+
     pub padding: u32,
 }
 
@@ -130,16 +136,21 @@ impl<Profile> GlslShader<Profile> {
 
 pub struct NativeShader {
     pub label: &'static str,
+
     /// The shared pipeline description this shader was generated for: topology, vertex
     /// count and data layout are the same on every backend.
     pub pipeline: &'static crate::shaders::interface::Pipeline,
+
     pub vertex_entry: &'static str,
     pub fragment_entry: &'static str,
     pub dx11: Dx11Shader,
+
     /// GLSL 3.30 core, using the data-texture downlevel transport.
     pub glsl_330: GlslShader<Glsl330>,
+
     /// GLSL ES 3.00, using the same downlevel transport.
     pub gles_300: GlslShader<Gles300>,
+
     pub msl: &'static str,
 }
 
@@ -169,10 +180,12 @@ mod tests {
             decoder.contains("base + 7u"),
             "Background decoder must load its first color stop at word 7"
         );
+
         assert!(
             decoder.contains(&format!("base + {second_element_offset}u")),
             "Background decoder must use the host LinearColorStop stride"
         );
+
         assert!(
             !decoder.contains("base + 17u)), dl_scene_word"),
             "Background decoder must not read padding as the second color stop"
@@ -191,10 +204,12 @@ mod tests {
             decoder.contains(&format!("base, {dash_length_word}u")),
             "Quad decoder must load border_dashed_length from its host offset"
         );
+
         assert!(
             decoder.contains(&format!("base, {dash_gap_word}u")),
             "Quad decoder must load border_dashed_gap from its host offset"
         );
+
         assert!(
             loader.contains(&format!("i * {stride_words}u")),
             "Quad decoder must advance by the host Quad stride"

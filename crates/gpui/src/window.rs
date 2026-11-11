@@ -28,6 +28,7 @@ use crate::{
     },
     white,
 };
+
 use anyhow::{Context as _, Result, anyhow};
 use collections::{FxHashMap, FxHashSet};
 use derive_more::{Deref, DerefMut};
@@ -43,6 +44,7 @@ use refineable::Refineable;
 use scheduler::Instant;
 use slotmap::SlotMap;
 use smallvec::SmallVec;
+
 use std::{
     any::{Any, TypeId},
     borrow::Cow,
@@ -61,6 +63,7 @@ use std::{
     },
     time::Duration,
 };
+
 use uuid::Uuid;
 
 #[cfg(not(target_family = "wasm"))]
@@ -84,11 +87,13 @@ fn quantize_glyph_origin(origin: Point<ScaledPixels>) -> (Point<ScaledPixels>, P
         let quantized = round_half_toward_zero(value.0 * variants as f32) / variants as f32;
         let integer = quantized.floor();
         let variant = ((quantized - integer) * variants as f32).round() as u8;
+
         (ScaledPixels(integer), variant.min(variants - 1))
     }
 
     let (integer_x, variant_x) = axis(origin.x, SUBPIXEL_VARIANTS_X);
     let (integer_y, variant_y) = axis(origin.y, SUBPIXEL_VARIANTS_Y);
+
     (point(integer_x, integer_y), point(variant_x, variant_y))
 }
 
@@ -143,12 +148,15 @@ impl DispatchPhase {
 struct WindowInvalidatorInner {
     #[cfg(feature = "profiler")]
     pub window_id: WindowId,
+
     pub dirty: bool,
     pub draw_phase: DrawPhase,
     pub dirty_views: FxHashSet<EntityId>,
     pub update_count: usize,
+
     #[cfg(feature = "profiler")]
     pub frame_dirty: FrameDirtyAccumulator,
+
     pub platform_waker: Option<Rc<dyn Fn()>>,
 }
 
@@ -188,26 +196,37 @@ impl WindowInvalidator {
 
     pub fn invalidate_view(&self, entity: EntityId, cx: &mut App) -> bool {
         let mut inner = self.inner.borrow_mut();
+
         inner.update_count += 1;
+
         inner.dirty_views.insert(entity);
+
         if inner.draw_phase == DrawPhase::None {
             #[cfg(feature = "profiler")]
             let dirty_at = Self::record_frame_dirty(&mut inner);
             let became_dirty = !inner.dirty;
+
             inner.dirty = true;
+
             let waker = became_dirty.then(|| inner.platform_waker.clone()).flatten();
             #[cfg(feature = "profiler")]
             let window_id = inner.window_id;
+
             drop(inner);
+
             #[cfg(feature = "profiler")]
             if became_dirty {
                 profiler::journal::record_frame_pending(window_id, dirty_at);
             }
+
             cx.push_effect(Effect::Notify { emitter: entity });
+
             if let Some(waker) = waker {
                 waker();
             }
+
             true
+
         } else {
             false
         }
@@ -220,20 +239,26 @@ impl WindowInvalidator {
     pub fn set_dirty(&self, dirty: bool) {
         let mut inner = self.inner.borrow_mut();
         let became_dirty = dirty && !inner.dirty;
+
         inner.dirty = dirty;
+
         if dirty {
             inner.update_count += 1;
         }
+
         #[cfg(feature = "profiler")]
         let dirty_at = dirty.then(|| Self::record_frame_dirty(&mut inner));
         let waker = became_dirty.then(|| inner.platform_waker.clone()).flatten();
         #[cfg(feature = "profiler")]
         let window_id = inner.window_id;
+
         drop(inner);
+
         #[cfg(feature = "profiler")]
         if became_dirty && let Some(dirty_at) = dirty_at {
             profiler::journal::record_frame_pending(window_id, dirty_at);
         }
+
         if let Some(waker) = waker {
             waker();
         }
@@ -241,9 +266,13 @@ impl WindowInvalidator {
 
     pub fn set_platform_waker(&self, waker: Option<Rc<dyn Fn()>>) {
         let mut inner = self.inner.borrow_mut();
+
         inner.platform_waker = waker;
+
         let waker = inner.dirty.then(|| inner.platform_waker.clone()).flatten();
+
         drop(inner);
+
         if let Some(waker) = waker {
             waker();
         }
@@ -254,6 +283,7 @@ impl WindowInvalidator {
     /// windows. No-op on platforms without a frame waker.
     pub fn wake_platform(&self) {
         let waker = self.inner.borrow().platform_waker.clone();
+
         if let Some(waker) = waker {
             waker();
         }
@@ -270,7 +300,9 @@ impl WindowInvalidator {
     #[cfg(feature = "profiler")]
     fn record_frame_dirty(inner: &mut WindowInvalidatorInner) -> Instant {
         let dirty_at = *inner.frame_dirty.dirty_at.get_or_insert_with(Instant::now);
+
         inner.frame_dirty.invalidations += 1;
+
         dirty_at
     }
 
@@ -383,7 +415,9 @@ pub(crate) fn with_element_arena<R>(f: impl FnOnce(&mut Arena) -> R) -> R {
             // SAFETY: The pointer is valid for the duration of the draw operation
             // that set it, and we're being called during that same draw.
             let arena_cell = unsafe { &*arena_ptr };
+
             f(&mut arena_cell.borrow_mut())
+
         } else {
             ELEMENT_ARENA.with_borrow_mut(f)
         }
@@ -408,6 +442,7 @@ pub(crate) struct ElementArenaScope {
     /// The entered arena: compared against the argument in `exit`, and
     /// dereferenced in `Drop` to end its scope (see the SAFETY note there).
     entered: *const RefCell<Arena>,
+
     previous: Option<*const RefCell<Arena>>,
     exited: bool,
 }
@@ -416,11 +451,15 @@ impl ElementArenaScope {
     /// Enter a scope where element allocations use the given arena.
     pub(crate) fn enter(arena: &RefCell<Arena>) -> Self {
         arena.borrow_mut().begin_scope();
+
         let previous = CURRENT_ELEMENT_ARENA.with(|current| {
             let prev = current.get();
+
             current.set(Some(arena as *const RefCell<Arena>));
+
             prev
         });
+
         Self {
             entered: arena as *const RefCell<Arena>,
             previous,
@@ -441,7 +480,9 @@ impl ElementArenaScope {
             std::ptr::eq(self.entered, arena),
             "ElementArenaScope::exit called with a different arena than was entered"
         );
+
         self.exited = true;
+
         // Teardown (restoring the thread-local and ending the arena's
         // clear-deferral scope) runs in `Drop`, which fires both here — `self`
         // is dropped as `exit` returns, before the token reaches the caller —
@@ -461,12 +502,15 @@ impl Drop for ElementArenaScope {
         CURRENT_ELEMENT_ARENA.with(|current| {
             current.set(self.previous);
         });
+
         // SAFETY: `entered` came from a `&RefCell<Arena>` in `enter`, and the
         // arena (owned by the `App` being drawn) outlives this guard on both the
         // normal and unwinding paths, since the guard is a local of the draw.
         unsafe { &*self.entered }.borrow_mut().end_scope();
+
         if !self.exited && !std::thread::panicking() {
             debug_assert!(false, "ElementArenaScope dropped without calling exit()");
+
             log::error!(
                 "ElementArenaScope dropped without calling exit(); \
                  the arena clear for this draw was never requested"
@@ -505,11 +549,13 @@ impl ArenaClearNeeded {
             std::ptr::eq(self.arena, &cx.element_arena),
             "ArenaClearNeeded::clear called with a different App than the draw ran against"
         );
+
         cx.element_arena.borrow_mut().clear();
     }
 }
 
 pub(crate) type FocusMap = RwLock<SlotMap<FocusId, FocusRef>>;
+
 pub(crate) struct FocusRef {
     pub(crate) ref_count: AtomicUsize,
     pub(crate) tab_index: isize,
@@ -534,6 +580,7 @@ impl FocusId {
     /// focused element or is itself focused.
     pub fn within_focused(&self, window: &Window, cx: &App) -> bool {
         let focused = window.focused(cx);
+
         focused.is_some_and(|focused| focused.id.contains(*self, window))
     }
 
@@ -550,8 +597,10 @@ impl FocusId {
 pub struct FocusHandle {
     pub(crate) id: FocusId,
     handles: Arc<FocusMap>,
+
     /// The index of this element in the tab order.
     pub tab_index: isize,
+
     /// Whether this element can be focused by tab navigation.
     pub tab_stop: bool,
 }
@@ -581,9 +630,11 @@ impl FocusHandle {
     pub(crate) fn for_id(id: FocusId, handles: &Arc<FocusMap>) -> Option<Self> {
         let lock = handles.read();
         let focus = lock.get(id)?;
+
         if atomic_incr_if_not_zero(&focus.ref_count) == 0 {
             return None;
         }
+
         Some(Self {
             id,
             tab_index: focus.tab_index,
@@ -595,9 +646,11 @@ impl FocusHandle {
     /// Sets the tab index of the element associated with this handle.
     pub fn tab_index(mut self, index: isize) -> Self {
         self.tab_index = index;
+
         if let Some(focus) = self.handles.write().get_mut(self.id) {
             focus.tab_index = index;
         }
+
         self
     }
 
@@ -606,9 +659,11 @@ impl FocusHandle {
     /// When `false`, the element will not be included in the tab order.
     pub fn tab_stop(mut self, tab_stop: bool) -> Self {
         self.tab_stop = tab_stop;
+
         if let Some(focus) = self.handles.write().get_mut(self.id) {
             focus.tab_stop = tab_stop;
         }
+
         self
     }
 
@@ -695,6 +750,7 @@ impl WeakFocusHandle {
     /// Attempts to upgrade the [WeakFocusHandle] to a [FocusHandle].
     pub fn upgrade(&self) -> Option<FocusHandle> {
         let handles = self.handles.upgrade()?;
+
         FocusHandle::for_id(self.id, &handles)
     }
 }
@@ -789,8 +845,10 @@ impl CursorStyleSource {
 pub struct HitTest {
     // HitboxIds which were included in the test's click path (the last of which will be the box that caused occlusion)
     ordered_ids: SmallVec<[HitboxId; 8]>,
+
     // metadata about all hitboxes, even those outside the test's path
     entries: HashMap<HitboxId, HitTestEntry>,
+
     // the number of hitbox ids in `ordered_ids` which support mouse. anything after this amount only support scroll.
     hover_hitbox_count: usize,
 }
@@ -802,6 +860,7 @@ impl HitTest {
         let mut ids_until_occlusion = SmallVec::default();
         let mut entries = HashMap::default();
         let mut found_hit_occlusion = false;
+
         // index is 0=closest to viewer, n=farthest from viewer
         for (index, hitbox) in hitboxes.enumerate() {
             entries.insert(
@@ -832,6 +891,7 @@ impl HitTest {
                 found_hit_occlusion = true;
             }
         }
+
         Self {
             hover_hitbox_count: num_until_mouse_blocked.unwrap_or(ids_until_occlusion.len()),
             ordered_ids: ids_until_occlusion,
@@ -864,6 +924,7 @@ pub struct HitTestEntry {
     /// The depth of the hitbox in the ordered list from the Frame.
     /// A smaller number is closer to the viewer, and a larger number is farther from the viewer.
     depth: usize,
+
     tags: Vec<SharedString>,
 }
 
@@ -921,9 +982,11 @@ impl HitboxId {
         if window.captured_hitbox == Some(self) {
             return true;
         }
+
         if window.last_input_was_keyboard() {
             return false;
         }
+
         self.hit_test(window)
     }
 
@@ -936,6 +999,7 @@ impl HitboxId {
         if window.captured_hitbox == Some(self) {
             return true;
         }
+
         self.hit_test(window)
     }
 
@@ -962,15 +1026,20 @@ impl HitboxId {
 pub struct Hitbox {
     /// A unique identifier for the hitbox.
     pub id: HitboxId,
+
     /// The bounds of the hitbox.
     #[deref]
     pub bounds: Bounds<Pixels>,
+
     /// The content mask when the hitbox was inserted.
     pub content_mask: ContentMask<Pixels>,
+
     /// Flags that specify hitbox behavior.
     pub behavior: HitboxBehavior,
+
     /// Disjoint regions of an inline element. `bounds` is their union.
     pub fragments: Option<Arc<[Bounds<Pixels>]>>,
+
     /// Additional user-provided tags to extend behavior of the hitbox.
     pub tags: Vec<SharedString>,
 }
@@ -1144,12 +1213,16 @@ pub(crate) struct Frame {
     pub(crate) input_handlers: Vec<Option<PlatformInputHandler>>,
     pub(crate) tooltip_requests: Vec<Option<TooltipRequest>>,
     cursor_styles: Vec<CursorStyleRequest>,
+
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) debug_bounds: FxHashMap<String, Bounds<Pixels>>,
+
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) next_inspector_instance_ids: FxHashMap<Rc<crate::InspectorElementPath>, usize>,
+
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) inspector_hitboxes: FxHashMap<HitboxId, crate::InspectorElementId>,
+
     pub(crate) tab_stops: TabStopMap,
 }
 
@@ -1219,6 +1292,7 @@ impl Frame {
         self.window_control_hitboxes.clear();
         self.deferred_draws.clear();
         self.tab_stops.clear();
+
         self.focus = None;
 
         #[cfg(any(test, feature = "test-support"))]
@@ -1246,6 +1320,7 @@ impl Frame {
                 if !window.pointer_inside_window {
                     return None;
                 }
+
                 self.cursor_styles
                     .iter()
                     .rev()
@@ -1255,6 +1330,7 @@ impl Frame {
                         {
                             style.resolve(window.mouse_position())
                         }
+
                         _ => None,
                     })
             })
@@ -1303,11 +1379,13 @@ pub struct Window {
     text_system: Arc<WindowTextSystem>,
     text_rendering_mode: Rc<Cell<TextRenderingMode>>,
     rem_size: Pixels,
+
     /// The stack of override values for the window's rem size.
     ///
     /// This is used by `with_rem_size` to allow rendering an element tree with
     /// a given rem size.
     rem_size_override_stack: SmallVec<[Pixels; 8]>,
+
     pub(crate) viewport_size: Size<Pixels>,
     layout_engine: Option<TaffyLayoutEngine>,
     pub(crate) collecting_inline: bool,
@@ -1319,15 +1397,19 @@ pub struct Window {
     pub(crate) measurement_unicode_bidi: UnicodeBidi,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
+
     /// Bounds of the parent `Div` currently prepainting this element as one of its children.
     /// Inset transitions use these bounds to resolve `auto` from the child's rendered position.
     style_transition_containing_bounds: Option<Bounds<Pixels>>,
+
     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
+
     /// The [`TextInputConfiguration`] most recently forwarded to the platform
     /// window, so that only actual changes are forwarded (reconfiguring a live
     /// input session can restart the IME connection).
     last_text_input_configuration: Option<TextInputConfiguration>,
+
     focused_text_input_active: bool,
     pub(crate) image_cache_stack: Vec<AnyImageCache>,
     pub(crate) rendered_frame: Frame,
@@ -1354,11 +1436,14 @@ pub struct Window {
     active: Rc<Cell<bool>>,
     hovered: Rc<Cell<bool>>,
     pub(crate) needs_present: Rc<Cell<bool>>,
+
     /// Tracks recent input event timestamps to determine if input is arriving at a high rate.
     /// Used to selectively enable VRR optimization only when input rate exceeds 60fps.
     pub(crate) input_rate_tracker: Rc<RefCell<InputRateTracker>>,
+
     #[cfg(feature = "profiler")]
     window_profiler: profiler::WindowProfiler,
+
     last_input_modality: InputModality,
     touch_gestures: TouchGestureRecognizer,
     touch_prediction_enabled: bool,
@@ -1368,21 +1453,27 @@ pub struct Window {
     pub(crate) activation_observers: SubscriberSet<(), AnyObserver>,
     pub(crate) focus: Option<FocusId>,
     focus_enabled: bool,
+
     /// Incremented every time focus moves. Used to invalidate a
     /// pending keyboard activation state when focus changes.
     pub(crate) focus_generation: u64,
+
     pending_input: Option<PendingInput>,
     pending_modifier: ModifierState,
     pub(crate) pending_input_observers: SubscriberSet<(), AnyObserver>,
     prompt: Option<RenderablePromptHandle>,
     pub(crate) client_inset: Option<Pixels>,
+
     /// The hitbox that has captured the pointer, if any.
     /// While captured, mouse events route to this hitbox regardless of hit testing.
     captured_hitbox: Option<HitboxId>,
+
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector: Option<Entity<Inspector>>,
+
     #[cfg(feature = "profiler")]
     debug_frame_overlay: crate::debug_overlay::DebugFrameOverlay,
+
     pub(crate) a11y: A11y,
 }
 
@@ -1418,10 +1509,12 @@ impl Default for InputRateTracker {
 impl InputRateTracker {
     pub fn record_input(&mut self) {
         let now = Instant::now();
+
         self.timestamps.push(now);
         self.prune_old_timestamps(now);
 
         let min_events = self.inputs_per_second as u128 * self.window.as_millis() / 1000;
+
         if self.timestamps.len() as u128 >= min_events {
             self.sustain_until = now + self.sustain_duration;
         }
@@ -1455,6 +1548,7 @@ struct PendingInput {
 
 pub(crate) struct ElementStateBox {
     pub(crate) inner: Box<dyn Any>,
+
     #[cfg(debug_assertions)]
     pub(crate) type_name: &'static str,
 }
@@ -1494,6 +1588,7 @@ fn default_bounds(display_id: Option<DisplayId>, cx: &mut App) -> WindowBounds {
             WindowBounds::Maximized(bounds) => (bounds, WindowBounds::Maximized),
             WindowBounds::Fullscreen(bounds) => (bounds, WindowBounds::Fullscreen),
         },
+
         None => (
             display
                 .as_ref()
@@ -1521,6 +1616,7 @@ fn default_bounds(display_id: Option<DisplayId>, cx: &mut App) -> WindowBounds {
         (true, false) => point(base_origin.x, display_bounds.origin.y),
         (false, false) => display_bounds.origin,
     };
+
     window_bounds_ctor(Bounds::new(final_origin, base_size))
 }
 
@@ -1531,6 +1627,7 @@ impl Window {
         cx: &mut App,
     ) -> Result<Self> {
         let background_appearance = options.background_appearance();
+
         let WindowOptions {
             window_bounds,
             titlebar,
@@ -1561,6 +1658,7 @@ impl Window {
             .and_then(|titlebar| titlebar.title.clone());
 
         let window_bounds = window_bounds.unwrap_or_else(|| default_bounds(display_id, cx));
+
         let mut platform_window = cx.platform.open_window(
             handle,
             WindowParams {
@@ -1583,7 +1681,9 @@ impl Window {
         )?;
 
         let tab_bar_visible = platform_window.tab_bar_visible();
+
         SystemWindowTabController::init_visible(cx, tab_bar_visible);
+
         if let Some(tabs) = platform_window.tabbed_windows() {
             SystemWindowTabController::add_tab(cx, handle.window_id(), tabs);
         }
@@ -1607,6 +1707,7 @@ impl Window {
 
         platform_window
             .request_decorations(window_decorations.unwrap_or(WindowDecorations::Server));
+
         platform_window.set_background_appearance(background_appearance);
 
         match window_bounds {
@@ -1622,27 +1723,34 @@ impl Window {
         #[cfg(not(target_family = "wasm"))]
         if !accessibility_force_disabled {
             let mut initial_root_node = accesskit::Node::new(accesskit::Role::Window);
+
             if let Some(title) = &initial_window_title {
                 initial_root_node.set_label(title.to_string());
             }
+
             let initial_tree = accesskit::TreeUpdate {
                 nodes: vec![(ROOT_NODE_ID, initial_root_node)],
                 tree: Some(accesskit::Tree::new(ROOT_NODE_ID)),
                 tree_id: accesskit::TreeId::ROOT,
                 focus: ROOT_NODE_ID,
             };
+
             let (activation_sender, activation_receiver) = async_channel::unbounded::<()>();
             let (deactivation_sender, deactivation_receiver) = async_channel::unbounded::<()>();
+
             let (action_sender, action_receiver) =
                 async_channel::unbounded::<accesskit::ActionRequest>();
 
             platform_window.a11y_init(crate::A11yCallbacks {
                 activation: {
                     let active_flag = a11y_active_flag.clone();
+
                     Box::new(move || {
                         log::info!("Accessibility activated");
+
                         active_flag.store(true, SeqCst);
                         activation_sender.send_blocking(()).log_err();
+
                         Some(initial_tree.clone())
                     })
                 },
@@ -1651,8 +1759,10 @@ impl Window {
                 }),
                 deactivation: {
                     let active_flag = a11y_active_flag.clone();
+
                     Box::new(move || {
                         log::info!("Accessibility deactivated");
+
                         active_flag.store(false, SeqCst);
                         deactivation_sender.send_blocking(()).log_err();
                     })
@@ -1665,6 +1775,7 @@ impl Window {
             //
             // So we force a new frame, which will then send a correct `TreeUpdate`.
             let mut async_cx = cx.to_async();
+
             cx.foreground_executor()
                 .spawn(async move {
                     while activation_receiver.recv().await.is_ok() {
@@ -1676,6 +1787,7 @@ impl Window {
                 .detach();
 
             let mut async_cx = cx.to_async();
+
             cx.foreground_executor()
                 .spawn(async move {
                     while deactivation_receiver.recv().await.is_ok() {
@@ -1687,6 +1799,7 @@ impl Window {
                 .detach();
 
             let mut async_cx = cx.to_async();
+
             cx.foreground_executor()
                 .spawn(async move {
                     while let Ok(request) = action_receiver.recv().await {
@@ -1716,6 +1829,7 @@ impl Window {
                 not(target_family = "wasm")
             ))]
             let hot_patch_sender = hot_patch_sender.clone();
+
             move || {
                 #[cfg(all(
                     feature = "hot-patching",
@@ -1723,12 +1837,15 @@ impl Window {
                     not(target_family = "wasm")
                 ))]
                 hot_patch_sender.close();
+
                 let _ = handle.update(&mut cx, |_, window, _| window.remove_window());
+
                 let _ = cx.update(|cx| {
                     SystemWindowTabController::remove_tab(cx, window_id);
                 });
             }
         }));
+
         #[cfg(all(
             feature = "hot-patching",
             debug_assertions,
@@ -1740,8 +1857,10 @@ impl Window {
             subsecond::register_handler(Arc::new(move || {
                 let _ = hot_patch_sender.try_send(());
             }));
+
             let mut cx = cx.to_async();
             let foreground_executor = cx.foreground_executor().clone();
+
             foreground_executor
                 .spawn(async move {
                     while hot_patch_receiver.recv().await.is_ok() {
@@ -1755,6 +1874,7 @@ impl Window {
                 })
                 .detach();
         }
+
         platform_window.on_request_frame(Box::new({
             let mut cx = cx.to_async();
             let invalidator = invalidator.clone();
@@ -1763,9 +1883,11 @@ impl Window {
             let next_frame_callbacks = next_frame_callbacks.clone();
             let input_rate_tracker = input_rate_tracker.clone();
             let mut deferred_force_render = false;
+
             move |request_frame_options| {
                 #[cfg(feature = "profiler")]
                 let _foreground_turn = profiler::journal::foreground_turn();
+
                 // This must be checked before anything else: if this request
                 // arrived re-entrantly while a draw is on this thread's stack
                 // (e.g. via a nested message pump in the Windows window
@@ -1783,9 +1905,12 @@ impl Window {
                 // platform events (and thus requests frames) mid-draw.
                 if draw_in_progress() {
                     log::debug!("deferring re-entrant window draw request");
+
                     deferred_force_render |= request_frame_options.force_render;
+
                     return;
                 }
+
                 // Take the deferred flag first: `||` short-circuits, and leaving
                 // the flag set when this request already forces a render would
                 // force a second, redundant render on the next frame.
@@ -1813,29 +1938,35 @@ impl Window {
                 };
 
                 let now = Instant::now();
+
                 if let Some(min_interval) = min_frame_interval {
                     if let Some(last_frame) = last_frame_time.get()
                         && now.duration_since(last_frame) < min_interval
                     {
                         // Don't lose a pending forced render to throttling.
                         deferred_force_render |= force_render;
+
                         // Deferred by throttling: ask demand-driven platforms to retry.
                         handle
                             .update(&mut cx, |_, window, _| {
                                 window.platform_window.schedule_frame();
                             })
                             .log_err();
+
                         // The demand that entered this branch (a deferred forced
                         // render or pending next-frame callbacks) is still
                         // unserved; platforms that stop requesting frames for
                         // idle windows need a wakeup to deliver the retry.
                         invalidator.wake_platform();
+
                         return;
                     }
                 }
+
                 last_frame_time.set(Some(now));
 
                 let pending_next_frame_callbacks = next_frame_callbacks.take();
+
                 if !pending_next_frame_callbacks.is_empty() {
                     handle
                         .update(&mut cx, |_, window, cx| {
@@ -1862,12 +1993,15 @@ impl Window {
                                     // atlas tile references after a GPU device recovery.
                                     window.refresh();
                                 }
+
                                 let arena_clear_needed = window.draw(cx);
+
                                 window.present();
                                 arena_clear_needed.clear(cx);
                             })
                             .log_err();
                     })
+
                 } else if needs_present {
                     handle
                         .update(&mut cx, |_, window, _| window.present())
@@ -1894,28 +2028,36 @@ impl Window {
                 }
             }
         }));
+
         invalidator.set_platform_waker(platform_window.frame_waker());
+
         platform_window.on_resize(Box::new({
             let mut cx = cx.to_async();
+
             move |_, _| {
                 handle
                     .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
                     .log_err();
             }
         }));
+
         platform_window.on_moved(Box::new({
             let mut cx = cx.to_async();
+
             move || {
                 handle
                     .update(&mut cx, |_, window, cx| window.bounds_changed(cx))
                     .log_err();
             }
         }));
+
         platform_window.on_appearance_changed(Box::new({
             let cx = cx.to_async();
             let foreground_executor = cx.foreground_executor().clone();
+
             move || {
                 let mut cx = cx.clone();
+
                 // Defer the update because changing the AppKit appearance may
                 // synchronously invoke this callback while App is already borrowed.
                 foreground_executor
@@ -1927,22 +2069,28 @@ impl Window {
                     .detach();
             }
         }));
+
         platform_window.on_button_layout_changed(Box::new({
             let mut cx = cx.to_async();
+
             move || {
                 handle
                     .update(&mut cx, |_, window, cx| window.button_layout_changed(cx))
                     .log_err();
             }
         }));
+
         platform_window.on_active_status_change(Box::new({
             let mut cx = cx.to_async();
+
             move |active| {
                 handle
                     .update(&mut cx, |_, window, cx| {
                         window.active.set(active);
+
                         window.modifiers = window.platform_window.modifiers();
                         window.capslock = window.platform_window.capslock();
+
                         window
                             .activation_observers
                             .clone()
@@ -1956,20 +2104,26 @@ impl Window {
                     .log_err();
             }
         }));
+
         platform_window.on_hover_status_change(Box::new({
             let mut cx = cx.to_async();
+
             move |active| {
                 handle
                     .update(&mut cx, |_, window, _| {
                         window.hovered.set(active);
+
                         window.pointer_inside_window = active;
+
                         window.refresh();
                     })
                     .log_err();
             }
         }));
+
         platform_window.on_input({
             let mut cx = cx.to_async();
+
             Box::new(move |event| {
                 handle
                     .update(&mut cx, |_, window, cx| window.dispatch_event(event, cx))
@@ -1977,25 +2131,31 @@ impl Window {
                     .unwrap_or(DispatchEventResult::default())
             })
         });
+
         platform_window.on_hit_test_window_control({
             let mut cx = cx.to_async();
+
             Box::new(move || {
                 handle
                     .update(&mut cx, |_, window, _cx| {
                         for (area, hitbox) in &window.rendered_frame.window_control_hitboxes {
                             let mut scrollable_ids = window.mouse_hit_test().iter_scrollable();
+
                             if scrollable_ids.contains(&hitbox.id) {
                                 return Some(*area);
                             }
                         }
+
                         None
                     })
                     .log_err()
                     .unwrap_or(None)
             })
         });
+
         platform_window.on_move_tab_to_new_window({
             let mut cx = cx.to_async();
+
             Box::new(move || {
                 handle
                     .update(&mut cx, |_, _window, cx| {
@@ -2004,8 +2164,10 @@ impl Window {
                     .log_err();
             })
         });
+
         platform_window.on_merge_all_windows({
             let mut cx = cx.to_async();
+
             Box::new(move || {
                 handle
                     .update(&mut cx, |_, _window, cx| {
@@ -2014,8 +2176,10 @@ impl Window {
                     .log_err();
             })
         });
+
         platform_window.on_select_next_tab({
             let mut cx = cx.to_async();
+
             Box::new(move || {
                 handle
                     .update(&mut cx, |_, _window, cx| {
@@ -2024,8 +2188,10 @@ impl Window {
                     .log_err();
             })
         });
+
         platform_window.on_select_previous_tab({
             let mut cx = cx.to_async();
+
             Box::new(move || {
                 handle
                     .update(&mut cx, |_, _window, cx| {
@@ -2034,12 +2200,15 @@ impl Window {
                     .log_err();
             })
         });
+
         platform_window.on_toggle_tab_bar({
             let mut cx = cx.to_async();
+
             Box::new(move || {
                 handle
                     .update(&mut cx, |_, window, cx| {
                         let tab_bar_visible = window.platform_window.tab_bar_visible();
+
                         SystemWindowTabController::set_visible(cx, tab_bar_visible);
                     })
                     .log_err();
@@ -2166,6 +2335,7 @@ pub struct DispatchEventResult {
 pub struct ContentMask<P: Clone + Debug + Default + PartialEq> {
     /// The bounds
     pub bounds: Bounds<P>,
+
     /// Edge fade distances. A zero distance leaves that edge fully opaque.
     pub fade_out: Edges<P>,
 }
@@ -2254,9 +2424,11 @@ mod content_mask_tests {
     fn intersect_keeps_only_the_fade_at_the_visible_edge() {
         let outer = mask(0., 100., 20.);
         let inner = mask(30., 40., 0.);
+
         assert_eq!(outer.intersect(&inner).fade_out.left, px(0.));
 
         let child = mask(0., 40., 0.);
+
         assert_eq!(outer.intersect(&child).fade_out.left, px(20.));
     }
 }
@@ -2285,10 +2457,13 @@ impl Window {
             (),
             Box::new(move |window, cx| {
                 callback(window, cx);
+
                 true
             }),
         );
+
         activate();
+
         subscription
     }
 
@@ -2301,10 +2476,13 @@ impl Window {
             (),
             Box::new(move |window, cx| {
                 callback(window, cx);
+
                 true
             }),
         );
+
         activate();
+
         subscription
     }
 
@@ -2318,8 +2496,11 @@ impl Window {
         E: 'static + Render,
     {
         let view = cx.new(|cx| build_view(self, cx));
+
         self.root = Some(view.clone().into());
+
         self.refresh();
+
         view
     }
 
@@ -2342,6 +2523,7 @@ impl Window {
     pub fn refresh(&mut self) {
         if self.invalidator.not_drawing() {
             self.refreshing = true;
+
             self.invalidator.set_dirty(true);
         }
     }
@@ -2362,8 +2544,10 @@ impl Window {
     /// for focus restoration. Returns `None` at all other times, or when no such ancestor exists.
     pub fn focus_lost_restore_target(&self, cx: &App) -> Option<FocusHandle> {
         let (_leaf, ancestors) = self.focus_lost_path.split_last()?;
+
         ancestors.iter().rev().find_map(|id| {
             self.rendered_frame.dispatch_tree.focusable_node_id(*id)?;
+
             FocusHandle::for_id(*id, &cx.focus_handles)
         })
     }
@@ -2376,6 +2560,7 @@ impl Window {
 
         self.focus = Some(handle.id);
         self.focus_generation = self.focus_generation.wrapping_add(1);
+
         self.clear_pending_keystrokes(cx);
 
         self.refresh();
@@ -2392,13 +2577,16 @@ impl Window {
         if self.focus.is_some() {
             self.focus_generation = self.focus_generation.wrapping_add(1);
         }
+
         self.focus = None;
+
         self.refresh();
     }
 
     /// Blur the window and don't allow anything in it to be focused again.
     pub fn disable_focus(&mut self, cx: &mut App) {
         self.blur(cx);
+
         self.focus_enabled = false;
     }
 
@@ -2432,9 +2620,11 @@ impl Window {
     /// The current text style. Which is composed of all the style refinements provided to `with_text_style`.
     pub fn text_style(&self) -> TextStyle {
         let mut style = TextStyle::default();
+
         for refinement in &self.text_style_stack {
             style.refine(refinement);
         }
+
         style
     }
 
@@ -2515,10 +2705,12 @@ impl Window {
         let focus_id = self.focused(cx).map(|handle| handle.id);
 
         let window = self.handle;
+
         cx.defer(move |cx| {
             window
                 .update(cx, |_, window, cx| {
                     let node_id = window.focus_node_id_in_rendered_frame(focus_id);
+
                     window.dispatch_action_on_node(node_id, action.as_ref(), cx);
                 })
                 .log_err();
@@ -2578,6 +2770,7 @@ impl Window {
     /// that are currently on the stack to be returned to the app.
     pub fn defer(&self, cx: &mut App, f: impl FnOnce(&mut Window, &mut App) + 'static) {
         let handle = self.handle;
+
         cx.defer(move |cx| {
             handle.update(cx, |_, window, cx| f(window, cx)).ok();
         });
@@ -2595,6 +2788,7 @@ impl Window {
         let entity_id = observed.entity_id();
         let observed = observed.downgrade();
         let window_handle = self.handle;
+
         cx.new_observer(
             entity_id,
             Box::new(move |cx| {
@@ -2602,7 +2796,9 @@ impl Window {
                     .update(cx, |_, window, cx| {
                         if let Some(handle) = observed.upgrade() {
                             on_notify(handle, window, cx);
+
                             true
+
                         } else {
                             false
                         }
@@ -2628,6 +2824,7 @@ impl Window {
         let entity_id = entity.entity_id();
         let handle = entity.downgrade();
         let window_handle = self.handle;
+
         cx.new_subscription(
             entity_id,
             (
@@ -2637,8 +2834,11 @@ impl Window {
                         .update(cx, |_, window, cx| {
                             if let Some(entity) = handle.upgrade() {
                                 let event = event.downcast_ref().expect("invalid event type");
+
                                 on_event(entity, event, window, cx);
+
                                 true
+
                             } else {
                                 false
                             }
@@ -2661,6 +2861,7 @@ impl Window {
     {
         let entity_id = entity.entity_id();
         let window_handle = self.handle;
+
         let (subscription, activate) = cx.release_listeners.insert(
             entity_id,
             Box::new(move |entity, cx| {
@@ -2668,7 +2869,9 @@ impl Window {
                 let _ = window_handle.update(cx, |_, window, cx| on_release(entity, window, cx));
             }),
         );
+
         activate();
+
         subscription
     }
 
@@ -2701,6 +2904,7 @@ impl Window {
     /// and skip the frame request when it is set.
     pub fn request_animation_frame(&self) {
         let entity = self.current_view();
+
         self.on_next_frame(move |_, cx| cx.notify(entity));
     }
 
@@ -2712,9 +2916,11 @@ impl Window {
     pub fn simulate_next_frame(&mut self, cx: &mut App) -> usize {
         let callbacks = self.next_frame_callbacks.take();
         let count = callbacks.len();
+
         for callback in callbacks {
             callback(self, cx);
         }
+
         count
     }
 
@@ -2728,8 +2934,10 @@ impl Window {
         AsyncFn: AsyncFnOnce(&mut AsyncWindowContext) -> R + 'static,
     {
         let handle = self.handle;
+
         cx.spawn(async move |app| {
             let mut async_window_cx = AsyncWindowContext::new_context(app.clone(), handle);
+
             f(&mut async_window_cx).await
         })
     }
@@ -2749,8 +2957,10 @@ impl Window {
         AsyncFn: AsyncFnOnce(&mut AsyncWindowContext) -> R + 'static,
     {
         let handle = self.handle;
+
         cx.spawn_with_priority(priority, async move |app| {
             let mut async_window_cx = AsyncWindowContext::new_context(app.clone(), handle);
+
             f(&mut async_window_cx).await
         })
     }
@@ -2791,6 +3001,7 @@ impl Window {
     #[cfg(any(test, feature = "test-support"))]
     pub fn rendered_primitive_counts(&self) -> (usize, usize, usize, usize) {
         let scene = &self.rendered_frame.scene;
+
         (
             scene.quads.len(),
             scene.monochrome_sprites.len(),
@@ -2890,6 +3101,7 @@ impl Window {
     /// When using client side decorations, set this to the width of the invisible decorations (Wayland and X11)
     pub fn set_client_inset(&mut self, inset: Pixels) {
         self.client_inset = Some(inset);
+
         self.platform_window.set_client_inset(inset);
     }
 
@@ -2981,6 +3193,7 @@ impl Window {
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_scale_factor(&mut self, scale_factor: f32) {
         self.scale_factor = scale_factor;
+
         self.refresh();
     }
 
@@ -3021,8 +3234,11 @@ impl Window {
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.element_id_stack.push(element_id.into());
+
         let result = f(self);
+
         self.element_id_stack.pop();
+
         result
     }
 
@@ -3040,9 +3256,13 @@ impl Window {
 
         if let Some(rem_size) = rem_size {
             self.rem_size_override_stack.push(rem_size.into());
+
             let result = f(self);
+
             self.rem_size_override_stack.pop();
+
             result
+
         } else {
             f(self)
         }
@@ -3063,6 +3283,7 @@ impl Window {
     #[inline]
     pub fn pixel_snap_f64(&self, value: f64) -> f64 {
         let scale_factor = f64::from(self.scale_factor());
+
         round_half_toward_zero_f64(value * scale_factor) / scale_factor
     }
 
@@ -3085,6 +3306,7 @@ impl Window {
         let top = round_to_device_pixel(bounds.top().0, scale_factor);
         let right = round_to_device_pixel(bounds.right().0, scale_factor).max(left);
         let bottom = round_to_device_pixel(bounds.bottom().0, scale_factor).max(top);
+
         Bounds::from_corners(
             point(ScaledPixels(left), ScaledPixels(top)),
             point(ScaledPixels(right), ScaledPixels(bottom)),
@@ -3110,6 +3332,7 @@ impl Window {
         let top = floor_to_device_pixel(bounds.top().0, scale_factor);
         let right = ceil_to_device_pixel(bounds.right().0, scale_factor).max(left);
         let bottom = ceil_to_device_pixel(bounds.bottom().0, scale_factor).max(top);
+
         Bounds::from_corners(
             point(ScaledPixels(left), ScaledPixels(top)),
             point(ScaledPixels(right), ScaledPixels(bottom)),
@@ -3119,6 +3342,7 @@ impl Window {
     #[inline]
     fn snapped_content_mask(&self) -> ContentMask<ScaledPixels> {
         let mask = self.content_mask();
+
         ContentMask {
             bounds: self.cover_bounds(mask.bounds),
             fade_out: mask.fade_out.scale(self.scale_factor()),
@@ -3140,6 +3364,7 @@ impl Window {
     pub fn is_action_available(&self, action: &dyn Action, cx: &App) -> bool {
         let node_id =
             self.focus_node_id_in_rendered_frame(self.focused(cx).map(|handle| handle.id));
+
         self.rendered_frame
             .dispatch_tree
             .is_action_available(action, node_id)
@@ -3148,6 +3373,7 @@ impl Window {
     /// Determine whether the given action is available along the dispatch path to the given focus_handle.
     pub fn is_action_available_in(&self, action: &dyn Action, focus_handle: &FocusHandle) -> bool {
         let node_id = self.focus_node_id_in_rendered_frame(Some(focus_handle.id));
+
         self.rendered_frame
             .dispatch_tree
             .is_action_available(action, node_id)
@@ -3220,6 +3446,7 @@ impl Window {
         // first-invalidation timestamp can't be attributed to this one.
         #[cfg(feature = "profiler")]
         let frame_dirty = self.invalidator.take_frame_dirty();
+
         #[cfg(feature = "profiler")]
         self.window_profiler.begin_draw();
 
@@ -3229,8 +3456,11 @@ impl Window {
 
         self.invalidate_entities();
         cx.entities.clear_accessed();
+
         debug_assert!(self.rendered_entity_stack.is_empty());
+
         self.invalidator.set_dirty(false);
+
         self.requested_autoscroll = None;
 
         // Restore the previously-used input handler.
@@ -3250,12 +3480,15 @@ impl Window {
                 self.rendered_frame.input_handlers.push(Some(input_handler));
             }
         }
+
         if !cx.mode.skip_drawing() {
             self.draw_roots(cx);
+
             #[cfg(feature = "profiler")]
             {
                 let viewport_size = self.viewport_size;
                 let scale_factor = self.scale_factor();
+
                 self.debug_frame_overlay.paint(
                     &mut self.next_frame.scene,
                     viewport_size,
@@ -3263,7 +3496,9 @@ impl Window {
                 );
             }
         }
+
         self.dirty_views.clear();
+
         self.next_frame.window_active = self.active.get();
 
         // Register requested input handler with the platform window.
@@ -3279,14 +3514,20 @@ impl Window {
             .find_map(|h| h.take())
         {
             let accepts_text_input = input_handler.accepts_text_input(self, cx);
+
             self.platform_window.set_input_handler(input_handler);
+
             accepts_text_input
+
         } else {
             false
         };
+
         self.apply_text_input_configuration(cx);
+
         if focused_text_input_active != self.focused_text_input_active {
             self.focused_text_input_active = focused_text_input_active;
+
             self.platform_window
                 .text_input_state_changed(if focused_text_input_active {
                     TextInputStateChange::FocusGained
@@ -3300,10 +3541,14 @@ impl Window {
         self.next_frame.finish(&mut self.rendered_frame);
 
         self.invalidator.set_phase(DrawPhase::Focus);
+
         let previous_focus_path = self.rendered_frame.focus_path();
         let previous_window_active = self.rendered_frame.window_active;
+
         mem::swap(&mut self.rendered_frame, &mut self.next_frame);
+
         self.next_frame.clear();
+
         let current_focus_path = self.rendered_frame.focus_path();
         let current_window_active = self.rendered_frame.window_active;
         let mut focus_before_listeners = self.focus;
@@ -3313,9 +3558,11 @@ impl Window {
         {
             if !previous_focus_path.is_empty() && current_focus_path.is_empty() {
                 self.focus_lost_path = previous_focus_path.clone();
+
                 self.focus_lost_listeners
                     .clone()
                     .retain(&(), |listener| listener(self, cx));
+
                 self.focus_lost_path = SmallVec::new();
                 // The focus-lost fallback (e.g. a workspace refocusing itself) may target
                 // an element that isn't part of the element tree, in which case scheduling
@@ -3336,17 +3583,22 @@ impl Window {
                     Default::default()
                 },
             };
+
             self.focus_listeners
                 .clone()
                 .retain(&(), |listener| listener(&event, self, cx));
         }
 
         debug_assert!(self.rendered_entity_stack.is_empty());
+
         self.record_entities_accessed(cx);
         self.reset_cursor_style(cx);
+
         self.refreshing = false;
+
         self.invalidator.set_phase(DrawPhase::None);
         self.notify_pointer_observers(PointerChangeCause::Layout, cx);
+
         // Focus listeners may move focus (e.g. a dock forwarding focus to its active
         // panel). `Window::focus` suppresses `refresh` while a draw is in progress, so
         // schedule another frame here to render the new focus state and dispatch the
@@ -3354,6 +3606,7 @@ impl Window {
         if self.focus != focus_before_listeners {
             self.refresh();
         }
+
         self.needs_present.set(true);
 
         #[cfg(feature = "profiler")]
@@ -3361,6 +3614,7 @@ impl Window {
             let draw_duration = self
                 .window_profiler
                 .end_draw(frame_dirty.dirty_at, frame_dirty.invalidations);
+
             self.debug_frame_overlay.record_frame(draw_duration);
         }
 
@@ -3373,21 +3627,26 @@ impl Window {
         let mut entities_ref = cx.entities.accessed_entities.get_mut();
         let mut entities = mem::take(entities_ref.deref_mut());
         let handle = self.handle;
+
         cx.record_entities_accessed(
             handle,
             // Try moving window invalidator into the Window
             self.invalidator.clone(),
             &entities,
         );
+
         let mut entities_ref = cx.entities.accessed_entities.get_mut();
+
         mem::swap(&mut entities, entities_ref.deref_mut());
     }
 
     fn invalidate_entities(&mut self) {
         let mut views = self.invalidator.take_views();
+
         for entity in views.drain() {
             self.mark_view_dirty(entity);
         }
+
         self.invalidator.replace_views(views);
     }
 
@@ -3397,7 +3656,9 @@ impl Window {
         let _foreground_turn = profiler::journal::foreground_turn();
         #[cfg(feature = "profiler")]
         let present_start = Instant::now();
+
         self.platform_window.draw(&self.rendered_frame.scene);
+
         #[cfg(feature = "profiler")]
         self.window_profiler.record_present(
             present_start,
@@ -3405,7 +3666,9 @@ impl Window {
             self.active.get(),
             !self.next_frame_callbacks.borrow().is_empty(),
         );
+
         self.needs_present.set(false);
+
         profiling::finish_frame!();
     }
 
@@ -3466,22 +3729,28 @@ impl Window {
         self.tooltip_bounds.take();
 
         self.a11y.sync_active_flag();
+
         if self.a11y.is_active() {
             self.a11y.begin_frame();
         }
 
         let _inspector_width: Pixels = rems(30.0).to_pixels(self.rem_size());
+
         let root_size = {
             #[cfg(any(feature = "inspector", debug_assertions))]
             {
                 if self.inspector.is_some() {
                     let mut size = self.viewport_size;
+
                     size.width = (size.width - _inspector_width).max(px(0.0));
+
                     size
+
                 } else {
                     self.viewport_size
                 }
             }
+
             #[cfg(not(any(feature = "inspector", debug_assertions)))]
             {
                 self.viewport_size
@@ -3494,10 +3763,12 @@ impl Window {
         let scale_factor = self.scale_factor();
         let mut root_element = self.root.as_ref().unwrap().clone().into_any_element();
         let root_layout_id = root_element.request_layout(self, cx);
+
         self.layout_engine
             .as_mut()
             .unwrap()
             .stretch_auto_size_to_fill(root_layout_id, root_size, scale_factor);
+
         root_element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
@@ -3508,22 +3779,30 @@ impl Window {
         let mut prompt_element = None;
         let mut active_drag_element = None;
         let mut tooltip_element = None;
+
         if let Some(prompt) = self.prompt.take() {
             let mut element = prompt.view.any_view().into_any_element();
             let prompt_layout_id = element.request_layout(self, cx);
+
             self.layout_engine
                 .as_mut()
                 .unwrap()
                 .stretch_auto_size_to_fill(prompt_layout_id, root_size, scale_factor);
+
             element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
+
             prompt_element = Some(element);
             self.prompt = Some(prompt);
+
         } else if let Some(active_drag) = cx.active_drag.take() {
             let mut element = active_drag.view.clone().into_any_element();
             let offset = self.mouse_position() - active_drag.cursor_offset;
+
             element.prepaint_as_root(offset, AvailableSpace::min_size(), self, cx);
+
             active_drag_element = Some(element);
             cx.active_drag = Some(active_drag);
+
         } else {
             tooltip_element = self.prepaint_tooltip(cx);
         }
@@ -3552,7 +3831,9 @@ impl Window {
 
         // a11y may have been activated/deactivated halfway through the frame
         let a11y_active_start_of_frame = self.a11y.is_active();
+
         self.a11y.sync_active_flag();
+
         let a11y_active_end_of_frame = self.a11y.is_active();
 
         let should_send_a11y_update = a11y_active_start_of_frame && a11y_active_end_of_frame;
@@ -3565,6 +3846,7 @@ impl Window {
                 scale_factor: self.scale_factor,
                 tab_stop_count: self.next_frame.tab_stops.tab_stop_count(),
             };
+
             // clear the builder state regardless
             let tree_update = self.a11y.end_frame(frame_info);
 
@@ -3573,6 +3855,7 @@ impl Window {
                     "Sending a11y tree update: {} nodes",
                     tree_update.nodes.len()
                 );
+
                 self.platform_window.a11y_tree_update(tree_update);
             }
         }
@@ -3588,14 +3871,17 @@ impl Window {
                 .cloned()
             else {
                 log::error!("Unexpectedly absent TooltipRequest");
+
                 continue;
             };
+
             let mut element = tooltip_request.tooltip.view.clone().into_any_element();
             let mouse_position = tooltip_request.tooltip.mouse_position;
             let tooltip_size = element.layout_as_root(AvailableSpace::min_size(), self, cx);
 
             let mut tooltip_bounds =
                 Bounds::new(mouse_position + point(px(1.), px(1.)), tooltip_size);
+
             let window_bounds = Bounds {
                 origin: Point::default(),
                 size: self.viewport_size(),
@@ -3603,6 +3889,7 @@ impl Window {
 
             if tooltip_bounds.right() > window_bounds.right() {
                 let new_x = mouse_position.x - tooltip_bounds.size.width - px(1.);
+
                 if new_x >= Pixels::ZERO {
                     tooltip_bounds.origin.x = new_x;
                 } else {
@@ -3615,6 +3902,7 @@ impl Window {
 
             if tooltip_bounds.bottom() > window_bounds.bottom() {
                 let new_y = mouse_position.y - tooltip_bounds.size.height - px(1.);
+
                 if new_y >= Pixels::ZERO {
                     tooltip_bounds.origin.y = new_y;
                 } else {
@@ -3630,6 +3918,7 @@ impl Window {
             // case, instead update the tooltip's visibility here.
             let is_visible =
                 (tooltip_request.tooltip.check_visible_and_update)(tooltip_bounds, self, cx);
+
             if !is_visible {
                 continue;
             }
@@ -3642,8 +3931,10 @@ impl Window {
                 id: tooltip_request.id,
                 bounds: tooltip_bounds,
             });
+
             return Some(element);
         }
+
         None
     }
 
@@ -3662,17 +3953,22 @@ impl Window {
         // the wrong deferred draws and panic in the dispatch tree.
         let mut round_start = 0;
         let mut depth = 0;
+
         loop {
             let round_end = self.next_frame.deferred_draws.len();
+
             if round_start == round_end {
                 break;
             }
+
             // Limit maximum nesting depth to prevent infinite loops.
             assert!(depth < 10, "Exceeded maximum (10) deferred depth");
+
             depth += 1;
 
             // Sort this round by priority.
             let mut traversal_order = (round_start..round_end).collect::<SmallVec<[usize; 8]>>();
+
             traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
 
             for deferred_draw_ix in traversal_order {
@@ -3686,10 +3982,13 @@ impl Window {
                     prepaint_range,
                 ) = {
                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
+
                     self.element_id_stack
                         .clone_from(&deferred_draw.element_id_stack);
+
                     self.text_style_stack
                         .clone_from(&deferred_draw.text_style_stack);
+
                     (
                         deferred_draw.priority,
                         deferred_draw.element.take(),
@@ -3700,30 +3999,39 @@ impl Window {
                         deferred_draw.prepaint_range.clone(),
                     )
                 };
+
                 self.next_frame.dispatch_tree.set_active_node(parent_node);
 
                 let prepaint_start = self.prepaint_index();
+
                 if let Some(mut element) = element {
                     self.with_rendered_view(current_view, |window| {
                         window.with_rem_size(Some(rem_size), |window| {
                             window.with_absolute_element_offset(absolute_offset, |window| {
                                 crate::DeferredPriorityStackCache::push(priority, cx);
+
                                 element.prepaint(window, cx);
+
                                 crate::DeferredPriorityStackCache::pop(cx);
                             });
                         });
                     });
+
                     self.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
+
                 } else {
                     self.reuse_prepaint(prepaint_range);
                 }
+
                 let prepaint_end = self.prepaint_index();
+
                 self.next_frame.deferred_draws[deferred_draw_ix].prepaint_range =
                     prepaint_start..prepaint_end;
             }
 
             self.element_id_stack.clear();
             self.text_style_stack.clear();
+
             round_start = round_end;
         }
     }
@@ -3744,16 +4052,20 @@ impl Window {
 
         let traversal_order = self.deferred_draw_traversal_order();
         let mut deferred_draws = mem::take(&mut self.next_frame.deferred_draws);
+
         for deferred_draw_ix in traversal_order {
             let mut deferred_draw = &mut deferred_draws[deferred_draw_ix];
+
             self.element_id_stack
                 .clone_from(&deferred_draw.element_id_stack);
+
             self.next_frame
                 .dispatch_tree
                 .set_active_node(deferred_draw.parent_node);
 
             let paint_start = self.paint_index();
             let content_mask = deferred_draw.content_mask;
+
             if let Some(element) = deferred_draw.element.as_mut() {
                 self.with_rendered_view(deferred_draw.current_view, |window| {
                     window.with_content_mask(content_mask, |window| {
@@ -3762,20 +4074,27 @@ impl Window {
                         });
                     })
                 })
+
             } else {
                 self.reuse_paint(deferred_draw.paint_range.clone());
             }
+
             let paint_end = self.paint_index();
+
             deferred_draw.paint_range = paint_start..paint_end;
         }
+
         self.next_frame.deferred_draws = deferred_draws;
+
         self.element_id_stack.clear();
     }
 
     fn deferred_draw_traversal_order(&mut self) -> SmallVec<[usize; 8]> {
         let deferred_count = self.next_frame.deferred_draws.len();
         let mut sorted_indices = (0..deferred_count).collect::<SmallVec<[_; 8]>>();
+
         sorted_indices.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
+
         sorted_indices
     }
 
@@ -3796,18 +4115,21 @@ impl Window {
                 .iter()
                 .cloned(),
         );
+
         self.next_frame.tooltip_requests.extend(
             self.rendered_frame.tooltip_requests
                 [range.start.tooltips_index..range.end.tooltips_index]
                 .iter_mut()
                 .map(|request| request.take()),
         );
+
         self.next_frame.accessed_element_states.extend(
             self.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
                 ..range.end.accessed_element_states_index]
                 .iter()
                 .map(|(id, type_id)| (id.clone(), *type_id)),
         );
+
         self.text_system
             .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
 
@@ -3861,30 +4183,35 @@ impl Window {
                 .iter()
                 .cloned(),
         );
+
         self.next_frame.cursor_styles.extend(
             self.rendered_frame.cursor_styles
                 [range.start.cursor_styles_index..range.end.cursor_styles_index]
                 .iter()
                 .cloned(),
         );
+
         self.next_frame.input_handlers.extend(
             self.rendered_frame.input_handlers
                 [range.start.input_handlers_index..range.end.input_handlers_index]
                 .iter_mut()
                 .map(|handler| handler.take()),
         );
+
         self.next_frame.mouse_listeners.extend(
             self.rendered_frame.mouse_listeners
                 [range.start.mouse_listeners_index..range.end.mouse_listeners_index]
                 .iter_mut()
                 .map(|listener| listener.take()),
         );
+
         self.next_frame.accessed_element_states.extend(
             self.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
                 ..range.end.accessed_element_states_index]
                 .iter()
                 .map(|(id, type_id)| (id.clone(), *type_id)),
         );
+
         self.next_frame.tab_stops.replay(
             &self.rendered_frame.tab_stops.insertion_history
                 [range.start.tab_handle_index..range.end.tab_handle_index],
@@ -3892,6 +4219,7 @@ impl Window {
 
         self.text_system
             .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
+
         self.next_frame.scene.replay(
             range.start.scene_index..range.end.scene_index,
             &self.rendered_frame.scene,
@@ -3906,11 +4234,16 @@ impl Window {
         F: FnOnce(&mut Self) -> R,
     {
         self.invalidator.debug_assert_paint_or_prepaint();
+
         if let Some(style) = style {
             self.text_style_stack.push(style);
+
             let result = f(self);
+
             self.text_style_stack.pop();
+
             result
+
         } else {
             f(self)
         }
@@ -3920,6 +4253,7 @@ impl Window {
     /// during the paint phase of element drawing.
     pub fn set_cursor_style(&mut self, style: CursorStyle, hitbox: &Hitbox) {
         self.invalidator.debug_assert_paint();
+
         self.next_frame
             .cursor_styles
             .push(CursorStyleRequest::Hitbox {
@@ -3936,6 +4270,7 @@ impl Window {
         resolve: impl Fn(Point<Pixels>) -> Option<CursorStyle> + 'static,
     ) {
         self.invalidator.debug_assert_paint();
+
         self.next_frame
             .cursor_styles
             .push(CursorStyleRequest::Hitbox {
@@ -3950,6 +4285,7 @@ impl Window {
     /// phase of element drawing.
     pub fn set_window_cursor_style(&mut self, style: CursorStyle) {
         self.invalidator.debug_assert_paint();
+
         self.next_frame
             .cursor_styles
             .push(CursorStyleRequest::Window(CursorStyleSource::Fixed(style)));
@@ -3962,6 +4298,7 @@ impl Window {
         resolve: impl Fn(Point<Pixels>) -> Option<CursorStyle> + 'static,
     ) {
         self.invalidator.debug_assert_paint();
+
         self.next_frame
             .cursor_styles
             .push(CursorStyleRequest::Window(CursorStyleSource::Position(
@@ -3973,10 +4310,13 @@ impl Window {
     /// during the paint phase of element drawing.
     pub fn set_tooltip(&mut self, tooltip: AnyTooltip) -> TooltipId {
         self.invalidator.debug_assert_prepaint();
+
         let id = TooltipId(post_inc(&mut self.next_tooltip_id.0));
+
         self.next_frame
             .tooltip_requests
             .push(Some(TooltipRequest { id, tooltip }));
+
         id
     }
 
@@ -3991,12 +4331,18 @@ impl Window {
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.invalidator.debug_assert_paint_or_prepaint();
+
         if let Some(mask) = mask {
             let mask = mask.intersect(&self.content_mask());
+
             self.content_mask_stack.push(mask);
+
             let result = f(self);
+
             self.content_mask_stack.pop();
+
             result
+
         } else {
             f(self)
         }
@@ -4016,6 +4362,7 @@ impl Window {
         };
 
         let abs_offset = self.element_offset() + offset;
+
         self.with_absolute_element_offset(abs_offset, f)
     }
 
@@ -4025,9 +4372,12 @@ impl Window {
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.invalidator.debug_assert_prepaint();
+
         let previous_bounds = self.style_transition_containing_bounds.replace(bounds);
         let result = f(self);
+
         self.style_transition_containing_bounds = previous_bounds;
+
         result
     }
 
@@ -4045,8 +4395,11 @@ impl Window {
     ) -> R {
         self.invalidator.debug_assert_prepaint();
         self.element_offset_stack.push(offset);
+
         let result = f(self);
+
         self.element_offset_stack.pop();
+
         result
     }
 
@@ -4056,6 +4409,7 @@ impl Window {
         paint: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.invalidator.debug_assert_paint();
+
         let opacity = opacity.unwrap_or(1.0).clamp(0.0, 1.0);
 
         if opacity == 1.0 {
@@ -4065,6 +4419,7 @@ impl Window {
         // The existing targets cover the viewport, preserving shadows and visible overflow.
         // Child paint operations already carry their clipping and edge fades.
         let bounds = self.cover_bounds(Bounds::new(Point::default(), self.viewport_size()));
+
         let boundary = FilterBoundary {
             order: 0,
             bounds,
@@ -4088,7 +4443,9 @@ impl Window {
         paint: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.next_frame.scene.insert_primitive(boundary.clone());
+
         let result = paint(self);
+
         self.next_frame.scene.insert_primitive(FilterBoundary {
             is_start: false,
             ..boundary
@@ -4104,24 +4461,32 @@ impl Window {
     /// called during the prepaint phase of element drawing.
     pub fn transact<T, U>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, U>) -> Result<T, U> {
         self.invalidator.debug_assert_prepaint();
+
         let index = self.prepaint_index();
         let result = f(self);
+
         if result.is_err() {
             self.next_frame.hitboxes.truncate(index.hitboxes_index);
+
             self.next_frame
                 .tooltip_requests
                 .truncate(index.tooltips_index);
+
             self.next_frame
                 .deferred_draws
                 .truncate(index.deferred_draws_index);
+
             self.next_frame
                 .dispatch_tree
                 .truncate(index.dispatch_tree_index);
+
             self.next_frame
                 .accessed_element_states
                 .truncate(index.accessed_element_states_index);
+
             self.text_system.truncate_layouts(index.line_layout_index);
         }
+
         result
     }
 
@@ -4132,6 +4497,7 @@ impl Window {
     /// called during the prepaint phase of element drawing.
     pub fn request_autoscroll(&mut self, bounds: Bounds<Pixels>) {
         self.invalidator.debug_assert_prepaint();
+
         self.requested_autoscroll = Some(bounds);
     }
 
@@ -4149,11 +4515,14 @@ impl Window {
     /// time.
     pub fn use_asset<A: Asset>(&mut self, source: &A::Source, cx: &mut App) -> Option<A::Output> {
         let (task, is_first) = cx.fetch_asset::<A>(source);
+
         task.clone().now_or_never().or_else(|| {
             if is_first {
                 let entity_id = self.current_view();
+
                 self.spawn(cx, {
                     let task = task.clone();
+
                     async move |cx| {
                         task.await;
 
@@ -4176,12 +4545,15 @@ impl Window {
     /// time.
     pub fn get_asset<A: Asset>(&mut self, source: &A::Source, cx: &mut App) -> Option<A::Output> {
         let (task, _) = cx.fetch_asset::<A>(source);
+
         task.now_or_never()
     }
+
     /// Obtain the current element offset. This method should only be called during the
     /// prepaint phase of element drawing.
     pub fn element_offset(&self) -> Point<Pixels> {
         self.invalidator.debug_assert_prepaint();
+
         self.element_offset_stack
             .last()
             .copied()
@@ -4191,6 +4563,7 @@ impl Window {
     /// Obtain the current content mask. This method should only be called during element drawing.
     pub fn content_mask(&self) -> ContentMask<Pixels> {
         self.invalidator.debug_assert_paint_or_prepaint();
+
         self.content_mask_stack
             .last()
             .cloned()
@@ -4211,8 +4584,11 @@ impl Window {
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.element_id_stack.push(element_id.into());
+
         let result = f(self);
+
         self.element_id_stack.pop();
+
         result
     }
 
@@ -4226,16 +4602,19 @@ impl Window {
         init: impl FnOnce(&mut Self, &mut Context<S>) -> S,
     ) -> Entity<S> {
         let current_view = self.current_view();
+
         self.with_global_id(key.into(), |global_id, window| {
             window.with_element_state(global_id, |state: Option<Entity<S>>, window| {
                 if let Some(state) = state {
                     (state.clone(), state)
                 } else {
                     let new_state = cx.new(|cx| init(window, cx));
+
                     cx.observe(&new_state, move |_, cx| {
                         cx.notify(current_view);
                     })
                     .detach();
+
                     (new_state.clone(), new_state)
                 }
             })
@@ -4277,6 +4656,7 @@ impl Window {
         self.invalidator.debug_assert_paint_or_prepaint();
 
         let key = (global_id.clone(), TypeId::of::<S>());
+
         self.next_frame.accessed_element_states.push(key.clone());
 
         if let Some(any) = self
@@ -4290,6 +4670,7 @@ impl Window {
                 #[cfg(debug_assertions)]
                 type_name,
             } = any;
+
             // Using the extra inner option to avoid needing to reallocate a new box.
             let mut state_box = inner
                 .downcast::<Option<S>>()
@@ -4316,8 +4697,11 @@ impl Window {
             let state = state_box.take().expect(
                 "reentrant call to with_element_state for the same state type and element id",
             );
+
             let (result, state) = f(Some(state), self);
+
             state_box.replace(state);
+
             self.next_frame.element_states.insert(
                 key,
                 ElementStateBox {
@@ -4326,9 +4710,12 @@ impl Window {
                     type_name,
                 },
             );
+
             result
+
         } else {
             let (result, state) = f(None, self);
+
             self.next_frame.element_states.insert(
                 key,
                 ElementStateBox {
@@ -4337,6 +4724,7 @@ impl Window {
                     type_name: std::any::type_name::<S>(),
                 },
             );
+
             result
         }
     }
@@ -4360,16 +4748,21 @@ impl Window {
         if let Some(global_id) = global_id {
             self.with_element_state(global_id, |state, cx| {
                 let (result, state) = f(Some(state), cx);
+
                 let state =
                     state.expect("you must return some state when you pass some element id");
+
                 (result, state)
             })
+
         } else {
             let (result, state) = f(None, self);
+
             debug_assert!(
                 state.is_none(),
                 "you must not return an element state when passing None for the global id"
             );
+
             result
         }
     }
@@ -4385,6 +4778,7 @@ impl Window {
         init: impl Fn(&mut Window, &mut Context<TransitionState<T>>) -> T,
     ) -> Transition<T> {
         let motion = motion.into();
+
         let state = self.use_state(cx, |window, cx| {
             TransitionState::new(init(window, cx), motion.clone())
         });
@@ -4408,6 +4802,7 @@ impl Window {
         init: impl Fn(&mut Window, &mut Context<TransitionState<T>>) -> T,
     ) -> Transition<T> {
         let motion = motion.into();
+
         let state = self.use_keyed_state(key, cx, |window, cx| {
             TransitionState::new(init(window, cx), motion.clone())
         });
@@ -4420,9 +4815,13 @@ impl Window {
     pub fn with_tab_group<R>(&mut self, index: Option<isize>, f: impl FnOnce(&mut Self) -> R) -> R {
         if let Some(index) = index {
             self.next_frame.tab_stops.begin_group(index);
+
             let result = f(self);
+
             self.next_frame.tab_stops.end_group();
+
             result
+
         } else {
             f(self)
         }
@@ -4444,7 +4843,9 @@ impl Window {
         content_mask: Option<ContentMask<Pixels>>,
     ) {
         self.invalidator.debug_assert_prepaint();
+
         let parent_node = self.next_frame.dispatch_tree.active_node_id().unwrap();
+
         self.next_frame.deferred_draws.push(DeferredDraw {
             current_view: self.current_view(),
             parent_node,
@@ -4470,6 +4871,7 @@ impl Window {
 
         let content_mask = self.content_mask();
         let clipped_bounds = bounds.intersect(&content_mask.bounds);
+
         if !clipped_bounds.is_empty() {
             self.next_frame
                 .scene
@@ -4543,6 +4945,7 @@ impl Window {
             let shadow_radii = if inset {
                 // Large inset spreads must not produce negative radii in the shader.
                 corner_radii.map(|radius| (*radius - shadow.spread_radius).max(Pixels::ZERO))
+
             } else {
                 corner_radii
             };
@@ -4582,11 +4985,13 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
+
         let filters: SmallVec<[ScaledFilter; 4]> = filters
             .iter()
             .filter(|filter| !filter.is_identity())
             .map(|filter| filter.scale(scale_factor))
             .collect();
+
         if filters.is_empty() {
             return;
         }
@@ -4623,11 +5028,13 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.scale_factor();
+
         let filters: SmallVec<[ScaledFilter; 4]> = filters
             .iter()
             .filter(|filter| !filter.is_identity())
             .map(|filter| filter.scale(scale_factor))
             .collect();
+
         if filters.is_empty() {
             return f(self);
         }
@@ -4650,6 +5057,7 @@ impl Window {
         let radii = &quad.corner_radii;
         let widths = &quad.border_widths;
         let reach_factor = 1.0 + quad.corner_smoothing;
+
         let edge_reaches = Edges {
             top: radii.top_left.max(radii.top_right) * reach_factor,
             right: radii.top_right.max(radii.bottom_right) * reach_factor,
@@ -4658,6 +5066,7 @@ impl Window {
         };
 
         let antialias_inset = point(ScaledPixels(1.0), ScaledPixels(1.0));
+
         let inset_bounds = |top_left_inset, bottom_right_inset| {
             Bounds::from_corners(
                 quad.bounds.origin + top_left_inset + antialias_inset,
@@ -4671,6 +5080,7 @@ impl Window {
             point(widths.left, widths.top.max(edge_reaches.top)),
             point(widths.right, widths.bottom.max(edge_reaches.bottom)),
         );
+
         let vertical_band = inset_bounds(
             point(widths.left.max(edge_reaches.left), widths.top),
             point(widths.right.max(edge_reaches.right), widths.bottom),
@@ -4679,6 +5089,7 @@ impl Window {
         let area = |bounds: &Bounds<ScaledPixels>| {
             bounds.size.width.0.max(0.) * bounds.size.height.0.max(0.)
         };
+
         if area(&horizontal_band) >= area(&vertical_band) {
             horizontal_band
         } else {
@@ -4701,6 +5112,7 @@ impl Window {
 
         let snapped_bounds = self.snap_bounds(quad.bounds);
         let snapped_border_widths = self.snap_border_widths(quad.border_widths);
+
         let quad = Quad {
             order: 0,
             bounds: snapped_bounds,
@@ -4718,6 +5130,7 @@ impl Window {
 
         if !quad.background.is_transparent() {
             self.next_frame.scene.insert_primitive(quad);
+
             return;
         }
 
@@ -4728,6 +5141,7 @@ impl Window {
 
         if inner_bounds.is_empty() {
             self.next_frame.scene.insert_primitive(quad);
+
             return;
         }
 
@@ -4756,6 +5170,7 @@ impl Window {
 
         for strip in strips {
             let content_mask_bounds = quad.content_mask.bounds.intersect(&strip);
+
             if !content_mask_bounds.is_empty() {
                 self.next_frame.scene.insert_primitive(Quad {
                     content_mask: ContentMask {
@@ -4776,9 +5191,13 @@ impl Window {
 
         let scale_factor = self.scale_factor();
         let content_mask = self.content_mask();
+
         path.content_mask = content_mask;
+
         let color: Background = color.into();
+
         path.color = color;
+
         self.next_frame
             .scene
             .insert_primitive(path.scale(scale_factor));
@@ -4797,11 +5216,13 @@ impl Window {
 
         let scale_factor = self.scale_factor();
         let thickness = self.snap_stroke(style.thickness);
+
         let height = if style.wavy {
             ScaledPixels(thickness.0 * 3.)
         } else {
             thickness
         };
+
         let bounds = Bounds {
             origin: origin.map(|c| ScaledPixels(round_to_device_pixel(c.0, scale_factor))),
             size: size(self.snap_stroke(width), height),
@@ -4831,6 +5252,7 @@ impl Window {
 
         let scale_factor = self.scale_factor();
         let height = style.thickness;
+
         let bounds = Bounds {
             origin: origin.map(|c| ScaledPixels(round_to_device_pixel(c.0, scale_factor))),
             size: size(self.snap_stroke(width), self.snap_stroke(height)),
@@ -4869,14 +5291,17 @@ impl Window {
         let glyph_origin = origin.scale(scale_factor);
 
         let (integer_origin, subpixel_variant) = quantize_glyph_origin(glyph_origin);
+
         let requested_mode = if self.should_use_subpixel_rendering(font_id, font_size) {
             GlyphRenderMode::Subpixel
         } else {
             GlyphRenderMode::Grayscale
         };
+
         let raster_style =
             self.text_system()
                 .prepare_raster_style(font_id, glyph_id, color, requested_mode);
+
         let params = RenderGlyphParams {
             font_id,
             glyph_id,
@@ -4896,18 +5321,22 @@ impl Window {
         mask_color: Hsla,
     ) -> Result<()> {
         let text_system = self.text_system().clone();
+
         let entry = self
             .sprite_atlas
             .get_or_insert_glyph_with(&params, &mut || text_system.rasterize_glyph(&params))?;
+
         let Some(tile) = entry.tile else {
             return Ok(());
         };
 
         debug_assert_eq!(entry.bounds.size, tile.bounds.size.map(Into::into));
+
         let bounds = Bounds {
             origin: integer_origin + entry.bounds.origin.map(Into::into),
             size: tile.bounds.size.map(Into::into),
         };
+
         let content_mask = self.snapped_content_mask();
 
         match entry.format {
@@ -4922,6 +5351,7 @@ impl Window {
                     transformation: TransformationMatrix::unit(),
                 });
             }
+
             RasterizedGlyphFormat::BgraSubpixelMask => {
                 self.next_frame.scene.insert_primitive(SubpixelSprite {
                     order: 0,
@@ -4933,6 +5363,7 @@ impl Window {
                     transformation: TransformationMatrix::unit(),
                 });
             }
+
             RasterizedGlyphFormat::BgraColor => {
                 self.next_frame.scene.insert_primitive(PolychromeSprite {
                     order: 0,
@@ -4946,6 +5377,7 @@ impl Window {
                 });
             }
         }
+
         Ok(())
     }
 
@@ -4970,6 +5402,7 @@ impl Window {
             TextRenderingMode::PlatformDefault => self
                 .text_system()
                 .recommended_rendering_mode(font_id, font_size),
+
             mode => mode,
         };
 
@@ -5008,12 +5441,14 @@ impl Window {
         let scale_factor = self.scale_factor();
         let glyph_origin = origin.scale(scale_factor);
         let (integer_origin, subpixel_variant) = quantize_color_glyph_origin(glyph_origin);
+
         let raster_style = self.text_system().prepare_raster_style(
             font_id,
             glyph_id,
             color,
             GlyphRenderMode::Color,
         );
+
         let params = RenderGlyphParams {
             font_id,
             glyph_id,
@@ -5056,12 +5491,15 @@ impl Window {
                     else {
                         return Ok(None);
                     };
+
                     Ok(Some((size, Cow::Owned(bytes))))
                 })?
         else {
             return Ok(());
         };
+
         let content_mask = self.snapped_content_mask();
+
         let svg_bounds = Bounds {
             origin: bounds.center()
                 - Point::new(
@@ -5073,6 +5511,7 @@ impl Window {
                 .size
                 .map(|value| ScaledPixels(value.0 as f32 / SMOOTH_SVG_SCALE_FACTOR)),
         };
+
         let final_bounds = svg_bounds
             .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
             .map_size(|size| size.ceil());
@@ -5112,9 +5551,11 @@ impl Window {
         self.invalidator.debug_assert_paint();
 
         let visible_bounds = bounds.intersect(&image_bounds);
+
         if visible_bounds.size.width <= Pixels::ZERO || visible_bounds.size.height <= Pixels::ZERO {
             return Ok(());
         }
+
         if image_bounds.size.width <= Pixels::ZERO || image_bounds.size.height <= Pixels::ZERO {
             return Ok(());
         }
@@ -5144,8 +5585,10 @@ impl Window {
         } else {
             let x_offset_ratio =
                 (visible_bounds.origin.x - image_bounds.origin.x) / image_bounds.size.width;
+
             let y_offset_ratio =
                 (visible_bounds.origin.y - image_bounds.origin.y) / image_bounds.size.height;
+
             let width_ratio = visible_bounds.size.width / image_bounds.size.width;
             let height_ratio = visible_bounds.size.height / image_bounds.size.height;
 
@@ -5180,6 +5623,7 @@ impl Window {
         };
 
         let content_mask = self.snapped_content_mask();
+
         let corner_radii = corner_radii
             .clamp_radii_for_quad_size(visible_bounds.size)
             .scale(self.scale_factor());
@@ -5194,6 +5638,7 @@ impl Window {
             tile: sub_tile,
             opacity: 1.0,
         });
+
         Ok(())
     }
 
@@ -5209,6 +5654,7 @@ impl Window {
 
         let bounds = self.snap_bounds(bounds);
         let content_mask = self.snapped_content_mask();
+
         self.next_frame.scene.insert_primitive(PaintSurface {
             order: 0,
             bounds,
@@ -5262,6 +5708,7 @@ impl Window {
 
         cx.layout_id_buffer.clear();
         cx.layout_id_buffer.extend(children);
+
         let rem_size = self.rem_size();
         let scale_factor = self.scale_factor();
 
@@ -5290,6 +5737,7 @@ impl Window {
 
         let rem_size = self.rem_size();
         let scale_factor = self.scale_factor();
+
         self.layout_engine
             .as_mut()
             .unwrap()
@@ -5310,6 +5758,7 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
 
         let mut layout_engine = self.layout_engine.take().unwrap();
+
         layout_engine.compute_layout(
             layout_id,
             available_space,
@@ -5317,6 +5766,7 @@ impl Window {
             self,
             cx,
         );
+
         self.layout_engine = Some(layout_engine);
     }
 
@@ -5328,14 +5778,18 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
 
         let scale_factor = self.scale_factor();
+
         let mut bounds = self
             .layout_engine
             .as_mut()
             .unwrap()
             .layout_bounds(layout_id, scale_factor)
             .map(Into::into);
+
         let snapped_offset = self.pixel_snap_point(self.element_offset());
+
         bounds.origin += snapped_offset;
+
         bounds
     }
 
@@ -5347,12 +5801,15 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
 
         let scale_factor = self.scale_factor();
+
         let mut bounds = self
             .layout_engine
             .as_mut()
             .unwrap()
             .parent_relative_layout_bounds(layout_id, scale_factor);
+
         bounds.origin += self.pixel_snap_point(self.element_offset());
+
         bounds
     }
 
@@ -5372,6 +5829,7 @@ impl Window {
         layout_engine
             .inline_content
             .insert(node_id, Arc::new(content));
+
         true
     }
 
@@ -5427,11 +5885,15 @@ impl Window {
     ) -> R {
         let (direction, unicode_bidi) = self.layout_directionality(node_id);
         let previous_direction = std::mem::replace(&mut self.measurement_direction, direction);
+
         let previous_unicode_bidi =
             std::mem::replace(&mut self.measurement_unicode_bidi, unicode_bidi);
+
         let result = f(self);
+
         self.measurement_direction = previous_direction;
         self.measurement_unicode_bidi = previous_unicode_bidi;
+
         result
     }
 
@@ -5470,6 +5932,7 @@ impl Window {
             .get(&node_id)
             .map(|fragments| {
                 let offset = self.pixel_snap_point(self.element_offset());
+
                 if offset == Point::default() {
                     return fragments.clone();
                 }
@@ -5492,9 +5955,11 @@ impl Window {
         }
 
         let offset = self.pixel_snap_point(self.element_offset());
+
         bounds.origin -= offset;
 
         let scale = self.scale_factor();
+
         let Some(engine) = self.layout_engine.as_mut() else {
             return false;
         };
@@ -5547,7 +6012,9 @@ impl Window {
 
         let content_mask = self.content_mask();
         let hitbox_id = self.next_hitbox_id;
+
         self.next_hitbox_id = self.next_hitbox_id.next();
+
         let hitbox = Hitbox {
             id: hitbox_id,
             bounds,
@@ -5583,9 +6050,11 @@ impl Window {
     /// This method should only be called as part of the prepaint phase of element drawing.
     pub fn set_focus_handle(&mut self, focus_handle: &FocusHandle, _: &App) {
         self.invalidator.debug_assert_prepaint();
+
         if focus_handle.is_focused(self) {
             self.next_frame.focus = Some(focus_handle.id);
         }
+
         self.next_frame.dispatch_tree.set_focus_id(focus_handle.id);
     }
 
@@ -5612,8 +6081,11 @@ impl Window {
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.rendered_entity_stack.push(id);
+
         let result = f(self);
+
         self.rendered_entity_stack.pop();
+
         result
     }
 
@@ -5624,9 +6096,13 @@ impl Window {
     {
         if let Some(image_cache) = image_cache {
             self.image_cache_stack.push(image_cache);
+
             let result = f(self);
+
             self.image_cache_stack.pop();
+
             result
+
         } else {
             f(self)
         }
@@ -5650,6 +6126,7 @@ impl Window {
 
         if focus_handle.is_focused(self) {
             let cx = self.to_async(cx);
+
             self.next_frame
                 .input_handlers
                 .push(Some(PlatformInputHandler::new(cx, Box::new(input_handler))));
@@ -5664,14 +6141,19 @@ impl Window {
         let configuration = match self.platform_window.take_input_handler() {
             Some(mut input_handler) => {
                 let configuration = input_handler.text_input_configuration(self, cx);
+
                 self.platform_window.set_input_handler(input_handler);
+
                 configuration
             }
+
             None => TextInputConfiguration::default(),
         };
+
         if self.last_text_input_configuration.as_ref() != Some(&configuration) {
             self.platform_window
                 .set_text_input_configuration(configuration.clone());
+
             self.last_text_input_configuration = Some(configuration);
         }
     }
@@ -5710,12 +6192,15 @@ impl Window {
             position: self.pointer_inside_window.then_some(self.mouse_position),
             cause,
         };
+
         // Snapshot observers before callbacks can redraw the frame.
         let observers = self.rendered_frame.pointer_observers.clone();
         let propagate_event = cx.propagate_event;
         let default_prevented = self.default_prevented;
+
         for observer in observers.iter() {
             observer(change, self, cx);
+
             // Observers must not change the event's dispatch state.
             cx.propagate_event = propagate_event;
             self.default_prevented = default_prevented;
@@ -5774,14 +6259,18 @@ impl Window {
         mut listener: impl FnMut(&mut Window, &mut App) + 'static,
     ) -> Subscription {
         let focus_id = handle.id;
+
         let (subscription, activate) =
             self.new_focus_listener(Box::new(move |event, window, cx| {
                 if event.is_focus_in(focus_id) {
                     listener(window, cx);
                 }
+
                 true
             }));
+
         cx.defer(move |_| activate());
+
         subscription
     }
 
@@ -5794,6 +6283,7 @@ impl Window {
         mut listener: impl FnMut(FocusOutEvent, &mut Window, &mut App) + 'static,
     ) -> Subscription {
         let focus_id = handle.id;
+
         let (subscription, activate) =
             self.new_focus_listener(Box::new(move |event, window, cx| {
                 if let Some(blurred_id) = event.previous_focus_path.last().copied()
@@ -5805,11 +6295,15 @@ impl Window {
                             handles: Arc::downgrade(&cx.focus_handles),
                         },
                     };
+
                     listener(event, window, cx)
                 }
+
                 true
             }));
+
         cx.defer(move |_| activate());
+
         subscription
     }
 
@@ -5820,6 +6314,7 @@ impl Window {
                 .rendered_frame
                 .cursor_style(self)
                 .unwrap_or(CursorStyle::Arrow);
+
             cx.platform.set_cursor_style(style);
         }
     }
@@ -5828,6 +6323,7 @@ impl Window {
     /// You can create a keystroke with Keystroke::parse("").
     pub fn dispatch_keystroke(&mut self, keystroke: Keystroke, cx: &mut App) -> bool {
         let keystroke = keystroke.with_simulated_ime();
+
         let result = self.dispatch_event(
             PlatformInput::KeyDown(KeyDownEvent {
                 keystroke: keystroke.clone(),
@@ -5836,6 +6332,7 @@ impl Window {
             }),
             cx,
         );
+
         if !result.propagate {
             return true;
         }
@@ -5845,6 +6342,7 @@ impl Window {
         {
             input_handler.dispatch_input(&input, self, cx);
             self.platform_window.set_input_handler(input_handler);
+
             return true;
         }
 
@@ -5871,17 +6369,20 @@ impl Window {
     pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
         #[cfg(feature = "profiler")]
         self.window_profiler.begin_input(event.kind_name());
+
         let update_count_before = self.invalidator.update_count();
         // Track input modality for focus-visible styling and hover suppression.
         // Hover is suppressed during keyboard modality so that keyboard navigation
         // doesn't show hover highlights on the item under the mouse cursor.
         let old_modality = self.last_input_modality;
+
         self.last_input_modality = match &event {
             PlatformInput::KeyDown(_) => InputModality::Keyboard,
             PlatformInput::MouseMove(_) | PlatformInput::MouseDown(_) => InputModality::Mouse,
             PlatformInput::Touch(_) => InputModality::Touch,
             _ => self.last_input_modality,
         };
+
         if self.last_input_modality != old_modality {
             self.refresh();
         }
@@ -5897,46 +6398,63 @@ impl Window {
             PlatformInput::MouseMove(mouse_move) => {
                 self.mouse_position = mouse_move.position;
                 self.modifiers = mouse_move.modifiers;
+
                 PlatformInput::MouseMove(mouse_move)
             }
+
             PlatformInput::MouseDown(mouse_down) => {
                 self.mouse_position = mouse_down.position;
                 self.modifiers = mouse_down.modifiers;
+
                 PlatformInput::MouseDown(mouse_down)
             }
+
             PlatformInput::MouseUp(mouse_up) => {
                 self.mouse_position = mouse_up.position;
                 self.modifiers = mouse_up.modifiers;
+
                 PlatformInput::MouseUp(mouse_up)
             }
+
             PlatformInput::MousePressure(mouse_pressure) => {
                 PlatformInput::MousePressure(mouse_pressure)
             }
+
             PlatformInput::MouseExited(mouse_exited) => {
                 self.modifiers = mouse_exited.modifiers;
+
                 PlatformInput::MouseExited(mouse_exited)
             }
+
             PlatformInput::ModifiersChanged(modifiers_changed) => {
                 self.modifiers = modifiers_changed.modifiers;
                 self.capslock = modifiers_changed.capslock;
+
                 PlatformInput::ModifiersChanged(modifiers_changed)
             }
+
             PlatformInput::ScrollWheel(scroll_wheel) => {
                 self.mouse_position = scroll_wheel.position;
                 self.modifiers = scroll_wheel.modifiers;
+
                 PlatformInput::ScrollWheel(scroll_wheel)
             }
+
             PlatformInput::Pinch(pinch) => {
                 self.mouse_position = pinch.position;
                 self.modifiers = pinch.modifiers;
+
                 PlatformInput::Pinch(pinch)
             }
+
             // Translate dragging and dropping of external files from the operating system
             // to internal drag and drop events.
             PlatformInput::FileDrop(file_drop) => match file_drop {
                 FileDropEvent::Entered { position, paths } => {
                     self.mouse_position = position;
+
                     let source_window = self.handle.window_id();
+
                     if !cx.restore_platform_drag(source_window) && cx.active_drag.is_none() {
                         cx.active_drag = Some(AnyDrag {
                             value: Arc::new(paths.clone()),
@@ -5946,23 +6464,29 @@ impl Window {
                             external_payload_source: None,
                         });
                     }
+
                     PlatformInput::MouseMove(MouseMoveEvent {
                         position,
                         pressed_button: Some(MouseButton::Left),
                         modifiers: Modifiers::default(),
                     })
                 }
+
                 FileDropEvent::Pending { position } => {
                     self.mouse_position = position;
+
                     PlatformInput::MouseMove(MouseMoveEvent {
                         position,
                         pressed_button: Some(MouseButton::Left),
                         modifiers: Modifiers::default(),
                     })
                 }
+
                 FileDropEvent::Submit { position } => {
                     cx.activate(true);
+
                     self.mouse_position = position;
+
                     PlatformInput::MouseUp(MouseUpEvent {
                         button: MouseButton::Left,
                         position,
@@ -5970,35 +6494,47 @@ impl Window {
                         click_count: 1,
                     })
                 }
+
                 FileDropEvent::Exited => {
                     if !cx.hand_restored_drag_to_platform(self.handle.window_id()) {
                         cx.active_drag.take();
                     }
+
                     self.refresh();
+
                     PlatformInput::FileDrop(FileDropEvent::Exited)
                 }
+
                 FileDropEvent::Ended => {
                     cx.end_platform_drag(self.handle.window_id());
                     self.refresh();
+
                     PlatformInput::FileDrop(FileDropEvent::Ended)
                 }
             },
+
             PlatformInput::Touch(touch) => PlatformInput::Touch(touch),
+
             PlatformInput::LongPress(long_press) => {
                 self.mouse_position = if long_press.phase == crate::TouchPhase::Started {
                     long_press.start_position
                 } else {
                     long_press.position
                 };
+
                 if long_press.phase == crate::TouchPhase::Started {
                     self.long_press_capture = None;
                 }
+
                 PlatformInput::LongPress(long_press)
             }
+
             PlatformInput::TouchDrag(touch_drag) => {
                 self.mouse_position = touch_drag.start_position;
+
                 PlatformInput::TouchDrag(touch_drag)
             }
+
             PlatformInput::KeyDown(_) | PlatformInput::KeyUp(_) => event,
         };
 
@@ -6009,14 +6545,17 @@ impl Window {
         } else if let Some(touch_event) = event.touch_event() {
             self.dispatch_touch_event(touch_event, cx);
         }
+
         if let PlatformInput::LongPress(long_press) = &event {
             match long_press.phase {
                 crate::TouchPhase::Started if !self.default_prevented => {
                     self.long_press_capture = None;
                 }
+
                 crate::TouchPhase::Ended | crate::TouchPhase::Cancelled => {
                     self.long_press_capture = None;
                 }
+
                 crate::TouchPhase::Started | crate::TouchPhase::Moved => {}
             }
         }
@@ -6026,9 +6565,11 @@ impl Window {
         self.promote_external_drag_to_platform(&event, cx);
 
         let caused_invalidation = self.invalidator.update_count() > update_count_before;
+
         if caused_invalidation {
             self.input_rate_tracker.borrow_mut().record_input();
         }
+
         #[cfg(feature = "profiler")]
         self.window_profiler.end_input(caused_invalidation);
 
@@ -6042,15 +6583,19 @@ impl Window {
         let PlatformInput::MouseMove(mouse_move) = event else {
             return;
         };
+
         if mouse_move.pressed_button != Some(MouseButton::Left) {
             return;
         }
+
         if Bounds::new(Point::default(), self.viewport_size).contains(&mouse_move.position) {
             return;
         }
+
         if !self.platform_window.can_start_external_drag() {
             return;
         }
+
         let Some(payload_source) = cx
             .active_drag
             .as_mut()
@@ -6058,9 +6603,11 @@ impl Window {
         else {
             return;
         };
+
         let Some(payload) = payload_source(self, cx) else {
             return;
         };
+
         if self.platform_window.start_external_drag(&payload)
             && cx.hand_active_drag_to_platform(self.handle.window_id())
         {
@@ -6087,30 +6634,39 @@ impl Window {
     /// through the ordinary mouse-event path.
     fn dispatch_touch_event(&mut self, event: &TouchEvent, cx: &mut App) {
         let mut event = event.clone();
+
         if !self.touch_prediction_enabled {
             event.predicted_position = None;
         }
+
         let recognized_gestures = self.touch_gestures.handle_event(&event);
+
         if event.phase == crate::TouchPhase::Started
             && let Some(touch_drag) = self.touch_gestures.offer_touch_drag(event.id)
         {
             self.dispatch_recognized_touch_gesture(touch_drag, cx);
         }
+
         if event.phase == crate::TouchPhase::Started
             && self.touch_gestures.pending_long_press().is_some()
         {
             self.long_press_capture = None;
         }
+
         let mut tapped = false;
+
         for gesture in recognized_gestures {
             tapped |= matches!(gesture, RecognizedTouchGesture::Tap { .. });
+
             self.dispatch_recognized_touch_gesture(gesture, cx);
         }
+
         if event.phase == crate::TouchPhase::Started {
             self.schedule_long_press_timer(cx);
         } else if self.touch_gestures.pending_long_press().is_none() {
             self.long_press_timer.take();
         }
+
         // The platform's touch-release handler may inspect the input handler
         // as soon as this dispatch returns (the web platform decides virtual
         // keyboard visibility there, inside the user gesture). Input handlers
@@ -6119,6 +6675,7 @@ impl Window {
         if tapped && self.invalidator.is_dirty() {
             self.draw(cx).clear(cx);
         }
+
         if self.touch_gestures.has_momentum() {
             self.schedule_touch_momentum_tick();
         }
@@ -6129,47 +6686,65 @@ impl Window {
             RecognizedTouchGesture::Scroll(scroll_wheel) => {
                 self.mouse_position = scroll_wheel.position;
                 cx.propagate_event = true;
+
                 self.dispatch_mouse_event(&scroll_wheel, cx);
             }
+
             RecognizedTouchGesture::Tap { down, up } => {
                 self.mouse_position = up.position;
                 cx.propagate_event = true;
+
                 self.dispatch_mouse_event(&down, cx);
+
                 cx.propagate_event = true;
+
                 self.dispatch_mouse_event(&up, cx);
             }
+
             RecognizedTouchGesture::TouchDrag(touch_drag) => {
                 self.mouse_position = touch_drag.start_position;
                 cx.propagate_event = true;
                 self.default_prevented = false;
+
                 let started = touch_drag.phase == crate::TouchPhase::Started;
+
                 self.dispatch_mouse_event(&touch_drag, cx);
+
                 if started {
                     self.touch_gestures
                         .resolve_touch_drag(self.default_prevented);
                 }
             }
+
             RecognizedTouchGesture::LongPress(long_press) => {
                 self.mouse_position = if long_press.phase == crate::TouchPhase::Started {
                     long_press.start_position
                 } else {
                     long_press.position
                 };
+
                 cx.propagate_event = true;
                 self.default_prevented = false;
+
                 let started = long_press.phase == crate::TouchPhase::Started;
+
                 let ended = matches!(
                     long_press.phase,
                     crate::TouchPhase::Ended | crate::TouchPhase::Cancelled
                 );
+
                 self.dispatch_mouse_event(&long_press, cx);
+
                 if started {
                     let claimed = self.default_prevented;
+
                     self.touch_gestures.resolve_long_press(claimed);
+
                     if !claimed {
                         self.long_press_capture = None;
                     }
                 }
+
                 if ended {
                     self.long_press_capture = None;
                 }
@@ -6179,13 +6754,17 @@ impl Window {
 
     fn schedule_long_press_timer(&mut self, cx: &mut App) {
         self.long_press_timer.take();
+
         let Some((touch_id, duration)) = self.touch_gestures.pending_long_press() else {
             return;
         };
+
         self.long_press_timer = Some(self.spawn(cx, async move |cx| {
             cx.background_executor.timer(duration).await;
+
             cx.update(move |window, cx| {
                 window.long_press_timer.take();
+
                 if let Some(gesture) = window.touch_gestures.offer_long_press(touch_id) {
                     window.dispatch_recognized_touch_gesture(gesture, cx);
                 }
@@ -6199,6 +6778,7 @@ impl Window {
             if let Some(gesture) = window.touch_gestures.tick_momentum() {
                 window.dispatch_recognized_touch_gesture(gesture, cx);
             }
+
             if window.touch_gestures.has_momentum() {
                 window.schedule_touch_momentum_tick();
             }
@@ -6220,16 +6800,20 @@ impl Window {
             self.pointer_inside_window =
                 Bounds::new(Point::default(), self.viewport_size).contains(&self.mouse_position);
         }
+
         let hit_test = self.rendered_frame.hit_test(self.mouse_position());
+
         if hit_test != self.mouse_hit_test {
             self.mouse_hit_test = hit_test;
         }
+
         // Resolve on every pointer event, including movement within one hitbox.
         self.reset_cursor_style(cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         if self.is_inspector_picking(cx) {
             self.handle_inspector_mouse_event(event, cx);
+
             // When inspector is picking, all other mouse handling is skipped.
             return;
         }
@@ -6240,7 +6824,9 @@ impl Window {
         // special purposes, such as detecting events outside of a given Bounds.
         for listener in &mut mouse_listeners {
             let listener = listener.as_mut().unwrap();
+
             listener(event, DispatchPhase::Capture, self, cx);
+
             if !cx.propagate_event {
                 break;
             }
@@ -6250,7 +6836,9 @@ impl Window {
         if cx.propagate_event {
             for listener in mouse_listeners.iter_mut().rev() {
                 let listener = listener.as_mut().unwrap();
+
                 listener(event, DispatchPhase::Bubble, self, cx);
+
                 if !cx.propagate_event {
                     break;
                 }
@@ -6264,10 +6852,12 @@ impl Window {
                 // If this was a mouse move event, redraw the window so that the
                 // active drag can follow the mouse cursor.
                 self.refresh();
+
             } else if event.is::<MouseUpEvent>() {
                 // If this was a mouse up event, cancel the active drag and redraw
                 // the window.
                 cx.active_drag = None;
+
                 self.refresh();
             }
         }
@@ -6276,6 +6866,7 @@ impl Window {
         if event.is::<MouseUpEvent>() && self.captured_hitbox.is_some() {
             self.captured_hitbox = None;
         }
+
         if event.is::<MouseMoveEvent>()
             || event.is::<crate::MouseExitEvent>()
             || event.is::<MouseUpEvent>()
@@ -6307,6 +6898,7 @@ impl Window {
                     modifiers if modifiers.function => Some("function"),
                     _ => None,
                 };
+
                 if let Some(key) = key {
                     keystroke = Some(Keystroke {
                         key: key.to_string(),
@@ -6323,10 +6915,13 @@ impl Window {
             } else if event.modifiers.number_of_modifiers() > 1 {
                 self.pending_modifier.saw_other_input = true
             }
+
             self.pending_modifier.modifiers = event.modifiers
+
         } else if let Some(key_down_event) = event.downcast_ref::<KeyDownEvent>() {
             self.pending_modifier.saw_other_input = true;
             keystroke = Some(key_down_event.keystroke.clone());
+
             if key_down_event.keystroke.key_char.is_some()
                 && matches!(
                     cx.cursor_hide_mode,
@@ -6339,17 +6934,22 @@ impl Window {
 
         let Some(keystroke) = keystroke else {
             self.finish_dispatch_key_event(event, dispatch_path, self.context_stack(), cx);
+
             return;
         };
 
         cx.propagate_event = true;
+
         self.dispatch_keystroke_interceptors(event, self.context_stack(), cx);
+
         if !cx.propagate_event {
             self.finish_dispatch_key_event(event, dispatch_path, self.context_stack(), cx);
+
             return;
         }
 
         let mut currently_pending = self.pending_input.take().unwrap_or_default();
+
         if currently_pending.focus.is_some() && currently_pending.focus != self.focus {
             currently_pending = PendingInput::default();
         }
@@ -6362,11 +6962,13 @@ impl Window {
 
         if !match_result.to_replay.is_empty() {
             self.replay_pending_input(match_result.to_replay, cx);
+
             cx.propagate_event = true;
         }
 
         if !match_result.pending.is_empty() {
             currently_pending.timer.take();
+
             currently_pending.keystrokes = match_result.pending;
             currently_pending.focus = self.focus;
 
@@ -6376,7 +6978,9 @@ impl Window {
                 .and_then(|_| self.platform_window.take_input_handler())
                 .map_or(false, |mut input_handler| {
                     let accepts = input_handler.accepts_text_input(self, cx);
+
                     self.platform_window.set_input_handler(input_handler);
+
                     accepts
                 });
 
@@ -6386,6 +6990,7 @@ impl Window {
             if currently_pending.needs_timeout {
                 currently_pending.timer = Some(self.spawn(cx, async move |cx| {
                     cx.background_executor.timer(Duration::from_secs(1)).await;
+
                     cx.update(move |window, cx| {
                         let Some(currently_pending) = window
                             .pending_input
@@ -6396,6 +7001,7 @@ impl Window {
                         };
 
                         let node_id = window.focus_node_id_in_rendered_frame(window.focus);
+
                         let dispatch_path =
                             window.rendered_frame.dispatch_tree.dispatch_path(node_id);
 
@@ -6409,12 +7015,17 @@ impl Window {
                     })
                     .log_err();
                 }));
+
             } else {
                 currently_pending.timer = None;
             }
+
             self.pending_input = Some(currently_pending);
+
             self.pending_input_changed(cx);
+
             cx.propagate_event = false;
+
             return;
         }
 
@@ -6426,7 +7037,9 @@ impl Window {
                     .take_input_handler()
                     .map_or(false, |mut input_handler| {
                         let accepts = input_handler.accepts_text_input(self, cx);
+
                         self.platform_window.set_input_handler(input_handler);
+
                         // If modifiers are not excessive (e.g. AltGr), and the input handler is accepting text input,
                         // we prefer the text input over bindings.
                         accepts
@@ -6437,6 +7050,7 @@ impl Window {
         if !skip_bindings {
             for binding in match_result.bindings {
                 self.dispatch_action_on_node(node_id, binding.action.as_ref(), cx);
+
                 if !cx.propagate_event {
                     self.dispatch_keystroke_observers(
                         event,
@@ -6444,7 +7058,9 @@ impl Window {
                         match_result.context_stack,
                         cx,
                     );
+
                     self.pending_input_changed(cx);
+
                     return;
                 }
             }
@@ -6462,11 +7078,13 @@ impl Window {
         cx: &mut App,
     ) {
         self.dispatch_key_down_up_event(event, &dispatch_path, cx);
+
         if !cx.propagate_event {
             return;
         }
 
         self.dispatch_modifiers_changed_event(event, &dispatch_path, cx);
+
         if !cx.propagate_event {
             return;
         }
@@ -6484,6 +7102,7 @@ impl Window {
         // Avoid re-entrant entity updates by deferring observer notifications to the end of the
         // current effect cycle, and only for this window.
         let window_handle = self.handle;
+
         cx.defer(move |cx| {
             window_handle
                 .update(cx, |_, window, cx| {
@@ -6505,6 +7124,7 @@ impl Window {
 
             for key_listener in node.key_listeners.clone() {
                 key_listener(event, DispatchPhase::Capture, self, cx);
+
                 if !cx.propagate_event {
                     return;
                 }
@@ -6515,8 +7135,10 @@ impl Window {
         for node_id in dispatch_path.iter().rev() {
             // Handle low level key events
             let node = self.rendered_frame.dispatch_tree.node(*node_id);
+
             for key_listener in node.key_listeners.clone() {
                 key_listener(event, DispatchPhase::Bubble, self, cx);
+
                 if !cx.propagate_event {
                     return;
                 }
@@ -6533,10 +7155,13 @@ impl Window {
         let Some(event) = event.downcast_ref::<ModifiersChangedEvent>() else {
             return;
         };
+
         for node_id in dispatch_path.iter().rev() {
             let node = self.rendered_frame.dispatch_tree.node(*node_id);
+
             for listener in node.modifiers_changed_listeners.clone() {
                 listener(event, self, cx);
+
                 if !cx.propagate_event {
                     return;
                 }
@@ -6586,8 +7211,10 @@ impl Window {
             };
 
             cx.propagate_event = true;
+
             for binding in replay.bindings {
                 self.dispatch_action_on_node(node_id, binding.action.as_ref(), cx);
+
                 if !cx.propagate_event {
                     self.dispatch_keystroke_observers(
                         &event,
@@ -6595,14 +7222,17 @@ impl Window {
                         Vec::default(),
                         cx,
                     );
+
                     continue 'replay;
                 }
             }
 
             self.dispatch_key_down_up_event(&event, &dispatch_path, cx);
+
             if !cx.propagate_event {
                 continue 'replay;
             }
+
             if let Some(input) = replay.keystroke.key_char.as_ref().cloned()
                 && let Some(mut input_handler) = self.platform_window.take_input_handler()
             {
@@ -6648,6 +7278,7 @@ impl Window {
 
         // Capture phase for global actions.
         cx.propagate_event = true;
+
         if let Some(mut global_listeners) = cx
             .global_action_listeners
             .remove(&action.as_any().type_id())
@@ -6655,9 +7286,12 @@ impl Window {
             for listener in &global_listeners {
                 #[cfg(feature = "profiler")]
                 self.window_profiler.begin_action_handler(action, cx);
+
                 listener(action.as_any(), DispatchPhase::Capture, cx);
+
                 #[cfg(feature = "profiler")]
                 self.window_profiler.end_action_handler();
+
                 if !cx.propagate_event {
                     break;
                 }
@@ -6680,16 +7314,20 @@ impl Window {
         // Capture phase for window actions.
         for node_id in &dispatch_path {
             let node = self.rendered_frame.dispatch_tree.node(*node_id);
+
             for DispatchActionListener {
                 action_type,
                 listener,
             } in node.action_listeners.clone()
             {
                 let any_action = action.as_any();
+
                 if action_type == any_action.type_id() {
                     #[cfg(feature = "profiler")]
                     self.window_profiler.begin_action_handler(action, cx);
+
                     listener(any_action, DispatchPhase::Capture, self, cx);
+
                     #[cfg(feature = "profiler")]
                     self.window_profiler.end_action_handler();
 
@@ -6703,17 +7341,22 @@ impl Window {
         // Bubble phase for window actions.
         for node_id in dispatch_path.iter().rev() {
             let node = self.rendered_frame.dispatch_tree.node(*node_id);
+
             for DispatchActionListener {
                 action_type,
                 listener,
             } in node.action_listeners.clone()
             {
                 let any_action = action.as_any();
+
                 if action_type == any_action.type_id() {
                     cx.propagate_event = false; // Actions stop propagation by default during the bubble phase
+
                     #[cfg(feature = "profiler")]
                     self.window_profiler.begin_action_handler(action, cx);
+
                     listener(any_action, DispatchPhase::Bubble, self, cx);
+
                     #[cfg(feature = "profiler")]
                     self.window_profiler.end_action_handler();
 
@@ -6734,9 +7377,12 @@ impl Window {
 
                 #[cfg(feature = "profiler")]
                 self.window_profiler.begin_action_handler(action, cx);
+
                 listener(action.as_any(), DispatchPhase::Bubble, cx);
+
                 #[cfg(feature = "profiler")]
                 self.window_profiler.end_action_handler();
+
                 if !cx.propagate_event {
                     break;
                 }
@@ -6761,6 +7407,7 @@ impl Window {
         f: impl Fn(&mut Window, &mut App) + 'static,
     ) -> Subscription {
         let window_handle = self.handle;
+
         let (subscription, activate) = cx.global_observers.insert(
             TypeId::of::<G>(),
             Box::new(move |cx| {
@@ -6769,7 +7416,9 @@ impl Window {
                     .is_ok()
             }),
         );
+
         cx.defer(move |_| activate());
+
         subscription
     }
 
@@ -6827,6 +7476,7 @@ impl Window {
                 if let Some(bounds) = input_handler.selected_bounds(window, cx) {
                     window.platform_window.update_ime_position(bounds);
                 }
+
                 window.platform_window.set_input_handler(input_handler);
             }
         });
@@ -6847,6 +7497,7 @@ impl Window {
         T: Clone + Into<PromptButton>,
     {
         let prompt_builder = cx.prompt_builder.take();
+
         let Some(prompt_builder) = prompt_builder else {
             unreachable!("Re-entrant window prompting is not supported by GPUI");
         };
@@ -6863,6 +7514,7 @@ impl Window {
                 .unwrap_or_else(|| {
                     self.build_custom_prompt(&prompt_builder, level, message, detail, &answers, cx)
                 }),
+
             PromptBuilder::Custom(_) => {
                 self.build_custom_prompt(&prompt_builder, level, message, detail, &answers, cx)
             }
@@ -6885,7 +7537,9 @@ impl Window {
         let (sender, receiver) = oneshot::channel();
         let handle = PromptHandle::new(sender);
         let handle = (prompt_builder)(level, message, detail, answers, handle, self, cx);
+
         self.prompt = Some(handle);
+
         receiver
     }
 
@@ -6901,6 +7555,7 @@ impl Window {
     pub fn context_stack(&self) -> Vec<KeyContext> {
         let node_id = self.focus_node_id_in_rendered_frame(self.focus);
         let dispatch_tree = &self.rendered_frame.dispatch_tree;
+
         dispatch_tree
             .dispatch_path(node_id)
             .iter()
@@ -6912,14 +7567,17 @@ impl Window {
     pub fn available_actions(&self, cx: &App) -> Vec<Box<dyn Action>> {
         let node_id = self.focus_node_id_in_rendered_frame(self.focus);
         let mut actions = self.rendered_frame.dispatch_tree.available_actions(node_id);
+
         for action_type in cx.global_action_listeners.keys() {
             if let Err(ix) = actions.binary_search_by_key(action_type, |a| a.as_any().type_id()) {
                 let action = cx.actions.build_action_type(action_type).ok();
+
                 if let Some(action) = action {
                     actions.insert(ix, action);
                 }
             }
         }
+
         actions
     }
 
@@ -6949,6 +7607,7 @@ impl Window {
         context: KeyContext,
     ) -> Vec<KeyBinding> {
         let dispatch_tree = &self.rendered_frame.dispatch_tree;
+
         dispatch_tree.bindings_for_action(action, &[context])
     }
 
@@ -6960,6 +7619,7 @@ impl Window {
         context: KeyContext,
     ) -> Option<KeyBinding> {
         let dispatch_tree = &self.rendered_frame.dispatch_tree;
+
         dispatch_tree.highest_precedence_binding_for_action(action, &[context])
     }
 
@@ -6972,9 +7632,11 @@ impl Window {
         focus_handle: &FocusHandle,
     ) -> Vec<KeyBinding> {
         let dispatch_tree = &self.rendered_frame.dispatch_tree;
+
         let Some(context_stack) = self.context_stack_for_focus_handle(focus_handle) else {
             return vec![];
         };
+
         dispatch_tree.bindings_for_action(action, &context_stack)
     }
 
@@ -6988,6 +7650,7 @@ impl Window {
     ) -> Option<KeyBinding> {
         let dispatch_tree = &self.rendered_frame.dispatch_tree;
         let context_stack = self.context_stack_for_focus_handle(focus_handle)?;
+
         dispatch_tree.highest_precedence_binding_for_action(action, &context_stack)
     }
 
@@ -7004,11 +7667,13 @@ impl Window {
     ) -> Option<Vec<KeyContext>> {
         let dispatch_tree = &self.rendered_frame.dispatch_tree;
         let node_id = dispatch_tree.focusable_node_id(focus_handle.id)?;
+
         let context_stack: Vec<_> = dispatch_tree
             .dispatch_path(node_id)
             .into_iter()
             .filter_map(|node_id| dispatch_tree.node(node_id).context.clone())
             .collect();
+
         Some(context_stack)
     }
 
@@ -7019,6 +7684,7 @@ impl Window {
         f: impl Fn(&mut T, &E, &mut Window, &mut Context<T>) + 'static,
     ) -> impl Fn(&E, &mut Window, &mut App) + 'static {
         let view = view.downgrade();
+
         move |e: &E, window: &mut Window, cx: &mut App| {
             view.update(cx, |view, cx| f(view, e, window, cx)).ok();
         }
@@ -7031,6 +7697,7 @@ impl Window {
         f: Callback,
     ) -> impl Fn(&mut Window, &mut App) + 'static {
         let entity = entity.downgrade();
+
         move |window: &mut Window, cx: &mut App| {
             entity.update(cx, |entity, cx| f(entity, window, cx)).ok();
         }
@@ -7044,6 +7711,7 @@ impl Window {
         f: impl Fn(&mut Window, &mut App) -> bool + 'static,
     ) {
         let mut cx = self.to_async(cx);
+
         self.platform_window.on_should_close(Box::new(move || {
             cx.update(|window, cx| f(window, cx)).unwrap_or(true)
         }))
@@ -7290,15 +7958,19 @@ impl Window {
         if let Some(mut listeners) = self.a11y.action_listeners.remove(&request.target_node) {
             let extra_data = request.data.as_ref();
             let mut matched = false;
+
             for (action, listener) in &mut listeners {
                 if *action == request.action {
                     listener(extra_data, self, cx);
+
                     matched = true;
                 }
             }
+
             self.a11y
                 .action_listeners
                 .insert(request.target_node, listeners);
+
             if matched {
                 return;
             }
@@ -7309,6 +7981,7 @@ impl Window {
             accesskit::Action::Click => {
                 if let Some(bounds) = self.a11y.node_bounds.get(&request.target_node).copied() {
                     let center = bounds.center();
+
                     let mouse_down = PlatformInput::MouseDown(crate::MouseDownEvent {
                         button: MouseButton::Left,
                         position: center,
@@ -7316,16 +7989,19 @@ impl Window {
                         click_count: 1,
                         first_mouse: false,
                     });
+
                     let mouse_up = PlatformInput::MouseUp(MouseUpEvent {
                         button: MouseButton::Left,
                         position: center,
                         modifiers: Modifiers::default(),
                         click_count: 1,
                     });
+
                     self.dispatch_event(mouse_down, cx);
                     self.dispatch_event(mouse_up, cx);
                 }
             }
+
             accesskit::Action::Focus => {
                 if let Some(focus_id) = self.a11y.focus_ids.get(&request.target_node).copied()
                     && let Some(handle) = FocusHandle::for_id(focus_id, &cx.focus_handles)
@@ -7333,9 +8009,11 @@ impl Window {
                     self.focus(&handle, cx);
                 }
             }
+
             accesskit::Action::Blur => {
                 self.blur(cx);
             }
+
             _ => {
                 log::debug!(
                     "Unhandled a11y action: {:?} on {:?}",
@@ -7353,6 +8031,7 @@ impl Window {
             None => Some(cx.new(|_| Inspector::new())),
             Some(_) => None,
         };
+
         self.refresh();
     }
 
@@ -7364,6 +8043,7 @@ impl Window {
                 return inspector.read(_cx).is_picking();
             }
         }
+
         false
     }
 
@@ -7380,12 +8060,14 @@ impl Window {
         {
             let inspector = inspector.clone();
             let active_element_id = inspector.read(cx).active_element_id();
+
             if Some(inspector_id) == active_element_id {
                 return inspector.update(cx, |inspector, _cx| {
                     inspector.with_active_element_state(self, f)
                 });
             }
         }
+
         f(&mut None, self)
     }
 
@@ -7395,14 +8077,19 @@ impl Window {
         path: crate::InspectorElementPath,
     ) -> crate::InspectorElementId {
         self.invalidator.debug_assert_paint_or_prepaint();
+
         let path = Rc::new(path);
+
         let next_instance_id = self
             .next_frame
             .next_inspector_instance_ids
             .entry(path.clone())
             .or_insert(0);
+
         let instance_id = *next_instance_id;
+
         *next_instance_id += 1;
+
         crate::InspectorElementId { path, instance_id }
     }
 
@@ -7410,14 +8097,18 @@ impl Window {
     fn prepaint_inspector(&mut self, inspector_width: Pixels, cx: &mut App) -> Option<AnyElement> {
         if let Some(inspector) = self.inspector.take() {
             let mut inspector_element = AnyView::from(inspector.clone()).into_any_element();
+
             inspector_element.prepaint_as_root(
                 point(self.viewport_size.width - inspector_width, px(0.0)),
                 size(inspector_width, self.viewport_size.height).into(),
                 self,
                 cx,
             );
+
             self.inspector = Some(inspector);
+
             Some(inspector_element)
+
         } else {
             None
         }
@@ -7440,9 +8131,11 @@ impl Window {
         cx: &App,
     ) {
         self.invalidator.debug_assert_paint_or_prepaint();
+
         if !self.is_inspector_picking(cx) {
             return;
         }
+
         if let Some(inspector_id) = inspector_id {
             self.next_frame
                 .inspector_hitboxes
@@ -7454,6 +8147,7 @@ impl Window {
     fn paint_inspector_hitbox(&mut self, cx: &App) {
         if let Some(inspector) = self.inspector.as_ref() {
             let inspector = inspector.read(cx);
+
             if let Some((hitbox_id, _)) = self.hovered_inspector_hitbox(inspector, &self.next_frame)
                 && let Some(hitbox) = self
                     .next_frame
@@ -7471,6 +8165,7 @@ impl Window {
         let Some(inspector) = self.inspector.clone() else {
             return;
         };
+
         if event.downcast_ref::<MouseMoveEvent>().is_some() {
             inspector.update(cx, |inspector, _cx| {
                 if let Some((_, inspector_id)) =
@@ -7479,6 +8174,7 @@ impl Window {
                     inspector.hover(inspector_id, self);
                 }
             });
+
         } else if event.downcast_ref::<crate::MouseDownEvent>().is_some() {
             inspector.update(cx, |inspector, _cx| {
                 if let Some((_, inspector_id)) =
@@ -7487,24 +8183,30 @@ impl Window {
                     inspector.select(inspector_id, self);
                 }
             });
+
         } else if let Some(event) = event.downcast_ref::<crate::ScrollWheelEvent>() {
             // This should be kept in sync with SCROLL_LINES in x11 platform.
             const SCROLL_LINES: f32 = 3.0;
             const SCROLL_PIXELS_PER_LAYER: f32 = 36.0;
+
             let delta_y = event
                 .delta
                 .pixel_delta(px(SCROLL_PIXELS_PER_LAYER / SCROLL_LINES))
                 .y;
+
             if let Some(inspector) = self.inspector.clone() {
                 inspector.update(cx, |inspector, _cx| {
                     if let Some(depth) = inspector.pick_depth.as_mut() {
                         *depth += f32::from(delta_y) / SCROLL_PIXELS_PER_LAYER;
+
                         let max_depth = self.mouse_hit_test.entries.len() as f32 - 0.5;
+
                         if *depth < 0.0 {
                             *depth = 0.0;
                         } else if *depth > max_depth {
                             *depth = max_depth;
                         }
+
                         if let Some((_, inspector_id)) =
                             self.hovered_inspector_hitbox(inspector, &self.rendered_frame)
                         {
@@ -7526,12 +8228,14 @@ impl Window {
             let depth = (pick_depth as i64).try_into().unwrap_or(0);
             let max_skipped = self.mouse_hit_test.entries.len().saturating_sub(1);
             let skip_count = (depth as usize).min(max_skipped);
+
             for hitbox_id in self.mouse_hit_test.ordered_ids.iter().skip(skip_count) {
                 if let Some(inspector_id) = frame.inspector_hitboxes.get(hitbox_id) {
                     return Some((*hitbox_id, inspector_id.clone()));
                 }
             }
         }
+
         None
     }
 
@@ -7552,6 +8256,7 @@ impl Window {
             modifiers: self.modifiers,
             pressed_button: None,
         });
+
         let _ = self.dispatch_event(event, cx);
     }
 }
@@ -7582,6 +8287,7 @@ pub struct WindowHandle<V> {
     #[deref]
     #[deref_mut]
     pub(crate) any_handle: AnyWindowHandle,
+
     state_type: PhantomData<fn(V) -> V>,
 }
 
@@ -7746,6 +8452,7 @@ impl AnyWindowHandle {
                 any_handle: *self,
                 state_type: PhantomData,
             })
+
         } else {
             None
         }
@@ -7970,25 +8677,33 @@ impl From<[u8; 20]> for ElementId {
 pub struct PaintQuad {
     /// The bounds of the quad within the window.
     pub bounds: Bounds<Pixels>,
+
     /// The radii of the quad's corners.
     #[setters(generate)]
     pub corner_radii: Corners<Pixels>,
+
     /// Corner smoothing, from circular corners at `0.0` to maximum smoothing at `1.0`.
     pub corner_smoothing: f32,
+
     /// The background color of the quad.
     #[setters(generate)]
     pub background: Background,
+
     /// The widths of the quad's borders.
     #[setters(generate)]
     pub border_widths: Edges<Pixels>,
+
     /// The background painted into the quad's borders.
     #[setters(generate)]
     pub border_color: Background,
+
     /// The style of the quad's borders.
     #[setters(generate)]
     pub border_style: BorderStyle,
+
     /// The length of each border dash, as a multiple of the border width.
     pub border_dashed_length: f32,
+
     /// The gap between border dashes, as a multiple of the border width.
     pub border_dashed_gap: f32,
 }
@@ -8078,6 +8793,7 @@ mod pointer_tests;
 mod tests {
     use super::*;
     use crate::util::FluentBuilder;
+
     use crate::{
         ColorExt, DragMoveEvent, Empty, ExternalDragPayload, ExternalPaths, FileDragPaths,
         FocusHandle, Font, FontMetrics, ImageSource, InlineLayout, InlineLayoutRequest, InputEvent,
@@ -8087,6 +8803,7 @@ mod tests {
         TestApp, TestAppContext, TestTextSystem, TextLayoutRequest, TouchDragEvent, TouchId,
         TouchPhase, canvas, div, hsla, img, linear_color_stop, linear_gradient,
     };
+
     use image::{Frame as ImageFrame, ImageBuffer, Rgba};
     use proptest::prelude::*;
     use smallvec::smallvec;
@@ -8095,6 +8812,7 @@ mod tests {
     #[test]
     fn hit_test_preserves_inline_regions_occlusion_and_metadata() {
         let bounds = Bounds::new(Point::default(), size(px(100.), px(80.)));
+
         let background = Hitbox {
             id: HitboxId(1),
             bounds,
@@ -8106,6 +8824,7 @@ mod tests {
             tags: vec!["background".into()],
             fragments: None,
         };
+
         let mut inline = Hitbox {
             id: HitboxId(2),
             bounds,
@@ -8156,6 +8875,7 @@ mod tests {
                     hit_test.iter_hovered().copied().collect::<Vec<_>>(),
                     hovered
                 );
+
                 assert_eq!(
                     hit_test.iter_scrollable().copied().collect::<Vec<_>>(),
                     scrollable
@@ -8163,6 +8883,7 @@ mod tests {
 
                 for (depth, hitbox) in [&inline, &background].into_iter().enumerate() {
                     let entry = hit_test.entry(&hitbox.id).unwrap();
+
                     assert_eq!(entry.depth(), depth);
                     assert_eq!(entry.tags(), &hitbox.tags);
                 }
@@ -8240,23 +8961,29 @@ mod tests {
 
         fn rasterize_glyph(&self, params: &RenderGlyphParams) -> anyhow::Result<RasterizedGlyph> {
             self.rasterized.lock().unwrap().push(params.clone());
+
             if self.fail_next.swap(false, SeqCst) {
                 anyhow::bail!("injected glyph rasterization failure");
             }
 
             let (format, pixels) = match params.glyph_id.0 {
                 1 => (RasterizedGlyphFormat::AlphaMask, vec![0, 255]),
+
                 2 => (
                     RasterizedGlyphFormat::BgraSubpixelMask,
                     vec![1, 2, 3, 0, 4, 5, 6, 0],
                 ),
+
                 3 | 5 => (
                     RasterizedGlyphFormat::BgraColor,
                     vec![10, 20, 30, 128, 40, 50, 60, 255],
                 ),
+
                 node_id => anyhow::bail!("unexpected scripted glyph {node_id}"),
             };
+
             let size = size(DevicePixels(2), DevicePixels(1));
+
             Ok(RasterizedGlyph {
                 bounds: Bounds {
                     origin: point(DevicePixels(-1), DevicePixels(-2)),
@@ -8276,6 +9003,7 @@ mod tests {
                 };
 
                 PreparedRasterStyle::preblend(request)
+
             } else {
                 PreparedRasterStyle::independent(request.requested_mode)
             }
@@ -8296,6 +9024,7 @@ mod tests {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let color = hsla(0.6, 0.7, 0.4, 0.8);
             let alternate_color = hsla(0.1, 0.6, 0.3, 0.8);
+
             div().size_full().opacity(0.5).child(
                 canvas(
                     |_, _, _| (),
@@ -8329,6 +9058,7 @@ mod tests {
                                         foreground,
                                     )
                                     .unwrap();
+
                                 index += 1;
                             }
                         }
@@ -8344,51 +9074,62 @@ mod tests {
         let text_system = Arc::new(RasterFormatTextSystem::default());
         let mut app = TestApp::with_text_system(text_system.clone());
         let mut test_window = app.open_window(|_, _| RasterFormatView);
+
         test_window.draw();
 
         test_window.update(|_, window, _| {
             assert_eq!(window.rendered_primitive_counts(), (0, 2, 0, 4));
+
             let scene = &window.rendered_frame.scene;
             let expected_color = hsla(0.6, 0.7, 0.4, 0.8).into();
 
             assert_eq!(scene.monochrome_sprites[0].color, expected_color);
             assert_eq!(scene.monochrome_sprites[1].color, expected_color);
+
             assert!(
                 scene
                     .polychrome_sprites
                     .iter()
                     .all(|sprite| sprite.opacity == 1.0)
             );
+
             assert_eq!(
                 scene.monochrome_sprites[0].bounds.origin,
                 point(ScaledPixels(9.0), ScaledPixels(18.0))
             );
+
             assert_eq!(
                 scene.monochrome_sprites[0].tile.texture_id.kind,
                 crate::AtlasTextureKind::Monochrome
             );
+
             assert_eq!(
                 scene.monochrome_sprites[1].tile.texture_id.kind,
                 crate::AtlasTextureKind::Subpixel
             );
+
             assert_eq!(
                 scene.polychrome_sprites[0].tile.texture_id.kind,
                 crate::AtlasTextureKind::Polychrome
             );
+
             let first_tile = scene.polychrome_sprites[0].tile;
             let second_tile = scene.polychrome_sprites[1].tile;
             let third_tile = scene.polychrome_sprites[2].tile;
             let fourth_tile = scene.polychrome_sprites[3].tile;
+
             assert_eq!(first_tile, second_tile);
             assert_ne!(third_tile, fourth_tile);
         });
 
         let rasterized = text_system.rasterized.lock().unwrap();
+
         let color_styles = rasterized
             .iter()
             .filter(|params| params.raster_style.mode == GlyphRenderMode::Color)
             .map(|params| params.raster_style.color_effect)
             .collect::<Vec<_>>();
+
         assert_eq!(
             color_styles,
             [
@@ -8413,8 +9154,10 @@ mod tests {
             rasterized: StdMutex::default(),
             fail_next: AtomicBool::new(true),
         });
+
         let mut app = TestApp::with_text_system(text_system.clone());
         let mut test_window = app.open_window(|_, _| FragmentFailureView);
+
         test_window.draw();
 
         test_window.update(|_, window, _| {
@@ -8428,6 +9171,7 @@ mod tests {
             .iter()
             .map(|params| params.glyph_id)
             .collect::<Vec<_>>();
+
         assert!(
             glyph_ids.starts_with(&[GlyphId(1), GlyphId(2)]),
             "unexpected rasterization sequence: {glyph_ids:?}"
@@ -8480,7 +9224,9 @@ mod tests {
 
     fn assert_smoothing(name: &str, minimum_count: usize, values: impl IntoIterator<Item = f32>) {
         let values = values.into_iter().collect::<Vec<_>>();
+
         assert!(values.len() >= minimum_count, "missing {name}");
+
         assert!(
             values.iter().all(|&value| value == 1.0),
             "{name}: {values:?}"
@@ -8492,6 +9238,7 @@ mod tests {
             let mut image = img(ImageSource::Render(self.image.clone()))
                 .size(px(24.))
                 .rounded(px(8.));
+
             image.style().corner_smoothing = Some(1.5);
 
             let mut root = div()
@@ -8514,7 +9261,9 @@ mod tests {
                 .backdrop_blur(px(4.))
                 .blur(px(2.))
                 .child(image);
+
             root.style().corner_smoothing = Some(1.5);
+
             root
         }
     }
@@ -8522,6 +9271,7 @@ mod tests {
     #[gpui::test]
     fn shadow_backgrounds_survive_painting_with_geometry_and_opacity(cx: &mut TestAppContext) {
         let window = cx.add_window(|_, _| ShadowBackgroundView);
+
         let shadows = window
             .update(cx, |_, window, _| {
                 window.rendered_frame.scene.shadows.clone()
@@ -8529,15 +9279,19 @@ mod tests {
             .unwrap();
 
         assert_eq!(shadows.len(), 3);
+
         let gradient = shadow_gradient();
+
         let drop_gradient = shadows
             .iter()
             .find(|shadow| shadow.inset == ShaderBool::Disabled && shadow.color == gradient)
             .expect("gradient drop shadow should be painted");
+
         let inset_gradient = shadows
             .iter()
             .find(|shadow| shadow.inset == ShaderBool::Enabled && shadow.color == gradient)
             .expect("gradient inset shadow should be painted");
+
         let solid = shadows
             .iter()
             .find(|shadow| shadow.color.as_solid().is_some())
@@ -8548,6 +9302,7 @@ mod tests {
             Some(hsla(0.3, 0.7, 0.4, 0.4)),
             "shadow alpha stays intrinsic until the group composite"
         );
+
         assert_eq!(drop_gradient.element_bounds, inset_gradient.element_bounds);
         assert!(drop_gradient.bounds.size.width > drop_gradient.element_bounds.size.width);
         assert!(drop_gradient.bounds.size.height > drop_gradient.element_bounds.size.height);
@@ -8565,16 +9320,19 @@ mod tests {
         window
             .update(cx, |_, window, _| {
                 let scene = &window.rendered_frame.scene;
+
                 assert_smoothing(
                     "quads",
                     2,
                     scene.quads.iter().map(|quad| quad.corner_smoothing),
                 );
+
                 assert_smoothing(
                     "shadows",
                     2,
                     scene.shadows.iter().map(|shadow| shadow.corner_smoothing),
                 );
+
                 assert_smoothing(
                     "backdrop filters",
                     1,
@@ -8583,6 +9341,7 @@ mod tests {
                         .iter()
                         .map(|filter| filter.corner_smoothing),
                 );
+
                 assert_smoothing(
                     "filter boundaries",
                     2,
@@ -8592,6 +9351,7 @@ mod tests {
                         .filter(|boundary| !boundary.filters.is_empty())
                         .map(|boundary| boundary.corner_smoothing),
                 );
+
                 assert_smoothing(
                     "images",
                     1,
@@ -8600,6 +9360,7 @@ mod tests {
                         .iter()
                         .map(|image| image.corner_smoothing),
                 );
+
                 for inset in [ShaderBool::Disabled, ShaderBool::Enabled] {
                     assert!(scene.shadows.iter().any(|shadow| shadow.inset == inset));
                 }
@@ -8609,7 +9370,9 @@ mod tests {
                     .iter()
                     .find(|quad| quad.border_widths.top.0 > 0.0)
                     .expect("border quad");
+
                 let scale = window.scale_factor();
+
                 assert_eq!(
                     [
                         border.border_widths.top.0,
@@ -8630,6 +9393,7 @@ mod tests {
     impl Render for OpensWindowOnPaint {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let opened = self.opened.clone();
+
             div()
                 .size_full()
                 .child(canvas(
@@ -8658,9 +9422,11 @@ mod tests {
         let mut cx = TestAppContext::single();
 
         let opened = Rc::new(Cell::new(false));
+
         // add_window draws once, which runs the nested open_window mid-draw.
         let window = cx.add_window({
             let opened = opened.clone();
+
             move |_, _| OpensWindowOnPaint { opened }
         });
 
@@ -8696,8 +9462,10 @@ mod tests {
         // An idle window must not wake on clean frames or plain updates, or
         // the frame source could never stop.
         let baseline = test_window.frame_wake_count();
+
         test_window.simulate_frame_request(RequestFrameOptions::default());
         window.update(cx, |_, _, _| {}).unwrap();
+
         assert_eq!(
             test_window.frame_wake_count(),
             baseline,
@@ -8706,6 +9474,7 @@ mod tests {
 
         // Notifying a view in an idle window is the core demand signal.
         window.update(cx, |_, _, cx| cx.notify()).unwrap();
+
         assert!(
             test_window.frame_wake_count() > baseline,
             "notifying a view in an idle window must wake the frame source"
@@ -8713,8 +9482,11 @@ mod tests {
 
         // Serving that demand returns to idle without further wakes.
         test_window.simulate_frame_request(RequestFrameOptions::default());
+
         let baseline = test_window.frame_wake_count();
+
         test_window.simulate_frame_request(RequestFrameOptions::default());
+
         assert_eq!(
             test_window.frame_wake_count(),
             baseline,
@@ -8725,6 +9497,7 @@ mod tests {
         window
             .update(cx, |_, window, _| window.on_next_frame(|_, _| {}))
             .unwrap();
+
         assert!(
             test_window.frame_wake_count() > baseline,
             "scheduling a next-frame callback in an idle window must wake the frame source"
@@ -8739,14 +9512,17 @@ mod tests {
     fn test_pending_next_frame_callbacks_are_not_stranded(cx: &mut TestAppContext) {
         let window = cx.add_window(|_, _| EmptyView);
         let test_window = cx.test_window(window.into());
+
         // Establish a recent last-frame time so the inactive-window throttle
         // can engage on the next request.
         test_window.simulate_frame_request(RequestFrameOptions::default());
 
         let callback_ran = Rc::new(Cell::new(false));
+
         window
             .update(cx, {
                 let callback_ran = callback_ran.clone();
+
                 move |_, window, _| {
                     window.on_next_frame(move |_, _| callback_ran.set(true));
                 }
@@ -8754,7 +9530,9 @@ mod tests {
             .unwrap();
 
         let baseline = test_window.frame_wake_count();
+
         test_window.simulate_frame_request(RequestFrameOptions::default());
+
         // The test window is inactive, so this request throttles to ~30fps
         // when it lands within the throttle interval of the previous frame
         // (the common case here, but timing-dependent): the callback is
@@ -8772,12 +9550,14 @@ mod tests {
         use raw_window_handle::{HandleError, HasDisplayHandle as _, HasWindowHandle as _};
 
         let window = cx.add_window(|_, _| EmptyView);
+
         window
             .update(cx, |_, window, _| {
                 assert!(matches!(
                     window.window_handle(),
                     Err(HandleError::NotSupported)
                 ));
+
                 assert!(matches!(
                     window.display_handle(),
                     Err(HandleError::NotSupported)
@@ -8795,13 +9575,16 @@ mod tests {
                 })
                 .unwrap()
             });
+
             let platform_window = cx.test_window(window.into());
+
             assert_eq!(platform_window.is_visible(), show);
 
             for visible in [false, false, true, true, false, true] {
                 window
                     .update(cx, |_, window, _| window.set_visible(visible))
                     .unwrap();
+
                 assert_eq!(platform_window.is_visible(), visible);
             }
         }
@@ -8811,9 +9594,11 @@ mod tests {
     fn test_appearance_change_runs_after_app_update(cx: &mut TestAppContext) {
         let window = cx.add_window(|_, _| EmptyView);
         let observed_appearance = Rc::new(Cell::new(None));
+
         let _subscription = window
             .update(cx, {
                 let observed_appearance = observed_appearance.clone();
+
                 move |_, window, _| {
                     window.observe_window_appearance(move |window, _| {
                         observed_appearance.set(Some(window.appearance()));
@@ -8821,12 +9606,15 @@ mod tests {
                 }
             })
             .unwrap();
+
         let test_window = cx.test_window(window.into());
 
         cx.update(|_| {
             test_window.simulate_appearance_change(WindowAppearance::Dark);
+
             assert_eq!(observed_appearance.get(), None);
         });
+
         cx.run_until_parked();
 
         assert_eq!(observed_appearance.get(), Some(WindowAppearance::Dark));
@@ -8846,16 +9634,19 @@ mod tests {
             window.on_next_frame(|_, _| {});
         })
         .unwrap();
+
         assert!(
             test_window.frame_scheduled(),
             "queuing work on a parked window must wake the render loop"
         );
 
         assert!(test_window.simulate_scheduled_frame());
+
         assert!(
             test_window.frame_scheduled(),
             "presenting the frame must await one compositor callback"
         );
+
         assert!(test_window.simulate_scheduled_frame());
         assert!(!test_window.frame_scheduled());
     }
@@ -8884,11 +9675,14 @@ mod tests {
         let test_window = cx.test_window(window.into());
 
         let callback_ran = Rc::new(Cell::new(false));
+
         cx.update_window(window.into(), |_, window, _| {
             // Inactive windows are frame-rate throttled, which would defer the
             // ticks this test drives manually.
             window.active.set(true);
+
             let callback_ran = callback_ran.clone();
+
             window.on_next_frame(move |window, _| {
                 window.on_next_frame(move |_, _| callback_ran.set(true));
             });
@@ -8897,6 +9691,7 @@ mod tests {
 
         assert!(test_window.simulate_scheduled_frame());
         assert!(!callback_ran.get());
+
         assert!(
             test_window.frame_scheduled(),
             "a callback queued mid-frame must schedule a follow-up before the loop parks"
@@ -8914,6 +9709,7 @@ mod tests {
     impl Render for RootView {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             let child_bounds = self.child_bounds.clone();
+
             let root = div().flex().flex_col().child(
                 canvas(
                     move |bounds, _, _| child_bounds.set(bounds),
@@ -8921,6 +9717,7 @@ mod tests {
                 )
                 .size_full(),
             );
+
             if self.explicit_size {
                 root.w(px(300.)).h(px(200.))
             } else {
@@ -8933,8 +9730,10 @@ mod tests {
     fn auto_sized_window_root_fills_the_window() {
         let mut cx = TestAppContext::single();
         let child_bounds = Rc::new(Cell::new(Bounds::default()));
+
         let window = cx.add_window({
             let child_bounds = child_bounds.clone();
+
             move |_, _| RootView {
                 explicit_size: false,
                 child_bounds,
@@ -8955,8 +9754,10 @@ mod tests {
     fn explicitly_sized_window_root_keeps_its_size() {
         let mut cx = TestAppContext::single();
         let child_bounds = Rc::new(Cell::new(Bounds::default()));
+
         let window = cx.add_window({
             let child_bounds = child_bounds.clone();
+
             move |_, _| RootView {
                 explicit_size: true,
                 child_bounds,
@@ -8991,12 +9792,14 @@ mod tests {
                 })
                 .on_drag_move({
                     let observed_drag_moves = self.observed_drag_moves.clone();
+
                     move |event: &DragMoveEvent<PathBuf>, _, _| {
                         observed_drag_moves.borrow_mut().push(event.event.position);
                     }
                 })
                 .on_drop({
                     let observed_drops = self.observed_drops.clone();
+
                     move |path: &PathBuf, _, _| observed_drops.borrow_mut().push(path.clone())
                 })
         }
@@ -9013,10 +9816,12 @@ mod tests {
         fn start_drag(cx: &mut TestAppContext, path: PathBuf, platform_result: bool) -> Drag {
             let observed_drag_moves = Rc::new(RefCell::new(Vec::new()));
             let observed_drops = Rc::new(RefCell::new(Vec::new()));
+
             let window: AnyWindowHandle = cx
                 .add_window({
                     let observed_drag_moves = observed_drag_moves.clone();
                     let observed_drops = observed_drops.clone();
+
                     move |_, _| FileDragView {
                         path,
                         observed_drag_moves,
@@ -9024,11 +9829,13 @@ mod tests {
                     }
                 })
                 .into();
+
             cx.test_window(window)
                 .set_start_external_drag_result(platform_result);
 
             let update_result = cx.update_window(window, |_, window, cx| {
                 window.draw(cx).clear(cx);
+
                 window.dispatch_event(
                     MouseDownEvent {
                         position: point(px(10.), px(10.)),
@@ -9040,6 +9847,7 @@ mod tests {
                     .to_platform_input(),
                     cx,
                 );
+
                 window.dispatch_event(
                     MouseMoveEvent {
                         position: point(px(20.), px(20.)),
@@ -9049,14 +9857,17 @@ mod tests {
                     .to_platform_input(),
                     cx,
                 );
+
                 assert!(cx.active_drag.is_some());
             });
+
             assert!(
                 update_result.is_ok(),
                 "failed to start drag: {update_result:?}"
             );
 
             assert!(cx.test_window(window).external_drag_files().is_empty());
+
             Drag {
                 window,
                 observed_drag_moves,
@@ -9067,6 +9878,7 @@ mod tests {
         let successful_path = PathBuf::from("/tmp/successful-drag");
         let successful = start_drag(cx, successful_path.clone(), true);
         let outside_position = point(px(-1.), px(20.));
+
         let update_result = cx.update_window(successful.window, |_, window, cx| {
             window.dispatch_event(
                 MouseMoveEvent {
@@ -9077,16 +9889,20 @@ mod tests {
                 .to_platform_input(),
                 cx,
             );
+
             assert!(cx.active_drag.is_none());
         });
+
         assert!(
             update_result.is_ok(),
             "failed to promote drag: {update_result:?}"
         );
+
         assert_eq!(
             cx.test_window(successful.window).external_drag_files(),
             [(successful_path.clone(), true)]
         );
+
         // Views must still see the move that leaves the window, otherwise they never learn to tear
         // down the drag state they built up while the pointer was inside.
         assert_eq!(
@@ -9097,6 +9913,7 @@ mod tests {
         let destination: AnyWindowHandle = cx.add_window(|_, _| EmptyView).into();
         let reentry_position = point(px(30.), px(30.));
         let external_paths = || ExternalPaths([successful_path.clone()].into_iter().collect());
+
         let update_result = cx.update_window(destination, |_, window, cx| {
             window.dispatch_event(
                 FileDropEvent::Entered {
@@ -9106,14 +9923,18 @@ mod tests {
                 .to_platform_input(),
                 cx,
             );
+
             assert!(
                 cx.active_drag
                     .as_ref()
                     .is_some_and(|drag| drag.value.downcast_ref::<ExternalPaths>().is_some())
             );
+
             window.dispatch_event(FileDropEvent::Exited.to_platform_input(), cx);
+
             assert!(cx.active_drag.is_none());
         });
+
         assert!(
             update_result.is_ok(),
             "failed to handle drag in destination window: {update_result:?}"
@@ -9128,17 +9949,20 @@ mod tests {
                 .to_platform_input(),
                 cx,
             );
+
             assert!(
                 cx.active_drag
                     .as_ref()
                     .is_some_and(|drag| drag.value.downcast_ref::<PathBuf>().is_some())
             );
+
             assert_eq!(
                 successful.observed_drag_moves.borrow().last(),
                 Some(&reentry_position)
             );
 
             window.dispatch_event(FileDropEvent::Exited.to_platform_input(), cx);
+
             assert!(cx.active_drag.is_none());
 
             window.dispatch_event(
@@ -9149,6 +9973,7 @@ mod tests {
                 .to_platform_input(),
                 cx,
             );
+
             assert!(
                 cx.active_drag
                     .as_ref()
@@ -9162,15 +9987,20 @@ mod tests {
                 .to_platform_input(),
                 cx,
             );
+
             assert_eq!(
                 successful.observed_drops.borrow().as_slice(),
                 std::slice::from_ref(&successful_path)
             );
+
             assert!(cx.active_drag.is_none());
 
             window.dispatch_event(FileDropEvent::Exited.to_platform_input(), cx);
+
             assert!(cx.active_drag.is_none());
+
             window.dispatch_event(FileDropEvent::Ended.to_platform_input(), cx);
+
             assert!(cx.active_drag.is_none());
 
             window.dispatch_event(
@@ -9181,13 +10011,16 @@ mod tests {
                 .to_platform_input(),
                 cx,
             );
+
             assert!(
                 cx.active_drag
                     .as_ref()
                     .is_some_and(|drag| drag.value.downcast_ref::<ExternalPaths>().is_some())
             );
+
             window.dispatch_event(FileDropEvent::Exited.to_platform_input(), cx);
         });
+
         assert!(
             update_result.is_ok(),
             "failed to restore drag in source window: {update_result:?}"
@@ -9195,6 +10028,7 @@ mod tests {
 
         let cancelled_path = PathBuf::from("/tmp/cancelled-drag");
         let cancelled = start_drag(cx, cancelled_path.clone(), true);
+
         let update_result = cx.update_window(cancelled.window, |_, window, cx| {
             window.dispatch_event(
                 MouseMoveEvent {
@@ -9205,6 +10039,7 @@ mod tests {
                 .to_platform_input(),
                 cx,
             );
+
             assert!(cx.active_drag.is_none());
 
             window.dispatch_event(
@@ -9215,23 +10050,28 @@ mod tests {
                 .to_platform_input(),
                 cx,
             );
+
             assert!(
                 cx.active_drag
                     .as_ref()
                     .is_some_and(|drag| drag.value.downcast_ref::<PathBuf>().is_some())
             );
+
             assert!(cx.stop_active_drag(window));
             assert!(cx.active_drag.is_none());
         });
+
         assert!(
             update_result.is_ok(),
             "failed to cancel restored drag: {update_result:?}"
         );
+
         assert!(!cx.update(|cx| cx.end_platform_drag(cancelled.window.window_id())));
 
         let removed_path = PathBuf::from("/tmp/removed-window-drag");
         let removed = start_drag(cx, removed_path, true);
         let removed_window_id = removed.window.window_id();
+
         let update_result = cx.update_window(removed.window, |_, window, cx| {
             window.dispatch_event(
                 MouseMoveEvent {
@@ -9242,17 +10082,22 @@ mod tests {
                 .to_platform_input(),
                 cx,
             );
+
             assert!(cx.active_drag.is_none());
+
             window.remove_window();
         });
+
         assert!(
             update_result.is_ok(),
             "failed to remove drag source window: {update_result:?}"
         );
+
         assert!(!cx.update(|cx| cx.end_platform_drag(removed_window_id)));
 
         let failed_path = PathBuf::from("/tmp/failed-drag");
         let failed = start_drag(cx, failed_path.clone(), false);
+
         let update_result = cx.update_window(failed.window, |_, window, cx| {
             for x_position in [-1., -2.] {
                 window.dispatch_event(
@@ -9265,12 +10110,15 @@ mod tests {
                     cx,
                 );
             }
+
             assert!(cx.active_drag.is_some());
         });
+
         assert!(
             update_result.is_ok(),
             "failed to retain drag after platform failure: {update_result:?}"
         );
+
         assert_eq!(
             cx.test_window(failed.window).external_drag_files(),
             [(failed_path, true)]
@@ -9297,20 +10145,26 @@ mod tests {
     #[gpui::test]
     fn test_focus_moved_by_focus_listener_is_dispatched(cx: &mut TestAppContext) {
         let b_focus_count = Rc::new(Cell::new(0));
+
         let window = cx.add_window({
             let b_focus_count = b_focus_count.clone();
+
             move |window, cx| {
                 let a = cx.focus_handle();
                 let b = cx.focus_handle();
+
                 cx.on_focus(&a, window, |this: &mut FocusForwarder, window, cx| {
                     let b = this.b.clone();
+
                     window.focus(&b, cx);
                 })
                 .detach();
+
                 cx.on_focus(&b, window, move |_, _, _| {
                     b_focus_count.set(b_focus_count.get() + 1);
                 })
                 .detach();
+
                 FocusForwarder { a, b }
             }
         });
@@ -9321,9 +10175,11 @@ mod tests {
         window
             .update(cx, |this, window, cx| {
                 let a = this.a.clone();
+
                 window.focus(&a, cx);
             })
             .unwrap();
+
         cx.executor().run_until_parked();
 
         window
@@ -9331,16 +10187,20 @@ mod tests {
                 assert!(this.b.is_focused(window));
             })
             .unwrap();
+
         assert_eq!(b_focus_count.get(), 1);
     }
 
     #[gpui::test]
     fn claimed_touch_drag_receives_movement_and_release(cx: &mut TestAppContext) {
         let events = Rc::new(RefCell::new(Vec::new()));
+
         let window = cx.add_window({
             let events = events.clone();
+
             move |_, _| TouchDragListener { events }
         });
+
         let touch = TouchId(1);
 
         dispatch_touch(window, cx, touch, TouchPhase::Started, 10.);
@@ -9364,6 +10224,7 @@ mod tests {
     impl Render for TouchDragListener {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let events = self.events.clone();
+
             canvas(
                 |_, _, _| {},
                 move |_, _, window, _| {
@@ -9371,7 +10232,9 @@ mod tests {
                         if phase != DispatchPhase::Bubble {
                             return;
                         }
+
                         events.borrow_mut().push((event.phase, event.position.x));
+
                         if event.phase == TouchPhase::Started {
                             window.prevent_default();
                         }
@@ -9389,13 +10252,18 @@ mod tests {
             LongPressResponse::None,
         ] {
             let phases = Rc::new(RefCell::new(Vec::new()));
+
             let window = cx.add_window({
                 let phases = phases.clone();
+
                 move |_, _| LongPressListener { phases, response }
             });
+
             dispatch_touch(window, cx, TouchId(1), TouchPhase::Started, 0.);
+
             cx.executor().advance_clock(Duration::from_millis(501));
             cx.executor().run_until_parked();
+
             window
                 .update(cx, |_, window, _| {
                     assert_eq!(
@@ -9404,8 +10272,10 @@ mod tests {
                     );
                 })
                 .unwrap();
+
             dispatch_touch(window, cx, TouchId(1), TouchPhase::Moved, 2.);
             dispatch_touch(window, cx, TouchId(1), TouchPhase::Ended, 2.);
+
             window
                 .update(cx, |_, window, _| {
                     assert!(window.long_press_capture.is_none());
@@ -9413,6 +10283,7 @@ mod tests {
                 .unwrap();
 
             let phases = phases.borrow();
+
             if response == LongPressResponse::PreventDefault {
                 assert_eq!(
                     phases.as_slice(),
@@ -9427,13 +10298,16 @@ mod tests {
     #[gpui::test]
     fn stale_default_prevention_does_not_claim_long_press(cx: &mut TestAppContext) {
         let phases = Rc::new(RefCell::new(Vec::new()));
+
         let window = cx.add_window({
             let phases = phases.clone();
+
             move |_, _| LongPressListener {
                 phases,
                 response: LongPressResponse::None,
             }
         });
+
         window
             .update(cx, |_, window, _| {
                 window.prevent_default();
@@ -9441,8 +10315,10 @@ mod tests {
             .unwrap();
 
         dispatch_touch(window, cx, TouchId(1), TouchPhase::Started, 0.);
+
         cx.executor().advance_clock(Duration::from_millis(501));
         cx.executor().run_until_parked();
+
         dispatch_touch(window, cx, TouchId(1), TouchPhase::Moved, 2.);
 
         assert_eq!(phases.borrow().as_slice(), [TouchPhase::Started]);
@@ -9456,15 +10332,19 @@ mod tests {
             (TouchPhase::Moved, 20.),
         ] {
             let phases = Rc::new(RefCell::new(Vec::new()));
+
             let window = cx.add_window({
                 let phases = phases.clone();
+
                 move |_, _| LongPressListener {
                     phases,
                     response: LongPressResponse::PreventDefault,
                 }
             });
+
             dispatch_touch(window, cx, TouchId(1), TouchPhase::Started, 0.);
             dispatch_touch(window, cx, TouchId(1), phase, position);
+
             cx.executor().advance_clock(Duration::from_millis(501));
             cx.executor().run_until_parked();
 
@@ -9475,25 +10355,33 @@ mod tests {
     #[gpui::test]
     fn stale_long_press_timer_cannot_affect_replacement_touch(cx: &mut TestAppContext) {
         let phases = Rc::new(RefCell::new(Vec::new()));
+
         let window = cx.add_window({
             let phases = phases.clone();
+
             move |_, _| LongPressListener {
                 phases,
                 response: LongPressResponse::PreventDefault,
             }
         });
+
         let first_touch = TouchId(1);
+
         dispatch_touch(window, cx, first_touch, TouchPhase::Started, 0.);
+
         cx.executor().advance_clock(Duration::from_millis(250));
+
         dispatch_touch(window, cx, first_touch, TouchPhase::Cancelled, 0.);
         dispatch_touch(window, cx, TouchId(2), TouchPhase::Started, 10.);
 
         cx.executor().advance_clock(Duration::from_millis(251));
         cx.executor().run_until_parked();
+
         assert!(phases.borrow().is_empty());
 
         cx.executor().advance_clock(Duration::from_millis(250));
         cx.executor().run_until_parked();
+
         assert_eq!(phases.borrow().as_slice(), [TouchPhase::Started]);
     }
 
@@ -9514,6 +10402,7 @@ mod tests {
             let entity = cx.entity();
             let phases = self.phases.clone();
             let response = self.response;
+
             canvas(
                 |_, _, _| {},
                 move |_, _, window, _| {
@@ -9521,12 +10410,15 @@ mod tests {
                         if phase != DispatchPhase::Bubble {
                             return;
                         }
+
                         phases.borrow_mut().push(event.phase);
+
                         match response {
                             LongPressResponse::PreventDefault => {
                                 window.capture_long_press(&entity);
                                 window.prevent_default();
                             }
+
                             LongPressResponse::StopPropagation => cx.stop_propagation(),
                             LongPressResponse::None => {}
                         }
@@ -9568,6 +10460,7 @@ mod tests {
     impl Render for CachedOpacityChild {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             self.renders.set(self.renders.get() + 1);
+
             let paints = self.paints.clone();
 
             div().size(px(20.0)).bg(crate::red()).child(
@@ -9593,11 +10486,13 @@ mod tests {
     impl Render for CachedOpacityParent {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let mut child_style = div().size(px(20.0));
+
             let child = if self.cached {
                 self.child
                     .clone()
                     .cached(child_style.style().clone())
                     .into_any_element()
+
             } else {
                 self.child.clone().into_any_element()
             };
@@ -9614,6 +10509,7 @@ mod tests {
         let renders = Rc::new(Cell::new(0));
         let paints = Rc::new(Cell::new(0));
         let mut app = TestApp::new();
+
         let mut test_window = app.open_window(|_, cx| CachedOpacityParent {
             opacity: None,
             cached: true,
@@ -9622,9 +10518,12 @@ mod tests {
                 paints: paints.clone(),
             }),
         });
+
         test_window.draw();
+
         let initial_renders = renders.get();
         let initial_paints = paints.get();
+
         assert!(initial_renders > 0);
         assert!(initial_paints > 0);
 
@@ -9653,6 +10552,7 @@ mod tests {
 
         for opacity in [Some(0.5), Some(0.25), Some(1.0), Some(0.0), None] {
             let mut fresh_app = TestApp::new();
+
             let mut fresh_window = fresh_app.open_window(|_, cx| CachedOpacityParent {
                 opacity,
                 cached: false,
@@ -9661,19 +10561,26 @@ mod tests {
                     paints: Rc::new(Cell::new(0)),
                 }),
             });
+
             fresh_window.draw();
+
             let fresh_scene =
                 fresh_window.update(|_, window, _| scene_snapshot(&window.rendered_frame.scene));
 
             test_window.update(|view, _, cx| {
                 view.opacity = opacity;
+
                 cx.notify();
             });
+
             test_window.draw();
+
             test_window.update(|_, window, _| {
                 let scene = &window.rendered_frame.scene;
+
                 assert_eq!(scene_snapshot(scene), fresh_scene, "opacity {opacity:?}");
             });
+
             assert_eq!(renders.get(), initial_renders);
             assert_eq!(paints.get(), initial_paints);
         }

@@ -13,12 +13,14 @@
 mod example_prelude;
 
 use example_prelude::init_example;
+
 use gpui::{
     App, Bounds, ColorExt, Context, DragMoveEvent, FontWeight, HapticFeedbackStyle, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Render,
     StatefulInteractiveElement, Styled, Window, WindowBounds, WindowOptions, colors::Colors, div,
     prelude::*, px, relative, rgb, size,
 };
+
 use palette::IntoColor;
 
 const SLIDER_MIN: f32 = 0.0;
@@ -98,6 +100,7 @@ impl HapticFeedbackExample {
 
     fn snap_to_step(raw: f32) -> f32 {
         let snapped = (raw / SLIDER_STEP).round() * SLIDER_STEP;
+
         snapped.clamp(SLIDER_MIN, SLIDER_MAX)
     }
 
@@ -122,6 +125,7 @@ impl HapticFeedbackExample {
 
         if new_step != self.slider_prev_step {
             cx.play_haptic_feedback(HapticFeedbackStyle::LevelChange);
+
             self.slider_prev_step = new_step;
         }
 
@@ -180,6 +184,7 @@ impl Render for HapticFeedbackExample {
                         } else {
                             rgb(0xf59e0b)
                         };
+
                         div().size_2().rounded_full().bg(dot)
                     })
                     .child(
@@ -321,6 +326,7 @@ impl Render for HapticFeedbackExample {
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(520.), px(520.)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(|cx| HapticFeedbackExample::new(cx)),

@@ -1,8 +1,10 @@
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+
 use gpui::{
     FontFallbacks, GlyphRenderMode, PlatformTextSystem, PreparedRasterStyle, RenderGlyphParams,
     TextAlign, TextLayoutOptions, TextLayoutRequest, TextRun, TextSystem, font, px,
 };
+
 use gpui_ce_parley::{ParleyTextSystem, SystemFonts};
 use gpui_fonts::{IBM_PLEX, LILEX, SOURCE_SERIF};
 use std::borrow::Cow;
@@ -10,6 +12,7 @@ use std::sync::Arc;
 
 fn text_system() -> (ParleyTextSystem, TextRun) {
     let system = ParleyTextSystem::new_with_system_font(SystemFonts::Skip, IBM_PLEX.family);
+
     system
         .add_fonts(vec![
             Cow::Borrowed(IBM_PLEX.data),
@@ -17,11 +20,14 @@ fn text_system() -> (ParleyTextSystem, TextRun) {
             Cow::Borrowed(SOURCE_SERIF.data),
         ])
         .unwrap();
+
     let mut descriptor = font(IBM_PLEX.family);
+
     descriptor.fallbacks = Some(FontFallbacks::from_fonts(vec![
         SOURCE_SERIF.family.to_string(),
         LILEX.family.to_string(),
     ]));
+
     (
         system,
         TextRun {
@@ -40,7 +46,9 @@ fn code_text() -> String {
 fn raster_case() -> (TextSystem, RenderGlyphParams) {
     let (system, mut run) = text_system();
     let text = "A";
+
     run.len = text.len();
+
     let layout = system.layout_text(TextLayoutRequest {
         text,
         font_size: px(16.0),
@@ -53,6 +61,7 @@ fn raster_case() -> (TextSystem, RenderGlyphParams) {
 
     let fragment = &layout.paint_fragments[0];
     let glyph = &fragment.glyphs[0];
+
     let params = RenderGlyphParams {
         font_id: fragment.font_id,
         glyph_id: glyph.id,
@@ -72,10 +81,12 @@ fn raster_case() -> (TextSystem, RenderGlyphParams) {
 fn bench_text_pipeline(criterion: &mut Criterion) {
     let (system, base_run) = text_system();
     let code = code_text();
+
     let multilingual =
         "office cafe\u{301} العربية אבג 日本語 ไทย 👩🏽‍💻 🇬🇧 one two three four".repeat(16);
 
     let mut group = criterion.benchmark_group("parley_text_pipeline");
+
     for (name, text, font_size, wrap_width) in [
         ("layout_code_warm", code.as_str(), 14.0, None),
         (
@@ -145,6 +156,7 @@ fn bench_text_pipeline(criterion: &mut Criterion) {
 
     group.bench_function("cached_glyph_rasterization", |bencher| {
         let (system, params) = raster_case();
+
         system.rasterize_glyph(&params).unwrap();
         bencher.iter(|| system.rasterize_glyph(&params).unwrap());
     });

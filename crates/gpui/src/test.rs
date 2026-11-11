@@ -28,6 +28,7 @@
 use crate::{Entity, Subscription, TestAppContext, TestDispatcher};
 use futures::StreamExt as _;
 use proptest::prelude::{Just, Strategy, any};
+
 use std::{
     env,
     panic::{self, RefUnwindSafe, UnwindSafe},
@@ -61,7 +62,9 @@ pub fn apply_seed_to_proptest_config(
         .ok()
         .and_then(|val| val.parse::<u64>().ok())
         .unwrap_or(0);
+
     config.rng_seed = proptest::test_runner::RngSeed::Fixed(seed);
+
     config
 }
 
@@ -79,7 +82,9 @@ pub fn run_test_once<R>(
         let dispatcher = TestDispatcher::new(seed);
         let scheduler = dispatcher.scheduler().clone();
         let res = test_fn(dispatcher);
+
         scheduler.end_test();
+
         res
     });
 
@@ -103,36 +108,47 @@ pub fn run_test(
 
     for seed in seeds {
         let mut attempt = 0;
+
         loop {
             if is_multiple_runs {
                 eprintln!("seed = {seed}");
             }
+
             let result = panic::catch_unwind(|| {
                 let dispatcher = TestDispatcher::new(seed);
                 let scheduler = dispatcher.scheduler().clone();
+
                 test_fn(dispatcher, seed);
+
                 scheduler.end_test();
             });
 
             match result {
                 Ok(_) => break,
+
                 Err(error) => {
                     if attempt < max_retries {
                         println!("attempt {} failed, retrying", attempt);
+
                         attempt += 1;
+
                         // The panic payload might itself trigger an unwind on drop:
                         // https://doc.rust-lang.org/std/panic/fn.catch_unwind.html#notes
                         std::mem::forget(error);
+
                     } else {
                         if is_multiple_runs {
                             eprintln!("failing seed: {seed}");
+
                             eprintln!(
                                 "You can rerun from this seed by setting the environmental variable SEED to {seed}"
                             );
                         }
+
                         if let Some(on_fail_fn) = on_fail_fn {
                             on_fail_fn()
                         }
+
                         panic::resume_unwind(error);
                     }
                 }
@@ -185,7 +201,9 @@ fn calculate_seeds(
             .chain(iterations_range)
             .chain(explicit_seeds.iter().copied())
     };
+
     let is_multiple_runs = iter.clone().nth(1).is_some();
+
     (iter, is_multiple_runs)
 }
 
@@ -209,11 +227,13 @@ impl<T: 'static> futures::Stream for Observation<T> {
 /// observe returns a stream of the change events from the given `Entity`
 pub fn observe<T: 'static>(entity: &Entity<T>, cx: &mut TestAppContext) -> Observation<()> {
     let (tx, rx) = async_channel::unbounded();
+
     let _subscription = cx.update(|cx| {
         cx.observe(entity, move |_, _| {
             let _ = gpui::block_on(tx.send(()));
         })
     });
+
     let rx = Box::pin(rx);
 
     Observation { rx, _subscription }

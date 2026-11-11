@@ -1,4 +1,5 @@
 use gpui::HapticFeedbackStyle;
+
 use objc2_app_kit::{
     NSHapticFeedbackManager, NSHapticFeedbackPattern, NSHapticFeedbackPerformanceTime,
     NSHapticFeedbackPerformer,
@@ -41,6 +42,7 @@ impl MacHaptics {
         // NSHapticFeedbackManager is available on macOS 10.11+; platform methods
         // are invoked on the main thread.
         let manager = NSHapticFeedbackManager::defaultPerformer();
+
         manager
             .performFeedbackPattern_performanceTime(pattern, NSHapticFeedbackPerformanceTime::Now);
     }
@@ -53,12 +55,14 @@ mod tests {
     #[test]
     fn test_supported() {
         let haptics = MacHaptics::new(false);
+
         assert!(haptics.supported());
     }
 
     #[test]
     fn test_headless_is_unsupported() {
         let haptics = MacHaptics::new(true);
+
         assert!(!haptics.supported());
     }
 
@@ -68,10 +72,12 @@ mod tests {
             MacHaptics::pattern_for_style(HapticFeedbackStyle::Generic),
             NSHapticFeedbackPattern::Generic
         );
+
         assert_eq!(
             MacHaptics::pattern_for_style(HapticFeedbackStyle::Alignment),
             NSHapticFeedbackPattern::Alignment
         );
+
         assert_eq!(
             MacHaptics::pattern_for_style(HapticFeedbackStyle::LevelChange),
             NSHapticFeedbackPattern::LevelChange

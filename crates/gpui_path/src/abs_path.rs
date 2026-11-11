@@ -22,9 +22,11 @@ impl AbsPath {
         if !path.is_absolute() {
             return Err(anyhow::anyhow!("Path is not absolute: {:?}", path));
         }
+
         if path.to_str().is_none() {
             return Err(anyhow::anyhow!("Path is not valid utf-8: {:?}", path));
         }
+
         Ok(Self::new_unchecked(path))
     }
 
@@ -47,6 +49,7 @@ impl AbsPath {
 
     pub fn parent(&self) -> Option<&AbsPath> {
         let parent = self.0.parent()?;
+
         Some(AbsPath::new_unchecked(parent))
     }
 
@@ -62,6 +65,7 @@ impl AbsPath {
         if self == ancestor {
             return false;
         }
+
         self.starts_with(ancestor)
     }
 
@@ -89,6 +93,7 @@ impl AbsPath {
 
     pub fn strip_prefix<'a>(&'a self, prefix: &AbsPath) -> Option<Cow<'a, RelPath>> {
         let prefix = self.0.strip_prefix(&prefix.0).ok()?;
+
         RelPath::new(prefix, PathStyle::local()).ok()
     }
 }
@@ -116,6 +121,7 @@ impl AsRef<AbsPath> for AbsPath {
 impl From<&AbsPath> for Arc<AbsPath> {
     fn from(path: &AbsPath) -> Self {
         let arc: Arc<Path> = Arc::from(&path.0);
+
         // SAFETY: `AbsPath` is a `repr(transparent)` wrapper around `Path`.
         unsafe { Arc::from_raw(Arc::into_raw(arc) as *const AbsPath) }
     }
@@ -124,6 +130,7 @@ impl From<&AbsPath> for Arc<AbsPath> {
 impl From<&AbsPath> for Rc<AbsPath> {
     fn from(path: &AbsPath) -> Self {
         let arc: Rc<Path> = Rc::from(&path.0);
+
         // SAFETY: `AbsPath` is a `repr(transparent)` wrapper around `Path`.
         unsafe { Rc::from_raw(Rc::into_raw(arc) as *const AbsPath) }
     }
@@ -136,12 +143,15 @@ pub struct AbsPathBuf(PathBuf);
 impl AbsPathBuf {
     pub fn new(path: impl Into<PathBuf>) -> anyhow::Result<Self> {
         let path = path.into();
+
         AbsPath::new(&path)?;
+
         Ok(Self(path))
     }
 
     pub fn home_dir() -> anyhow::Result<Self> {
         let home = std::env::home_dir().context("no home dir available")?;
+
         Self::new(home)
     }
 
@@ -158,6 +168,7 @@ impl AbsPathBuf {
     /// or an external tool.
     pub fn canonicalize(path: impl AsRef<Path>) -> io::Result<Self> {
         let canonical = dunce::canonicalize(path.as_ref())?;
+
         Self::new(canonical).map_err(io::Error::other)
     }
 
@@ -243,10 +254,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = dunce::canonicalize(temp.path()).unwrap();
         let dir = root.join("CamelCase");
+
         std::fs::create_dir(&dir).unwrap();
 
         let canonical = AbsPathBuf::canonicalize(&dir).unwrap();
+
         assert_eq!(canonical.as_std_path(), dir);
+
         assert!(
             !canonical.as_str().starts_with(r"\\?\"),
             "canonical paths must not use Windows extended-length syntax: {canonical}"
@@ -256,6 +270,7 @@ mod tests {
         // case-insensitive filesystem; when it does, canonicalization must
         // restore the stored casing.
         let lowercased = root.join("camelcase");
+
         if std::fs::metadata(&lowercased).is_ok() {
             assert_eq!(
                 AbsPathBuf::canonicalize(&lowercased).unwrap().as_std_path(),
@@ -269,12 +284,15 @@ mod tests {
     fn test_new_test_normalizes_rooted_paths() {
         if cfg!(windows) {
             assert_eq!(AbsPathBuf::new_test("/").as_str(), "C:/");
+
             assert_eq!(
                 AbsPathBuf::new_test("/test/project").as_str(),
                 "C:/test/project"
             );
+
         } else {
             assert_eq!(AbsPathBuf::new_test("/").as_str(), "/");
+
             assert_eq!(
                 AbsPathBuf::new_test("/test/project").as_str(),
                 "/test/project"

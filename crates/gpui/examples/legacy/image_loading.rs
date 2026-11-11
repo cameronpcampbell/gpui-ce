@@ -11,6 +11,7 @@ use gpui::{
     Resource, SharedString, Window, WindowBounds, WindowOptions, black, div, img, prelude::*,
     pulsating_between, px, red, size,
 };
+
 use gpui_platform::application;
 use palette::WithAlpha;
 
@@ -58,15 +59,20 @@ impl Asset for LoadImageWithParameters {
         cx: &mut App,
     ) -> impl std::future::Future<Output = Self::Output> + Send + 'static {
         let timer = cx.background_executor().timer(parameters.timeout);
+
         let data = AssetLogger::<ImageAssetLoader>::load(
             Resource::Path(Path::new(IMAGE).to_path_buf().into()),
             cx,
         );
+
         async move {
             timer.await;
+
             if parameters.fail {
                 log::error!("Intentionally failed to load image");
+
                 Err(anyhow::anyhow!("Failed to load image").into())
+
             } else {
                 data.await
             }
@@ -185,6 +191,7 @@ impl Render for ImageLoadingExample {
                             "this/file/really/shouldn't/exist/or/won't/be/an/image/I/hope",
                         )
                         .to_path_buf();
+
                         img(image_source.clone())
                             .id("image-4")
                             .border_1()
@@ -206,9 +213,11 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         let options = WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(
             Bounds::centered(None, size(px(300.), px(300.)), cx),
         )));
+
         cx.open_window(options, |_, cx| {
             cx.activate(false);
             cx.new(|_| ImageLoadingExample {})

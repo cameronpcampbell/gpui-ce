@@ -99,6 +99,7 @@ impl<S: Refineable + Default> Cascade<S> {
     /// using `set()`.
     pub fn reserve(&mut self) -> CascadeSlot {
         self.0.push(None);
+
         CascadeSlot(self.0.len() - 1)
     }
 
@@ -124,9 +125,11 @@ impl<S: Refineable + Default> Cascade<S> {
     /// Empty slots (`None`) are skipped during merging.
     pub fn merged(&self) -> S::Refinement {
         let mut merged = self.0[0].clone().unwrap();
+
         for refinement in self.0.iter().skip(1).flatten() {
             merged.refine(refinement);
         }
+
         merged
     }
 }

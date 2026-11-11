@@ -1,4 +1,5 @@
 use gpui::CaretSelection;
+
 use std::{
     ops::Range,
     time::{Duration, Instant},
@@ -14,11 +15,14 @@ pub const DEFAULT_GROUP_INTERVAL: Duration = Duration::from_millis(300);
 pub struct EditableTextHistory {
     /// The maximum duration between changes to `content` that can be grouped together as a single entry in the history log.
     grouping_interval: Duration,
+
     /// Stack of previous states for undo.
     undo_stack: Vec<HistoryEntry>,
+
     /// Stack of undone states for redo.
     redo_stack: Vec<HistoryEntry>,
 }
+
 impl Default for EditableTextHistory {
     fn default() -> Self {
         Self {
@@ -35,12 +39,16 @@ impl Default for EditableTextHistory {
 pub struct HistoryEntry {
     /// The byte range that was modified (after the edit, for undo; before the edit, for redo).
     pub range: Range<usize>,
+
     /// The text that was replaced (to restore on undo).
     pub old_text: String,
+
     /// The length of the new text that replaced old_text (to know how much to remove on undo).
     pub new_text_len: usize,
+
     /// The selection range before the edit.
     pub selected_range: CaretSelection,
+
     /// Timestamp for grouping consecutive edits.
     pub timestamp: Instant,
 }
@@ -143,6 +151,7 @@ impl HistoryEntry {
     pub fn char_range(&self, max_len: usize) -> Range<usize> {
         let undo_start = self.range.start;
         let undo_end = (self.range.start + self.new_text_len).min(max_len);
+
         undo_start..undo_end
     }
 

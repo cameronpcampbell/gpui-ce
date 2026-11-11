@@ -6,6 +6,7 @@ use crate::keyboard::WebKeyboardLayout;
 use crate::window::WebWindow;
 use anyhow::Result;
 use futures::channel::oneshot;
+
 use gpui::{
     Action, AnyWindowHandle, BackgroundExecutor, ClipboardEntry, ClipboardItem, ClipboardReadError,
     ClipboardString, CursorStyle, DummyKeyboardMapper, ForegroundExecutor, GestureTuning, Image,
@@ -14,13 +15,16 @@ use gpui::{
     PlatformWindow, ScrollPhysics, Task, ThermalState, WindowAppearance, WindowKind, WindowParams,
     popup::PopupNotSupportedError,
 };
+
 use gpui_wgpu::{PreparedWebGraphics, WebBackendPreference, WgpuContext, wgpu};
+
 use std::{
     cell::{Cell, RefCell},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
 };
+
 use wasm_bindgen::prelude::*;
 
 /// Provides the GPUI platform implementation for web browsers.
@@ -62,6 +66,7 @@ impl WebGestures {
             // matters for touch screens.
             ScrollPhysics::ios()
         };
+
         Self {
             tuning: GestureTuning {
                 scroll_physics,
@@ -109,16 +114,20 @@ impl std::fmt::Display for WebWindowError {
             Self::AlreadyOpen => formatter.write_str(
                 "GPUI web supports only one top-level window; a window is already open",
             ),
+
             Self::ReopeningUnsupported => formatter.write_str(
                 "reopening the GPUI web top-level window after it closes is not supported",
             ),
+
             Self::UnsupportedWindowKind(kind) => write!(
                 formatter,
                 "GPUI web does not support {kind} as a separate top-level window; render it inside the normal window instead"
             ),
+
             Self::GraphicsInitializationPending => formatter.write_str(
                 "browser graphics initialization has not completed yet; open windows from the callback passed to Platform::run",
             ),
+
             Self::GraphicsUnavailable => formatter.write_str(
                 "browser graphics are unavailable because graphics initialization or an earlier window creation failed",
             ),
@@ -151,24 +160,30 @@ impl WebPlatform {
     ) -> Self {
         let browser_window =
             web_sys::window().expect("must be running in a browser window context");
+
         let dispatcher = Arc::new(WebDispatcher::new(
             browser_window.clone(),
             allow_multi_threading,
         ));
+
         let background_executor = BackgroundExecutor::new(dispatcher.clone());
         let foreground_executor = ForegroundExecutor::new(dispatcher);
+
         let text_system: Arc<dyn PlatformTextSystem> =
             Arc::new(gpui_parley::ParleyTextSystem::without_system_fonts());
+
         let active_display: Rc<dyn PlatformDisplay> =
             Rc::new(WebDisplay::new(browser_window.clone()));
 
         let cursor_visible = Rc::new(Cell::new(true));
         let last_cursor_css = Rc::new(Cell::new("default"));
+
         let cursor_restore_listeners = cursor_restore_listeners(
             &browser_window,
             cursor_visible.clone(),
             last_cursor_css.clone(),
         );
+
         let gestures = Rc::new(WebGestures::from_user_agent(
             &browser_window.navigator().user_agent().unwrap_or_default(),
         ));
@@ -209,6 +224,7 @@ async fn initialize_graphics(
     match preference {
         WebBackendPreference::Auto => {
             let webgpu_canvas = WebWindow::prepare_canvas(browser_window)?;
+
             let webgpu_result = if wgpu::util::is_browser_webgpu_supported().await {
                 WgpuContext::new_web(&webgpu_canvas, WebBackendPreference::WebGpu).await
             } else {
@@ -216,13 +232,17 @@ async fn initialize_graphics(
                     "browser WebGPU probe did not return a usable adapter"
                 ))
             };
+
             match webgpu_result {
                 Ok(PreparedWebGraphics { context, surface }) => {
                     return Ok((webgpu_canvas, context, surface));
                 }
+
                 Err(webgpu_error) => {
                     let canvas: &web_sys::Element = webgpu_canvas.as_ref();
+
                     canvas.remove();
+
                     log::warn!(
                         "WebGPU initialization failed; falling back to WebGL2: {webgpu_error:#}"
                     );
@@ -234,13 +254,17 @@ async fn initialize_graphics(
                              Failed to prepare a replacement canvas for WebGL2: {error:#}"
                             )
                         })?;
+
                     match WgpuContext::new_web(&webgl_canvas, WebBackendPreference::WebGl).await {
                         Ok(PreparedWebGraphics { context, surface }) => {
                             Ok((webgl_canvas, context, surface))
                         }
+
                         Err(webgl_error) => {
                             let canvas: &web_sys::Element = webgl_canvas.as_ref();
+
                             canvas.remove();
+
                             Err(anyhow::anyhow!(
                                 "No browser graphics backend could be initialized. \
                                  Tried WebGPU, then WebGL2. \
@@ -252,18 +276,24 @@ async fn initialize_graphics(
                 }
             }
         }
+
         WebBackendPreference::WebGpu | WebBackendPreference::WebGl => {
             let backend_name = if preference == WebBackendPreference::WebGpu {
                 "WebGPU"
             } else {
                 "WebGL2"
             };
+
             let canvas = WebWindow::prepare_canvas(browser_window)?;
+
             match WgpuContext::new_web(&canvas, preference).await {
                 Ok(PreparedWebGraphics { context, surface }) => Ok((canvas, context, surface)),
+
                 Err(error) => {
                     let canvas: &web_sys::Element = canvas.as_ref();
+
                     canvas.remove();
+
                     Err(anyhow::anyhow!(
                         "No browser graphics backend could be initialized. \
                          Only {backend_name} was tried because the application requested \
@@ -298,6 +328,7 @@ impl Platform for WebPlatform {
         let window_lifecycle = self.window_lifecycle.clone();
         let browser_window = self.browser_window.clone();
         let backend_preference = self.backend_preference;
+
         wasm_bindgen_futures::spawn_local(async move {
             match initialize_graphics(&browser_window, backend_preference).await {
                 Ok((canvas, context, surface)) => {
@@ -305,13 +336,18 @@ impl Platform for WebPlatform {
                         "Browser graphics initialized successfully with {:?}",
                         context.backend()
                     );
+
                     *wgpu_context.borrow_mut() = Some(context);
                     *prepared_window.borrow_mut() = Some(PreparedWebWindow { canvas, surface });
+
                     on_finish_launching();
                 }
+
                 Err(error) => {
                     window_lifecycle.set(WebWindowLifecycle::Unavailable);
+
                     log::error!("Failed to initialize browser graphics: {error:#}");
+
                     show_graphics_unavailable_message(&browser_window, &error);
                 }
             }
@@ -352,12 +388,15 @@ impl Platform for WebPlatform {
         match &params.kind {
             WindowKind::Normal => {}
             WindowKind::AnchoredPopup(_) => return Err(PopupNotSupportedError.into()),
+
             WindowKind::PopUp => {
                 return Err(WebWindowError::UnsupportedWindowKind("popup windows").into());
             }
+
             WindowKind::Floating => {
                 return Err(WebWindowError::UnsupportedWindowKind("floating windows").into());
             }
+
             WindowKind::Dialog => {
                 return Err(WebWindowError::UnsupportedWindowKind("dialog windows").into());
             }
@@ -365,24 +404,30 @@ impl Platform for WebPlatform {
 
         match self.window_lifecycle.get() {
             WebWindowLifecycle::Open => return Err(WebWindowError::AlreadyOpen.into()),
+
             WebWindowLifecycle::Closed => {
                 return Err(WebWindowError::ReopeningUnsupported.into());
             }
+
             WebWindowLifecycle::Unavailable => {
                 return Err(WebWindowError::GraphicsUnavailable.into());
             }
+
             WebWindowLifecycle::Available => {}
         }
 
         let context_ref = self.wgpu_context.borrow();
+
         let context = context_ref
             .as_ref()
             .ok_or(WebWindowError::GraphicsInitializationPending)?;
+
         let prepared_window = self
             .prepared_window
             .borrow_mut()
             .take()
             .ok_or(WebWindowError::GraphicsInitializationPending)?;
+
         let canvas = prepared_window.canvas;
         let canvas_for_cleanup = canvas.clone();
 
@@ -396,16 +441,22 @@ impl Platform for WebPlatform {
             self.window_lifecycle.clone(),
             self.active_window.clone(),
         );
+
         match window {
             Ok(window) => {
                 self.window_lifecycle.set(WebWindowLifecycle::Open);
+
                 *self.active_window.borrow_mut() = Some(handle);
+
                 Ok(Box::new(window))
             }
+
             Err(error) => {
                 let canvas: &web_sys::Element = canvas_for_cleanup.as_ref();
+
                 canvas.remove();
                 self.window_lifecycle.set(WebWindowLifecycle::Unavailable);
+
                 Err(error)
             }
         }
@@ -418,6 +469,7 @@ impl Platform for WebPlatform {
         else {
             return WindowAppearance::Light;
         };
+
         if media_query.matches() {
             WindowAppearance::Dark
         } else {
@@ -444,10 +496,12 @@ impl Platform for WebPlatform {
         _options: PathPromptOptions,
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>> {
         let (tx, rx) = oneshot::channel();
+
         tx.send(Err(anyhow::anyhow!(
             "prompt_for_paths is not supported on the web"
         )))
         .ok();
+
         rx
     }
 
@@ -457,11 +511,13 @@ impl Platform for WebPlatform {
         _suggested_name: Option<&str>,
     ) -> oneshot::Receiver<Result<Option<PathBuf>>> {
         let (sender, receiver) = oneshot::channel();
+
         sender
             .send(Err(anyhow::anyhow!(
                 "prompt_for_new_path is not supported on the web"
             )))
             .ok();
+
         receiver
     }
 
@@ -527,6 +583,7 @@ impl Platform for WebPlatform {
         if self.last_cursor_css.replace(css_cursor) == css_cursor {
             return;
         }
+
         if self.cursor_visible.get() {
             set_body_cursor(&self.browser_window, css_cursor);
         }
@@ -536,6 +593,7 @@ impl Platform for WebPlatform {
         if !self.cursor_visible.replace(false) {
             return;
         }
+
         set_body_cursor(&self.browser_window, "none");
     }
 
@@ -553,30 +611,38 @@ impl Platform for WebPlatform {
 
     fn read_from_clipboard_async(&self) -> Task<Result<Option<ClipboardItem>, ClipboardReadError>> {
         let navigator = self.browser_window.navigator();
+
         // `navigator.clipboard` is undefined outside secure contexts; probing
         // first avoids a wasm-bindgen abort from invoking a method on
         // `undefined`.
         let clipboard_available = js_sys::Reflect::get(navigator.as_ref(), &"clipboard".into())
             .is_ok_and(|clipboard| !clipboard.is_undefined() && !clipboard.is_null());
+
         if !clipboard_available {
             return Task::ready(Err(ClipboardReadError::Unavailable));
         }
+
         // `read()` must be called synchronously so it is still covered by the
         // user activation (e.g. the click on a context-menu item) that
         // triggered this read.
         let read = navigator.clipboard().read();
+
         self.foreground_executor.spawn(async move {
             let items = wasm_bindgen_futures::JsFuture::from(read)
                 .await
                 .map_err(clipboard_read_rejection_error)?;
+
             let mut entries = Vec::new();
             let mut saw_unsupported_type = false;
+
             for item in js_sys::Array::from(&items).iter() {
                 let item: web_sys::ClipboardItem = item.unchecked_into();
+
                 for mime_type in item.types().iter() {
                     let Some(mime_type) = mime_type.as_string() else {
                         continue;
                     };
+
                     // Only fetch blobs for types we can convert; copies from
                     // other web apps routinely carry `text/html` and
                     // `web application/...` custom formats whose `getType`
@@ -586,22 +652,27 @@ impl Platform for WebPlatform {
                             Ok(text) if !text.is_empty() => {
                                 entries.push(ClipboardEntry::String(ClipboardString::new(text)));
                             }
+
                             Ok(_) => {}
                             Err(error) => log_clipboard_entry_error(&mime_type, &error),
                         }
+
                     } else if let Some(format) = ImageFormat::from_mime_type(&mime_type) {
                         match read_clipboard_item_bytes(&item, &mime_type).await {
                             Ok(bytes) => {
                                 entries
                                     .push(ClipboardEntry::Image(Image::from_bytes(format, bytes)));
                             }
+
                             Err(error) => log_clipboard_entry_error(&mime_type, &error),
                         }
+
                     } else {
                         saw_unsupported_type = true;
                     }
                 }
             }
+
             if !entries.is_empty() {
                 Ok(Some(ClipboardItem { entries }))
             } else if saw_unsupported_type {
@@ -693,6 +764,7 @@ fn clipboard_read_rejection_error(error: JsValue) -> ClipboardReadError {
         Some("NotAllowedError") | Some("SecurityError") => {
             ClipboardReadError::Denied(js_error_message(&error))
         }
+
         _ => ClipboardReadError::UnsupportedContent,
     }
 }
@@ -702,6 +774,7 @@ async fn read_clipboard_item_blob(
     mime_type: &str,
 ) -> Result<web_sys::Blob, JsValue> {
     let blob = wasm_bindgen_futures::JsFuture::from(item.get_type(mime_type)).await?;
+
     Ok(blob.unchecked_into())
 }
 
@@ -711,6 +784,7 @@ async fn read_clipboard_item_text(
 ) -> Result<String, JsValue> {
     let blob = read_clipboard_item_blob(item, mime_type).await?;
     let text = wasm_bindgen_futures::JsFuture::from(blob.text()).await?;
+
     text.as_string()
         .ok_or_else(|| JsValue::from_str("blob text is not a string"))
 }
@@ -720,11 +794,13 @@ async fn read_clipboard_item_bytes(
     mime_type: &str,
 ) -> Result<Vec<u8>, JsValue> {
     let blob = read_clipboard_item_blob(item, mime_type).await?;
+
     read_blob_bytes(&blob).await
 }
 
 pub(crate) async fn read_blob_bytes(blob: &web_sys::Blob) -> Result<Vec<u8>, JsValue> {
     let buffer = wasm_bindgen_futures::JsFuture::from(blob.array_buffer()).await?;
+
     Ok(js_sys::Uint8Array::new(&buffer).to_vec())
 }
 
@@ -755,6 +831,7 @@ fn cursor_restore_listeners(
     last_cursor_css: Rc<Cell<&'static str>>,
 ) -> Vec<EventListenerHandle> {
     let mut handles = Vec::new();
+
     let Some(document) = browser_window.document() else {
         return handles;
     };
@@ -763,6 +840,7 @@ fn cursor_restore_listeners(
         let browser_window = browser_window.clone();
         let cursor_visible = cursor_visible.clone();
         let last_cursor_css = last_cursor_css.clone();
+
         handles.push(EventListenerHandle::add(
             target,
             event_name,
@@ -789,15 +867,19 @@ fn show_graphics_unavailable_message(browser_window: &web_sys::Window, error: &a
     let Some(document) = browser_window.document() else {
         return;
     };
+
     let Some(body) = document.body() else {
         return;
     };
+
     let Ok(message) = document.create_element("p") else {
         return;
     };
+
     message.set_text_content(Some(&format!(
         "Failed to initialize browser graphics: {error}"
     )));
+
     body.append_child(&message).ok();
 }
 

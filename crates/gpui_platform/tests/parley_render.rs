@@ -4,10 +4,12 @@ use gpui::HeadlessAppContext;
 use gpui::VisualTestAppContext;
 #[cfg(target_family = "wasm")]
 use gpui::{App, ApplicationHandle, Bounds, WindowBounds, WindowOptions, size};
+
 use gpui::{
     AppContext as _, Context, Div, FontWeight, IntoElement, ParentElement as _, Render,
     Styled as _, Window, div, px, rgb, white,
 };
+
 use std::borrow::Cow;
 #[cfg(target_family = "wasm")]
 use std::cell::RefCell;
@@ -122,6 +124,7 @@ fn main() {
                 |_, cx| cx.new(|_| ParleyRenderingFixture),
             )
             .expect("failed to open browser text window");
+
             cx.activate(true);
         });
 
@@ -164,16 +167,20 @@ fn main() {
             .expect("failed to create the headless text window");
 
         let window = window.into();
+
         cx.run_until_parked();
 
         let primitive_counts = cx
             .update_window(window, |_, window, _| window.rendered_primitive_counts())
             .expect("failed to inspect rendered text");
+
         let (_, monochrome, subpixel, polychrome) = primitive_counts;
+
         assert!(
             monochrome + subpixel > 0,
             "Parley scene contained no text glyph sprites"
         );
+
         assert!(
             polychrome >= 9,
             "Parley scene contained {polychrome} color emoji sprites, expected at least 9"
@@ -192,11 +199,13 @@ fn main() {
             let background = *image.get_pixel(0, 0);
             let scale_x = image.width() as f32 / 1280.0;
             let scale_y = image.height() as f32 / 800.0;
+
             let changed_pixels_in = |left: f32, top: f32, right: f32, bottom: f32| {
                 let left = (left * scale_x).floor() as u32;
                 let top = (top * scale_y).floor() as u32;
                 let right = ((right * scale_x).ceil() as u32).min(image.width());
                 let bottom = ((bottom * scale_y).ceil() as u32).min(image.height());
+
                 (top..bottom)
                     .flat_map(|y| (left..right).map(move |x| (x, y)))
                     .filter(|(x, y)| *image.get_pixel(*x, *y) != background)
@@ -215,6 +224,7 @@ fn main() {
             ] {
                 let (left, top, right, bottom) = bounds;
                 let changed_pixels = changed_pixels_in(left, top, right, bottom);
+
                 assert!(
                     changed_pixels >= minimum_ink,
                     "{name} painted {changed_pixels} non-background pixels, expected at least {minimum_ink}; primitive counts were {primitive_counts:?}"
@@ -225,6 +235,7 @@ fn main() {
         #[cfg(not(target_os = "macos"))]
         {
             let background = *image.get_pixel(0, 0);
+
             let changed_emoji_pixels = (72..120)
                 .flat_map(|y| (24..600).map(move |x| (x, y)))
                 .filter(|(x, y)| *image.get_pixel(*x, *y) != background)

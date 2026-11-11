@@ -35,6 +35,7 @@ impl WgpuRenderer {
         let window_handle = window
             .window_handle()
             .map_err(|error| anyhow::anyhow!("failed to get window handle: {error}"))?;
+
         Self::new_for_target(
             gpu_context,
             &|| Some(Box::new(window.clone())),
@@ -74,12 +75,16 @@ impl WgpuRenderer {
         extra_requirements: Option<WgpuDeviceRequirements>,
     ) -> anyhow::Result<Self> {
         let mut context_slot = gpu_context.borrow_mut();
+
         let (context, surface) = match context_slot.as_mut() {
             Some(context) => {
                 let surface = create_surface(&context.instance, surface_target)?;
+
                 context.check_compatible_with_surface(&surface)?;
+
                 (context, surface)
             }
+
             None => {
                 let (context, surface) = initialize_context_and_surface(
                     display,
@@ -88,10 +93,13 @@ impl WgpuRenderer {
                     SoftwareAdapterPolicy::Allow,
                     extra_requirements.as_ref(),
                 )?;
+
                 (context_slot.insert(context), surface)
             }
         };
+
         let atlas = Arc::new(WgpuAtlas::from_context(context));
+
         Self::new_internal(
             Some(Rc::clone(&gpu_context)),
             context,
@@ -126,6 +134,7 @@ impl WgpuRenderer {
         if !self.target.is_configured() {
             return false;
         }
+
         let frame = match self
             .resources()
             .surface
@@ -134,30 +143,43 @@ impl WgpuRenderer {
             .get_current_texture()
         {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 drop(frame);
+
                 self.reconfigure_surface();
+
                 return false;
             }
+
             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 self.reconfigure_surface();
+
                 return false;
             }
+
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
                 self.target.request_redraw();
+
                 return false;
             }
+
             wgpu::CurrentSurfaceTexture::Validation => {
                 self.target.request_redraw();
+
                 *self.faults.pending_error.lock().unwrap() =
                     Some("surface texture validation error".to_string());
+
                 return false;
             }
         };
+
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+
         let rendered = self.render_to_view(scene, &view);
+
         if rendered {
             frame.present();
         } else {
@@ -166,15 +188,19 @@ impl WgpuRenderer {
             // and make subsequent acquisitions time out until a resize.
             drop(view);
             drop(frame);
+
             self.reconfigure_surface();
         }
+
         rendered
     }
 
     fn reconfigure_surface(&mut self) {
         self.target.request_redraw();
+
         let config = self.target.configuration().clone();
         let resources = self.resources_mut();
+
         resources
             .surface
             .as_ref()
@@ -185,6 +211,7 @@ impl WgpuRenderer {
     /// Keeps device resources alive while detaching a destroyed native surface.
     pub fn unconfigure_surface(&mut self) {
         self.target.set_configured(false);
+
         if let Some(resources) = self.resources.as_mut() {
             resources.invalidate_intermediate_textures();
         }
@@ -200,10 +227,12 @@ impl WgpuRenderer {
         let window_handle = window
             .window_handle()
             .map_err(|error| anyhow::anyhow!("failed to get window handle: {error}"))?;
+
         let surface = create_surface(
             instance,
             NativeSurfaceTarget::Window(window_handle.as_raw()),
         )?;
+
         // A replacement surface can expose different present modes (for example when a
         // window moves between displays or Wayland/X11 surfaces). Query the new surface,
         // rather than reusing capabilities from the old target.
@@ -211,13 +240,18 @@ impl WgpuRenderer {
             let context_slot = self.context.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("native surface replacement requires a GPU context")
             })?;
+
             let context_slot = context_slot.borrow();
+
             let context = context_slot.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("native surface replacement requires an initialized GPU context")
             })?;
+
             let capabilities = surface.get_capabilities(&context.adapter);
+
             if capabilities.formats.is_empty() {
                 let info = context.adapter.get_info();
+
                 anyhow::bail!(
                     "Adapter {:?} (backend={:?}, device={:#06x}) is not compatible with the display surface for this window.",
                     info.name,
@@ -225,21 +259,28 @@ impl WgpuRenderer {
                     info.device,
                 );
             }
+
             capabilities.present_modes
         };
+
         if self.target.apply(config, &supported_present_modes) {
             self.rebuild_pipelines();
         }
+
         let target_config = self.target.configuration().clone();
 
         let resources = self
             .resources
             .as_mut()
             .expect("GPU resources not available");
+
         surface.configure(&resources.device, &target_config);
+
         resources.surface = Some(surface);
+
         resources.invalidate_intermediate_textures();
         self.target.set_configured(true);
+
         Ok(())
     }
 
@@ -265,6 +306,7 @@ impl WgpuRenderer {
         let window_handle = window
             .window_handle()
             .map_err(|error| anyhow::anyhow!("failed to get window handle: {error}"))?;
+
         self.recover_target(
             &|| Some(Box::new(window.clone())),
             NativeSurfaceTarget::Window(window_handle.as_raw()),
@@ -284,31 +326,40 @@ impl WgpuRenderer {
         surface_target: NativeSurfaceTarget,
     ) -> anyhow::Result<()> {
         let gpu_context = self.context.as_ref().expect("recover requires gpu_context");
+
         let needs_new_context = gpu_context
             .borrow()
             .as_ref()
             .is_none_or(WgpuContext::device_lost);
+
         if needs_new_context {
             let now = std::time::Instant::now();
+
             match self.faults.recovery_not_before {
                 None => {
                     self.faults.recovery_not_before =
                         Some(now + std::time::Duration::from_millis(350));
+
                     anyhow::bail!("waiting for the GPU driver to stabilize before recovery");
                 }
+
                 Some(not_before) if now < not_before => {
                     anyhow::bail!("waiting for the GPU driver to stabilize before recovery");
                 }
+
                 Some(_) => self.faults.recovery_not_before = None,
             }
+
         } else {
             self.faults.recovery_not_before = None;
         }
 
         let surface = if needs_new_context {
             log::warn!("GPU device lost, recreating context...");
+
             self.resources = None;
             *gpu_context.borrow_mut() = None;
+
             let (new_context, surface) = match initialize_context_and_surface(
                 display,
                 surface_target,
@@ -317,20 +368,27 @@ impl WgpuRenderer {
                 self.extra_requirements.as_ref(),
             ) {
                 Ok(result) => result,
+
                 Err(error) => {
                     self.faults.recovery_not_before =
                         Some(std::time::Instant::now() + std::time::Duration::from_millis(350));
+
                     return Err(error);
                 }
             };
+
             *gpu_context.borrow_mut() = Some(new_context);
+
             surface
+
         } else {
             let context_slot = gpu_context.borrow();
+
             let instance = &context_slot
                 .as_ref()
                 .expect("a recovered context must exist")
                 .instance;
+
             create_surface(instance, surface_target)?
         };
 
@@ -338,11 +396,14 @@ impl WgpuRenderer {
         let gpu_context = Rc::clone(gpu_context);
         let context_slot = gpu_context.borrow();
         let context = context_slot.as_ref().expect("context should exist");
+
         self.resources = None;
+
         self.atlas.handle_device_lost(context);
 
         let font_rasterization = self.rendering_params.font_rasterization;
         let subpixel_order = self.subpixel_order;
+
         let mut recovered = Self::new_internal(
             Some(Rc::clone(&gpu_context)),
             context,
@@ -352,10 +413,14 @@ impl WgpuRenderer {
             self.extra_requirements.clone(),
             Arc::clone(&self.atlas),
         )?;
+
         recovered.set_font_rasterization_settings(font_rasterization);
         recovered.set_subpixel_order(subpixel_order);
+
         *self = recovered;
+
         log::info!("GPU recovery complete");
+
         Ok(())
     }
 
@@ -368,6 +433,7 @@ impl WgpuRenderer {
         else {
             return;
         };
+
         if let Some(surface) = unsafe { surface.as_hal::<wgpu::hal::api::Metal>() } {
             surface
                 .render_layer()
@@ -391,6 +457,7 @@ enum NativeSurfaceTarget {
 impl NativeSurfaceTarget {
     fn metal_layer(layer: &metal::MetalLayerRef) -> Self {
         use metal::foreign_types::ForeignTypeRef as _;
+
         Self::MetalLayer(layer.as_ptr().cast())
     }
 }
@@ -411,6 +478,7 @@ fn initialize_context_and_surface(
     NativeBackend::try_in_preference_order("a GPU context for the window", |backend| {
         let instance = backend.instance(display());
         let surface = create_surface(&instance.raw, surface_target)?;
+
         let context = WgpuContext::new_with_adapter_policy(
             instance,
             &surface,
@@ -418,6 +486,7 @@ fn initialize_context_and_surface(
             adapter_policy,
             extra_requirements,
         )?;
+
         Ok((context, surface))
     })
 }
@@ -432,11 +501,13 @@ fn create_surface(
             raw_display_handle: None,
             raw_window_handle,
         },
+
         #[cfg(target_os = "macos")]
         NativeSurfaceTarget::MetalLayer(layer) => {
             wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer)
         }
     };
+
     // SAFETY: window handles come from live windows. Metal layers come from a
     // `MetalLayerRef` borrowed for this call, and WGPU retains the layer.
     unsafe {
@@ -485,7 +556,9 @@ mod tests {
                 height: ScaledPixels(2.0),
             },
         };
+
         let mut scene = Scene::default();
+
         scene.insert_primitive(Quad {
             bounds,
             content_mask: gpui::ContentMask {
@@ -495,7 +568,9 @@ mod tests {
             background: gpui::solid_background(gpui::red()),
             ..Default::default()
         });
+
         scene.finish();
+
         scene
     }
 
@@ -506,6 +581,7 @@ mod tests {
         let mut first = renderer(&context, &first_layer)?;
         let mut second = renderer(&context, &second_layer)?;
         let (lost_device, _) = first.gpu_context();
+
         assert!(Arc::ptr_eq(&lost_device, &second.gpu_context().0));
 
         context
@@ -514,24 +590,31 @@ mod tests {
             .expect("the renderers' context")
             .device_lost_flag()
             .store(true, Ordering::Relaxed);
+
         assert!(first.device_lost() && second.device_lost());
 
         // The driver is given time to settle before the context is recreated.
         assert!(first.recover_metal_layer(&first_layer).is_err());
         assert!(first.device_lost());
+
         std::thread::sleep(Duration::from_millis(400));
+
         first.recover_metal_layer(&first_layer)?;
         // The other window joins the context the first one recreated.
         second.recover_metal_layer(&second_layer)?;
 
         let (device, _) = first.gpu_context();
+
         assert!(!Arc::ptr_eq(&device, &lost_device));
         assert!(Arc::ptr_eq(&device, &second.gpu_context().0));
         assert!(!first.device_lost() && !second.device_lost());
+
         for renderer in [&mut first, &mut second] {
             let image = renderer.render_to_image(&red_scene())?;
+
             assert_eq!(image.get_pixel(1, 1).0, [255, 0, 0, 255]);
         }
+
         Ok(())
     }
 }

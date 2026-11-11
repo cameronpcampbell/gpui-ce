@@ -4,6 +4,7 @@ use crate::{
     PromptButton, PromptLevel, Render, Reservation, Result, Subscription, Task, VisualContext,
     Window, WindowHandle,
 };
+
 use anyhow::{Context as _, bail};
 use derive_more::{Deref, DerefMut};
 use futures::channel::oneshot;
@@ -73,12 +74,14 @@ impl AppContext for AsyncApp {
     fn new<T: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T> {
         let app = self.app();
         let mut app = app.borrow_mut();
+
         app.new(build_entity)
     }
 
     fn reserve_entity<T: 'static>(&mut self) -> Reservation<T> {
         let app = self.app();
         let mut app = app.borrow_mut();
+
         app.reserve_entity()
     }
 
@@ -89,6 +92,7 @@ impl AppContext for AsyncApp {
     ) -> Entity<T> {
         let app = self.app();
         let mut app = app.borrow_mut();
+
         app.insert_entity(reservation, build_entity)
     }
 
@@ -99,6 +103,7 @@ impl AppContext for AsyncApp {
     ) -> R {
         let app = self.app();
         let mut app = app.borrow_mut();
+
         app.update_entity(handle, update)
     }
 
@@ -115,12 +120,14 @@ impl AppContext for AsyncApp {
     {
         let app = self.app();
         let lock = app.borrow();
+
         lock.read_entity(handle, callback)
     }
 
     fn notify(&mut self, entity_id: EntityId) {
         let app = self.app();
         let mut lock = app.borrow_mut();
+
         lock.notify(entity_id);
     }
 
@@ -131,6 +138,7 @@ impl AppContext for AsyncApp {
     {
         let app = self.app();
         let mut lock = app.borrow_mut();
+
         lock.emit(entity, event)
     }
 
@@ -140,9 +148,11 @@ impl AppContext for AsyncApp {
     {
         let app = self.app.upgrade().context("app was released")?;
         let mut lock = app.try_borrow_mut()?;
+
         if lock.quitting {
             bail!("app is quitting");
         }
+
         lock.update_window(window, f)
     }
 
@@ -153,9 +163,11 @@ impl AppContext for AsyncApp {
     ) -> Option<R> {
         let app = self.app.upgrade()?;
         let mut lock = app.try_borrow_mut().ok()?;
+
         if lock.quitting {
             return None;
         }
+
         lock.with_window(entity_id, f)
     }
 
@@ -169,9 +181,11 @@ impl AppContext for AsyncApp {
     {
         let app = self.app.upgrade().context("app was released")?;
         let lock = app.borrow();
+
         if lock.quitting {
             bail!("app is quitting");
         }
+
         lock.read_window(window, read)
     }
 
@@ -189,18 +203,21 @@ impl AppContext for AsyncApp {
     {
         let app = self.app();
         let mut lock = app.borrow_mut();
+
         lock.update(|this| this.read_global(callback))
     }
 
     fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
         let app = self.app();
         let mut lock = app.borrow_mut();
+
         lock.insert_global_entity(entity)
     }
 
     fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
         let app = self.app();
         let mut lock = app.borrow_mut();
+
         lock.remove_global_entity(entity)
     }
 
@@ -208,6 +225,7 @@ impl AppContext for AsyncApp {
         let app = self.app();
         let mut lock = app.borrow_mut();
         let iter = lock.global_entities();
+
         // Cloning the iterator here so that lock can be released when function is going out of scope
         iter.collect::<Vec<_>>().into_iter()
     }
@@ -220,6 +238,7 @@ impl AsyncApp {
     pub fn refresh(&self) {
         let app = self.app();
         let mut lock = app.borrow_mut();
+
         // A direct call would leave the refresh effect queued, which cannot wake
         // a platform render loop that has already parked.
         lock.update(|cx| cx.refresh_windows());
@@ -246,6 +265,7 @@ impl AsyncApp {
     pub fn update<R>(&self, f: impl FnOnce(&mut App) -> R) -> R {
         let app = self.app();
         let mut lock = app.borrow_mut();
+
         lock.update(f)
     }
 
@@ -266,6 +286,7 @@ impl AsyncApp {
     {
         let app = self.app();
         let mut lock = app.borrow_mut();
+
         lock.subscribe(entity, on_event)
     }
 
@@ -287,9 +308,11 @@ impl AsyncApp {
     {
         let app = self.app();
         let mut lock = app.borrow_mut();
+
         if lock.quitting {
             bail!("app is quitting");
         }
+
         lock.open_window(options, build_root_view)
     }
 
@@ -305,6 +328,7 @@ impl AsyncApp {
         R: 'static,
     {
         let mut cx = self.clone();
+
         self.foreground_executor
             .spawn(async move { f(&mut cx).await }.boxed_local())
     }
@@ -313,6 +337,7 @@ impl AsyncApp {
     pub fn has_global<G: Global>(&self) -> bool {
         let app = self.app();
         let app = app.borrow_mut();
+
         app.has_global::<G>()
     }
 
@@ -326,6 +351,7 @@ impl AsyncApp {
     pub fn read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> R {
         let app = self.app();
         let app = app.borrow_mut();
+
         read(app.global(), &app)
     }
 
@@ -334,9 +360,11 @@ impl AsyncApp {
     pub fn try_read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> Option<R> {
         let app = self.app();
         let app = app.borrow_mut();
+
         if app.quitting {
             return None;
         }
+
         Some(read(app.try_global()?, &app))
     }
 
@@ -348,9 +376,11 @@ impl AsyncApp {
     ) -> R {
         let app = self.app();
         let mut app = app.borrow_mut();
+
         app.update(|cx| {
             cx.default_global::<G>();
         });
+
         read(app.global(), &app)
     }
 
@@ -366,6 +396,7 @@ impl AsyncApp {
     pub fn update_global<G: Global, R>(&self, update: impl FnOnce(&mut G, &mut App) -> R) -> R {
         let app = self.app();
         let mut app = app.borrow_mut();
+
         app.update(|cx| cx.update_global(update))
     }
 
@@ -397,6 +428,7 @@ impl AsyncApp {
     ) -> gpui_util::Deferred<impl FnOnce() + use<T, Callback>> {
         let entity = entity.clone();
         let mut cx = self.clone();
+
         gpui_util::defer(move || {
             entity.update(&mut cx, f).ok();
         })
@@ -450,6 +482,7 @@ pub struct AsyncWindowContext {
     #[deref]
     #[deref_mut]
     app: AsyncApp,
+
     window: AnyWindowHandle,
 }
 
@@ -553,6 +586,7 @@ impl AsyncWindowContext {
         R: 'static,
     {
         let mut cx = self.clone();
+
         self.foreground_executor
             .spawn(async move { f(&mut cx).await }.boxed_local())
     }
@@ -586,6 +620,7 @@ impl AppContext for AsyncWindowContext {
         T: 'static,
     {
         let mut build_entity = Some(build_entity);
+
         match self.app.update_window(self.window, |_, _, cx| {
             cx.new(
                 build_entity
@@ -594,6 +629,7 @@ impl AppContext for AsyncWindowContext {
             )
         }) {
             Ok(entity) => entity,
+
             Err(_) => self.app.new(
                 build_entity
                     .take()
@@ -612,15 +648,19 @@ impl AppContext for AsyncWindowContext {
         build_entity: impl FnOnce(&mut Context<T>) -> T,
     ) -> Entity<T> {
         let mut args = Some((reservation, build_entity));
+
         match self.app.update_window(self.window, |_, _, cx| {
             let (reservation, build_entity) = args.take().expect("args are taken exactly once");
+
             cx.insert_entity(reservation, build_entity)
         }) {
             Ok(entity) => entity,
+
             Err(_) => {
                 let (reservation, build_entity) = args
                     .take()
                     .expect("update_window returned Err without invoking the closure");
+
                 self.app.insert_entity(reservation, build_entity)
             }
         }
@@ -736,6 +776,7 @@ impl VisualContext for AsyncWindowContext {
         update: impl FnOnce(&mut T, &mut Window, &mut Context<T>) -> R,
     ) -> Result<R> {
         let view = view.clone();
+
         self.app
             .with_window(view.entity_id(), |window, app| {
                 view.update(app, |entity, cx| update(entity, window, cx))

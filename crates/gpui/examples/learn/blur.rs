@@ -30,7 +30,9 @@ fn busy_background() -> impl IntoElement {
     let palette = [
         0xef4444, 0xf97316, 0xeab308, 0x22c55e, 0x06b6d4, 0x3b82f6, 0x8b5cf6, 0xec4899,
     ];
+
     let mut next = 0usize;
+
     div()
         .absolute()
         .inset_0()
@@ -41,7 +43,9 @@ fn busy_background() -> impl IntoElement {
                 (0..8)
                     .map(|_| {
                         let hex = palette[next % palette.len()];
+
                         next += 1;
+
                         div()
                             .flex_1()
                             .h_full()
@@ -193,6 +197,7 @@ const SEAM_COLORS: [u32; 4] = [0xef4444, 0x22c55e, 0x3b82f6, 0xeab308];
 fn seam_block(i: usize, hex: u32, blur_each: bool) -> impl IntoElement {
     let block = div().flex_1().h_full();
     let block = if blur_each { block.blur(px(5.)) } else { block };
+
     block
         .bg(rgb(hex))
         .flex()
@@ -292,6 +297,7 @@ impl Render for BlurExample {
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         cx.activate(true);
+
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();
@@ -303,6 +309,7 @@ fn main() {
             origin: point(px(100.), px(100.)),
             size: size(px(1060.), px(760.)),
         };
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(|_| BlurExample),

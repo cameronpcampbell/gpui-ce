@@ -48,6 +48,7 @@ impl WebDisplay {
             .ok()
             .and_then(|v| v.as_f64())
             .unwrap_or(1920.0) as f32;
+
         let height = self
             .browser_window
             .inner_height()
@@ -73,6 +74,7 @@ impl PlatformDisplay for WebDisplay {
 
     fn bounds(&self) -> Bounds<Pixels> {
         let size = self.screen_size();
+
         Bounds {
             origin: Point::default(),
             size,
@@ -81,6 +83,7 @@ impl PlatformDisplay for WebDisplay {
 
     fn visible_bounds(&self) -> Bounds<Pixels> {
         let size = self.viewport_size();
+
         Bounds {
             origin: Point::default(),
             size,
@@ -93,6 +96,7 @@ impl PlatformDisplay for WebDisplay {
         let height = visible.size.height * 0.75;
         let origin_x = (visible.size.width - width) / 2.0;
         let origin_y = (visible.size.height - height) / 2.0;
+
         Bounds {
             origin: Point::new(origin_x, origin_y),
             size: Size { width, height },

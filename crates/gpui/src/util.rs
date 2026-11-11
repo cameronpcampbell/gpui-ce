@@ -1,4 +1,5 @@
 use crate::{BackgroundExecutor, Task};
+
 use std::{
     future::Future,
     pin::Pin,
@@ -51,6 +52,7 @@ pub trait FluentBuilder {
             }
         })
     }
+
     /// Conditionally unwrap and modify self with the given closure, if the given option is None.
     fn when_none<T>(self, option: &Option<T>, then: impl FnOnce(Self) -> Self) -> Self
     where
@@ -97,6 +99,7 @@ impl TextRangeExt for str {
 pub struct WithTimeout<T> {
     #[pin]
     future: T,
+
     #[pin]
     timer: Task<()>,
 }
@@ -126,10 +129,12 @@ impl<T: Future> Future for WithTimeout<T> {
 /// Return the new value of the counter.
 pub(crate) fn atomic_incr_if_not_zero(counter: &AtomicUsize) -> usize {
     let mut loaded = counter.load(SeqCst);
+
     loop {
         if loaded == 0 {
             return 0;
         }
+
         match counter.compare_exchange_weak(loaded, loaded + 1, SeqCst, SeqCst) {
             Ok(x) => return x + 1,
             Err(actual) => loaded = actual,
@@ -246,6 +251,7 @@ mod tests {
 
         let long_duration = Duration::from_secs(6000);
         let short_duration = Duration::from_secs(1);
+
         cx.executor()
             .timer(long_duration)
             .with_timeout(short_duration, &cx.executor())
@@ -256,7 +262,9 @@ mod tests {
             .executor()
             .timer(long_duration)
             .with_timeout(short_duration, &cx.executor());
+
         cx.executor().advance_clock(short_duration * 2);
+
         futures::FutureExt::now_or_never(fut)
             .unwrap_or_else(|| panic!("timeout should have triggered"))
             .expect_err("timeout");

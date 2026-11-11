@@ -8,6 +8,7 @@ use gpui::{
     WindowDecorations, WindowOptions, black, div, green, hsla, point, prelude::*, px, rgb, size,
     transparent_black, white,
 };
+
 use gpui_platform::application;
 
 struct WindowShadow {
@@ -21,15 +22,20 @@ impl Render for WindowShadow {
         let shadow_size = px(10.0);
         let border_size = px(1.0);
         let grey = rgb(0x808080);
+
         window.set_client_inset(shadow_size);
+
         let is_resizable = window.is_resizable();
         let hovered_edge = self.hovered_edge;
+
         let resize_region = match decorations {
             Decorations::Server => ResizeRegion::new(shadow_size).corner_size(shadow_size),
+
             Decorations::Client { tiling } => ResizeRegion::new(shadow_size)
                 .corner_size(shadow_size)
                 .without_tiled_edges(tiling),
         };
+
         let edge_hint = match hovered_edge {
             Some(edge) => format!("Resize region: {edge:?}"),
             None => "Resize region: none".to_string(),
@@ -40,6 +46,7 @@ impl Render for WindowShadow {
             .bg(transparent_black())
             .map(|div| match decorations {
                 Decorations::Server => div,
+
                 Decorations::Client { tiling, .. } => div
                     .bg(gpui::transparent_black())
                     .cursor_with(move |position, bounds| {
@@ -47,6 +54,7 @@ impl Render for WindowShadow {
                             resize_region
                                 .hit_test(position, bounds)
                                 .map(gpui::CursorStyle::from)
+
                         } else {
                             None
                         }
@@ -61,6 +69,7 @@ impl Render for WindowShadow {
                         },
                         cx.listener(|this, edge: &Option<ResizeEdge>, _window, cx| {
                             this.hovered_edge = *edge;
+
                             cx.notify();
                         }),
                     )
@@ -74,6 +83,7 @@ impl Render for WindowShadow {
                     .when(!tiling.right, |div| div.pr(shadow_size))
                     .on_mouse_down(MouseButton::Left, move |e, window, _cx| {
                         let bounds = Bounds::new(point(px(0.0), px(0.0)), window.viewport_size());
+
                         match resize_region.hit_test(e.position, bounds) {
                             Some(edge) if window.is_resizable() => window.start_window_resize(edge),
                             None => window.start_window_move(),
@@ -86,6 +96,7 @@ impl Render for WindowShadow {
                 div()
                     .map(|div| match decorations {
                         Decorations::Server => div,
+
                         Decorations::Client { tiling } => div
                             .border_color(grey)
                             .when(!(tiling.top || tiling.right), |div| {
@@ -141,6 +152,7 @@ impl Render for WindowShadow {
                                         ])
                                         .map(|div| match decorations {
                                             Decorations::Server => div,
+
                                             Decorations::Client { .. } => div
                                                 .on_mouse_down(
                                                     MouseButton::Left,
@@ -168,7 +180,9 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         let bounds = Bounds::centered(None, size(px(600.0), px(600.0)), cx);
+
         cx.open_window(
             WindowOptions::new()
                 .window_bounds(Some(WindowBounds::Windowed(bounds)))
@@ -179,6 +193,7 @@ fn run_example() {
                         window.refresh();
                     })
                     .detach();
+
                     WindowShadow { hovered_edge: None }
                 })
             },

@@ -13,6 +13,7 @@ where
         while let Some(entry) = entries.next().await {
             if let Some(entry) = entry.log_err() {
                 let entry_path = entry.path();
+
                 if predicate(entry_path.as_path())
                     && let Ok(metadata) = fs::metadata(&entry_path).await
                 {
@@ -78,6 +79,7 @@ pub async fn move_folder_files_to_folder<P: AsRef<Path>>(
     }
 
     let mut entries = fs::read_dir(source_path.as_ref()).await?;
+
     while let Some(entry) = entries.next().await {
         let entry = entry?;
         let old_path = entry.path();

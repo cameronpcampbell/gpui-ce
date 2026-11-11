@@ -19,6 +19,7 @@ pub(super) fn draw_surfaces(
         Ok(())
     } else {
         log::error!("native surface primitives are unsupported on this render target");
+
         Err(frame::DrawError::ExternalSurface)
     }
 }

@@ -8,6 +8,7 @@ use crate::{
     TestScreenCaptureSource, TestWindow, TextSystem, VisualContext, Window, WindowBounds,
     WindowHandle, WindowOptions, app::GpuiMode, window::ElementArenaScope,
 };
+
 use anyhow::{anyhow, bail};
 use futures::{Stream, StreamExt, channel::oneshot};
 
@@ -28,14 +29,18 @@ use std::{
 pub struct TestAppContext {
     #[doc(hidden)]
     pub background_executor: BackgroundExecutor,
+
     #[doc(hidden)]
     pub foreground_executor: ForegroundExecutor,
+
     #[doc(hidden)]
     pub dispatcher: TestDispatcher,
+
     test_platform: Rc<TestPlatform>,
     text_system: Arc<TextSystem>,
     fn_name: Option<&'static str>,
     on_quit: Rc<RefCell<Vec<Box<dyn FnOnce() + 'static>>>>,
+
     #[doc(hidden)]
     pub app: Rc<AppCell>,
 }
@@ -43,11 +48,13 @@ pub struct TestAppContext {
 impl AppContext for TestAppContext {
     fn new<T: 'static>(&mut self, build_entity: impl FnOnce(&mut Context<T>) -> T) -> Entity<T> {
         let mut app = self.app.borrow_mut();
+
         app.new(build_entity)
     }
 
     fn reserve_entity<T: 'static>(&mut self) -> crate::Reservation<T> {
         let mut app = self.app.borrow_mut();
+
         app.reserve_entity()
     }
 
@@ -57,6 +64,7 @@ impl AppContext for TestAppContext {
         build_entity: impl FnOnce(&mut Context<T>) -> T,
     ) -> Entity<T> {
         let mut app = self.app.borrow_mut();
+
         app.insert_entity(reservation, build_entity)
     }
 
@@ -66,6 +74,7 @@ impl AppContext for TestAppContext {
         update: impl FnOnce(&mut T, &mut Context<T>) -> R,
     ) -> R {
         let mut app = self.app.borrow_mut();
+
         app.update_entity(handle, update)
     }
 
@@ -81,11 +90,13 @@ impl AppContext for TestAppContext {
         T: 'static,
     {
         let app = self.app.borrow();
+
         app.read_entity(handle, read)
     }
 
     fn notify(&mut self, entity_id: EntityId) {
         let mut lock = self.app.borrow_mut();
+
         lock.notify(entity_id)
     }
 
@@ -95,6 +106,7 @@ impl AppContext for TestAppContext {
         EventType: 'static,
     {
         let mut lock = self.app.borrow_mut();
+
         lock.emit(entity, event)
     }
 
@@ -103,6 +115,7 @@ impl AppContext for TestAppContext {
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
     {
         let mut lock = self.app.borrow_mut();
+
         lock.update_window(window, f)
     }
 
@@ -112,6 +125,7 @@ impl AppContext for TestAppContext {
         f: impl FnOnce(&mut Window, &mut App) -> R,
     ) -> Option<R> {
         let mut lock = self.app.borrow_mut();
+
         lock.with_window(entity_id, f)
     }
 
@@ -124,6 +138,7 @@ impl AppContext for TestAppContext {
         T: 'static,
     {
         let app = self.app.borrow();
+
         app.read_window(window, read)
     }
 
@@ -139,22 +154,26 @@ impl AppContext for TestAppContext {
         G: Global,
     {
         let app = self.app.borrow();
+
         app.read_global(callback)
     }
 
     fn insert_global_entity<T: 'static>(&mut self, entity: Entity<T>) {
         let mut lock = self.app.borrow_mut();
+
         lock.insert_global_entity(entity)
     }
 
     fn remove_global_entity<T: 'static>(&mut self, entity: &Entity<T>) {
         let mut lock = self.app.borrow_mut();
+
         lock.remove_global_entity(entity)
     }
 
     fn global_entities<T: 'static>(&self) -> impl Iterator<Item = Entity<T>> {
         let lock = self.app.borrow();
         let iter = lock.global_entities();
+
         // Cloning the iterator here so that lock can be released when function is going out of scope
         iter.collect::<Vec<_>>().into_iter()
     }
@@ -177,6 +196,7 @@ impl TestAppContext {
             AssetRegistry::default().into(),
             http_client,
         );
+
         app.borrow_mut().mode = GpuiMode::test();
 
         Self {
@@ -201,6 +221,7 @@ impl TestAppContext {
     /// Use this in doctests and in code that runs outside `#[gpui::test]`.
     pub fn single() -> Self {
         let dispatcher = TestDispatcher::new(0);
+
         Self::build(dispatcher, None)
     }
 
@@ -237,7 +258,9 @@ impl TestAppContext {
     /// Marks every window for redraw on the next effect cycle. Always returns `Ok(())`.
     pub fn refresh(&mut self) -> Result<()> {
         let mut app = self.app.borrow_mut();
+
         app.refresh_windows();
+
         Ok(())
     }
 
@@ -275,12 +298,14 @@ impl TestAppContext {
     /// ```
     pub fn update<R>(&self, f: impl FnOnce(&mut App) -> R) -> R {
         let mut cx = self.app.borrow_mut();
+
         cx.update(f)
     }
 
     /// Runs `f` with read-only access to the [`App`].
     pub fn read<R>(&self, f: impl FnOnce(&App) -> R) -> R {
         let cx = self.app.borrow();
+
         f(&cx)
     }
 
@@ -301,6 +326,7 @@ impl TestAppContext {
 
         // Some tests rely on the window size matching the bounds of the test display
         let bounds = Bounds::maximized(None, &cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| cx.new(|cx| build_window(window, cx)),
@@ -326,6 +352,7 @@ impl TestAppContext {
         V: 'static + Render,
     {
         let mut cx = self.app.borrow_mut();
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(Bounds {
                 origin: Point::default(),
@@ -342,15 +369,20 @@ impl TestAppContext {
     pub fn add_empty_window(&mut self) -> &mut VisualTestContext {
         let mut cx = self.app.borrow_mut();
         let bounds = Bounds::maximized(None, &cx);
+
         let window = cx
             .open_window(
                 WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
                 |_, cx| cx.new(|_| Empty),
             )
             .unwrap();
+
         drop(cx);
+
         let cx = VisualTestContext::from_window(*window.deref(), self).into_mut();
+
         cx.run_until_parked();
+
         cx
     }
 
@@ -370,15 +402,19 @@ impl TestAppContext {
     {
         let mut cx = self.app.borrow_mut();
         let bounds = Bounds::maximized(None, &cx);
+
         let window = cx
             .open_window(
                 WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
                 |window, cx| cx.new(|cx| build_root_view(window, cx)),
             )
             .unwrap();
+
         drop(cx);
+
         let view = window.root(self).unwrap();
         let cx = VisualTestContext::from_window(*window.deref(), self).into_mut();
+
         cx.run_until_parked();
 
         // it might be nice to try and cleanup these at the end of each test.
@@ -513,7 +549,9 @@ impl TestAppContext {
     /// sender, so the previous receiver is cancelled.
     pub fn expect_restart(&self) -> oneshot::Receiver<(Option<PathBuf>, Vec<std::ffi::OsString>)> {
         let (tx, rx) = futures::channel::oneshot::channel();
+
         self.test_platform.expect_restart.borrow_mut().replace(tx);
+
         rx
     }
 
@@ -543,6 +581,7 @@ impl TestAppContext {
     /// Returns whether a global of type `G` is set.
     pub fn has_global<G: Global>(&self) -> bool {
         let app = self.app.borrow();
+
         app.has_global::<G>()
     }
 
@@ -553,18 +592,21 @@ impl TestAppContext {
     /// Panics if no global of type `G` is set. Use [`TestAppContext::try_read_global`] when it might not be.
     pub fn read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> R {
         let app = self.app.borrow();
+
         read(app.global(), &app)
     }
 
     /// Runs `read` with the global of type `G` if it is set, and returns `None` otherwise.
     pub fn try_read_global<G: Global, R>(&self, read: impl FnOnce(&G, &App) -> R) -> Option<R> {
         let lock = self.app.borrow();
+
         Some(read(lock.try_global()?, &lock))
     }
 
     /// Sets the global of type `G`, replacing any previous value.
     pub fn set_global<G: Global>(&mut self, global: G) {
         let mut lock = self.app.borrow_mut();
+
         lock.update(|cx| cx.set_global(global))
     }
 
@@ -575,6 +617,7 @@ impl TestAppContext {
     /// Panics if no global of type `G` is set.
     pub fn update_global<G: Global, R>(&mut self, update: impl FnOnce(&mut G, &mut App) -> R) -> R {
         let mut lock = self.app.borrow_mut();
+
         lock.update(|cx| cx.update_global(update))
     }
 
@@ -684,17 +727,21 @@ impl TestAppContext {
         entity: &Entity<T>,
     ) -> impl Stream<Item = ()> + use<T> {
         let (tx, rx) = futures::channel::mpsc::unbounded();
+
         self.update(|cx| {
             cx.observe(entity, {
                 let tx = tx.clone();
+
                 move |_, _| {
                     let _ = tx.unbounded_send(());
                 }
             })
             .detach();
+
             cx.observe_release(entity, move |_, _| tx.close_channel())
                 .detach()
         });
+
         rx
     }
 
@@ -707,6 +754,7 @@ impl TestAppContext {
         Evt: 'static + Clone,
     {
         let (tx, rx) = futures::channel::mpsc::unbounded();
+
         entity
             .update(self, |_, cx: &mut Context<T>| {
                 cx.subscribe(entity, move |_entity, _handle, event, _cx| {
@@ -714,6 +762,7 @@ impl TestAppContext {
                 })
             })
             .detach();
+
         rx
     }
 
@@ -776,6 +825,7 @@ impl<T: 'static> Entity<T> {
     {
         let (tx, mut rx) = oneshot::channel();
         let mut tx = Some(tx);
+
         let subscription = self.update(cx, |_, cx| {
             cx.subscribe(self, move |_, _, event, _| {
                 if let Some(tx) = tx.take() {
@@ -786,7 +836,9 @@ impl<T: 'static> Entity<T> {
 
         async move {
             let event = rx.await.expect("no event emitted");
+
             drop(subscription);
+
             event
         }
     }
@@ -810,6 +862,7 @@ impl<V: 'static> Entity<V> {
         use postage::prelude::{Sink as _, Stream as _};
 
         let (mut tx, mut rx) = postage::mpsc::channel(1);
+
         let subscription = cx.app.borrow_mut().observe(self, move |_, _| {
             tx.try_send(()).ok();
         });
@@ -820,6 +873,7 @@ impl<V: 'static> Entity<V> {
             rx.recv()
                 .await
                 .expect("entity dropped while test was waiting for its next notification");
+
             drop(subscription);
         }
     }
@@ -848,15 +902,18 @@ impl<V> Entity<V> {
         let (tx, mut rx) = postage::mpsc::channel(1024);
 
         let mut cx = cx.app.borrow_mut();
+
         let subscriptions = (
             cx.observe(self, {
                 let mut tx = tx.clone();
+
                 move |_, _| {
                     tx.blocking_send(()).ok();
                 }
             }),
             cx.subscribe(self, {
                 let mut tx = tx;
+
                 move |_, _: &Evt, _| {
                     tx.blocking_send(()).ok();
                 }
@@ -871,6 +928,7 @@ impl<V> Entity<V> {
                 {
                     let cx = cx.borrow();
                     let cx = &*cx;
+
                     if predicate(
                         handle
                             .upgrade()
@@ -886,6 +944,7 @@ impl<V> Entity<V> {
                     .await
                     .expect("view dropped with pending condition");
             }
+
             drop(subscriptions);
         }
     }
@@ -894,6 +953,7 @@ impl<V> Entity<V> {
 use derive_more::{Deref, DerefMut};
 
 use super::{Context, Entity};
+
 #[derive(Deref, DerefMut, Clone)]
 /// A [`TestAppContext`] bound to one window, the test equivalent of a [`Window`] and [`App`].
 ///
@@ -904,6 +964,7 @@ pub struct VisualTestContext {
     #[deref_mut]
     /// The underlying [`TestAppContext`]. Methods on it are also available through deref.
     pub cx: TestAppContext,
+
     window: AnyWindowHandle,
 }
 
@@ -1026,6 +1087,7 @@ impl VisualTestContext {
             click_count: 1,
             first_mouse: false,
         });
+
         self.simulate_event(MouseUpEvent {
             position,
             modifiers,
@@ -1082,17 +1144,21 @@ impl VisualTestContext {
             let arena_scope = ElementArenaScope::enter(&cx.element_arena);
 
             window.invalidator.set_phase(DrawPhase::Prepaint);
+
             let mut element = Drawable::new(f(window, cx));
+
             element.layout_as_root(space.into(), window, cx);
             window.with_absolute_element_offset(origin, |window| element.prepaint(window, cx));
 
             window.invalidator.set_phase(DrawPhase::Paint);
+
             let (request_layout_state, prepaint_state) = element.paint(window, cx);
 
             window.invalidator.set_phase(DrawPhase::None);
             window.refresh();
 
             drop(element);
+
             arena_scope.exit(&cx.element_arena).clear(cx);
 
             (request_layout_state, prepaint_state)
@@ -1105,6 +1171,7 @@ impl VisualTestContext {
     pub fn simulate_event<E: InputEvent>(&mut self, event: E) {
         self.test_window(self.window)
             .simulate_input(event.to_platform_input());
+
         self.background_executor.run_until_parked();
     }
 
@@ -1115,6 +1182,7 @@ impl VisualTestContext {
         if Some(self.window) == self.test_platform.active_window() {
             self.test_platform.set_active_window(None)
         }
+
         self.background_executor.run_until_parked();
     }
 
@@ -1136,14 +1204,18 @@ impl VisualTestContext {
                     .take()
             })
             .unwrap();
+
         if let Some(mut handler) = handler {
             let should_close = handler();
+
             self.cx
                 .update_window(self.window, |_, window, _| {
                     window.platform_window.on_should_close(handler);
                 })
                 .unwrap();
+
             should_close
+
         } else {
             false
         }
@@ -1162,9 +1234,11 @@ impl VisualTestContext {
         // todo: This is unsound under stacked borrows (also tree borrows probably?)
         // the mutable reference invalidates `ptr` which is later used in the closure
         let cx = unsafe { &mut *ptr };
+
         cx.on_quit(move || unsafe {
             drop(Box::from_raw(ptr));
         });
+
         cx
     }
 }
@@ -1307,6 +1381,7 @@ impl VisualContext for VisualTestContext {
         update: impl FnOnce(&mut V, &mut Window, &mut Context<V>) -> R,
     ) -> R {
         let view = view.clone();
+
         self.cx
             .app
             .borrow_mut()
@@ -1361,6 +1436,7 @@ mod tests {
         PathPromptOptions, SystemNotification, SystemNotificationAction,
         SystemNotificationResponse, TestAppContext,
     };
+
     use std::cell::RefCell;
     use std::path::PathBuf;
     use std::rc::Rc;
@@ -1377,17 +1453,20 @@ mod tests {
                 actions: Vec::new(),
             });
         });
+
         assert!(cx.shown_system_notifications().is_empty());
         assert!(cx.delivered_system_notifications().is_empty());
 
         cx.update(|cx| {
             cx.set_app_identity("com.example.tasks", "Tasks");
+
             cx.show_system_notification(SystemNotification {
                 tag: "thread-1".into(),
                 title: "Task started".into(),
                 body: "Running tests".into(),
                 actions: Vec::new(),
             });
+
             cx.show_system_notification(SystemNotification {
                 tag: "thread-1".into(),
                 title: "Task finished".into(),
@@ -1403,7 +1482,9 @@ mod tests {
             cx.app_identity(),
             Some(("com.example.tasks".into(), "Tasks".into()))
         );
+
         assert_eq!(cx.shown_system_notifications().len(), 2);
+
         assert_eq!(
             cx.delivered_system_notifications(),
             [SystemNotification {
@@ -1418,6 +1499,7 @@ mod tests {
         );
 
         cx.update(|cx| cx.dismiss_system_notification("thread-1"));
+
         assert!(cx.delivered_system_notifications().is_empty());
         assert_eq!(cx.dismissed_system_notifications(), ["thread-1"]);
     }
@@ -1425,9 +1507,11 @@ mod tests {
     #[gpui::test]
     async fn test_system_notification_body_and_action_responses(cx: &mut TestAppContext) {
         let responses = Rc::new(RefCell::new(Vec::new()));
+
         cx.update(|cx| {
             cx.on_system_notification_response({
                 let responses = responses.clone();
+
                 move |response, _cx| responses.borrow_mut().push(response)
             });
         });
@@ -1436,6 +1520,7 @@ mod tests {
             tag: "thread-1".into(),
             action_id: None,
         });
+
         cx.simulate_system_notification_response(SystemNotificationResponse {
             tag: "thread-1".into(),
             action_id: Some("default".into()),
@@ -1460,13 +1545,17 @@ mod tests {
     async fn test_system_notification_response_handler_can_be_replaced(cx: &mut TestAppContext) {
         let first_responses = Rc::new(RefCell::new(Vec::new()));
         let second_responses = Rc::new(RefCell::new(Vec::new()));
+
         cx.update(|cx| {
             cx.on_system_notification_response({
                 let first_responses = first_responses.clone();
+
                 move |response, _cx| first_responses.borrow_mut().push(response)
             });
+
             cx.on_system_notification_response({
                 let second_responses = second_responses.clone();
+
                 move |response, _cx| second_responses.borrow_mut().push(response)
             });
         });
@@ -1475,6 +1564,7 @@ mod tests {
             tag: "thread-1".into(),
             action_id: None,
         };
+
         cx.simulate_system_notification_response(response.clone());
 
         assert!(first_responses.borrow().is_empty());
@@ -1485,12 +1575,14 @@ mod tests {
     async fn test_system_notification_response_handler_can_reenter_app(cx: &mut TestAppContext) {
         cx.update(|cx| {
             cx.set_app_identity("com.example.tasks", "Tasks");
+
             cx.show_system_notification(SystemNotification {
                 tag: "thread-1".into(),
                 title: "Task finished".into(),
                 body: "All tests passed".into(),
                 actions: Vec::new(),
             });
+
             cx.on_system_notification_response(|response, cx| {
                 cx.dismiss_system_notification(&response.tag);
             });
@@ -1517,19 +1609,25 @@ mod tests {
                 prompt: None,
             })
         });
+
         assert!(cx.did_prompt_for_paths());
 
         let selected = vec![PathBuf::from("/a"), PathBuf::from("/b")];
+
         cx.simulate_path_prompt_response({
             let selected = selected.clone();
+
             move |options| {
                 assert!(options.multiple);
+
                 Some(selected)
             }
         });
+
         assert!(!cx.did_prompt_for_paths());
 
         let response = receiver.await.unwrap().unwrap();
+
         assert_eq!(response, Some(selected));
     }
 
@@ -1547,6 +1645,7 @@ mod tests {
         cx.simulate_path_prompt_response(|_options| None);
 
         let response = receiver.await.unwrap().unwrap();
+
         assert_eq!(response, None);
     }
 }

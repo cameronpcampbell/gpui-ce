@@ -3,6 +3,7 @@ use gpui::{DevicePixels, Size, get_gamma_correction_ratios};
 pub struct WgpuSurfaceConfig {
     pub size: Size<DevicePixels>,
     pub transparent: bool,
+
     /// Preferred presentation mode, falling back to FIFO when unsupported.
     pub preferred_present_mode: Option<wgpu::PresentMode>,
 }
@@ -46,10 +47,13 @@ impl FontRasterizationSettings {
 
     fn from_environment() -> Self {
         let gamma = environment_f32("ZED_FONTS_GAMMA", 1.8).clamp(1.0, 2.2);
+
         let grayscale_enhanced_contrast =
             environment_f32("ZED_FONTS_GRAYSCALE_ENHANCED_CONTRAST", 1.0).max(0.0);
+
         let subpixel_enhanced_contrast =
             environment_f32("ZED_FONTS_SUBPIXEL_ENHANCED_CONTRAST", 0.5).max(0.0);
+
         Self::new(
             gamma,
             grayscale_enhanced_contrast,
@@ -67,10 +71,12 @@ pub(super) struct RenderingParameters {
 impl RenderingParameters {
     pub(super) fn new(adapter: &wgpu::Adapter, surface_format: wgpu::TextureFormat) -> Self {
         let format_features = adapter.get_texture_format_features(surface_format);
+
         let path_sample_count = [4, 2, 1]
             .into_iter()
             .find(|&sample_count| format_features.flags.sample_count_supported(sample_count))
             .unwrap_or(1);
+
         Self {
             path_sample_count,
             font_rasterization: FontRasterizationSettings::from_environment(),

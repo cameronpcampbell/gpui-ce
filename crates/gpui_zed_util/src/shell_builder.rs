@@ -8,10 +8,13 @@ use crate::shell::{Shell, ShellKind};
 pub struct ShellBuilder {
     /// The shell to run
     program: String,
+
     args: Vec<String>,
     interactive: bool,
+
     /// Whether to redirect stdin to /dev/null for the spawned command as a subshell.
     redirect_stdin: bool,
+
     kind: ShellKind,
 }
 
@@ -25,6 +28,7 @@ impl ShellBuilder {
         };
 
         let kind = ShellKind::new(&program, is_windows);
+
         Self {
             program,
             args,
@@ -33,8 +37,10 @@ impl ShellBuilder {
             redirect_stdin: false,
         }
     }
+
     pub fn non_interactive(mut self) -> Self {
         self.interactive = false;
+
         self
     }
 
@@ -47,9 +53,11 @@ impl ShellBuilder {
                 ShellKind::PowerShell | ShellKind::Pwsh => {
                     format!("{} -C '{}'", self.program, command_to_use_in_label)
                 }
+
                 ShellKind::Cmd => {
                     format!("{} /C \"{}\"", self.program, command_to_use_in_label)
                 }
+
                 ShellKind::Posix
                 | ShellKind::Nushell
                 | ShellKind::Fish
@@ -59,6 +67,7 @@ impl ShellBuilder {
                 | ShellKind::Xonsh
                 | ShellKind::Elvish => {
                     let interactivity = if self.interactive { "-i " } else { "" };
+
                     format!(
                         "{PROGRAM} {interactivity}-c '{command_to_use_in_label}'",
                         PROGRAM = self.program
@@ -70,6 +79,7 @@ impl ShellBuilder {
 
     pub fn redirect_stdin_to_dev_null(mut self) -> Self {
         self.redirect_stdin = true;
+
         self
     }
 
@@ -85,18 +95,24 @@ impl ShellBuilder {
                     Some(task_command) => task_command.into_owned(),
                     None => task_command,
                 }
+
             } else {
                 task_command
             };
+
             let mut combined_command = task_args.iter().fold(task_command, |mut command, arg| {
                 command.push(' ');
+
                 let shell_variable = self.kind.to_shell_variable(arg);
+
                 command.push_str(&match self.kind.try_quote(&shell_variable) {
                     Some(shell_variable) => shell_variable,
                     None => Cow::Owned(shell_variable),
                 });
+
                 command
             });
+
             if self.redirect_stdin {
                 match self.kind {
                     ShellKind::Posix => {
@@ -107,10 +123,12 @@ impl ShellBuilder {
                         // interactive shell in this case.
                         combined_command.insert_str(0, "exec </dev/null\n");
                     }
+
                     ShellKind::Fish => {
                         combined_command.insert_str(0, "begin; ");
                         combined_command.push_str("; end </dev/null");
                     }
+
                     ShellKind::Nushell
                     | ShellKind::Csh
                     | ShellKind::Tcsh
@@ -120,10 +138,12 @@ impl ShellBuilder {
                         combined_command.insert(0, '(');
                         combined_command.push_str("\n) </dev/null");
                     }
+
                     ShellKind::PowerShell | ShellKind::Pwsh => {
                         combined_command.insert_str(0, "$null | & {");
                         combined_command.push('}');
                     }
+
                     ShellKind::Cmd => {
                         combined_command.push_str("< NUL");
                     }
@@ -148,17 +168,21 @@ impl ShellBuilder {
             let mut combined_command = task_args.iter().fold(task_command, |mut command, arg| {
                 command.push(' ');
                 command.push_str(&self.kind.to_shell_variable(arg));
+
                 command
             });
+
             if self.redirect_stdin {
                 match self.kind {
                     ShellKind::Posix => {
                         combined_command.insert_str(0, "exec </dev/null\n");
                     }
+
                     ShellKind::Fish => {
                         combined_command.insert_str(0, "begin; ");
                         combined_command.push_str("; end </dev/null");
                     }
+
                     ShellKind::Nushell
                     | ShellKind::Csh
                     | ShellKind::Tcsh
@@ -168,10 +192,12 @@ impl ShellBuilder {
                         combined_command.insert(0, '(');
                         combined_command.push_str("\n) </dev/null");
                     }
+
                     ShellKind::PowerShell | ShellKind::Pwsh => {
                         combined_command.insert_str(0, "$null | & {");
                         combined_command.push('}');
                     }
+
                     ShellKind::Cmd => {
                         combined_command.push_str("< NUL");
                     }
@@ -208,12 +234,14 @@ impl ShellBuilder {
     ) -> std::process::Command {
         #[cfg(windows)]
         let kind = self.kind;
+
         if task_args.is_empty() {
             task_command = task_command
                 .as_ref()
                 .map(|cmd| self.kind.try_quote_prefix_aware(cmd).map(Cow::into_owned))
                 .unwrap_or(task_command);
         }
+
         let (program, args) = self.build(task_command, task_args);
 
         let mut child = crate::command::new_std_command(program);
@@ -225,6 +253,7 @@ impl ShellBuilder {
             for arg in args {
                 child.raw_arg(arg);
             }
+
         } else {
             child.args(args);
         }
@@ -262,6 +291,7 @@ mod test {
         );
 
         assert_eq!(program, "nu");
+
         assert_eq!(
             args,
             vec![
@@ -304,11 +334,13 @@ mod test {
         let shell_builder = ShellBuilder::new(&shell, false);
 
         let command = "cat <<EOF\nhello\nEOF";
+
         let (program, args) = shell_builder
             .redirect_stdin_to_dev_null()
             .build(Some(command.into()), &[]);
 
         assert_eq!(program, "sh");
+
         assert_eq!(
             args,
             vec!["-i", "-c", "exec </dev/null\ncat <<EOF\nhello\nEOF"]
@@ -326,6 +358,7 @@ mod test {
 
         assert_eq!(program, "sh");
         assert_eq!(args, vec!["-c", "echo hello"]);
+
         assert!(
             !args.iter().any(|arg| arg == "-i"),
             "non-interactive shell command must not include `-i`"

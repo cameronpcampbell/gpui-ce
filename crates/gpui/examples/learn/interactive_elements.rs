@@ -12,11 +12,13 @@ mod example_prelude;
 
 use example_prelude::init_example;
 use gpui::colors::Colors;
+
 use gpui::{
     App, Bounds, ClickEvent, ColorExt, Context, Entity, Half, Hsla, IntoElement, MouseButton,
     MouseMoveEvent, Pixels, Point, Render, Window, WindowBounds, WindowOptions, div, prelude::*,
     px, rgb, size,
 };
+
 use palette::IntoColor;
 
 // ============================================================================
@@ -82,12 +84,14 @@ impl Render for ClickDemo {
                     // on_click receives a ClickEvent with click_count() method
                     .on_click(cx.listener(|this, event: &ClickEvent, _window, cx| {
                         this.click_count += 1;
+
                         this.last_click_type = match event.click_count() {
                             1 => "Single Click".to_string(),
                             2 => "Double Click".to_string(),
                             3 => "Triple Click".to_string(),
                             n => format!("{n}x Click"),
                         };
+
                         cx.notify();
                     })),
             )
@@ -192,9 +196,11 @@ impl Render for HoverDemo {
                     // on_hover callback receives a bool: true when mouse enters, false when it leaves
                     .on_hover(cx.listener(|this, &hovered, _window, cx| {
                         this.is_hovered = hovered;
+
                         if hovered {
                             this.hover_count += 1;
                         }
+
                         cx.notify();
                     })),
             )
@@ -234,6 +240,7 @@ impl MouseEventsDemo {
 
     fn log_event(&mut self, event: &str) {
         self.event_log.push(event.to_string());
+
         if self.event_log.len() > 5 {
             self.event_log.remove(0);
         }
@@ -244,6 +251,7 @@ impl Render for MouseEventsDemo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = Colors::for_appearance(window);
         let is_pressed = self.is_pressed;
+
         let position_text = self
             .mouse_position
             .map(|p| format!("({:.0}, {:.0})", f32::from(p.x), f32::from(p.y)))
@@ -295,6 +303,7 @@ impl Render for MouseEventsDemo {
                         MouseButton::Left,
                         cx.listener(|this, _event, _window, cx| {
                             this.is_pressed = true;
+
                             this.log_event("Mouse Down");
                             cx.notify();
                         }),
@@ -303,12 +312,14 @@ impl Render for MouseEventsDemo {
                         MouseButton::Left,
                         cx.listener(|this, _event, _window, cx| {
                             this.is_pressed = false;
+
                             this.log_event("Mouse Up");
                             cx.notify();
                         }),
                     )
                     .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                         this.mouse_position = Some(event.position);
+
                         cx.notify();
                     })),
             )
@@ -355,6 +366,7 @@ impl DragData {
 
     fn with_position(mut self, position: Point<Pixels>) -> Self {
         self.position = position;
+
         self
     }
 }
@@ -439,6 +451,7 @@ impl Render for DragDropDemo {
                             .cursor_grab()
                             .hover_style(move |style| {
                                 let c: Hsla = color.into_color();
+
                                 style.bg(c.opacity(0.1))
                             })
                             .child(format!("Item {}", index + 1))
@@ -470,6 +483,7 @@ impl Render for DragDropDemo {
                     // on_drop receives the drag data when an item is dropped
                     .on_drop(cx.listener(|this, data: &DragData, _window, cx| {
                         this.dropped_item = Some(*data);
+
                         cx.notify();
                     }))
                     .child(
@@ -555,6 +569,7 @@ impl Render for InteractiveElementsExample {
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(700.), px(650.)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(|cx| InteractiveElementsExample::new(cx)),

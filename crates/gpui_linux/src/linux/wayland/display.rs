@@ -13,6 +13,7 @@ use gpui::{Bounds, DisplayId, Pixels, PlatformDisplay};
 pub(crate) struct WaylandDisplay {
     /// The ID of the wl_output object
     pub id: ObjectId,
+
     pub name: Option<String>,
     pub bounds: Bounds<Pixels>,
 }
@@ -33,6 +34,7 @@ impl PlatformDisplay for WaylandDisplay {
             .name
             .as_ref()
             .context("Wayland display does not have a name")?;
+
         Ok(Uuid::new_v5(&Uuid::NAMESPACE_DNS, name.as_bytes()))
     }
 

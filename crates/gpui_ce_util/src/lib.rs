@@ -22,7 +22,9 @@ pub fn new_std_command(program: impl AsRef<OsStr>) -> std::process::Command {
     use std::os::windows::process::CommandExt;
 
     let mut command = std::process::Command::new(program);
+
     command.creation_flags(CREATE_NO_WINDOW);
+
     command
 }
 
@@ -51,6 +53,7 @@ pub fn get_powershell() -> Option<String> {
         };
 
         let install_base_dir = PathBuf::from(std::env::var_os(env_var)?).join("PowerShell");
+
         install_base_dir
             .read_dir()
             .ok()?
@@ -62,15 +65,19 @@ pub fn get_powershell() -> Option<String> {
 
                 let version = if find_preview {
                     let dash_index = dir_name.find('-')?;
+
                     if &dir_name[dash_index + 1..] != "preview" {
                         return None;
                     };
+
                     dir_name[..dash_index].parse::<u32>().ok()?
+
                 } else {
                     dir_name.parse::<u32>().ok()?
                 };
 
                 let exe_path = entry.path().join("pwsh.exe");
+
                 if exe_path.is_file() {
                     Some((version, exe_path))
                 } else {
@@ -84,30 +91,36 @@ pub fn get_powershell() -> Option<String> {
     fn find_pwsh_in_msix(find_preview: bool) -> Option<PathBuf> {
         let msix_app_dir =
             PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Microsoft\\WindowsApps");
+
         let package_family_name = if find_preview {
             "Microsoft.PowerShellPreview_8wekyb3d8bbwe"
         } else {
             "Microsoft.PowerShell_8wekyb3d8bbwe"
         };
+
         let pwsh_exe = msix_app_dir.join(package_family_name).join("pwsh.exe");
+
         pwsh_exe.exists().then_some(pwsh_exe)
     }
 
     fn find_pwsh_in_scoop() -> Option<PathBuf> {
         let pwsh_exe =
             PathBuf::from(std::env::var_os("USERPROFILE")?).join("scoop\\shims\\pwsh.exe");
+
         pwsh_exe.is_file().then_some(pwsh_exe)
     }
 
     fn find_pwsh_in_dotnet_tools() -> Option<PathBuf> {
         let pwsh_exe =
             PathBuf::from(std::env::var_os("USERPROFILE")?).join(".dotnet\\tools\\pwsh.exe");
+
         pwsh_exe.is_file().then_some(pwsh_exe)
     }
 
     fn find_windows_powershell() -> Option<PathBuf> {
         let system_root = PathBuf::from(std::env::var_os("SystemRoot")?);
         let powershell = system_root.join("System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+
         powershell.is_file().then_some(powershell)
     }
 
@@ -140,23 +153,29 @@ pub fn get_powershell() -> Option<String> {
 pub fn get_windows_system_shell() -> String {
     static CMD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         log::warn!("Powershell not found, falling back to `cmd`");
+
         let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+
         std::path::PathBuf::from(system_root)
             .join("System32\\cmd.exe")
             .to_string_lossy()
             .into_owned()
     });
+
     get_powershell().unwrap_or_else(|| (*CMD).clone())
 }
 
 pub fn post_inc<T: From<u8> + AddAssign<T> + Copy>(value: &mut T) -> T {
     let prev = *value;
+
     *value += T::from(1);
+
     prev
 }
 
 pub fn measure<R>(label: &str, f: impl FnOnce() -> R) -> R {
     static ZED_MEASUREMENTS: OnceLock<bool> = OnceLock::new();
+
     let zed_measurements = ZED_MEASUREMENTS.get_or_init(|| {
         env::var("ZED_MEASUREMENTS")
             .map(|measurements| measurements == "1" || measurements == "true")
@@ -167,8 +186,11 @@ pub fn measure<R>(label: &str, f: impl FnOnce() -> R) -> R {
         let start = Instant::now();
         let result = f();
         let elapsed = start.elapsed();
+
         eprintln!("{}: {:?}", label, elapsed);
+
         result
+
     } else {
         f()
     }
@@ -192,6 +214,7 @@ pub fn some_or_debug_panic<T>(option: Option<T>) -> Option<T> {
     if option.is_none() {
         panic!("Unexpected None");
     }
+
     option
 }
 
@@ -211,20 +234,26 @@ macro_rules! maybe {
         (async move || $block)()
     };
 }
+
 pub trait ResultExt<E> {
     type Ok;
 
     fn log_err(self) -> Option<Self::Ok>;
+
     /// Like [`ResultExt::log_err`], but uses `{:?}` formatting so `anyhow::Error` values emit their
     /// full backtrace. Reach for this only when a backtrace is genuinely wanted — most call sites
     /// should stick with `log_err` / `warn_on_err`, whose output is a single chained error message.
     fn log_err_with_backtrace(self) -> Option<Self::Ok>
     where
         E: std::fmt::Debug;
+
     /// Assert that this result should never be an error in development or tests.
     fn debug_assert_ok(self, reason: &str) -> Self;
+
     fn warn_on_err(self) -> Option<Self::Ok>;
+
     fn log_with_level(self, level: log::Level) -> Option<Self::Ok>;
+
     fn anyhow(self) -> anyhow::Result<Self::Ok>
     where
         E: Into<anyhow::Error>;
@@ -248,12 +277,14 @@ where
     {
         match self {
             Ok(value) => Some(value),
+
             Err(error) => {
                 log_error_with_caller(
                     *Location::caller(),
                     DebugAsDisplay(&error),
                     log::Level::Error,
                 );
+
                 None
             }
         }
@@ -264,6 +295,7 @@ where
         if let Err(error) = &self {
             debug_panic!("{reason} - {error:#}");
         }
+
         self
     }
 
@@ -276,8 +308,10 @@ where
     fn log_with_level(self, level: log::Level) -> Option<T> {
         match self {
             Ok(value) => Some(value),
+
             Err(error) => {
                 log_error_with_caller(*Location::caller(), error, level);
+
                 None
             }
         }
@@ -311,7 +345,9 @@ where
             krate.to_owned() + "::" + &module.trim_end_matches(".rs").replace('/', "::")
         }
     });
+
     let file = file.map(|(_, file)| format!("crates/{file}"));
+
     log::logger().log(
         &log::Record::builder()
             .target(module_path.as_deref().unwrap_or(""))
@@ -351,6 +387,7 @@ pub trait TryFutureExt {
     fn warn_on_err(self) -> LogErrorFuture<Self>
     where
         Self: Sized;
+
     fn unwrap(self) -> UnwrapFuture<Self>
     where
         Self: Sized;
@@ -382,6 +419,7 @@ where
         Self: Sized,
     {
         let location = Location::caller();
+
         LogErrorFuture(self, log::Level::Error, *location)
     }
 
@@ -398,6 +436,7 @@ where
         Self: Sized,
     {
         let location = Location::caller();
+
         LogErrorFuture(self, log::Level::Warn, *location)
     }
 
@@ -420,6 +459,7 @@ where
         Self: Sized,
     {
         let location = Location::caller();
+
         LogErrorWithBacktraceFuture(self, log::Level::Error, *location)
     }
 
@@ -448,14 +488,18 @@ where
         let level = self.1;
         let location = self.2;
         let inner = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().0) };
+
         match inner.poll(cx) {
             Poll::Ready(output) => Poll::Ready(match output {
                 Ok(output) => Some(output),
+
                 Err(error) => {
                     log_error_with_caller(location, error, level);
+
                     None
                 }
             }),
+
             Poll::Pending => Poll::Pending,
         }
     }
@@ -475,14 +519,18 @@ where
         let level = self.1;
         let location = self.2;
         let inner = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().0) };
+
         match inner.poll(cx) {
             Poll::Ready(output) => Poll::Ready(match output {
                 Ok(output) => Some(output),
+
                 Err(error) => {
                     log_error_with_caller(location, DebugAsDisplay(&error), level);
+
                     None
                 }
             }),
+
             Poll::Pending => Poll::Pending,
         }
     }
@@ -499,6 +547,7 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let inner = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().0) };
+
         match inner.poll(cx) {
             Poll::Ready(result) => Poll::Ready(result.unwrap()),
             Poll::Pending => Poll::Pending,
@@ -552,7 +601,9 @@ impl std::hash::Hasher for TypeIdHasher {
         if let Some(bytes) = bytes.get(..8) {
             let array = <[u8; 8]>::try_from(bytes)
                 .unwrap_or_else(|_| unreachable!("slice was sliced to 8 bytes"));
+
             self.value = u64::from_ne_bytes(array);
+
         } else {
             debug_panic!(
                 "expected a 64-bit value, did you use this hasher with something other than a TypeId?"
@@ -570,11 +621,15 @@ impl std::hash::Hasher for TypeIdHasher {
 fn type_id_hasher() {
     use core::any::TypeId;
     use core::hash::{Hash, Hasher};
+
     fn verify_hashing_with(type_id: TypeId) {
         let mut hasher = TypeIdHasher::default();
+
         type_id.hash(&mut hasher);
+
         assert_ne!(hasher.finish(), 0);
     }
+
     // Pick a variety of types, just to demonstrate it’s all sane. Normal, zero-sized, unsized, &c.
     verify_hashing_with(TypeId::of::<usize>());
     verify_hashing_with(TypeId::of::<()>());
@@ -590,10 +645,13 @@ where
     if limit == 0 {
         items.clear();
     }
+
     if items.len() <= limit {
         items.sort_by(compare);
+
         return;
     }
+
     // When limit is near to items.len() it may be more efficient to sort the whole list and
     // truncate, rather than always doing selection first as is done below. It's hard to analyze
     // where the threshold for this should be since the quickselect style algorithm used by

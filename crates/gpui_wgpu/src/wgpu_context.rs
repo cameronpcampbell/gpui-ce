@@ -55,19 +55,24 @@ impl NativeBackend {
     ) -> NativeInstance {
         #[cfg(not(target_os = "windows"))]
         let backend_options = wgpu::BackendOptions::default();
+
         #[cfg(target_os = "windows")]
         let backend_options = match self {
             Self::Dx12 => {
                 let mut options = wgpu::BackendOptions::default();
+
                 let direct_composition_disabled = std::env::var(DISABLE_DIRECT_COMPOSITION_ENV)
                     .is_ok_and(|value| value == "true" || value == "1");
+
                 options.dx12.presentation_system = if direct_composition_disabled {
                     wgpu::Dx12SwapchainKind::DxgiFromHwnd
                 } else {
                     wgpu::Dx12SwapchainKind::DxgiFromVisual
                 };
+
                 options
             }
+
             Self::Vulkan | Self::Gl => wgpu::BackendOptions::default(),
         };
 
@@ -88,12 +93,14 @@ impl NativeBackend {
         mut attempt: impl FnMut(Self) -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
         let mut failures = SmallVec::<[NativeBackendFailure; 3]>::new();
+
         for &backend in Self::PREFERENCE {
             match attempt(backend) {
                 Ok(value) => return Ok(value),
                 Err(source) => failures.push(NativeBackendFailure { backend, source }),
             }
         }
+
         Err(NativeBackendFallbackError {
             operation,
             failures,
@@ -140,12 +147,15 @@ impl std::fmt::Display for NativeBackendFallbackError {
             "failed to initialize {}; attempted backends in order: ",
             self.operation
         )?;
+
         for (index, failure) in self.failures.iter().enumerate() {
             if index > 0 {
                 formatter.write_str("; ")?;
             }
+
             write!(formatter, "{:?}: {:#}", failure.backend, failure.source)?;
         }
+
         Ok(())
     }
 }
@@ -276,6 +286,7 @@ impl WgpuContextHandle {
     ) -> Self {
         let features = device.features();
         let limits = device.limits();
+
         Self {
             device,
             queue,
@@ -373,6 +384,7 @@ impl WgpuRenderTarget {
         let size = normalize_target_size(size);
         let texture = create_render_target_texture(context.device(), size, format);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         Self {
             texture: Arc::new(texture),
             view,
@@ -384,10 +396,13 @@ impl WgpuRenderTarget {
     /// Resizes the target, preserving its texture format.
     pub fn resize(&mut self, context: &WgpuContextHandle, size: gpui::Size<gpui::DevicePixels>) {
         let size = normalize_target_size(size);
+
         if self.size == size {
             return;
         }
+
         let texture = create_render_target_texture(context.device(), size, self.format);
+
         self.view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.texture = Arc::new(texture);
         self.size = size;
@@ -464,6 +479,7 @@ pub struct WgpuDeviceRequirements {
     /// Additional [`wgpu::Features`] to enable.  These are OR-ed with gpui's
     /// own required features.
     pub features: wgpu::Features,
+
     /// Additional [`wgpu::Limits`] to request.  Each field is merged by taking
     /// `max(gpui_limit, app_limit)` for upper-bound limits and
     /// `min(gpui_limit, app_limit)` for alignment/lower-bound limits.
@@ -489,6 +505,7 @@ impl WgpuContext {
     ) -> anyhow::Result<Self> {
         NativeBackend::try_in_preference_order("a headless GPU context", |backend| {
             let instance = backend.instance(None);
+
             let adapter =
                 gpui::block_on(instance.raw.request_adapter(&wgpu::RequestAdapterOptions {
                     // LowPower avoids waking a discrete GPU just for snapshots on dual-GPU
@@ -500,7 +517,9 @@ impl WgpuContext {
                 .map_err(|error| {
                     anyhow::anyhow!("failed to request headless GPU adapter: {error}")
                 })?;
+
             let device = gpui::block_on(Self::create_device(&adapter, extra_requirements))?;
+
             Self::from_created_device(instance.raw, adapter, device)
         })
     }
@@ -517,10 +536,13 @@ impl WgpuContext {
             Ok(val) => parse_pci_id(&val)
                 .context("Failed to parse device ID from `ZED_DEVICE_ID` environment variable")
                 .log_err(),
+
             Err(std::env::VarError::NotPresent) => None,
+
             err => {
                 err.context("Failed to read value of `ZED_DEVICE_ID` environment variable")
                     .log_err();
+
                 None
             }
         };
@@ -559,6 +581,7 @@ impl WgpuContext {
             WebBackendPreference::WebGpu => wgpu::Backends::BROWSER_WEBGPU,
             WebBackendPreference::WebGl => wgpu::Backends::GL,
         };
+
         let descriptor = wgpu::InstanceDescriptor {
             backends,
             flags: wgpu::InstanceFlags::default(),
@@ -566,11 +589,13 @@ impl WgpuContext {
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
             display: Some(Box::new(WebDisplaySource)),
         };
+
         let instance = if preference == WebBackendPreference::Auto {
             wgpu::util::new_instance_with_webgpu_detection(descriptor).await
         } else {
             wgpu::Instance::new(descriptor)
         };
+
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|error| {
@@ -589,8 +614,10 @@ impl WgpuContext {
                     "Failed to request a {preference:?} adapter compatible with the canvas: {error}"
                 )
             })?;
+
         let device = Self::create_device(&adapter, None).await?;
         let context = Self::from_created_device(instance, adapter, device)?;
+
         log::info!(
             "Browser graphics initialized: requested={preference:?}, selected={backend:?}, \
              adapter={:?}, limits={:?}, dual_source_blending={dual_source_blending}",
@@ -599,6 +626,7 @@ impl WgpuContext {
             backend = context.backend,
             dual_source_blending = context.dual_source_blending,
         );
+
         Ok(PreparedWebGraphics { context, surface })
     }
 
@@ -609,15 +637,19 @@ impl WgpuContext {
     ) -> anyhow::Result<Self> {
         let (device_lost, uncaptured_error) = install_device_callbacks(&device.device);
         let info = adapter.get_info();
+
         log::info!("Selected GPU adapter: {:?} ({:?})", info.name, info.backend);
+
         #[cfg(target_family = "wasm")]
         let backend = match info.backend {
             wgpu::Backend::BrowserWebGpu => WgpuBackend::BrowserWebGpu,
             wgpu::Backend::Gl => WgpuBackend::Gl,
+
             backend => anyhow::bail!(
                 "Browser graphics initialization selected unexpected backend {backend:?}"
             ),
         };
+
         #[cfg(not(target_family = "wasm"))]
         let backend = WgpuBackend::Native(info.backend);
 
@@ -640,6 +672,7 @@ impl WgpuContext {
         extra_requirements: Option<&WgpuDeviceRequirements>,
     ) -> anyhow::Result<CreatedDevice> {
         let renderer_tier = renderer_tier(adapter);
+
         // Our LCD shader uses storage buffers even when the adapter exposes dual-source
         // blending. Downlevel devices must use grayscale and the data-texture dialect.
         let dual_source_blending = renderer_tier == RendererTier::Modern
@@ -648,6 +681,7 @@ impl WgpuContext {
                 .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
 
         let mut required_features = wgpu::Features::empty();
+
         if dual_source_blending {
             required_features |= wgpu::Features::DUAL_SOURCE_BLENDING;
         } else {
@@ -663,6 +697,7 @@ impl WgpuContext {
             RendererTier::Modern => wgpu::Limits::downlevel_defaults(),
             RendererTier::WebGl2 => wgpu::Limits::downlevel_webgl2_defaults(),
         };
+
         let mut required_limits = baseline
             .using_resolution(adapter.limits())
             .using_alignment(adapter.limits());
@@ -670,6 +705,7 @@ impl WgpuContext {
         // Merge application-requested requirements.
         if let Some(reqs) = extra_requirements {
             required_features |= reqs.features;
+
             if let Some(limits) = &reqs.limits {
                 required_limits = required_limits.or_better_values_from(limits);
             }
@@ -698,8 +734,10 @@ impl WgpuContext {
 
     pub fn check_compatible_with_surface(&self, surface: &wgpu::Surface<'_>) -> anyhow::Result<()> {
         let caps = surface.get_capabilities(&self.adapter);
+
         if caps.formats.is_empty() {
             let info = self.adapter.get_info();
+
             anyhow::bail!(
                 "Adapter {:?} (backend={:?}, device={:#06x}) is not compatible with the \
                  display surface for this window.",
@@ -708,6 +746,7 @@ impl WgpuContext {
                 info.device,
             );
         }
+
         Ok(())
     }
 
@@ -763,6 +802,7 @@ impl WgpuContext {
                 {
                     0
                 }
+
                 _ => 1,
             };
 
@@ -775,6 +815,7 @@ impl WgpuContext {
                 wgpu::DeviceType::VirtualGpu => 3,
                 wgpu::DeviceType::Cpu => 4,
             };
+
             #[cfg(not(target_vendor = "apple"))]
             let type_priority: u8 = if info.device_type == wgpu::DeviceType::Cpu {
                 4
@@ -803,8 +844,10 @@ impl WgpuContext {
 
         // Log all available adapters (in sorted order)
         log::info!("Found {} GPU adapter(s):", adapters.len());
+
         for adapter in &adapters {
             let info = adapter.get_info();
+
             log::info!(
                 "  - {} (vendor={:#06x}, device={:#06x}, backend={:?}, type={:?})",
                 info.name,
@@ -825,6 +868,7 @@ impl WgpuContext {
                     info.name,
                     info.backend
                 );
+
                 continue;
             }
 
@@ -837,8 +881,10 @@ impl WgpuContext {
                         info.name,
                         info.backend
                     );
+
                     return Ok(SelectedAdapter { adapter, device });
                 }
+
                 Err(e) => {
                     log::info!(
                         "  Adapter {} ({:?}) failed: {}, trying next...",
@@ -862,14 +908,17 @@ impl WgpuContext {
         extra_requirements: Option<&WgpuDeviceRequirements>,
     ) -> anyhow::Result<CreatedDevice> {
         let caps = surface.get_capabilities(adapter);
+
         if caps.formats.is_empty() {
             anyhow::bail!("no compatible surface formats");
         }
+
         if caps.alpha_modes.is_empty() {
             anyhow::bail!("no compatible alpha modes");
         }
 
         let device = Self::create_device(adapter, extra_requirements).await?;
+
         let error_scope = device
             .device
             .push_error_scope(wgpu::ErrorFilter::Validation);
@@ -888,6 +937,7 @@ impl WgpuContext {
         surface.configure(&device.device, &test_config);
 
         let error = error_scope.pop().await;
+
         if let Some(e) = error {
             anyhow::bail!("surface configuration failed: {e}");
         }
@@ -899,17 +949,21 @@ impl WgpuContext {
         let required_usages = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
         let bgra_features = adapter.get_texture_format_features(wgpu::TextureFormat::Bgra8Unorm);
         let rgba_features = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba8Unorm);
+
         #[cfg(target_family = "wasm")]
         if adapter.get_info().backend == wgpu::Backend::Gl
             && rgba_features.allowed_usages.contains(required_usages)
         {
             return Ok(wgpu::TextureFormat::Rgba8Unorm);
         }
+
         if bgra_features.allowed_usages.contains(required_usages) {
             return Ok(wgpu::TextureFormat::Bgra8Unorm);
         }
+
         if rgba_features.allowed_usages.contains(required_usages) {
             let info = adapter.get_info();
+
             log::warn!(
                 "Adapter {} ({:?}) does not support Bgra8Unorm atlas textures with usages {:?}; \
                  falling back to Rgba8Unorm atlas textures.",
@@ -917,10 +971,12 @@ impl WgpuContext {
                 info.backend,
                 required_usages,
             );
+
             return Ok(wgpu::TextureFormat::Rgba8Unorm);
         }
 
         let info = adapter.get_info();
+
         Err(anyhow::anyhow!(
             "Adapter {} ({:?}, device={:#06x}) does not support a usable color atlas texture \
              format with usages {:?}. Bgra8Unorm allowed usages: {:?}; \
@@ -933,6 +989,7 @@ impl WgpuContext {
             rgba_features.allowed_usages,
         ))
     }
+
     pub fn backend(&self) -> WgpuBackend {
         self.backend
     }
@@ -972,6 +1029,7 @@ impl WgpuContext {
 fn renderer_tier(adapter: &wgpu::Adapter) -> RendererTier {
     let limits = adapter.limits();
     let flags = adapter.get_downlevel_capabilities().flags;
+
     if limits.max_storage_buffers_per_shader_stage > 0
         && flags.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
         && flags.contains(wgpu::DownlevelFlags::FRAGMENT_STORAGE)
@@ -986,24 +1044,33 @@ fn install_device_callbacks(
     device: &wgpu::Device,
 ) -> (Arc<AtomicBool>, Arc<Mutex<Option<String>>>) {
     let device_lost = Arc::new(AtomicBool::new(false));
+
     device.set_device_lost_callback({
         let device_lost = Arc::clone(&device_lost);
+
         move |reason, message| {
             log::error!("wgpu device lost: reason={reason:?}, message={message}");
+
             if reason != wgpu::DeviceLostReason::Destroyed {
                 device_lost.store(true, Ordering::Relaxed);
             }
         }
     });
+
     let uncaptured_error = Arc::new(Mutex::new(None));
+
     device.on_uncaptured_error(Arc::new({
         let uncaptured_error = Arc::clone(&uncaptured_error);
+
         move |error| {
             let message = error.to_string();
+
             log::error!("uncaptured wgpu error: {message}");
+
             *uncaptured_error.lock().unwrap() = Some(message);
         }
     }));
+
     (device_lost, uncaptured_error)
 }
 
@@ -1014,8 +1081,10 @@ fn parse_pci_id(id: &str) -> anyhow::Result<u32> {
     if id.starts_with("0x") || id.starts_with("0X") {
         id = &id[2..];
     }
+
     let is_hex_string = id.chars().all(|c| c.is_ascii_hexdigit());
     let is_4_chars = id.len() == 4;
+
     anyhow::ensure!(
         is_4_chars && is_hex_string,
         "Expected a 4 digit PCI ID in hexadecimal format"
@@ -1031,7 +1100,9 @@ mod tests {
     #[test]
     fn native_backend_fallbacks_are_individually_initialized() {
         let backends = NativeBackend::PREFERENCE;
+
         assert!(!backends.is_empty());
+
         assert!(
             backends
                 .iter()
@@ -1041,6 +1112,7 @@ mod tests {
 
         #[cfg(target_os = "linux")]
         assert_eq!(backends, &[NativeBackend::Vulkan, NativeBackend::Gl]);
+
         #[cfg(target_os = "windows")]
         assert_eq!(
             backends,
@@ -1050,6 +1122,7 @@ mod tests {
                 NativeBackend::Gl,
             ]
         );
+
         #[cfg(target_os = "macos")]
         assert_eq!(backends, &[NativeBackend::Metal]);
     }
@@ -1057,19 +1130,24 @@ mod tests {
     #[test]
     fn native_backend_fallback_preserves_ordered_failures() {
         let mut attempted = Vec::new();
+
         let error = NativeBackend::try_in_preference_order::<()>("test context", |backend| {
             attempted.push(backend);
+
             anyhow::bail!("unavailable")
         })
         .unwrap_err();
 
         assert_eq!(attempted, NativeBackend::PREFERENCE);
+
         let message = format!("{error:#}");
         let mut previous = 0;
+
         for backend in NativeBackend::PREFERENCE {
             let index = message[previous..]
                 .find(&format!("{backend:?}: unavailable"))
                 .expect("each backend failure should be reported in preference order");
+
             previous += index;
         }
     }
@@ -1078,6 +1156,7 @@ mod tests {
     fn software_adapter_policy_is_explicit() {
         assert!(SoftwareAdapterPolicy::Allow.accepts(wgpu::DeviceType::Cpu));
         assert!(!SoftwareAdapterPolicy::Reject.accepts(wgpu::DeviceType::Cpu));
+
         assert!(
             SoftwareAdapterPolicy::Reject.accepts(wgpu::DeviceType::IntegratedGpu),
             "rejecting software must not reject lower-power hardware adapters"
@@ -1091,6 +1170,7 @@ mod tests {
         assert!(parse_pci_id("abcd").is_ok());
         assert!(parse_pci_id("1234").is_ok());
         assert!(parse_pci_id("123").is_err());
+
         assert_eq!(
             parse_pci_id(&format!("{:x}", 0x1234)).unwrap(),
             parse_pci_id(&format!("{:X}", 0x1234)).unwrap(),

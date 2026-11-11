@@ -5,16 +5,20 @@ use crate::{
     RenderImage, Resource, SharedString, SharedUri, StyleRefinement, Styled, Task, Window,
     decode_static_image, decode_static_image_from_decoder, px,
 };
+
 use anyhow::Result;
 
 use futures::Future;
 use gpui_util::ResultExt;
+
 use image::{
     AnimationDecoder, ImageError, ImageFormat, Rgba,
     codecs::{gif::GifDecoder, webp::WebPDecoder},
 };
+
 use scheduler::Instant;
 use smallvec::SmallVec;
+
 use std::{
     fs,
     io::{self, Cursor},
@@ -24,6 +28,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+
 use thiserror::Error;
 
 use super::{Stateful, StatefulInteractiveElement};
@@ -152,12 +157,14 @@ pub trait StyledImage: Sized {
     /// Set the image to be displayed in grayscale.
     fn grayscale(mut self, grayscale: bool) -> Self {
         self.image_style().grayscale = grayscale;
+
         self
     }
 
     /// Set the object fit for the image.
     fn object_fit(mut self, object_fit: ObjectFit) -> Self {
         self.image_style().object_fit = object_fit;
+
         self
     }
 
@@ -165,6 +172,7 @@ pub trait StyledImage: Sized {
     /// the image fail to load.
     fn with_fallback(mut self, fallback: impl Fn() -> AnyElement + 'static) -> Self {
         self.image_style().fallback = Some(Box::new(fallback));
+
         self
     }
 
@@ -172,6 +180,7 @@ pub trait StyledImage: Sized {
     /// is still being loaded.
     fn with_loading(mut self, loading: impl Fn() -> AnyElement + 'static) -> Self {
         self.image_style().loading = Some(Box::new(loading));
+
         self
     }
 }
@@ -318,29 +327,37 @@ impl Element for Img {
 
                             if let Some(state) = &mut state {
                                 state.frame_index = state.frame_index.min(max_frame_index);
+
                                 if frame_count > 1 && !cx.reduce_motion() {
                                     if window.is_window_active() {
                                         let current_time = Instant::now();
+
                                         if let Some(last_frame_time) = state.last_frame_time {
                                             let elapsed = current_time - last_frame_time;
+
                                             let frame_duration =
                                                 Duration::from(data.delay(state.frame_index));
 
                                             if elapsed >= frame_duration {
                                                 state.frame_index =
                                                     (state.frame_index + 1) % frame_count;
+
                                                 state.last_frame_time =
                                                     Some(current_time - (elapsed - frame_duration));
                                             }
+
                                         } else {
                                             state.last_frame_time = Some(current_time);
                                         }
+
                                     } else {
                                         state.last_frame_time = None;
                                     }
+
                                 } else {
                                     state.last_frame_time = None;
                                 }
+
                                 state.started_loading = None;
                                 frame_index = state.frame_index;
                             }
@@ -355,12 +372,14 @@ impl Element for Img {
                                 style.size.width = match style.size.height {
                                     Length::Definite(DefiniteLength::Absolute(abs_length)) => {
                                         let height_px = abs_length.to_pixels(window.rem_size());
+
                                         Length::Definite(
                                             px(image_size.width.0 * height_px.0
                                                 / image_size.height.0)
                                             .into(),
                                         )
                                     }
+
                                     _ => Length::Definite(image_size.width.into()),
                                 };
                             }
@@ -369,12 +388,14 @@ impl Element for Img {
                                 style.size.height = match style.size.width {
                                     Length::Definite(DefiniteLength::Absolute(abs_length)) => {
                                         let width_px = abs_length.to_pixels(window.rem_size());
+
                                         Length::Definite(
                                             px(image_size.height.0 * width_px.0
                                                 / image_size.width.0)
                                             .into(),
                                         )
                                     }
+
                                     _ => Length::Definite(image_size.height.into()),
                                 };
                             }
@@ -387,16 +408,20 @@ impl Element for Img {
                                 window.request_animation_frame();
                             }
                         }
+
                         Some(_err) => {
                             if let Some(fallback) = self.style.fallback.as_ref() {
                                 let mut element = fallback();
+
                                 replacement_id = Some(element.request_layout(window, cx));
                                 layout_state.replacement = Some(element);
                             }
+
                             if let Some(state) = &mut state {
                                 state.started_loading = None;
                             }
                         }
+
                         None => {
                             if let Some(state) = &mut state {
                                 if let Some((started_loading, _)) = state.started_loading {
@@ -404,18 +429,23 @@ impl Element for Img {
                                         && let Some(loading) = self.style.loading.as_ref()
                                     {
                                         let mut element = loading();
+
                                         replacement_id = Some(element.request_layout(window, cx));
                                         layout_state.replacement = Some(element);
                                     }
+
                                 } else {
                                     let current_view = window.current_view();
+
                                     let task = window.spawn(cx, async move |cx| {
                                         cx.background_executor().timer(LOADING_DELAY).await;
+
                                         cx.update(move |_, cx| {
                                             cx.notify(current_view);
                                         })
                                         .ok();
                                     });
+
                                     state.started_loading = Some((Instant::now(), task));
                                 }
                             }
@@ -469,6 +499,7 @@ impl Element for Img {
         cx: &mut App,
     ) {
         let source = self.source.clone();
+
         self.interactivity.paint(
             global_id,
             inspector_id,
@@ -487,11 +518,14 @@ impl Element for Img {
                     if data.frame_count() == 0 {
                         return;
                     }
+
                     let new_bounds = self
                         .style
                         .object_fit
                         .get_bounds(bounds, data.size(layout_state.frame_index));
+
                     let corner_radii = style.corner_radii.to_pixels(window.rem_size());
+
                     window
                         .paint_image(
                             bounds,
@@ -503,6 +537,7 @@ impl Element for Img {
                             self.style.grayscale,
                         )
                         .log_err();
+
                 } else if let Some(replacement) = &mut layout_state.replacement {
                     replacement.paint(window, cx);
                 }
@@ -548,6 +583,7 @@ impl ImageSource {
                     window.use_asset::<ImgResourceLoader>(resource, cx)
                 }
             }
+
             ImageSource::Custom(loading_fn) => loading_fn(window, cx),
             ImageSource::Render(data) => Some(Ok(data.to_owned())),
             ImageSource::Image(data) => window.use_asset::<AssetLogger<ImageDecoder>>(data, cx),
@@ -568,6 +604,7 @@ impl ImageSource {
                     window.get_asset::<ImgResourceLoader>(resource, cx)
                 }
             }
+
             ImageSource::Custom(loading_fn) => loading_fn(window, cx),
             ImageSource::Render(data) => Some(Ok(data.to_owned())),
             ImageSource::Image(data) => window.get_asset::<AssetLogger<ImageDecoder>>(data, cx),
@@ -580,6 +617,7 @@ impl ImageSource {
             ImageSource::Resource(resource) => {
                 cx.remove_asset::<ImgResourceLoader>(resource);
             }
+
             ImageSource::Custom(_) | ImageSource::Render(_) => {}
             ImageSource::Image(data) => cx.remove_asset::<AssetLogger<ImageDecoder>>(data),
         }
@@ -609,6 +647,7 @@ impl Asset for ImageDecoder {
         cx: &mut App,
     ) -> impl Future<Output = Self::Output> + Send + 'static {
         let renderer = cx.svg_renderer();
+
         async move { source.to_image_data(renderer).map_err(Into::into) }
     }
 }
@@ -630,9 +669,11 @@ impl Asset for ImageAssetLoader {
         // let scale_factor = cx.scale_factor();
         let svg_renderer = cx.svg_renderer();
         let asset_registry = cx.assets().clone();
+
         async move {
             let bytes = match source.clone() {
                 Resource::Path(uri) => fs::read(uri.as_ref())?,
+
                 Resource::Uri(uri) => {
                     use anyhow::Context as _;
 
@@ -640,20 +681,26 @@ impl Asset for ImageAssetLoader {
                         .get(uri.as_ref(), true)
                         .await
                         .with_context(|| format!("loading image asset from {uri:?}"))?;
+
                     if !response.status.is_success() {
                         let mut error_body = String::from_utf8_lossy(&response.body).into_owned();
                         let first_line = error_body.lines().next().unwrap_or("").trim_end();
+
                         error_body.truncate(first_line.len());
+
                         return Err(ImageCacheError::BadStatus {
                             uri,
                             status: response.status,
                             body: error_body,
                         });
                     }
+
                     response.body
                 }
+
                 Resource::Embedded(path) => {
                     let data = asset_registry.load(&path);
+
                     if let Some(data) = data {
                         data.to_vec()
                     } else {
@@ -677,8 +724,10 @@ impl Asset for ImageAssetLoader {
                                     for pixel in frame.buffer_mut().chunks_exact_mut(4) {
                                         pixel.swap(0, 2);
                                     }
+
                                     frames.push(frame);
                                 }
+
                                 Err(err) => {
                                     log::debug!(
                                         "Skipping GIF frame in {source:?} due to decode error: {err}"
@@ -695,6 +744,7 @@ impl Asset for ImageAssetLoader {
 
                         frames
                     }
+
                     ImageFormat::WebP => {
                         let mut decoder = WebPDecoder::new(Cursor::new(&bytes))?;
 
@@ -709,8 +759,10 @@ impl Asset for ImageAssetLoader {
                                         for pixel in frame.buffer_mut().chunks_exact_mut(4) {
                                             pixel.swap(0, 2);
                                         }
+
                                         frames.push(frame);
                                     }
+
                                     Err(err) => {
                                         log::debug!(
                                             "Skipping WebP frame in {source:?} due to decode error: {err}"
@@ -726,14 +778,17 @@ impl Asset for ImageAssetLoader {
                             }
 
                             frames
+
                         } else {
                             decode_static_image_from_decoder(decoder)?
                         }
                     }
+
                     _ => decode_static_image(&bytes, format)?,
                 };
 
                 Ok(Arc::new(RenderImage::new(data)))
+
             } else {
                 svg_renderer
                     .render_single_frame(&bytes, 1.0)
@@ -757,8 +812,10 @@ pub enum ImageCacheError {
     BadStatus {
         /// The URI of the image.
         uri: SharedUri,
+
         /// The HTTP status code.
         status: http::StatusCode,
+
         /// The HTTP response body.
         body: String,
     },
@@ -807,6 +864,7 @@ mod tests {
 
     fn test_image(frame_count: usize) -> Arc<RenderImage> {
         let frame = Frame::new(ImageBuffer::from_pixel(1, 1, Rgba([0, 0, 0, 0])));
+
         Arc::new(RenderImage::new(SmallVec::from_iter(
             (0..frame_count).map(|_| frame.clone()),
         )))
@@ -814,6 +872,7 @@ mod tests {
 
     fn test_image_with_size(width: u32, height: u32) -> Arc<RenderImage> {
         let frame = Frame::new(ImageBuffer::from_pixel(width, height, Rgba([0, 0, 0, 0])));
+
         Arc::new(RenderImage::new(SmallVec::from_elem(frame, 1)))
     }
 
@@ -825,7 +884,9 @@ mod tests {
                 window.with_global_id(TEST_IMG_ID.into(), |id, window| {
                     window.with_element_state::<ImgState, _>(id, |state, _| {
                         let mut state = state.expect("img state should be initialized");
+
                         state.frame_index = frame_index;
+
                         ((), state)
                     });
                 });
@@ -845,12 +906,14 @@ mod tests {
     fn image_object_fit_cover_crops_to_element_bounds(cx: &mut TestAppContext) {
         let window = cx.add_empty_window();
         let image = test_image_with_size(200, 100);
+
         window.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
             img(ImageSource::Render(image.clone()))
                 .size_full()
                 .object_fit(ObjectFit::Fill)
                 .into_any_element()
         });
+
         let full_tile_bounds = window.update(|window, _| {
             window
                 .rendered_frame
@@ -876,8 +939,10 @@ mod tests {
                 .polychrome_sprites
                 .last()
                 .expect("cover image should paint a sprite");
+
             (sprite.bounds, sprite.tile.bounds, window.scale_factor())
         });
+
         assert_eq!(
             rendered_bounds,
             Bounds {
@@ -885,6 +950,7 @@ mod tests {
                 size: size(px(100.).scale(scale_factor), px(100.).scale(scale_factor)),
             }
         );
+
         assert_eq!(
             (
                 rendered_tile_bounds.origin.x.0 - full_tile_bounds.origin.x.0,
@@ -921,6 +987,7 @@ mod tests {
                 .polychrome_sprites
                 .last()
                 .expect("contained image should paint a sprite");
+
             (sprite.bounds, window.scale_factor())
         });
 
@@ -937,6 +1004,7 @@ mod tests {
     #[gpui::test]
     fn image_object_fit_cover_clamps_corner_radii_to_visible_bounds(cx: &mut TestAppContext) {
         let window = cx.add_empty_window();
+
         window.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
             img(ImageSource::Render(test_image_with_size(200, 100)))
                 .size_full()
@@ -956,6 +1024,7 @@ mod tests {
                 px(50.).scale(window.scale_factor()),
             )
         });
+
         assert_eq!(corner_radius, Some(expected_corner_radius));
     }
 
@@ -972,6 +1041,7 @@ mod tests {
                 .child(seed_frame_index(4))
                 .into_any_element()
         });
+
         window.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
             img(ImageSource::Render(test_image(1)))
                 .id(TEST_IMG_ID)

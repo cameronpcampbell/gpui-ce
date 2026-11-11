@@ -6,9 +6,11 @@ use crate::{
     TextOverflow, TextRangeExt, TextRun, TextStyle, TextTransform, TooltipId, UnicodeBidi,
     WhiteSpace, Window, px, register_tooltip_mouse_handlers, set_tooltip_on_window,
 };
+
 use anyhow::Context as _;
 use gpui_util::ResultExt;
 use smallvec::SmallVec;
+
 use std::{
     borrow::Cow,
     cell::{Cell, Ref, RefCell},
@@ -17,6 +19,7 @@ use std::{
     rc::Rc,
     sync::Arc,
 };
+
 use unicode_segmentation::UnicodeSegmentation;
 
 /// An [`Element`] that renders text.
@@ -103,6 +106,7 @@ impl Text {
     /// Produce a new [`Text`] with the given `id`.
     pub fn with_id(mut self, id: impl Into<ElementId>) -> Self {
         self.id = Some(id.into());
+
         self
     }
 
@@ -115,6 +119,7 @@ impl Text {
 
 impl Deref for Text {
     type Target = SharedString;
+
     fn deref(&self) -> &Self::Target {
         &self.text
     }
@@ -137,11 +142,13 @@ pub const fn __hash_text_macro_location_unstable_do_not_use(s: &'static str) -> 
     let bytes = s.as_bytes();
     let mut hash = BASIS;
     let mut i = 0;
+
     while i < bytes.len() {
         hash ^= bytes[i] as u64;
         hash = hash.wrapping_mul(PRIME);
         i += 1;
     }
+
     hash
 }
 
@@ -169,6 +176,7 @@ macro_rules! text {
 
 impl IntoElement for Text {
     type Element = Self;
+
     #[inline]
     fn into_element(self) -> Self::Element {
         self
@@ -273,6 +281,7 @@ impl Element for &'static str {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut state = TextLayout::default();
         let layout_id = state.layout(SharedString::from(*self), None, window, cx);
+
         (layout_id, state)
     }
 
@@ -347,6 +356,7 @@ impl Element for SharedString {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut state = TextLayout::default();
         let layout_id = state.layout(self.clone(), None, window, cx);
+
         (layout_id, state)
     }
 
@@ -425,7 +435,9 @@ impl StyledText {
             self.delayed_highlights.is_none(),
             "Can't use `with_default_highlights` and `with_highlights`"
         );
+
         let runs = Self::compute_runs(&self.text, default_style, highlights);
+
         self.with_runs(runs)
     }
 
@@ -439,6 +451,7 @@ impl StyledText {
             self.runs.is_none(),
             "Can't use `with_highlights` and `with_default_highlights`"
         );
+
         self.delayed_highlights = Some(
             highlights
                 .into_iter()
@@ -447,6 +460,7 @@ impl StyledText {
                 })
                 .collect::<Vec<_>>(),
         );
+
         self
     }
 
@@ -457,23 +471,28 @@ impl StyledText {
     ) -> Vec<TextRun> {
         let mut runs = Vec::new();
         let mut ix = 0;
+
         for (range, highlight) in highlights {
             debug_assert!(text.contains_range(&range));
 
             if ix < range.start {
                 runs.push(default_style.clone().to_run(range.start - ix));
             }
+
             runs.push(
                 default_style
                     .clone()
                     .highlight(highlight)
                     .to_run(range.len()),
             );
+
             ix = range.end;
         }
+
         if ix < text.len() {
             runs.push(default_style.to_run(text.len() - ix));
         }
+
         runs
     }
 
@@ -497,6 +516,7 @@ impl StyledText {
                 })
                 .collect(),
         );
+
         self
     }
 
@@ -506,23 +526,29 @@ impl StyledText {
     ) {
         let mut byte_offset = 0;
         let mut override_idx = 0;
+
         for run in runs.iter_mut() {
             let run_end = byte_offset + run.len;
+
             while override_idx < overrides.len() && overrides[override_idx].0.end <= byte_offset {
                 override_idx += 1;
             }
+
             if override_idx < overrides.len() {
                 let (ref range, ref family) = overrides[override_idx];
+
                 if byte_offset >= range.start && run_end <= range.end {
                     run.font.family = family.clone();
                 }
             }
+
             byte_offset = run_end;
         }
     }
 
     fn take_runs(&mut self, default_style: &TextStyle) -> Vec<TextRun> {
         let font_family_overrides = self.delayed_font_family_overrides.take();
+
         let mut runs = self.runs.take().or_else(|| {
             self.delayed_highlights.take().map(|delayed_highlights| {
                 Self::compute_runs(&self.text, default_style, delayed_highlights)
@@ -531,6 +557,7 @@ impl StyledText {
 
         if let Some(ref overrides) = font_family_overrides {
             let runs = runs.get_or_insert_with(|| vec![default_style.to_run(self.text.len())]);
+
             Self::apply_font_family_overrides(runs, overrides);
         }
 
@@ -540,6 +567,7 @@ impl StyledText {
     /// Set the text runs for this piece of text.
     pub fn with_runs(mut self, runs: Vec<TextRun>) -> Self {
         let mut text = &*self.text;
+
         for run in &runs {
             text = text.get(run.len..).unwrap_or_else(|| {
                 #[cfg(debug_assertions)]
@@ -548,8 +576,11 @@ impl StyledText {
                 panic!("invalid text run");
             });
         }
+
         assert!(text.is_empty(), "invalid text run");
+
         self.runs = Some(runs);
+
         self
     }
 }
@@ -574,9 +605,11 @@ impl Element for StyledText {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let runs = self.take_runs(&window.text_style());
+
         let layout_id = self
             .layout
             .layout(self.text.clone(), Some(runs), window, cx);
+
         (layout_id, ())
     }
 
@@ -641,35 +674,43 @@ fn apply_text_transform_preserving_byte_len(
     let Some(transform) = transform else {
         return text;
     };
+
     if matches!(transform, TextTransform::None) {
         return text;
     }
 
     let mut output = String::with_capacity(text.len());
+
     match transform {
         TextTransform::Uppercase => {
             for character in text.as_ref().chars() {
                 push_case_mapped_character(&mut output, character, CaseMapKind::Upper);
             }
         }
+
         TextTransform::Lowercase => {
             for character in text.as_ref().chars() {
                 push_case_mapped_character(&mut output, character, CaseMapKind::Lower);
             }
         }
+
         TextTransform::Capitalize => {
             for piece in text.as_ref().split_word_bounds() {
                 let mut seen_first_letter = false;
+
                 for character in piece.chars() {
                     if !seen_first_letter && character.is_alphabetic() {
                         push_case_mapped_character(&mut output, character, CaseMapKind::Upper);
+
                         seen_first_letter = true;
+
                     } else {
                         output.push(character);
                     }
                 }
             }
         }
+
         TextTransform::None => return text,
     }
 
@@ -703,10 +744,13 @@ mod text_transform_tests {
     #[test]
     fn text_transforms_preserve_bytes_and_spacing() {
         let input = SharedString::from("hello   WORLD\tfoo-bar 123baz déjà vu");
+
         let uppercase =
             apply_text_transform_preserving_byte_len(input.clone(), Some(TextTransform::Uppercase));
+
         let lowercase =
             apply_text_transform_preserving_byte_len(input.clone(), Some(TextTransform::Lowercase));
+
         let capitalize = apply_text_transform_preserving_byte_len(
             input.clone(),
             Some(TextTransform::Capitalize),
@@ -723,8 +767,10 @@ mod text_transform_tests {
     #[test]
     fn text_transforms_skip_expanding_unicode_mappings() {
         let input = SharedString::from("straße İSTANBUL");
+
         let uppercase =
             apply_text_transform_preserving_byte_len(input.clone(), Some(TextTransform::Uppercase));
+
         let lowercase =
             apply_text_transform_preserving_byte_len(input.clone(), Some(TextTransform::Lowercase));
 
@@ -737,10 +783,12 @@ mod text_transform_tests {
     #[test]
     fn capitalize_preserves_letters_after_digit_prefix() {
         let input = SharedString::from("123BAZ");
+
         let output = apply_text_transform_preserving_byte_len(
             input.clone(),
             Some(TextTransform::Capitalize),
         );
+
         assert_eq!(output.as_ref(), "123BAZ");
         assert_eq!(input.len(), output.len());
     }
@@ -748,16 +796,20 @@ mod text_transform_tests {
     #[test]
     fn capitalize_does_not_fold_remaining_letters() {
         let input = SharedString::from("foo2BAR");
+
         let output =
             apply_text_transform_preserving_byte_len(input, Some(TextTransform::Capitalize));
+
         assert_eq!(output.as_ref(), "Foo2BAR");
     }
 
     #[test]
     fn capitalize_handles_apostrophe_contractions() {
         let input = SharedString::from("don't panic");
+
         let output =
             apply_text_transform_preserving_byte_len(input, Some(TextTransform::Capitalize));
+
         assert_eq!(output.as_ref(), "Don't Panic");
     }
 }
@@ -777,8 +829,10 @@ pub enum TruncateFrom {
 pub struct TextLayoutTruncation {
     /// The width that the text can occupy before it is truncated.
     pub width: Option<Pixels>,
+
     /// The text to affix to the displayed text if truncating (e.g. an ellipsis `...`).
     pub affix: SharedString,
+
     /// What side of the text will be truncated if it does not fit.
     pub source: TruncateFrom,
 }
@@ -837,6 +891,7 @@ impl TextLayout {
 
                 TextLayoutTruncation::overflow_width(text_overflow, width)
             }
+
             None => TextLayoutTruncation {
                 width: None,
                 affix: SharedString::default(),
@@ -853,10 +908,12 @@ impl TextLayout {
         unicode_bidi: UnicodeBidi,
     ) -> (TextLayoutOptions, TextLayoutTruncation) {
         let alignment_width = Self::evaluate_alignment_width(known_dimensions, available_space);
+
         let direction = match unicode_bidi {
             UnicodeBidi::Plaintext => ParagraphDirection::Auto,
             _ => resolved_direction.into(),
         };
+
         let options = TextLayoutOptions {
             wrap_width: match text_style.white_space {
                 WhiteSpace::Normal => alignment_width,
@@ -868,6 +925,7 @@ impl TextLayout {
             direction,
             unicode_bidi,
         };
+
         let truncation = Self::evaluate_overflow(text_style, known_dimensions, available_space);
 
         (options, truncation)
@@ -888,9 +946,11 @@ impl TextLayout {
         cx: &mut App,
     ) -> (SharedString, Cow<'runs, [TextRun]>) {
         let _ = (line_height, cx);
+
         let Some(truncate_width) = truncation.width else {
             return (text, Cow::Borrowed(runs));
         };
+
         truncate_to_shaped_layout(
             text,
             font_size,
@@ -916,6 +976,7 @@ impl TextLayout {
         let text_style = window.text_style();
         let text = apply_text_transform_preserving_byte_len(text, text_style.text_transform);
         let font_size = text_style.font_size.to_pixels(window.rem_size());
+
         let line_height = window.pixel_snap(
             text_style
                 .line_height
@@ -929,6 +990,7 @@ impl TextLayout {
         };
 
         let runs: Arc<[TextRun]> = runs.into();
+
         let content = crate::InlineContent::Text {
             text: text.clone(),
             runs: runs.clone(),
@@ -941,6 +1003,7 @@ impl TextLayout {
 
             move |known_dimensions, available_space, window, cx| {
                 let unicode_bidi = window.resolved_unicode_bidi();
+
                 let (options, truncation) = Self::layout_options(
                     &text_style,
                     known_dimensions,
@@ -948,6 +1011,7 @@ impl TextLayout {
                     window.resolved_direction(),
                     unicode_bidi,
                 );
+
                 let truncate_width = truncation.width;
 
                 // Only use cached layout if:
@@ -978,6 +1042,7 @@ impl TextLayout {
                     window,
                     cx,
                 );
+
                 let document = window
                     .text_system()
                     .shape_text_with_options(text, font_size, &runs, options)
@@ -1012,6 +1077,7 @@ impl TextLayout {
 
         window.publish_inline_content(layout_id, content);
         self.0.layout_id.set(Some(layout_id));
+
         layout_id
     }
 
@@ -1026,11 +1092,14 @@ impl TextLayout {
             .get()
             .map(|layout_id| window.parent_relative_layout_bounds(layout_id))
             .unwrap_or(bounds);
+
         let mut element_state = self.0.layout.borrow_mut();
+
         let element_state = element_state
             .as_mut()
             .with_context(|| format!("measurement has not been performed on {text}"))
             .unwrap();
+
         element_state.bounds = Some(bounds);
     }
 
@@ -1040,16 +1109,19 @@ impl TextLayout {
         }
 
         let element_state = self.0.layout.borrow();
+
         let element_state = element_state
             .as_ref()
             .with_context(|| format!("measurement has not been performed on {text}"))
             .unwrap();
+
         let bounds = element_state
             .bounds
             .with_context(|| format!("prepaint has not been performed on {text}"))
             .unwrap();
 
         let line_height = element_state.line_height;
+
         if let Some(document) = &element_state.document {
             document
                 .paint_background(
@@ -1061,6 +1133,7 @@ impl TextLayout {
                     cx,
                 )
                 .log_err();
+
             document
                 .paint(
                     bounds.origin,
@@ -1083,6 +1156,7 @@ impl TextLayout {
     /// Get the byte index into the input of the pixel position.
     pub fn index_for_position(&self, pixel_point: Point<Pixels>) -> Result<usize, usize> {
         let element_state = self.measured();
+
         let bounds = element_state
             .bounds
             .expect("prepaint has not been performed");
@@ -1092,6 +1166,7 @@ impl TextLayout {
         }
 
         let line_height = element_state.line_height;
+
         let Some(document) = &element_state.document else {
             return Err(0);
         };
@@ -1102,12 +1177,15 @@ impl TextLayout {
     /// Get the pixel position for the given byte index.
     pub fn position_for_index(&self, byte_index: usize) -> Option<Point<Pixels>> {
         let element_state = self.measured();
+
         let bounds = element_state
             .bounds
             .expect("prepaint has not been performed");
+
         let line_height = element_state.line_height;
 
         let document = element_state.document.as_ref()?;
+
         Some(bounds.origin + document.visual_position_for_byte_index(byte_index, line_height)?)
     }
 
@@ -1115,6 +1193,7 @@ impl TextLayout {
     pub fn line_layout_for_index(&self, index: usize) -> Option<Arc<ShapedTextLayout>> {
         let element_state = self.measured();
         let document = element_state.document.as_ref()?;
+
         (index <= document.len()).then(|| document.layout.clone())
     }
 
@@ -1161,8 +1240,10 @@ impl TextLayout {
                 accumulator.push('\n');
             }
         }
+
         // Remove trailing newline
         accumulator.pop();
+
         accumulator
     }
 }
@@ -1187,6 +1268,7 @@ fn truncate_to_shaped_layout<'a>(
         text_align: TextAlign::Left,
         ..Default::default()
     };
+
     let Ok(document) =
         window
             .text_system()
@@ -1194,6 +1276,7 @@ fn truncate_to_shaped_layout<'a>(
     else {
         return (text, Cow::Borrowed(runs));
     };
+
     let width = wrap_width.unwrap_or(truncate_width);
     let fits = text_layout_fits(&document.layout.layout, width, max_lines);
 
@@ -1205,12 +1288,16 @@ fn truncate_to_shaped_layout<'a>(
         .grapheme_indices(true)
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
+
     boundaries.push(text.len());
+
     let grapheme_count = boundaries.len().saturating_sub(1);
+
     let grapheme_ranges = boundaries
         .windows(2)
         .map(|boundary| boundary[0]..boundary[1])
         .collect::<Vec<_>>();
+
     let grapheme_widths = document
         .platform_layout
         .inline_geometry_for_ranges(&grapheme_ranges)
@@ -1222,8 +1309,11 @@ fn truncate_to_shaped_layout<'a>(
                 .sum::<Pixels>()
         })
         .collect::<Vec<_>>();
+
     let mut prefix_widths = Vec::with_capacity(grapheme_widths.len() + 1);
+
     prefix_widths.push(Pixels::ZERO);
+
     for width in &grapheme_widths {
         prefix_widths.push(prefix_widths.last().copied().unwrap_or_default() + *width);
     }
@@ -1253,39 +1343,49 @@ fn truncate_to_shaped_layout<'a>(
             )
             .map_or(Pixels::ZERO, |layout| layout.width())
     };
+
     let available_width = (width - affix_width).max(Pixels::ZERO);
 
     let keep = if direction == TruncateFrom::End
         && let (Some(wrap_width), Some(max_lines)) = (wrap_width, max_lines)
     {
         let last_line_idx = max_lines.max(1).saturating_sub(1);
+
         let line_start = document
             .visual_lines()
             .get(last_line_idx)
             .map_or(0, |line| line.text_range.start);
+
         let fixed_count = grapheme_ranges.partition_point(|range| range.end <= line_start);
+
         fixed_count
             + grapheme_widths[fixed_count..]
                 .iter()
                 .scan(Pixels::ZERO, |used, advance| {
                     *used += *advance;
+
                     Some(*used <= (wrap_width - affix_width).max(Pixels::ZERO))
                 })
                 .take_while(|fits| *fits)
                 .count()
+
     } else {
         (0..grapheme_count)
             .take_while(|keep| {
                 let candidate_count = keep + 1;
+
                 let width: Pixels = match direction {
                     TruncateFrom::End => prefix_widths[candidate_count],
+
                     TruncateFrom::Start => {
                         prefix_widths[grapheme_count]
                             - prefix_widths[grapheme_count - candidate_count]
                     }
+
                     TruncateFrom::Middle => {
                         let front_count = candidate_count.saturating_mul(2).div_ceil(3);
                         let back_count = candidate_count - front_count;
+
                         prefix_widths[front_count] + prefix_widths[grapheme_count]
                             - prefix_widths[grapheme_count - back_count]
                     }
@@ -1394,6 +1494,7 @@ impl<Boundaries: DoubleEndedIterator<Item = usize> + Clone> TruncationBoundaries
         let (front_count, back_count) = match direction {
             TruncateFrom::End => (keep, 0),
             TruncateFrom::Start => (0, keep),
+
             TruncateFrom::Middle => {
                 let front_count = keep.saturating_mul(2).div_ceil(3);
 
@@ -1443,6 +1544,7 @@ impl<Boundaries: DoubleEndedIterator<Item = usize> + Clone> BoundaryWindow<Bound
     fn retain_after(&mut self, index: usize) {
         if index > self.first {
             let _boundary = self.boundaries.nth(index - self.first - 1);
+
             self.first = index;
         }
     }
@@ -1450,6 +1552,7 @@ impl<Boundaries: DoubleEndedIterator<Item = usize> + Clone> BoundaryWindow<Bound
     fn retain_before(&mut self, index: usize) {
         if index < self.last {
             let _boundary = self.boundaries.nth_back(self.last - index - 1);
+
             self.last = index;
         }
     }
@@ -1481,9 +1584,11 @@ pub(crate) fn truncate_with_measured_candidates<Layout>(
         if fits {
             best = Some((candidate, layout));
             lower = keep + 1;
+
         } else if keep == 0 {
             // Preserve the requested marker when even the marker alone is too wide.
             return best.unwrap_or((candidate, layout));
+
         } else {
             upper = keep - 1;
         }
@@ -1493,6 +1598,7 @@ pub(crate) fn truncate_with_measured_candidates<Layout>(
         }
 
         boundaries.narrow(keep, direction, fits);
+
         keep = lower + (upper - lower) / 2;
     }
 }
@@ -1507,19 +1613,23 @@ fn make_truncation_candidate(
 ) -> TruncationCandidate {
     let grapheme_count = boundaries.grapheme_count;
     let keep = keep.min(grapheme_count);
+
     let (front_end, back_start, affix_source) = match direction {
         TruncateFrom::End => {
             let prefix = text[..boundaries.front.get(keep)]
                 .trim_end_matches(|ch: char| ch.is_whitespace() || ch.is_ascii_punctuation());
+
             let end = prefix.len();
 
             (end, text.len(), end.min(text.len().saturating_sub(1)))
         }
+
         TruncateFrom::Start => {
             let start = boundaries.back.get(grapheme_count - keep);
 
             (0, start, start.saturating_sub(1))
         }
+
         TruncateFrom::Middle => {
             let front_count = keep.saturating_mul(2).div_ceil(3);
             let back_count = keep - front_count;
@@ -1543,11 +1653,13 @@ fn make_truncation_candidate(
         affix_range: front_end..front_end + affix.len(),
         affix_source,
     };
+
     let mut offset = 0;
     let mut display_runs = Vec::new();
 
     for run in runs {
         let source = offset..offset + run.len;
+
         offset = source.end;
 
         for range in candidate.display_ranges(&source) {
@@ -1562,6 +1674,7 @@ fn make_truncation_candidate(
     }
 
     display_runs.sort_by_key(|(start, _run)| *start);
+
     candidate.runs = display_runs.into_iter().map(|(_start, run)| run).collect();
 
     candidate
@@ -1574,8 +1687,10 @@ mod truncation_tests {
     #[test]
     fn truncation_candidates_keep_complete_graphemes_and_cover_output_with_runs() {
         const FAMILY: &str = "👩‍👩‍👧‍👦";
+
         let text = format!("Ae\u{301}{FAMILY}🦀");
         let split = "Ae\u{301}".len();
+
         let runs = [
             TextRun {
                 len: split,
@@ -1586,10 +1701,12 @@ mod truncation_tests {
                 ..Default::default()
             },
         ];
+
         let boundaries = text
             .grapheme_indices(true)
             .map(|(index, _grapheme)| index)
             .chain(std::iter::once(text.len()));
+
         let grapheme_count = boundaries.clone().count().saturating_sub(1);
         let boundaries = TruncationBoundaries::new(boundaries, grapheme_count);
 
@@ -1612,7 +1729,9 @@ mod truncation_tests {
         ] {
             let candidate =
                 make_truncation_candidate(&text, &boundaries, keep, "…", &runs, direction);
+
             assert_eq!(candidate.text.as_ref(), expected, "{direction:?}");
+
             assert_eq!(
                 candidate.runs.iter().map(|run| run.len).sum::<usize>(),
                 candidate.text.len(),
@@ -1641,6 +1760,7 @@ mod truncation_tests {
                 len: text.len(),
                 ..Default::default()
             }];
+
             let boundaries = text
                 .grapheme_indices(true)
                 .map(|(index, _grapheme)| index)
@@ -1660,11 +1780,13 @@ mod truncation_tests {
                         (candidate.text.clone(), fits)
                     },
                 );
+
                 assert_eq!(
                     candidate.text.as_ref(),
                     expected,
                     "{text:?} {direction:?} {initial_keep:?}"
                 );
+
                 assert_eq!(measured_text, candidate.text);
             }
 
@@ -1677,6 +1799,7 @@ mod truncation_tests {
                 direction,
                 |candidate| (candidate.text.clone(), false),
             );
+
             assert_eq!(candidate.text.as_ref(), "…");
             assert_eq!(measured_text, candidate.text);
         }
@@ -1687,8 +1810,10 @@ mod truncation_tests {
 pub struct InteractiveText {
     element_id: ElementId,
     text: StyledText,
+
     click_listener:
         Option<Box<dyn Fn(&[Range<usize>], InteractiveTextClickEvent, &mut Window, &mut App)>>,
+
     hover_listener: Option<Box<dyn Fn(Option<usize>, MouseMoveEvent, &mut Window, &mut App)>>,
     tooltip_builder: Option<Rc<dyn Fn(usize, &mut Window, &mut App) -> Option<AnyView>>>,
     tooltip_id: Option<TooltipId>,
@@ -1738,7 +1863,9 @@ impl InteractiveText {
                 }
             }
         }));
+
         self.clickable_ranges = ranges;
+
         self
     }
 
@@ -1749,6 +1876,7 @@ impl InteractiveText {
         listener: impl Fn(Option<usize>, MouseMoveEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.hover_listener = Some(Box::new(listener));
+
         self
     }
 
@@ -1758,6 +1886,7 @@ impl InteractiveText {
         builder: impl Fn(usize, &mut Window, &mut App) -> Option<AnyView> + 'static,
     ) -> Self {
         self.tooltip_builder = Some(Rc::new(builder));
+
         self
     }
 }
@@ -1793,6 +1922,7 @@ impl Element for InteractiveText {
 
         // InteractiveText owns range-based selection and hit testing in its independent layout.
         window.publish_inline_content(result.0, crate::InlineContent::Atomic);
+
         result
     }
 
@@ -1815,6 +1945,7 @@ impl Element for InteractiveText {
                     if self.tooltip_builder.is_some() {
                         self.tooltip_id =
                             set_tooltip_on_window(&interactive_state.active_tooltip, window);
+
                     } else {
                         // If there is no longer a tooltip builder, remove the active tooltip.
                         interactive_state.active_tooltip.take();
@@ -1823,7 +1954,9 @@ impl Element for InteractiveText {
 
                 self.text
                     .prepaint(None, inspector_id, bounds, state, window, cx);
+
                 let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+
                 (hitbox, interactive_state)
             },
         )
@@ -1841,12 +1974,15 @@ impl Element for InteractiveText {
     ) {
         let current_view = window.current_view();
         let text_layout = self.text.layout().clone();
+
         window.with_element_state::<InteractiveTextState, _>(
             global_id.unwrap(),
             |interactive_state, window| {
                 let mut interactive_state = interactive_state.unwrap_or_default();
+
                 if let Some(click_listener) = self.click_listener.take() {
                     let mouse_position = window.mouse_position();
+
                     if let Ok(ix) = text_layout.index_for_position(mouse_position)
                         && self
                             .clickable_ranges
@@ -1858,9 +1994,11 @@ impl Element for InteractiveText {
 
                     let text_layout = text_layout.clone();
                     let mouse_down = interactive_state.mouse_down_index.clone();
+
                     if let Some(mouse_down_index) = mouse_down.get() {
                         let hitbox = hitbox.clone();
                         let clickable_ranges = mem::take(&mut self.clickable_ranges);
+
                         window.on_mouse_event(
                             move |event: &MouseUpEvent, phase, window: &mut Window, cx| {
                                 if phase == DispatchPhase::Bubble && hitbox.is_hovered(window) {
@@ -1883,8 +2021,10 @@ impl Element for InteractiveText {
                                 }
                             },
                         );
+
                     } else {
                         let hitbox = hitbox.clone();
+
                         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, _| {
                             if phase == DispatchPhase::Bubble
                                 && hitbox.is_hovered(window)
@@ -1903,15 +2043,19 @@ impl Element for InteractiveText {
                     let hitbox = hitbox.clone();
                     let text_layout = text_layout.clone();
                     let hovered_index = interactive_state.hovered_index.clone();
+
                     move |event: &MouseMoveEvent, phase, window, cx| {
                         if phase == DispatchPhase::Bubble && hitbox.is_hovered(window) {
                             let current = hovered_index.get();
                             let updated = text_layout.index_for_position(event.position).ok();
+
                             if current != updated {
                                 hovered_index.set(updated);
+
                                 if let Some(hover_listener) = hover_listener.as_ref() {
                                     hover_listener(updated, event.clone(), window, cx);
                                 }
+
                                 cx.notify(current_view);
                             }
                         }
@@ -1920,9 +2064,11 @@ impl Element for InteractiveText {
 
                 if let Some(tooltip_builder) = self.tooltip_builder.clone() {
                     let active_tooltip = interactive_state.active_tooltip.clone();
+
                     let build_tooltip = Rc::new({
                         let tooltip_is_hoverable = false;
                         let text_layout = text_layout.clone();
+
                         move |window: &mut Window, cx: &mut App| {
                             text_layout
                                 .index_for_position(window.mouse_position())
@@ -1937,6 +2083,7 @@ impl Element for InteractiveText {
                         let source_hitbox = hitbox.clone();
                         let text_layout = text_layout.clone();
                         let pending_mouse_down = interactive_state.mouse_down_index.clone();
+
                         move |window: &Window| {
                             text_layout
                                 .index_for_position(window.mouse_position())
@@ -1950,6 +2097,7 @@ impl Element for InteractiveText {
                         let hitbox = hitbox.clone();
                         let text_layout = text_layout.clone();
                         let pending_mouse_down = interactive_state.mouse_down_index.clone();
+
                         move |window: &Window| {
                             text_layout
                                 .index_for_position(window.mouse_position())
@@ -1990,10 +2138,12 @@ impl IntoElement for InteractiveText {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::{
         AvailableSpace, Context, Hsla, Render, ScaledPixels, TestApp, TestAppContext, div, hsla,
         prelude::*, size,
     };
+
     use std::collections::HashSet;
 
     const CONTAINER_COLOR: Hsla = hsla(0.72, 0.45, 0.32, 1.0);
@@ -2097,6 +2247,7 @@ mod tests {
 
     fn only_quad(window: &Window, color: Hsla) -> Bounds<ScaledPixels> {
         let color = color.into();
+
         let mut bounds = window
             .rendered_frame
             .scene
@@ -2104,8 +2255,11 @@ mod tests {
             .iter()
             .filter(|quad| quad.background.solid == color)
             .map(|quad| quad.bounds);
+
         let result = bounds.next().expect("expected a rendered quad");
+
         assert!(bounds.next().is_none(), "expected only one rendered quad");
+
         result
     }
 
@@ -2133,6 +2287,7 @@ mod tests {
         }
 
         assert_eq!(make_text_stable_id(false).id, make_text_stable_id(true).id);
+
         assert_ne!(
             make_text_unstable_id(false).id,
             make_text_unstable_id(true).id
@@ -2143,14 +2298,18 @@ mod tests {
     fn accessible_text_keeps_its_unicode_value_and_stable_identity() {
         let first = Text::new("status".into(), "Ready العربية 👩🏽‍💻".into());
         let second = Text::new("status".into(), "Done 日本語 ✅".into());
+
         assert_eq!(first.id(), second.id());
         assert_eq!(first.a11y_role(), Some(accesskit::Role::Label));
 
         let mut node = accesskit::Node::new(accesskit::Role::Label);
+
         second.write_a11y_info(&mut node);
+
         assert_eq!(node.value(), Some("Done 日本語 ✅"));
 
         let hidden = Text::new_inaccessible("decorative 👀".into());
+
         assert_eq!(hidden.a11y_role(), None);
     }
 
@@ -2158,10 +2317,13 @@ mod tests {
     fn centered_text_keeps_its_device_pixel_offset_when_its_parent_moves() {
         for scale_factor in [1.0, 1.5] {
             let mut app = TestApp::new();
+
             let mut test_window = app.open_window(|window, _| {
                 window.set_scale_factor(scale_factor);
+
                 CenteredTextView { extent: 0.0 }
             });
+
             test_window.draw();
 
             let (initial_container, initial_background) = test_window.update(|_, window, _| {
@@ -2170,7 +2332,9 @@ mod tests {
                     only_quad(window, TEXT_BACKGROUND_COLOR),
                 )
             });
+
             let expected_offset = initial_background.origin - initial_container.origin;
+
             let mut container_origins = HashSet::from([(
                 initial_container.origin.x.as_f32() as i32,
                 initial_container.origin.y.as_f32() as i32,
@@ -2179,8 +2343,10 @@ mod tests {
             for step in 1..=32 {
                 test_window.update(|view, _, cx| {
                     view.extent = step as f32;
+
                     cx.notify();
                 });
+
                 test_window.draw();
 
                 let (container, background) = test_window.update(|_, window, _| {
@@ -2189,11 +2355,13 @@ mod tests {
                         only_quad(window, TEXT_BACKGROUND_COLOR),
                     )
                 });
+
                 assert_eq!(
                     background.origin - container.origin,
                     expected_offset,
                     "text moved within its parent at scale {scale_factor}, step {step}"
                 );
+
                 container_origins.insert((
                     container.origin.x.as_f32() as i32,
                     container.origin.y.as_f32() as i32,

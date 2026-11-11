@@ -24,6 +24,7 @@ pub struct PathRasterizationVertex {
 unsafe impl BufferData for PathSprite {
     const WGSL_TYPE: &'static str = "PathSprite";
 }
+
 unsafe impl BufferData for PathRasterizationVertex {
     const WGSL_TYPE: &'static str = "PathRasterizationVertex";
 }
@@ -42,6 +43,7 @@ pub fn rasterization_vertices(
 ) -> impl Iterator<Item = PathRasterizationVertex> + '_ {
     paths.iter().flat_map(|path| {
         let bounds = path.clipped_bounds();
+
         path.vertices
             .iter()
             .map(move |vertex| PathRasterizationVertex {
@@ -64,6 +66,7 @@ pub fn sprites(paths: &[Path<ScaledPixels>]) -> PathSprites<'_> {
                 })
         })
     });
+
     PathSprites {
         paths: combined.is_none().then_some(paths.iter()),
         combined,
@@ -82,6 +85,7 @@ impl Iterator for PathSprites<'_> {
         if let Some(bounds) = self.combined.take() {
             return Some(PathSprite { bounds });
         }
+
         self.paths.as_mut()?.next().map(|path| PathSprite {
             bounds: path.clipped_bounds(),
         })

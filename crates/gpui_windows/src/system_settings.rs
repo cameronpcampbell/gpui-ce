@@ -4,6 +4,7 @@ use std::{
 };
 
 use gpui_util::ResultExt;
+
 use windows::Win32::UI::WindowsAndMessaging::{
     SPI_GETWHEELSCROLLCHARS, SPI_GETWHEELSCROLLLINES, SYSTEM_PARAMETERS_INFO_ACTION,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
@@ -20,6 +21,7 @@ pub(crate) struct WindowsSystemSettings {
 pub(crate) struct MouseWheelSettings {
     /// SEE: SPI_GETWHEELSCROLLCHARS
     pub(crate) wheel_scroll_chars: Cell<u32>,
+
     /// SEE: SPI_GETWHEELSCROLLLINES
     pub(crate) wheel_scroll_lines: Cell<u32>,
 }
@@ -27,7 +29,9 @@ pub(crate) struct MouseWheelSettings {
 impl WindowsSystemSettings {
     pub(crate) fn new() -> Self {
         let mut settings = Self::default();
+
         settings.init();
+
         settings
     }
 
@@ -55,6 +59,7 @@ impl MouseWheelSettings {
 
     fn update_wheel_scroll_chars(&self) {
         let mut value = c_uint::default();
+
         let result = unsafe {
             SystemParametersInfoW(
                 SPI_GETWHEELSCROLLCHARS,
@@ -71,6 +76,7 @@ impl MouseWheelSettings {
 
     fn update_wheel_scroll_lines(&self) {
         let mut value = c_uint::default();
+
         let result = unsafe {
             SystemParametersInfoW(
                 SPI_GETWHEELSCROLLLINES,

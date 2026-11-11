@@ -6,10 +6,12 @@ mod example_support;
 use std::{fs, path::PathBuf};
 
 use anyhow::Result;
+
 use gpui::{
     App, AssetSource, Bounds, BoxShadow, ClickEvent, Context, SharedString, Task, Window,
     WindowBounds, WindowOptions, div, hsla, img, prelude::*, px, rgb, size, svg,
 };
+
 use gpui_platform::application;
 
 struct Assets {
@@ -57,6 +59,7 @@ impl HelloWorld {
     fn start_animation(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.opacity = 0.0;
         self.animating = true;
+
         cx.notify();
     }
 }
@@ -65,9 +68,11 @@ impl Render for HelloWorld {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.animating {
             self.opacity += 0.005;
+
             if self.opacity >= 1.0 {
                 self.animating = false;
                 self.opacity = 1.0;
+
             } else {
                 window.request_animation_frame();
             }
@@ -169,12 +174,15 @@ fn run_example() {
             if !example_support::load_fonts(cx) {
                 return;
             }
+
             let bounds = Bounds::centered(None, size(px(500.0), px(500.0)), cx);
+
             cx.open_window(
                 WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
                 |window, cx| cx.new(|cx| HelloWorld::new(window, cx)),
             )
             .unwrap();
+
             cx.activate(true);
         });
 }

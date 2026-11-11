@@ -2,7 +2,9 @@ use crate::{
     ColorGlyphKind, FontStore, GlyphRasterizer, SwashGlyphRasterizer, SystemFonts,
     catalog::{family_names, new_font_context, register_font_blobs, resolve_face},
 };
+
 use anyhow::{Context as _, Result};
+
 use gpui::{
     Bounds, CaretAffinity, CaretMovement, CaretPosition, Font, FontId, FontMetrics, GlyphId,
     InlineBidiScope, InlineBoxRequest, InlineLayout, InlineLayoutRequest, InlineRangeGeometry,
@@ -14,15 +16,19 @@ use gpui::{
     TextSelectionKind, UnicodeBidi, VisualDirection, VisualLine, align_inline_boxes,
     is_paragraph_separator, point, px, size,
 };
+
 use parking_lot::{Mutex, RwLock};
 use parley::setting::Tag;
+
 use parley::{
     Affinity, Alignment, AlignmentOptions, CHROMIUM_LINE_BREAK_OVERRIDE, Cluster, Cursor,
     FontContext, FontFamily, FontFamilyName, FontFeature, FontFeatures, FontStyle,
     FontVariation as ParleyFontVariation, FontWeight, GenericFamily, InlineBox, InlineBoxKind,
     Layout, LayoutContext, Line, LineHeight, PositionedLayoutItem, Selection, StyleProperty,
 };
+
 use skrifa::instance::NormalizedCoord;
+
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
@@ -33,6 +39,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+
 use unicode_segmentation::UnicodeSegmentation as _;
 
 mod paragraphs;
@@ -194,16 +201,19 @@ impl SourceMappedLayout {
         line_height: Pixels,
     ) -> CaretPosition {
         let mapped = self.map.source_caret(caret);
+
         if self.inner.len() == self.source_len {
             return mapped;
         }
 
         let start = CaretPosition::attached_to_next_cluster(0);
+
         if self.source_len == 0 {
             return start;
         }
 
         let end = CaretPosition::attached_to_previous_cluster(self.source_len);
+
         let mapped = match mapped.index {
             0 => start,
             idx if idx == self.source_len => end,
@@ -280,6 +290,7 @@ impl PlatformTextLayout for SourceMappedLayout {
 
         for _attempt in 0..=self.inner.len() {
             backend_caret = self.inner.adjacent_visual_caret(backend_caret, direction)?;
+
             let source_caret = self.map.source_caret(backend_caret);
 
             if source_caret.index != source_start {
@@ -436,15 +447,18 @@ fn controls_for_scope(
         ResolvedDirection::LeftToRight => ('\u{202a}', '\u{2066}', '\u{202d}'),
         ResolvedDirection::RightToLeft => ('\u{202b}', '\u{2067}', '\u{202e}'),
     };
+
     let (open, close) = match unicode_bidi {
         UnicodeBidi::Normal => return None,
         UnicodeBidi::Embed => (vec![directional_embed], vec!['\u{202c}']),
         UnicodeBidi::Isolate => (vec![directional_isolate], vec!['\u{2069}']),
         UnicodeBidi::BidiOverride => (vec![directional_override], vec!['\u{202c}']),
+
         UnicodeBidi::IsolateOverride => (
             vec![directional_isolate, directional_override],
             vec!['\u{202c}', '\u{2069}'],
         ),
+
         UnicodeBidi::Plaintext => (vec!['\u{2068}'], vec!['\u{2069}']),
     };
 
@@ -470,6 +484,7 @@ fn prepare_bidi_text(
         ParagraphDirection::LeftToRight => Some(ResolvedDirection::LeftToRight),
         ParagraphDirection::RightToLeft => Some(ResolvedDirection::RightToLeft),
     };
+
     let mut controls = bidi_scopes
         .iter()
         .filter(|scope| text.contains_range(&scope.range))
@@ -503,6 +518,7 @@ fn prepare_bidi_text(
             ResolvedDirection::LeftToRight => '\u{200e}',
             ResolvedDirection::RightToLeft => '\u{200f}',
         };
+
         append_synthetic(marker, 0, &mut prepared, &mut backend_to_source);
     }
 
@@ -540,8 +556,10 @@ fn prepare_bidi_text(
         }
 
         prepared.push(character);
+
         for byte_offset in 1..=character.len_utf8() {
             backend_to_source.push(source_idx + byte_offset);
+
             source_to_backend[source_idx + byte_offset] =
                 prepared.len() - character.len_utf8() + byte_offset;
         }
@@ -561,7 +579,9 @@ fn prepare_bidi_text(
         source_to_backend,
         backend_to_source,
     };
+
     let (runs, run_sources) = remap_runs(&prepared, &map, runs, text.len());
+
     let text_styles = text_styles
         .iter()
         .map(|style| InlineTextStyle {
@@ -569,6 +589,7 @@ fn prepare_bidi_text(
             ..style.clone()
         })
         .collect();
+
     let inline_boxes = inline_boxes
         .iter()
         .map(|inline_box| InlineBoxRequest {
@@ -598,6 +619,7 @@ fn remap_runs(
 
     for run in source_runs {
         end += run.len;
+
         run_ends.push(end);
     }
 
@@ -608,6 +630,7 @@ fn remap_runs(
         let source_idx = map
             .source_index(backend_idx)
             .min(source_len.saturating_sub(1));
+
         let source_run = run_ends
             .partition_point(|run_end| *run_end <= source_idx)
             .min(source_runs.len().saturating_sub(1));
@@ -616,7 +639,9 @@ fn remap_runs(
             runs.last_mut().unwrap().len += character.len_utf8();
         } else if let Some(run) = source_runs.get(source_run) {
             let mut run = run.clone();
+
             run.len = character.len_utf8();
+
             runs.push(run);
             run_sources.push(source_run);
         }
@@ -768,11 +793,14 @@ fn visit_line_clusters(
         }
 
         previous_run_index = Some(run.index());
+
         let mut inline = glyph_run.offset();
 
         for cluster in run.visual_clusters() {
             let advance = inline..inline + cluster.advance();
+
             inline = advance.end;
+
             visit(cluster, advance);
         }
     }
@@ -804,6 +832,7 @@ impl ParleyLayout {
 
     fn caret_position(cursor: Cursor) -> CaretPosition {
         let gpui_affinity = cursor.affinity().into_affinity();
+
         CaretPosition {
             index: cursor.index(),
             affinity: gpui_affinity,
@@ -812,11 +841,13 @@ impl ParleyLayout {
 
     fn cursor(&self, caret: CaretPosition) -> Cursor {
         let parley_affinity = caret.affinity.into_affinity();
+
         Cursor::from_byte_index(&self.layout, caret.index, parley_affinity)
     }
 
     fn cursor_position(layout: &Layout<ParleyBrush>, cursor: Cursor) -> (f64, f64) {
         let geometry = cursor.geometry(layout, 0.0);
+
         (geometry.y0, geometry.x0)
     }
 
@@ -827,14 +858,17 @@ impl ParleyLayout {
     ) -> ParleyCaretStops {
         let mut stops = Vec::with_capacity((graphemes.len() + 2) * 2);
         let mut indices = HashMap::with_capacity((graphemes.len() + 2) * 2);
+
         let grapheme_boundaries = std::iter::once(0)
             .chain(graphemes.iter().map(|range| range.end))
             .collect::<HashSet<_>>();
 
         for line in layout.lines() {
             let block = f64::from(line.metrics().block_min_coord);
+
             visit_line_clusters(line, |cluster, advance| {
                 let range = cluster.text_range();
+
                 let (left, right) = if cluster.is_rtl() {
                     (
                         CaretPosition {
@@ -846,6 +880,7 @@ impl ParleyLayout {
                             affinity: CaretAffinity::Downstream,
                         },
                     )
+
                 } else {
                     (
                         CaretPosition {
@@ -876,6 +911,7 @@ impl ParleyLayout {
         if stops.is_empty() {
             let cursor = Cursor::from_byte_index(layout, text_len, Affinity::Upstream);
             let (block, inline) = Self::cursor_position(layout, cursor);
+
             Self::push_caret_stop(
                 &mut stops,
                 &mut indices,
@@ -904,6 +940,7 @@ impl ParleyLayout {
         }
 
         indices.insert(caret, stops.len());
+
         stops.push(ParleyCaretStop {
             caret,
             block,
@@ -921,11 +958,13 @@ impl ParleyLayout {
         let stops = self.caret_stops.get_or_init(|| {
             Self::collect_caret_stops(&self.layout, self.text.len(), self.graphemes())
         });
+
         if let Some(idx) = stops.indices.get(&caret).copied() {
             return Some(idx);
         }
 
         let cursor = self.cursor(caret);
+
         if let Some(idx) = stops.indices.get(&Self::caret_position(cursor)).copied() {
             return Some(idx);
         }
@@ -940,6 +979,7 @@ impl ParleyLayout {
 
         search.ok().or_else(|| {
             let insertion_idx = search.unwrap_err();
+
             [insertion_idx.checked_sub(1), Some(insertion_idx)]
                 .into_iter()
                 .flatten()
@@ -964,6 +1004,7 @@ impl ParleyLayout {
             VisualDirection::Left => index
                 .checked_sub(1)
                 .and_then(|index| caret_stops.stops.get(index)),
+
             VisualDirection::Right => caret_stops.stops.get(index + 1),
         }
         .copied()
@@ -974,6 +1015,7 @@ impl ParleyLayout {
             .get(line_index)
             .map(|line| {
                 let metrics = line.metrics();
+
                 (metrics.block_min_coord + metrics.block_max_coord) * 0.5
             })
             .unwrap_or_else(|| self.layout.height())
@@ -1005,6 +1047,7 @@ impl ParleyLayout {
             let Some(inline_line) = self.inline_lines.get(line_index).copied() else {
                 continue;
             };
+
             visit_line_clusters(line, |cluster, advance| {
                 let left = px(advance.start);
                 let right = px(advance.end);
@@ -1167,6 +1210,7 @@ impl PlatformTextLayout for ParleyLayout {
     ) -> Vec<Bounds<Pixels>> {
         let anchor = Cursor::from_byte_index(&self.layout, byte_range.start, Affinity::Downstream);
         let focus = Cursor::from_byte_index(&self.layout, byte_range.end, Affinity::Upstream);
+
         Selection::new(anchor, focus)
             .geometry(&self.layout)
             .into_iter()
@@ -1195,11 +1239,13 @@ impl PlatformTextLayout for ParleyLayout {
         let geometries = self.inline_cluster_geometry();
         let mut owners = vec![Vec::new(); geometries.len()];
         let mut geometry_order = (0..geometries.len()).collect::<Vec<_>>();
+
         geometry_order.sort_unstable_by_key(|idx| geometries[*idx].text_range.start);
 
         let mut range_order = (0..ranges.len())
             .filter(|idx| !ranges[*idx].is_empty())
             .collect::<Vec<_>>();
+
         range_order.sort_unstable_by_key(|idx| ranges[*idx].start);
 
         let mut active_ranges: Vec<usize> = Vec::new();
@@ -1207,6 +1253,7 @@ impl PlatformTextLayout for ParleyLayout {
 
         for geometry_idx in geometry_order {
             let text_range = &geometries[geometry_idx].text_range;
+
             active_ranges.retain(|range_idx| ranges[*range_idx].end > text_range.start);
 
             while let Some(range_idx) = range_order.get(next_range).copied()
@@ -1255,6 +1302,7 @@ impl PlatformTextLayout for ParleyLayout {
         vertical_navigation_x: Option<Pixels>,
     ) -> CaretMovement {
         let cursor = self.cursor(caret);
+
         let moved = match (movement.direction, movement.boundary) {
             (Direction::Left | Direction::Right, Boundary::Cluster) => {
                 let direction = if movement.direction == Direction::Left {
@@ -1270,20 +1318,26 @@ impl PlatformTextLayout for ParleyLayout {
                     vertical_navigation_x: None,
                 };
             }
+
             (Direction::Left, Boundary::Word) => cursor.previous_visual_word(&self.layout),
             (Direction::Right, Boundary::Word) => cursor.next_visual_word(&self.layout),
+
             (Direction::Start, Boundary::VisualLine) => Selection::from(cursor)
                 .line_start(&self.layout, false)
                 .focus(),
+
             (Direction::End, Boundary::VisualLine) => Selection::from(cursor)
                 .line_end(&self.layout, false)
                 .focus(),
+
             (Direction::Start, Boundary::HardLine) => Selection::from(cursor)
                 .hard_line_start(&self.layout, false)
                 .focus(),
+
             (Direction::End, Boundary::HardLine) => Selection::from(cursor)
                 .hard_line_end(&self.layout, false)
                 .focus(),
+
             (Direction::Start | Direction::End, Boundary::Document) => {
                 let delta = if movement.direction == Direction::Start {
                     isize::MIN
@@ -1295,6 +1349,7 @@ impl PlatformTextLayout for ParleyLayout {
                     .move_lines(&self.layout, delta, false)
                     .focus()
             }
+
             (Direction::Up | Direction::Down, Boundary::VisualLine) => {
                 let delta = if movement.direction == Direction::Up {
                     -1
@@ -1304,11 +1359,14 @@ impl PlatformTextLayout for ParleyLayout {
 
                 let geometry = cursor.geometry(&self.layout, 0.0);
                 let line_index = self.line_index_at_block(geometry.y0 as f32);
+
                 let target_ix = line_index
                     .checked_add_signed(delta)
                     .filter(|&target_ix| self.layout.get(target_ix).is_some());
+
                 let Some(target_ix) = target_ix else {
                     let selection = Selection::from(cursor);
+
                     let moved = if delta < 0 {
                         selection.previous_line(&self.layout, false)
                     } else {
@@ -1323,12 +1381,15 @@ impl PlatformTextLayout for ParleyLayout {
 
                 let x = vertical_navigation_x
                     .map_or_else(|| cursor.geometry(&self.layout, 0.0).x0 as f32, f32::from);
+
                 let moved = Cursor::from_point(&self.layout, x, self.native_y_for_line(target_ix));
+
                 return CaretMovement {
                     result: Self::caret_position(moved),
                     vertical_navigation_x: Some(px(x)),
                 };
             }
+
             _ => cursor,
         };
 
@@ -1347,13 +1408,16 @@ impl PlatformTextLayout for ParleyLayout {
         let line_index = Self::line_index_from_point(pixel_point, line_height);
 
         let y = self.native_y_for_line(line_index);
+
         match kind {
             TextSelectionKind::Word => {
                 Selection::word_from_point(&self.layout, pixel_point.x.into(), y)
             }
+
             TextSelectionKind::VisualLine => {
                 Selection::line_from_point(&self.layout, pixel_point.x.into(), y)
             }
+
             TextSelectionKind::HardLine => {
                 Selection::hard_line_from_point(&self.layout, pixel_point.x.into(), y)
             }
@@ -1413,6 +1477,7 @@ impl ParleyTextSystem {
         rasterizer: impl GlyphRasterizer + 'static,
     ) -> Self {
         let parley = ParleyState::new(system_fonts);
+
         let color_glyph_formats = [
             ColorGlyphKind::ColrV0,
             ColorGlyphKind::ColrV1,
@@ -1423,6 +1488,7 @@ impl ParleyTextSystem {
         .into_iter()
         .filter(|kind| rasterizer.supports_color_glyph(*kind))
         .collect();
+
         let recommended_rendering_mode = rasterizer.recommended_mode();
 
         Self {
@@ -1460,6 +1526,7 @@ impl ParleyTextSystem {
         families: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         self.additional_fallbacks = families.into_iter().map(Into::into).collect();
+
         self
     }
 
@@ -1509,6 +1576,7 @@ impl ParleyTextSystem {
 
     fn parley_layout(&self, params: ParleyLayoutParams<'_>) -> Result<ParleyLayoutResult> {
         let request = params.text;
+
         let (inline_boxes, text_styles, bidi_scopes) = params
             .inline
             .as_ref()
@@ -1527,6 +1595,7 @@ impl ParleyTextSystem {
             runs,
             options,
         } = request;
+
         let run_ranges = run_ranges(runs);
 
         let mut paragraphs = Vec::new();
@@ -1542,6 +1611,7 @@ impl ParleyTextSystem {
 
         for source in paragraph_ranges(text) {
             let first_run = run_ranges.partition_point(|range| range.end <= source.content.start);
+
             let (mut paragraph_run_sources, mut paragraph_runs): (Vec<_>, Vec<_>) = run_ranges
                 .iter()
                 .enumerate()
@@ -1559,8 +1629,10 @@ impl ParleyTextSystem {
                     ))
                 })
                 .unzip();
+
             let first_style =
                 text_styles.partition_point(|style| style.range.end <= source.content.start);
+
             let mut paragraph_styles = text_styles[first_style..]
                 .iter()
                 .take_while(|style| style.range.start < source.content.end)
@@ -1577,6 +1649,7 @@ impl ParleyTextSystem {
             if source.content.is_empty() {
                 if let Some(run) = runs.get(first_run.min(runs.len().saturating_sub(1))) {
                     paragraph_run_sources.push(first_run.min(runs.len().saturating_sub(1)));
+
                     paragraph_runs.push(TextRun {
                         len: 0,
                         ..run.clone()
@@ -1584,6 +1657,7 @@ impl ParleyTextSystem {
                 }
 
                 let style_idx = source.content.start.min(text.len().saturating_sub(1));
+
                 paragraph_styles.extend(
                     text_styles
                         .iter()
@@ -1597,6 +1671,7 @@ impl ParleyTextSystem {
 
             let first_box =
                 inline_boxes.partition_point(|inline_box| inline_box.index < source.content.start);
+
             let paragraph_boxes = inline_boxes[first_box..]
                 .iter()
                 .take_while(|inline_box| {
@@ -1608,6 +1683,7 @@ impl ParleyTextSystem {
                     ..*inline_box
                 })
                 .collect::<Vec<_>>();
+
             let paragraph_bidi_scopes = bidi_scopes
                 .iter()
                 .filter_map(|scope| {
@@ -1618,6 +1694,7 @@ impl ParleyTextSystem {
                     })
                 })
                 .collect::<Vec<_>>();
+
             let mut result = self.parley_paragraph_layout(ParleyLayoutParams {
                 text: TextLayoutRequest {
                     text: &text[source.content.clone()],
@@ -1679,6 +1756,7 @@ impl ParleyTextSystem {
 
             let last_line = result.inline_lines.last().unwrap();
             let newline_width = (result.layout.ascent + result.layout.descent) * 0.25;
+
             let newline = if result.layout.visual_lines[0].direction.is_rtl() {
                 last_line.origin.x - newline_width..last_line.origin.x
             } else {
@@ -1694,6 +1772,7 @@ impl ParleyTextSystem {
                 native: result.layout.platform_layout,
                 newline,
             });
+
             visual_lines.extend(result.layout.visual_lines);
             paint_fragments.extend(result.layout.paint_fragments);
             inline_lines.extend(result.inline_lines);
@@ -1724,6 +1803,7 @@ impl ParleyTextSystem {
         params: ParleyLayoutParams<'_>,
     ) -> Result<ParleyLayoutResult> {
         let request = params.text;
+
         let (inline_boxes, text_styles, line_height, inline_text_metrics, bidi_scopes) =
             match params.inline.as_ref() {
                 Some(inline) => (
@@ -1733,6 +1813,7 @@ impl ParleyTextSystem {
                     Some(inline.text_metrics),
                     inline.bidi_scopes,
                 ),
+
                 None => (&[][..], &[][..], None, None, &[][..]),
             };
 
@@ -1742,6 +1823,7 @@ impl ParleyTextSystem {
             runs,
             options,
         } = request;
+
         let TextLayoutOptions {
             wrap_width,
             line_clamp,
@@ -1750,10 +1832,13 @@ impl ParleyTextSystem {
             direction,
             unicode_bidi,
         } = options;
+
         let wrap = (wrap_width.is_some() || line_clamp.is_some())
             .then_some((wrap_width.unwrap_or(Pixels::MAX), line_clamp));
+
         let source_text_len = text.len();
         let source_runs = runs;
+
         let prepared = prepare_bidi_text(
             text,
             runs,
@@ -1763,20 +1848,25 @@ impl ParleyTextSystem {
             unicode_bidi,
             bidi_scopes,
         );
+
         let text = prepared.text.as_str();
         let runs = prepared.runs.as_slice();
         let text_styles = prepared.text_styles.as_slice();
         let inline_boxes = prepared.inline_boxes.as_slice();
         let run_ranges = run_ranges(runs);
+
         let line_height = if text.is_empty() {
             text_styles
                 .last()
                 .map(|style| style.line_height)
                 .or(line_height)
+
         } else {
             line_height
         };
+
         let paragraph_text: Arc<str> = text.into();
+
         let cache_key = ParagraphCacheKey {
             font_generation: self.font_generation.load(Ordering::Acquire),
             text: paragraph_text.clone(),
@@ -1786,6 +1876,7 @@ impl ParleyTextSystem {
             text_styles: text_styles.to_vec(),
             line_height,
         };
+
         let result_cache_key = ParagraphResultCacheKey {
             paragraph: cache_key.clone(),
             source_map: prepared.map.clone(),
@@ -1816,10 +1907,12 @@ impl ParleyTextSystem {
                             .collect::<Vec<_>>()
                     })
                     .collect::<Vec<_>>();
+
             let feature_lists = runs
                 .iter()
                 .map(|run| {
                     let descriptor = &run.font;
+
                     descriptor
                         .features
                         .tag_value_list()
@@ -1827,6 +1920,7 @@ impl ParleyTextSystem {
                         .map(|(tag, value)| {
                             let tag = Tag::parse(tag)
                                 .with_context(|| format!("invalid OpenType feature tag '{tag}'"))?;
+
                             let value = (*value).try_into().with_context(|| {
                                 format!("OpenType feature '{tag}' value is larger than u16")
                             })?;
@@ -1836,6 +1930,7 @@ impl ParleyTextSystem {
                         .collect::<Result<Vec<_>>>()
                 })
                 .collect::<Result<Vec<_>>>()?;
+
             let inline_optical_settings = self.automatic_optical_sizing.then(|| {
                 text_styles
                     .iter()
@@ -1849,11 +1944,14 @@ impl ParleyTextSystem {
             });
 
             let mut state = self.parley.lock();
+
             let ParleyState {
                 font_context,
                 layout_context,
             } = &mut *state;
+
             let mut builder = layout_context.ranged_builder(font_context, text, 1.0, false);
+
             builder.set_line_break_override(Some(CHROMIUM_LINE_BREAK_OVERRIDE));
             builder.push_default(StyleProperty::FontSize(f32::from(font_size)));
 
@@ -1863,6 +1961,7 @@ impl ParleyTextSystem {
                     f32::from(font_size),
                 )]
             });
+
             if let Some(settings) = &default_optical_settings {
                 builder.push_default(StyleProperty::FontVariations(settings.as_slice().into()));
             }
@@ -1884,6 +1983,7 @@ impl ParleyTextSystem {
             for (run_index, run) in runs.iter().enumerate() {
                 let descriptor = &run.font;
                 let range = run_ranges[run_index].clone();
+
                 if range.is_empty() && !text.is_empty() {
                     continue;
                 }
@@ -1959,6 +2059,7 @@ impl ParleyTextSystem {
             }
 
             let layout = builder.build(text);
+
             self.paragraph_cache
                 .lock()
                 .insert(cache_key, layout.clone());
@@ -1969,7 +2070,9 @@ impl ParleyTextSystem {
         if let Some((wrap_width, max_lines)) = wrap {
             if let Some(max_lines) = max_lines {
                 let mut breaker = layout.break_lines();
+
                 breaker.state_mut().set_layout_max_advance(f32::MAX);
+
                 breaker
                     .state_mut()
                     .set_line_max_advance(f32::from(wrap_width));
@@ -1981,11 +2084,14 @@ impl ParleyTextSystem {
                 }
 
                 breaker.break_remaining(f32::MAX);
+
             } else {
                 layout.break_all_lines(Some(f32::from(wrap_width)));
             }
+
         } else if let Some(alignment_width) = alignment_width {
             let mut breaker = layout.break_lines();
+
             breaker.state_mut().set_layout_max_advance(f32::INFINITY);
             breaker.state_mut().set_line_max_advance(f32::INFINITY);
 
@@ -1994,6 +2100,7 @@ impl ParleyTextSystem {
             }
 
             breaker.finish();
+
         } else {
             layout.break_all_lines(None);
         }
@@ -2038,6 +2145,7 @@ impl ParleyTextSystem {
         } else {
             ResolvedDirection::LeftToRight
         };
+
         let mut visual_lines = Vec::new();
         let mut paint_fragments = Vec::new();
 
@@ -2053,8 +2161,10 @@ impl ParleyTextSystem {
         for (line_index, line) in layout.lines().enumerate() {
             let fragment_start = paint_fragments.len();
             let metrics = *line.metrics();
+
             let line_x =
                 empty_alignment.unwrap_or_else(|| px(metrics.inline_min_coord + metrics.offset));
+
             let line_advance = if empty_alignment.is_some() {
                 Pixels::ZERO
             } else {
@@ -2062,6 +2172,7 @@ impl ParleyTextSystem {
             };
 
             let mut text_metrics = inline_text_metrics.unwrap_or_default();
+
             let leading =
                 ((line_height.unwrap_or_default() - text_metrics.ascent - text_metrics.descent)
                     / 2.)
@@ -2089,14 +2200,17 @@ impl ParleyTextSystem {
                 };
 
                 let run = glyph_run.run();
+
                 let normalized_coords = run
                     .normalized_coords()
                     .iter()
                     .map(|coord| NormalizedCoord::from_bits(coord.to_bits()))
                     .collect::<Vec<_>>();
+
                 let shaping_variations = self
                     .automatic_optical_sizing
                     .then(|| [crate::FontVariation::new(*b"opsz", run.font_size())]);
+
                 let font_id = self.font_instances.write().intern(
                     run.font().data.clone(),
                     run.font().index,
@@ -2111,8 +2225,10 @@ impl ParleyTextSystem {
                 // Resolve leading from the input ranges. Parley 0.11 can report the
                 // following style's line height in a shaped run's cached metrics.
                 let range = run.text_range();
+
                 let first_style =
                     text_styles.partition_point(|style| style.range.end <= range.start);
+
                 let run_line_height = text_styles[first_style..]
                     .iter()
                     .take_while(|style| style.range.start < range.end)
@@ -2139,14 +2255,17 @@ impl ParleyTextSystem {
 
                 let glyphs = {
                     let font_instances = self.font_instances.read();
+
                     let color_glyphs = font_instances
                         .get(font_id)
                         .context("canonical font missing after interning")?
                         .color_glyphs()?;
+
                     glyph_run
                         .positioned_glyphs()
                         .map(|glyph| {
                             let id = GlyphId(glyph.id);
+
                             ShapedGlyph {
                                 id,
                                 position: point(px(glyph.x) - line_x, px(glyph.y - baseline)),
@@ -2160,6 +2279,7 @@ impl ParleyTextSystem {
 
                 let start = px(glyph_run.offset()) - line_x;
                 let source_run = prepared.run_sources[glyph_run.style().brush.source_run];
+
                 paint_fragments.push(PaintFragment {
                     source_run,
                     font_id,
@@ -2176,6 +2296,7 @@ impl ParleyTextSystem {
             }
 
             let parley_text_range = line.text_range();
+
             let text_range = prepared.map.source_range(
                 parley_text_range.start.min(text.len())..parley_text_range.end.min(text.len()),
             );
@@ -2235,11 +2356,13 @@ impl ParleyTextSystem {
         }
 
         let platform_layout = ParleyLayout::new(layout, paragraph_text, inline_lines.clone());
+
         let platform_layout: Arc<dyn PlatformTextLayout> = Arc::new(SourceMappedLayout {
             source_len: source_text_len,
             map: prepared.map,
             inner: Arc::new(platform_layout),
         });
+
         let line_layout = LineLayout {
             font_size,
             width,
@@ -2257,6 +2380,7 @@ impl ParleyTextSystem {
             inline_boxes: positioned_inline_boxes,
             size,
         };
+
         self.paragraph_result_cache
             .lock()
             .insert(result_cache_key, result.clone());
@@ -2271,6 +2395,7 @@ fn run_ranges(runs: &[TextRun]) -> Vec<Range<usize>> {
     runs.iter()
         .map(|run| {
             let range = start..start + run.len;
+
             start = range.end;
 
             range
@@ -2283,6 +2408,7 @@ fn face_families<'a>(
     system_font_fallback: &'a str,
 ) -> impl Iterator<Item = FontFamilyName<'a>> {
     let is_system_font = name == ".SystemUIFont";
+
     let family = if is_system_font {
         system_font_fallback
     } else {
@@ -2306,9 +2432,11 @@ impl PlatformTextSystem for ParleyTextSystem {
 
         {
             let mut state = self.parley.lock();
+
             register_font_blobs(&mut state.font_context, &blobs)?;
 
             let _previous_generation = self.font_generation.fetch_add(1, Ordering::Release);
+
             self.paragraph_cache.lock().clear();
             self.paragraph_result_cache.lock().clear();
         }
@@ -2322,6 +2450,7 @@ impl PlatformTextSystem for ParleyTextSystem {
 
             family_names(&mut state.font_context)
         };
+
         names.push(".SystemUIFont".to_owned());
         names.sort_unstable();
         names.dedup();
@@ -2372,12 +2501,15 @@ impl PlatformTextSystem for ParleyTextSystem {
 
     fn rasterize_glyph(&self, params: &RenderGlyphParams) -> Result<RasterizedGlyph> {
         let font_instances = self.font_instances.read();
+
         let font = font_instances
             .get(params.font_id)
             .context("Parley FontId missing from its store")?;
+
         let data_identity = font.data_identity();
         let face_index = font.index;
         let variations = font.variations.clone();
+
         self.rasterizer
             .lock()
             .rasterize(font.raster_face(params.font_id), params)
@@ -2392,6 +2524,7 @@ impl PlatformTextSystem for ParleyTextSystem {
     fn prepare_raster_style(&self, mut request: RasterStyleRequest) -> PreparedRasterStyle {
         request.foreground_dependency = if request.requested_mode == gpui::GlyphRenderMode::Color {
             let dependency_key = (request.font_id, request.glyph_id);
+
             if let Some(dependency) = self
                 .foreground_dependencies
                 .lock()
@@ -2411,23 +2544,28 @@ impl PlatformTextSystem for ParleyTextSystem {
                         .ok()
                     })
                     .unwrap_or(gpui::ForegroundDependency::Full);
+
                 self.foreground_dependencies
                     .lock()
                     .insert(dependency_key, dependency);
 
                 dependency
             }
+
         } else {
             gpui::ForegroundDependency::Full
         };
 
         let key = request.into();
+
         if let Some(style) = self.raster_styles.lock().get(&key) {
             return style;
         }
 
         let style = self.rasterizer.lock().prepare_style(request);
+
         self.raster_styles.lock().insert(key, style);
+
         style
     }
 
@@ -2487,6 +2625,7 @@ impl PlatformTextSystem for ParleyTextSystem {
 mod tests {
     use super::*;
     use crate::{FontSynthesis, FontVariation, RasterFace};
+
     use gpui::{
         AppContext, CaretSelection, Context, FontFallbacks, FontFeatures as GpuiFontFeatures,
         FontStyle as GpuiFontStyle, FontWeight as GpuiFontWeight, GlyphRenderMode,
@@ -2494,10 +2633,12 @@ mod tests {
         Render, ScaledPixels, StrikethroughStyle, Styled, StyledText, TextSystem, UnderlineStyle,
         VerticalAlign, Window, WindowHandle, WindowTextSystem, div, font, hsla, prelude::*,
     };
+
     use gpui_fonts::{
         IBM_PLEX, IBM_PLEX_SEMIBOLD, LILEX, NOTO_ARABIC, NOTO_COLOR_EMOJI, NOTO_HEBREW, NOTO_SANS,
         SOURCE_SERIF,
     };
+
     use std::{
         cell::Cell,
         cell::RefCell,
@@ -2513,6 +2654,7 @@ mod tests {
         for affinity in [CaretAffinity::Downstream, CaretAffinity::Upstream] {
             let parley_affinity: Affinity = affinity.into_affinity();
             let gpui_affinity: CaretAffinity = parley_affinity.into_affinity();
+
             assert_eq!(gpui_affinity, affinity);
         }
     }
@@ -2529,6 +2671,7 @@ mod tests {
                     NOTO_HEBREW.family,
                 ]),
         );
+
         system
             .add_fonts(vec![
                 Cow::Borrowed(IBM_PLEX.data),
@@ -2541,6 +2684,7 @@ mod tests {
                 Cow::Borrowed(NOTO_HEBREW.data),
             ])
             .unwrap();
+
         system
     }
 
@@ -2610,6 +2754,7 @@ mod tests {
     #[test]
     fn decoration_offsets_are_y_down_from_the_baseline() {
         let system = test_system();
+
         for family in [IBM_PLEX.family, SOURCE_SERIF.family, LILEX.family] {
             let text = "Learn how";
             let layout = layout_line(&system, text, px(16.0), &[text_run(text, family)]);
@@ -2621,15 +2766,18 @@ mod tests {
             // underline sits below the baseline, within the descent, and the
             // strikethrough sits above it, within the ascent.
             assert!(underline > px(0.0), "{family}: underline={underline:?}");
+
             assert!(
                 underline <= layout.descent,
                 "{family}: underline={underline:?}, descent={:?}",
                 layout.descent
             );
+
             assert!(
                 strikethrough < px(0.0),
                 "{family}: strikethrough={strikethrough:?}"
             );
+
             assert!(
                 -strikethrough < layout.ascent,
                 "{family}: strikethrough={strikethrough:?}, ascent={:?}",
@@ -2641,12 +2789,14 @@ mod tests {
     #[test]
     fn empty_directional_text_without_runs_keeps_metrics_without_paint() {
         let system = test_system();
+
         {
             // Give Parley a default font for synthetic bidi markers without
             // depending on installed system fonts or an explicit text run.
             let mut state = system.parley.lock();
             let collection = &mut state.font_context.collection;
             let family = collection.family_id(IBM_PLEX.family).unwrap();
+
             collection.set_generic_families(GenericFamily::SansSerif, std::iter::once(family));
         }
 
@@ -2785,13 +2935,17 @@ mod tests {
                     ..Default::default()
                 },
             );
+
             let native = &layout.platform_layout;
+
             let expected_direction = match direction {
                 ParagraphDirection::RightToLeft => ResolvedDirection::RightToLeft,
                 _ => ResolvedDirection::LeftToRight,
             };
+
             assert_eq!(layout.len, text.len(), "{name}");
             assert_eq!(native.len(), text.len(), "{name}");
+
             assert_eq!(
                 layout.visual_lines[0].direction, expected_direction,
                 "{name}"
@@ -2800,6 +2954,7 @@ mod tests {
             let start = native
                 .caret_bounds(CaretPosition::attached_to_next_cluster(0), line_height)
                 .unwrap();
+
             assert_eq!(
                 start.origin.x > px(100.0),
                 right_aligned,
@@ -2811,6 +2966,7 @@ mod tests {
             }
 
             let selection = native.selection_bounds(0..text.len(), line_height);
+
             assert!(!selection.is_empty(), "{name}");
 
             if right_aligned {
@@ -2828,12 +2984,14 @@ mod tests {
                 CaretPosition::attached_to_previous_cluster(text.len()),
             ] {
                 let bounds = native.caret_bounds(expected, line_height).unwrap();
+
                 let hit = native
                     .caret_from_pixel_point(
                         bounds.origin + point(px(0.0), line_height / 2.0),
                         line_height,
                     )
                     .unwrap_or_else(|caret| caret);
+
                 assert_eq!(hit, expected, "{name}");
             }
         }
@@ -2845,11 +3003,13 @@ mod tests {
         let text = "A אב B";
         let hebrew = text.find('א').unwrap()..text.find('ב').unwrap() + 'ב'.len_utf8();
         let runs = [text_run(text, "IBM Plex Sans")];
+
         let scopes = [InlineBidiScope {
             range: hebrew,
             direction: ResolvedDirection::RightToLeft,
             unicode_bidi: UnicodeBidi::IsolateOverride,
         }];
+
         let layout = system.layout_inline(InlineLayoutRequest {
             text,
             font_size: px(16.0),
@@ -2868,6 +3028,7 @@ mod tests {
 
         assert_eq!(layout.layout.len, text.len());
         assert_eq!(layout.layout.platform_layout.len(), text.len());
+
         assert_eq!(
             layout
                 .layout
@@ -2884,6 +3045,7 @@ mod tests {
                 .layout
                 .platform_layout
                 .normalized_caret(CaretPosition::attached_to_next_cluster(idx));
+
             assert!(caret.index <= text.len());
         }
 
@@ -2891,12 +3053,14 @@ mod tests {
             .layout
             .platform_layout
             .selection_bounds(0..text.len(), px(24.0));
+
         assert!(!selection.is_empty());
     }
 
     #[test]
     fn result_cache_keeps_source_maps_for_authored_directional_controls() {
         let system = test_system();
+
         let explicit = layout_with_options(
             &system,
             "a",
@@ -2908,7 +3072,9 @@ mod tests {
                 ..Default::default()
             },
         );
+
         let source = "\u{200e}a";
+
         let authored_control = system.layout_text(TextLayoutRequest {
             text: source,
             font_size: px(16.0),
@@ -2929,11 +3095,13 @@ mod tests {
         let system = test_system();
         let text = "abc";
         let runs = [text_run(text, "IBM Plex Sans")];
+
         let scopes = [InlineBidiScope {
             range: 0..text.len(),
             direction: ResolvedDirection::RightToLeft,
             unicode_bidi: UnicodeBidi::IsolateOverride,
         }];
+
         let layout = system.layout_inline(InlineLayoutRequest {
             text,
             font_size: px(16.0),
@@ -2948,6 +3116,7 @@ mod tests {
             },
             bidi_scopes: &scopes,
         });
+
         let positions = [0..1, 1..2, 2..3].map(|range| {
             layout
                 .layout
@@ -2967,6 +3136,7 @@ mod tests {
     fn plaintext_resolves_each_hard_paragraph_and_neutral_lines_fall_back_to_ltr() {
         let system = test_system();
         let text = "مرحبا\n123 …\nEnglish\n";
+
         let layout = system.layout_text(TextLayoutRequest {
             text,
             font_size: px(16.0),
@@ -2991,6 +3161,7 @@ mod tests {
                 ResolvedDirection::LeftToRight,
             ]
         );
+
         assert!(layout.visual_lines[0].offset > px(100.0));
         assert_eq!(layout.visual_lines[1].offset, Pixels::ZERO);
         assert_eq!(layout.visual_lines[3].text_range, text.len()..text.len());
@@ -3013,16 +3184,19 @@ mod tests {
             inline_box.id,
             inline_box.line_index
         );
+
         inline_box.bounds
     }
 
     fn assert_inline_geometry_is_contained(layout: &InlineLayout, width: Pixels) {
         let epsilon = px(0.01);
+
         for (line_index, line) in layout.lines.iter().enumerate() {
             assert!(
                 line.origin.x + line.size.width <= width + epsilon,
                 "line {line_index} extends past {width:?}: {line:?}"
             );
+
             assert!(
                 line.origin.y + line.size.height <= layout.size.height + epsilon,
                 "line {line_index} extends past the layout height"
@@ -3032,11 +3206,13 @@ mod tests {
         for inline_box in &layout.boxes {
             let bounds = positioned_box_bounds(layout, inline_box);
             let line = layout.lines[inline_box.line_index];
+
             assert!(
                 bounds.right() <= width + epsilon,
                 "inline box {} extends past the available width",
                 inline_box.id
             );
+
             assert!(
                 bounds.origin.y + epsilon >= line.origin.y
                     && bounds.bottom() <= line.origin.y + line.size.height + epsilon,
@@ -3050,11 +3226,14 @@ mod tests {
         assert_eq!(layout.len, text.len());
         assert!(!layout.visual_lines.is_empty());
         assert_eq!(layout.visual_lines[0].text_range.start, 0);
+
         assert_eq!(
             layout.visual_lines.last().unwrap().text_range.end,
             text.len()
         );
+
         assert_eq!(layout.visual_lines[0].paint_fragment_range.start, 0);
+
         assert_eq!(
             layout.visual_lines.last().unwrap().paint_fragment_range.end,
             layout.paint_fragments.len()
@@ -3062,6 +3241,7 @@ mod tests {
 
         for pair in layout.visual_lines.windows(2) {
             assert_eq!(pair[0].text_range.end, pair[1].text_range.start);
+
             assert_eq!(
                 pair[0].paint_fragment_range.end,
                 pair[1].paint_fragment_range.start
@@ -3071,15 +3251,18 @@ mod tests {
         for line in &layout.visual_lines {
             assert!(text.is_char_boundary(line.text_range.start));
             assert!(text.is_char_boundary(line.text_range.end));
+
             assert!(
                 f32::from(line.advance_width).is_finite() && line.advance_width >= Pixels::ZERO
             );
+
             for fragment in &layout.paint_fragments[line.paint_fragment_range.clone()] {
                 assert!(f32::from(fragment.x_range.start).is_finite());
                 assert!(f32::from(fragment.x_range.end).is_finite());
                 assert!(fragment.x_range.start <= fragment.x_range.end);
                 assert!(fragment.x_range.start >= -layout.font_size * 2.0);
                 assert!(fragment.x_range.end <= line.advance_width + layout.font_size * 2.0);
+
                 for glyph in &*fragment.glyphs {
                     assert!(f32::from(glyph.position.x).is_finite());
                     assert!(f32::from(glyph.position.y).is_finite());
@@ -3091,15 +3274,20 @@ mod tests {
     fn assert_document_navigation(text: &str, layout: &LineLayout) {
         let line_height = px(24.0);
         let wrapped = shaped_text_layout(layout.clone(), px(120.0));
+
         let mut caret = wrapped
             .closest_caret_for_pixel_point(point(px(-100.0), line_height * 0.5), line_height)
             .unwrap_err();
+
         let mut seen = Vec::new();
         let max_steps = text.chars().count() * 4 + wrapped.line_count() * 4 + 8;
+
         for _ in 0..max_steps {
             assert!(text.is_char_boundary(caret.index));
             assert!(!seen.contains(&caret), "visual caret traversal cycled");
+
             seen.push(caret);
+
             let Some(next) = wrapped.adjacent_visual_caret(caret, VisualDirection::Right) else {
                 break;
             };
@@ -3112,6 +3300,7 @@ mod tests {
                 .adjacent_visual_caret(caret, VisualDirection::Right)
                 .is_none()
         );
+
         for _ in 0..max_steps {
             let Some(previous) = wrapped.adjacent_visual_caret(caret, VisualDirection::Left) else {
                 break;
@@ -3131,6 +3320,7 @@ mod tests {
             let bounds = wrapped
                 .visual_position_for_caret(caret, line_height)
                 .expect("native caret must have geometry");
+
             assert!(f32::from(bounds.x).is_finite() && f32::from(bounds.y).is_finite());
         }
 
@@ -3148,6 +3338,7 @@ mod tests {
         let system = test_system();
 
         let text = "small\nBIG words\nend";
+
         let runs = [TextRun {
             len: text.len(),
             font: font("IBM Plex Sans"),
@@ -3182,11 +3373,13 @@ mod tests {
         });
 
         assert_eq!(layout.lines.len(), 3);
+
         assert!(
             layout.lines[1].size.height >= px(45.99),
             "{:?}",
             layout.lines
         );
+
         assert!(
             layout
                 .layout
@@ -3194,6 +3387,7 @@ mod tests {
                 .iter()
                 .any(|fragment| fragment.font_size == px(30.))
         );
+
         assert!(
             layout
                 .layout
@@ -3207,6 +3401,7 @@ mod tests {
             .platform_layout
             .inline_geometry(16..19)
             .unwrap();
+
         assert_eq!(native.len(), 1);
         assert_eq!(native[0].visual_line_index, 2);
         assert!(native[0].bounds.origin.y >= px(65.99), "{native:?}");
@@ -3215,6 +3410,7 @@ mod tests {
             .layout
             .platform_layout
             .selection_bounds(16..19, px(20.));
+
         assert_eq!(
             selection[0].origin.y,
             px(40.),
@@ -3230,6 +3426,7 @@ mod tests {
                 .is_empty(),
             "newlines add no span hit region"
         );
+
         assert!(
             layout
                 .layout
@@ -3243,6 +3440,7 @@ mod tests {
                 .layout
                 .platform_layout
                 .inline_geometry_for_ranges(&[6..6, 5..6, 16..19]);
+
         assert_eq!(batched.len(), 3);
         assert!(batched[0].is_empty());
         assert!(batched[1].is_empty());
@@ -3326,6 +3524,7 @@ mod tests {
 
         assert!(layout.lines.len() >= 2);
         assert_eq!(layout.lines.len(), layout.layout.visual_lines.len());
+
         assert_eq!(
             layout
                 .boxes
@@ -3334,8 +3533,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![7, 9, 11, 13]
         );
+
         assert!(layout.size.width <= px(160.0));
         assert!(layout.lines.iter().any(|line| line.origin.x > Pixels::ZERO));
+
         assert!(
             layout
                 .layout
@@ -3343,6 +3544,7 @@ mod tests {
                 .iter()
                 .any(|fragment| fragment.style.color == first_color)
         );
+
         assert!(
             layout
                 .layout
@@ -3357,26 +3559,35 @@ mod tests {
                 .iter()
                 .find(|inline_box| inline_box.id == box_id)
                 .unwrap();
+
             let line = &layout.lines[inline_box.line_index];
             let bounds = positioned_box_bounds(&layout, inline_box);
+
             (bounds, line)
         };
 
         let (baseline_box, baseline_line) = box_and_line(7);
+
         assert!(
             (baseline_box.bottom() - (baseline_line.origin.y + baseline_line.baseline)).abs()
                 < px(0.01)
         );
+
         let (middle_box, middle_line) = box_and_line(9);
+
         assert!(
             (middle_box.center().y
                 - (middle_line.origin.y + middle_line.baseline - text_metrics.x_height / 2.))
                 .abs()
                 < px(0.01)
         );
+
         let (top_box, top_line) = box_and_line(11);
+
         assert!((top_box.origin.y - top_line.origin.y).abs() < px(0.01));
+
         let (bottom_box, bottom_line) = box_and_line(13);
+
         assert!(
             (bottom_box.bottom() - (bottom_line.origin.y + bottom_line.size.height)).abs()
                 < px(0.01)
@@ -3392,6 +3603,7 @@ mod tests {
     #[test]
     fn inline_layout_supports_documents_containing_only_boxes() {
         let system = test_system();
+
         let boxes = [
             InlineBoxRequest {
                 id: 1,
@@ -3430,6 +3642,7 @@ mod tests {
         assert_eq!(layout.boxes.len(), 2);
         assert_eq!(layout.lines.len(), 2);
         assert_eq!(layout.layout.paint_fragments.len(), 0);
+
         assert_eq!(
             layout
                 .boxes
@@ -3438,8 +3651,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0, 1]
         );
+
         assert_eq!(layout.size.width, px(30.0));
         assert!(layout.size.height >= px(48.0));
+
         assert_inline_geometry_is_contained(&layout, layout.size.width);
     }
 
@@ -3458,6 +3673,7 @@ mod tests {
     #[test]
     fn paragraph_paint_and_carets_match_independent_layouts() {
         let system = test_system();
+
         for text in paragraph_samples() {
             for width in [px(500.), px(90.)] {
                 let document = layout_wrapped(
@@ -3481,10 +3697,13 @@ mod tests {
                         let left_position = shaped
                             .visual_position_for_byte_index(left_idx, px(24.))
                             .unwrap();
+
                         let right_position = shaped
                             .visual_position_for_byte_index(right_idx, px(24.))
                             .unwrap();
+
                         assert_eq!(left_position.y, right_position.y);
+
                         assert!(
                             left_position.x < right_position.x,
                             "{left} must precede {right}"
@@ -3496,6 +3715,7 @@ mod tests {
 
                 for source in paragraph_ranges(&text) {
                     let content = &text[source.content.clone()];
+
                     let independent = layout_wrapped(
                         &system,
                         content,
@@ -3507,7 +3727,9 @@ mod tests {
 
                     for (idx, expected) in independent.visual_lines.iter().enumerate() {
                         let actual = &document.visual_lines[first_line + idx];
+
                         assert_eq!(actual.advance_width, expected.advance_width);
+
                         assert_eq!(
                             document.paint_fragments[actual.paint_fragment_range.clone()],
                             independent.paint_fragments[expected.paint_fragment_range.clone()],
@@ -3524,14 +3746,17 @@ mod tests {
                                 index: idx,
                                 affinity,
                             };
+
                             let global = CaretPosition {
                                 index: source.content.start + idx,
                                 affinity,
                             };
+
                             let mut expected = independent
                                 .platform_layout
                                 .caret_bounds(local, px(24.))
                                 .unwrap();
+
                             expected.origin.y += px(24.) * first_line;
 
                             assert_eq!(
@@ -3545,6 +3770,7 @@ mod tests {
                 }
 
                 assert_eq!(first_line, document.visual_lines.len());
+
                 assert!(
                     document
                         .paint_fragments
@@ -3557,13 +3783,16 @@ mod tests {
         }
 
         let arabic = "مرحبا بالعالم";
+
         let layout = layout_line(
             &system,
             arabic,
             px(24.),
             &[text_run(arabic, "Noto Sans Arabic")],
         );
+
         let fragment = &layout.paint_fragments[0];
+
         let nominal = arabic
             .chars()
             .map(|character| system.glyph_for_char(fragment.font_id, character).unwrap())
@@ -3580,6 +3809,7 @@ mod tests {
 
     fn assert_paragraph_break_interaction(system: &ParleyTextSystem) {
         let text = "שלום עולם\r\n\nabc אבג def\u{2029}مرحبا بالعالم\n";
+
         let layout = layout_wrapped(
             system,
             text,
@@ -3588,18 +3818,22 @@ mod tests {
             px(100.),
             None,
         );
+
         let native = &layout.platform_layout;
         let line_height = px(24.);
         let geometry = |caret| native.caret_bounds(caret, line_height).unwrap();
+
         let mut caret = native
             .caret_from_pixel_point(point(px(-100.), px(12.)), line_height)
             .unwrap_err();
+
         let mut steps = 0;
 
         while let Some(next) = native.adjacent_visual_caret(caret, VisualDirection::Right) {
             let previous = native
                 .adjacent_visual_caret(next, VisualDirection::Left)
                 .unwrap_or_else(|| panic!("cannot reverse {caret:?} -> {next:?}"));
+
             assert_eq!(
                 geometry(previous),
                 geometry(caret),
@@ -3607,16 +3841,20 @@ mod tests {
             );
 
             let bounds = geometry(next);
+
             let hit = native
                 .caret_from_pixel_point(
                     point(bounds.origin.x, bounds.origin.y + line_height / 2.),
                     line_height,
                 )
                 .unwrap_or_else(|caret| caret);
+
             assert_eq!(geometry(hit), bounds);
             assert!(text.is_char_boundary(next.index));
+
             caret = next;
             steps += 1;
+
             assert!(steps < text.len() * 4);
         }
 
@@ -3629,19 +3867,23 @@ mod tests {
 
             let before = CaretPosition::attached_to_next_cluster(source.separator.start);
             let after = CaretPosition::attached_to_next_cluster(source.separator.end);
+
             assert_eq!(
                 native.logical_cluster_after(before),
                 Some(source.separator.clone())
             );
+
             assert_eq!(
                 native.logical_cluster_before(after),
                 Some(source.separator.clone())
             );
+
             assert!(
                 !native
                     .selection_bounds(source.separator.clone(), line_height)
                     .is_empty()
             );
+
             assert!(
                 native
                     .inline_geometry(source.separator.clone())
@@ -3650,11 +3892,13 @@ mod tests {
             );
 
             let position = geometry(before).origin + point(px(0.), line_height / 2.);
+
             let selected = native.selection_from_pixel_point(
                 position,
                 line_height,
                 TextSelectionKind::HardLine,
             );
+
             assert_eq!(selected, source.content.start..source.separator.end);
 
             for (movement, expected) in [
@@ -3676,18 +3920,22 @@ mod tests {
 
         let crlf = text.find('\r').unwrap();
         let inside = CaretPosition::attached_to_next_cluster(crlf + 1);
+
         assert_eq!(native.normalized_caret(inside).index, crlf);
 
         let start = CaretPosition::default();
+
         let down = native.caret_movement(
             start,
             Direction::Down.with_boundary(Boundary::VisualLine),
             None,
         );
+
         assert_eq!(
             geometry(down.result).origin.y,
             geometry(start).origin.y + line_height
         );
+
         assert_eq!(down.vertical_navigation_x, Some(geometry(start).origin.x));
 
         let mut vertical_caret = start;
@@ -3699,6 +3947,7 @@ mod tests {
                 Direction::Down.with_boundary(Boundary::VisualLine),
                 vertical_navigation_x,
             );
+
             vertical_caret = moved.result;
             vertical_navigation_x = moved.vertical_navigation_x;
 
@@ -3712,6 +3961,7 @@ mod tests {
                 Direction::Up.with_boundary(Boundary::VisualLine),
                 vertical_navigation_x,
             );
+
             vertical_caret = moved.result;
             vertical_navigation_x = moved.vertical_navigation_x;
 
@@ -3723,6 +3973,7 @@ mod tests {
             Direction::Start.with_boundary(Boundary::Document),
             None,
         );
+
         assert_eq!(
             document_start.result,
             CaretPosition::attached_to_next_cluster(0)
@@ -3733,6 +3984,7 @@ mod tests {
             Direction::End.with_boundary(Boundary::Document),
             None,
         );
+
         assert_eq!(
             document_end.result,
             CaretPosition::attached_to_previous_cluster(text.len())
@@ -3743,18 +3995,23 @@ mod tests {
                 VisualDirection::Left => Direction::Left.with_boundary(Boundary::Word),
                 VisualDirection::Right => Direction::Right.with_boundary(Boundary::Word),
             };
+
             let edge_x = match direction {
                 VisualDirection::Left => px(-100.),
                 VisualDirection::Right => px(10_000.),
             };
+
             let empty_row = native
                 .caret_from_pixel_point(point(edge_x, line_height * 1.5), line_height)
                 .unwrap_or_else(|caret| caret);
+
             let word = native.caret_movement(empty_row, movement, None).result;
+
             assert_ne!(geometry(word).origin.y, geometry(empty_row).origin.y);
         }
 
         let selected = native.selection_bounds(0..text.len(), line_height);
+
         assert!(
             selected
                 .windows(2)
@@ -3768,7 +4025,9 @@ mod tests {
             let selection = layout
                 .platform_layout
                 .selection_bounds(source.separator, line_height);
+
             let bounds = selection[0];
+
             assert_eq!(bounds.origin.y, line_height * line_index);
 
             if line_index == 0 {
@@ -3784,6 +4043,7 @@ mod tests {
         let system = test_system();
         let text = "אבג\r\nalpha مرحبا omega\r\n\r\n";
         let split = text.find("مرحبا").unwrap();
+
         let runs = [
             TextRun {
                 len: split,
@@ -3800,12 +4060,15 @@ mod tests {
                 ..text_run(text, "IBM Plex Sans")
             },
         ];
+
         let styles = [InlineTextStyle {
             range: split..text.len(),
             font_size: px(26.),
             line_height: px(48.),
         }];
+
         let separator = text.find('\r').unwrap();
+
         let boxes = [0, separator, separator + 1, separator + 2, text.len()]
             .into_iter()
             .enumerate()
@@ -3837,15 +4100,19 @@ mod tests {
                 },
                 bidi_scopes: &[],
             });
+
             let mut ids = inline
                 .boxes
                 .iter()
                 .map(|inline_box| inline_box.id)
                 .collect::<Vec<_>>();
+
             ids.sort_unstable();
 
             assert_eq!(ids, vec![0, 1, 2, 3, 4]);
+
             assert_inline_geometry_is_contained(&inline, px(260.));
+
             assert_eq!(inline.layout.len, text.len());
 
             for inline_box in &inline.boxes {
@@ -3867,6 +4134,7 @@ mod tests {
             }
 
             let empty_line = inline.lines[inline.lines.len() - 2];
+
             let empty_caret = inline
                 .layout
                 .platform_layout
@@ -3875,6 +4143,7 @@ mod tests {
                     px(28.),
                 )
                 .unwrap();
+
             assert_eq!(empty_line.size.width, Pixels::ZERO);
             assert_eq!(empty_caret.origin.x, empty_line.origin.x);
 
@@ -3886,6 +4155,7 @@ mod tests {
                     .any(|fragment| fragment.style.color == runs[0].color
                         && fragment.style.underline.is_some())
             );
+
             assert!(
                 inline
                     .layout
@@ -3900,6 +4170,7 @@ mod tests {
                 .platform_layout
                 .inline_geometry(split..text.len())
                 .unwrap();
+
             assert!(regions.iter().all(|geometry| geometry.bounds.origin.y
                 >= inline.lines[geometry.visual_line_index].origin.y));
         }
@@ -3913,6 +4184,7 @@ mod tests {
 
         for max_lines in [None, Some(0), Some(1), Some(3), Some(8)] {
             let document = layout_wrapped(&system, text, px(18.), &runs, px(80.), max_lines);
+
             let previous = system
                 .parley_paragraph_layout(ParleyLayoutParams {
                     text: TextLayoutRequest {
@@ -4048,6 +4320,7 @@ mod tests {
 
         for case in document_cases() {
             let layout = layout_document_case(&system, &case);
+
             assert_document_structure(&case.text, &layout);
 
             if case.exact_line_count {
@@ -4080,6 +4353,7 @@ mod tests {
 
         for case in document_cases() {
             let layout = layout_document_case(&system, &case);
+
             assert_document_navigation(&case.text, &layout);
         }
 
@@ -4090,6 +4364,7 @@ mod tests {
     #[test]
     fn wrapping_does_not_move_breaks_forward_as_width_shrinks() {
         let system = test_system();
+
         let cases = [
             (
                 "code punctuation",
@@ -4116,14 +4391,17 @@ mod tests {
         for (name, text, family) in cases {
             let runs = [text_run(text, family)];
             let mut previous_end = text.len();
+
             for half_width in (200..=1200).rev() {
                 let width = px(half_width as f32 / 2.0);
                 let layout = layout_wrapped(&system, text, px(16.0), &runs, width, None);
                 let first_line_end = layout.visual_lines[0].text_range.end;
+
                 assert!(
                     first_line_end <= previous_end,
                     "{name}: first break moved forward at {width:?}: {previous_end} -> {first_line_end}"
                 );
+
                 previous_end = first_line_end;
             }
         }
@@ -4136,11 +4414,14 @@ mod tests {
         let first_end = "office ".len();
         let second_end = first_end + "café ".len();
         let mut first_font = font(SOURCE_SERIF.family);
+
         first_font.features = GpuiFontFeatures::disable_ligatures();
+
         first_font.fallbacks = Some(FontFallbacks::from_fonts(vec![
             IBM_PLEX.family.into(),
             NOTO_COLOR_EMOJI.family.into(),
         ]));
+
         let base_runs = vec![
             TextRun {
                 len: first_end,
@@ -4162,8 +4443,11 @@ mod tests {
                 ..Default::default()
             },
         ];
+
         let mut left = text_run("left ", NOTO_SANS.family);
+
         left.font.width = gpui::FontWidth::CONDENSED;
+
         let right = text_run("right", IBM_PLEX.family);
 
         for (name, text, original_runs, font_size) in [
@@ -4182,11 +4466,13 @@ mod tests {
             }
 
             decorated_runs[0].background_color = Some(hsla(0.1, 0.5, 0.5, 0.3));
+
             decorated_runs[0].underline = Some(UnderlineStyle {
                 thickness: px(1.5),
                 color: None,
                 wavy: true,
             });
+
             decorated_runs[1].strikethrough = Some(StrikethroughStyle {
                 thickness: px(1.0),
                 color: None,
@@ -4194,6 +4480,7 @@ mod tests {
 
             let original = layout_line(&system, text, font_size, &original_runs);
             let decorated = layout_line(&system, text, font_size, &decorated_runs);
+
             let geometry = |layout: &LineLayout| {
                 layout
                     .paint_fragments
@@ -4210,8 +4497,10 @@ mod tests {
                     })
                     .collect::<Vec<_>>()
             };
+
             assert_eq!(original.width, decorated.width, "{name}");
             assert_eq!(geometry(&original), geometry(&decorated), "{name}");
+
             assert!(
                 Arc::ptr_eq(&original.platform_layout, &decorated.platform_layout),
                 "{name}"
@@ -4223,7 +4512,9 @@ mod tests {
                     .iter()
                     .filter(|fragment| fragment.source_run == idx)
                     .collect::<Vec<_>>();
+
                 assert!(!fragments.is_empty(), "{name}: missing authored run {idx}");
+
                 assert!(
                     fragments
                         .iter()
@@ -4241,27 +4532,33 @@ mod tests {
         let runs = [text_run(text, NOTO_SANS.family)];
         let normal = layout_line(&system, text, px(18.0), &runs);
         let mut condensed_runs = runs.clone();
+
         condensed_runs[0].font.width = gpui::FontWidth::CONDENSED;
+
         let condensed = layout_line(&system, text, px(18.0), &condensed_runs);
         let wrap_width = (normal.width + condensed.width) / 2.0;
 
         assert!(condensed.width < normal.width);
+
         assert_eq!(
             layout_wrapped(&system, text, px(18.0), &runs, wrap_width, None)
                 .visual_lines
                 .len(),
             2
         );
+
         assert_eq!(
             layout_wrapped(&system, text, px(18.0), &condensed_runs, wrap_width, None)
                 .visual_lines
                 .len(),
             1
         );
+
         assert_eq!(system.paragraph_cache.lock().entries.len(), 2);
         assert_eq!(system.paragraph_result_cache.lock().entries.len(), 4);
 
         let restored = layout_line(&system, text, px(18.0), &runs);
+
         assert!(Arc::ptr_eq(
             &normal.platform_layout,
             &restored.platform_layout
@@ -4269,6 +4566,7 @@ mod tests {
 
         let first = "stable paragraph\nfirst ending";
         let second = "stable paragraph\nsecond ending";
+
         layout_wrapped(
             &system,
             first,
@@ -4277,7 +4575,9 @@ mod tests {
             px(120.0),
             None,
         );
+
         let cache_entries = system.paragraph_cache.lock().entries.len();
+
         layout_wrapped(
             &system,
             second,
@@ -4304,6 +4604,7 @@ mod tests {
         impl GlyphRasterizer for PolicyRasterizer {
             fn prepare_style(&self, request: RasterStyleRequest) -> PreparedRasterStyle {
                 self.prepare_calls.fetch_add(1, Ordering::SeqCst);
+
                 PreparedRasterStyle::independent(request.requested_mode)
             }
 
@@ -4317,12 +4618,14 @@ mod tests {
 
             fn recommended_mode(&self) -> TextRenderingMode {
                 self.recommended_calls.fetch_add(1, Ordering::SeqCst);
+
                 TextRenderingMode::Grayscale
             }
         }
 
         let prepare_calls = Arc::new(AtomicUsize::new(0));
         let recommended_calls = Arc::new(AtomicUsize::new(0));
+
         let system = ParleyTextSystem::new_with_rasterizer(
             SystemFonts::Skip,
             "IBM Plex Sans",
@@ -4331,6 +4634,7 @@ mod tests {
                 recommended_calls: recommended_calls.clone(),
             },
         );
+
         let request = RasterStyleRequest {
             font_id: FontId(1),
             glyph_id: GlyphId(1),
@@ -4347,15 +4651,19 @@ mod tests {
                 ..request
             })
         );
+
         assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
+
         assert_eq!(
             system.recommended_rendering_mode(FontId(1), px(16.0)),
             TextRenderingMode::Grayscale
         );
+
         assert_eq!(
             system.recommended_rendering_mode(FontId(2), px(24.0)),
             TextRenderingMode::Grayscale
         );
+
         assert_eq!(recommended_calls.load(Ordering::SeqCst), 1);
     }
 
@@ -4365,16 +4673,20 @@ mod tests {
             ParleyTextSystem::new_with_system_font(SystemFonts::Skip, IBM_PLEX.family)
                 .with_fallback_families([IBM_PLEX.family]),
         );
+
         backend
             .add_fonts(vec![Cow::Borrowed(IBM_PLEX.data)])
             .unwrap();
+
         let text_system = Arc::new(TextSystem::new(backend.clone()));
         let window_text_system = WindowTextSystem::new(text_system);
         let text = "registered later";
         let run = text_run(text, SOURCE_SERIF.family);
+
         let before = window_text_system
             .shape_text(text, px(18.0), std::slice::from_ref(&run), None, None)
             .unwrap();
+
         let fallback_id = before.paint_fragments[0].font_id;
 
         backend
@@ -4383,32 +4695,45 @@ mod tests {
                 Cow::Borrowed(NOTO_SANS.data),
             ])
             .unwrap();
+
         let after = window_text_system
             .shape_text(text, px(18.0), &[run], None, None)
             .unwrap();
+
         assert_ne!(fallback_id, after.paint_fragments[0].font_id);
+
         let source_serif_regular = backend.font_id(&font("Source Serif 4")).unwrap();
+
         assert_eq!(after.paint_fragments[0].font_id, source_serif_regular);
 
         backend
             .add_fonts(vec![Cow::Borrowed(IBM_PLEX_SEMIBOLD.data)])
             .unwrap();
+
         let regular = backend.font_id(&font(IBM_PLEX.family)).unwrap();
         let bold = backend.font_id(&font(IBM_PLEX.family).bold()).unwrap();
+
         assert_ne!(regular, bold);
 
         let mut variable = font(SOURCE_SERIF.family);
+
         variable.weight = GpuiFontWeight(725.0);
         variable.style = GpuiFontStyle::Oblique;
+
         let variable_id = backend.font_id(&variable).unwrap();
         let source_serif_regular = backend.font_id(&font(SOURCE_SERIF.family)).unwrap();
+
         assert_ne!(source_serif_regular, variable_id);
 
         let mut run = text_run("H", NOTO_SANS.family);
+
         run.font.weight = GpuiFontWeight(725.0);
+
         let normal_id = backend.font_id(&run.font).unwrap();
         let normal = window_text_system.layout_line("H", px(32.0), &[run.clone()]);
+
         run.font.width = gpui::FontWidth(82.5);
+
         let condensed_id = backend.font_id(&run.font).unwrap();
         let condensed = window_text_system.layout_line("H", px(32.0), &[run.clone()]);
 
@@ -4419,13 +4744,17 @@ mod tests {
         let glyph_id = condensed.paint_fragments[0].glyphs[0].id;
         let advance = backend.advance(condensed_id, glyph_id).unwrap().width;
         let units_per_em = backend.font_metrics(condensed_id).units_per_em as f32;
+
         assert!((condensed.width - px(advance / units_per_em * 32.0)).abs() < px(0.01));
 
         run.font.width = gpui::FontWidth::EXPANDED;
+
         assert_eq!(backend.font_id(&run.font).unwrap(), normal_id);
 
         let mut static_font = font(IBM_PLEX.family);
+
         static_font.width = gpui::FontWidth::CONDENSED;
+
         assert_eq!(backend.font_id(&static_font).unwrap(), regular);
     }
 
@@ -4433,20 +4762,24 @@ mod tests {
         for text in ["👩🏽‍💻", "👨‍👩‍👧‍👦", "🇬🇧", "ก้"] {
             let layout = layout_line(system, text, px(22.0), &[text_run(text, IBM_PLEX.family)]);
             let wrapped = shaped_text_layout(layout, px(500.0));
+
             assert_eq!(
                 wrapped.logical_cluster_after(CaretPosition::default()),
                 Some(0..text.len()),
                 "{text:?} must be one editable cluster"
             );
+
             let end = wrapped
                 .platform_layout
                 .adjacent_visual_caret(CaretPosition::default(), VisualDirection::Right)
                 .unwrap();
+
             assert_eq!(
                 end.index,
                 text.len(),
                 "{text:?} must have no internal caret"
             );
+
             assert_eq!(
                 wrapped
                     .platform_layout
@@ -4459,6 +4792,7 @@ mod tests {
         }
 
         let single_line_text = "abcd";
+
         let single_line = shaped_text_layout(
             layout_line(
                 system,
@@ -4468,7 +4802,9 @@ mod tests {
             ),
             px(500.0),
         );
+
         let middle = CaretPosition::attached_to_next_cluster(2);
+
         assert_eq!(
             single_line
                 .caret_movement(
@@ -4480,6 +4816,7 @@ mod tests {
                 .index,
             0
         );
+
         assert_eq!(
             single_line
                 .caret_movement(
@@ -4493,6 +4830,7 @@ mod tests {
         );
 
         let text = "abc אבג العربية xyz";
+
         let layout = shaped_text_layout(
             layout_wrapped(
                 system,
@@ -4504,17 +4842,22 @@ mod tests {
             ),
             px(90.0),
         );
+
         let line_height = px(26.0);
+
         let start = layout
             .closest_caret_for_pixel_point(point(px(-10.0), px(10.0)), line_height)
             .unwrap_err();
+
         let end = layout
             .closest_caret_for_pixel_point(point(px(10_000.0), px(10.0)), line_height)
             .unwrap_err();
+
         let selection = CaretSelection {
             anchor: end,
             caret: start,
         };
+
         let collapsed_left = layout.selection_movement(
             selection,
             Direction::Left.with_boundary(Boundary::Cluster),
@@ -4522,8 +4865,10 @@ mod tests {
             None,
             line_height,
         );
+
         assert!(collapsed_left.result.is_empty());
         assert_eq!(collapsed_left.result.caret, start);
+
         let collapsed_right = layout.selection_movement(
             selection,
             Direction::Right.with_boundary(Boundary::Cluster),
@@ -4531,6 +4876,7 @@ mod tests {
             None,
             line_height,
         );
+
         assert_eq!(collapsed_right.result.caret, end);
 
         let word = layout.selection_movement(
@@ -4540,8 +4886,10 @@ mod tests {
             None,
             line_height,
         );
+
         assert_eq!(word.result.anchor, start);
         assert_ne!(word.result.caret, start);
+
         let down = layout.selection_movement(
             word.result.caret.into(),
             Direction::Down.with_boundary(Boundary::VisualLine),
@@ -4549,7 +4897,9 @@ mod tests {
             None,
             line_height,
         );
+
         assert!(down.vertical_navigation_x.is_some());
+
         let maintained_x = layout
             .selection_movement(
                 down.result,
@@ -4559,12 +4909,15 @@ mod tests {
                 line_height,
             )
             .vertical_navigation_x;
+
         assert_eq!(maintained_x, down.vertical_navigation_x);
+
         let selection = layout.selection_from_pixel_point(
             point(px(12.0), px(10.0)),
             line_height,
             TextSelectionKind::Word,
         );
+
         assert!(!selection.is_empty());
         assert!(text.is_char_boundary(selection.start));
         assert!(text.is_char_boundary(selection.end));
@@ -4580,11 +4933,13 @@ mod tests {
             px(24.0),
             &[text_run("1 1", NOTO_COLOR_EMOJI.family)],
         );
+
         let color_flags = mixed_color_face
             .paint_fragments
             .iter()
             .flat_map(|fragment| fragment.glyphs.iter().map(|glyph| glyph.is_emoji))
             .collect::<Vec<_>>();
+
         assert_eq!(color_flags, [true, false, true]);
 
         for (text, mode, expected_format) in [
@@ -4606,6 +4961,7 @@ mod tests {
         ] {
             let expect_color = mode == GlyphRenderMode::Color;
             let layout = layout_line(&system, text, px(24.0), &[text_run(text, IBM_PLEX.family)]);
+
             let glyph = layout
                 .paint_fragments
                 .iter()
@@ -4617,6 +4973,7 @@ mod tests {
                 })
                 .find(|(_, glyph)| glyph.is_emoji == expect_color)
                 .unwrap();
+
             let raster = system
                 .rasterize_glyph(&RenderGlyphParams {
                     font_id: glyph.0,
@@ -4627,23 +4984,29 @@ mod tests {
                     raster_style: PreparedRasterStyle::independent(mode),
                 })
                 .unwrap();
+
             assert_eq!(raster.bounds.size, raster.size);
             assert!(raster.size.width.0 > 0 && raster.size.height.0 > 0);
+
             let channels = match raster.format {
                 gpui::RasterizedGlyphFormat::AlphaMask => 1,
+
                 gpui::RasterizedGlyphFormat::BgraSubpixelMask
                 | gpui::RasterizedGlyphFormat::BgraColor => 4,
             };
 
             assert_eq!(raster.format, expected_format);
+
             assert_eq!(
                 raster.pixels.len(),
                 raster.size.width.0 as usize * raster.size.height.0 as usize * channels
             );
+
             match expected_format {
                 RasterizedGlyphFormat::AlphaMask => {
                     assert!(raster.pixels.iter().any(|&alpha| alpha > 0));
                 }
+
                 RasterizedGlyphFormat::BgraSubpixelMask => {
                     assert!(
                         raster
@@ -4652,6 +5015,7 @@ mod tests {
                             .any(|pixel| { pixel[0] != pixel[1] || pixel[1] != pixel[2] })
                     );
                 }
+
                 RasterizedGlyphFormat::BgraColor => {
                     assert!(raster.pixels.chunks_exact(4).any(|pixel| {
                         pixel[3] > 128
@@ -4679,6 +5043,7 @@ mod tests {
                 font_size,
                 &[text_run(SAMPLE, "IBM Plex Sans")],
             );
+
             let emoji_glyphs = layout
                 .paint_fragments
                 .iter()
@@ -4699,8 +5064,10 @@ mod tests {
                     fragment.font_id, noto_id,
                     "{character} selected another font"
                 );
+
                 assert_eq!(fragment.font_size, font_size);
                 assert_eq!(glyph.position.y, Pixels::ZERO);
+
                 assert_eq!(
                     glyph.id,
                     system.glyph_for_char(noto_id, character).unwrap(),
@@ -4712,12 +5079,15 @@ mod tests {
                     .iter()
                     .position(|candidate| std::ptr::eq(candidate, glyph))
                     .unwrap();
+
                 let shaped_advance = fragment
                     .glyphs
                     .get(glyph_idx + 1)
                     .map(|next| next.position.x - glyph.position.x)
                     .unwrap_or(fragment.x_range.end - glyph.position.x);
+
                 assert!(shaped_advance > Pixels::ZERO);
+
                 let raster_style = system.prepare_raster_style(RasterStyleRequest {
                     font_id: fragment.font_id,
                     glyph_id: glyph.id,
@@ -4725,6 +5095,7 @@ mod tests {
                     requested_mode: GlyphRenderMode::Color,
                     foreground_dependency: gpui::ForegroundDependency::Full,
                 });
+
                 let mut scale_one_bounds: Option<[f32; 4]> = None;
 
                 for scale_factor in [1.0, 1.5, 2.0] {
@@ -4738,8 +5109,11 @@ mod tests {
                             raster_style,
                         })
                         .unwrap();
+
                     raster.validate().unwrap();
+
                     assert_eq!(raster.format, RasterizedGlyphFormat::BgraColor);
+
                     assert!(
                         raster.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0),
                         "{character} produced no visible pixels"
@@ -4759,6 +5133,7 @@ mod tests {
                                 "{character} changed logical raster bounds from {reference:?} to {logical_bounds:?} at scale {scale_factor}"
                             );
                         }
+
                     } else {
                         scale_one_bounds = Some(logical_bounds);
                     }
@@ -4771,12 +5146,14 @@ mod tests {
     fn bundled_joined_emoji_sequence_shapes_as_one_color_glyph() {
         let system = test_system();
         let text = "👩🏽‍💻";
+
         let layout = layout_line(
             &system,
             text,
             px(24.0),
             &[text_run(text, "Noto Color Emoji")],
         );
+
         let glyphs = layout
             .paint_fragments
             .iter()
@@ -4790,14 +5167,17 @@ mod tests {
     #[test]
     fn fixed_color_bitmaps_ignore_foreground_rgb_but_preserve_alpha() {
         let system = ParleyTextSystem::new_with_system_font(SystemFonts::Skip, IBM_PLEX.family);
+
         system
             .add_fonts(vec![
                 Cow::Borrowed(IBM_PLEX.data),
                 Cow::Borrowed(NOTO_COLOR_EMOJI.data),
             ])
             .unwrap();
+
         let font_id = system.font_id(&font(NOTO_COLOR_EMOJI.family)).unwrap();
         let glyph_id = system.glyph_for_char(font_id, '😀').unwrap();
+
         let style = |color| {
             system.prepare_raster_style(RasterStyleRequest {
                 font_id,
@@ -4811,11 +5191,14 @@ mod tests {
         let red = style(gpui::rgba(0xff0000cc));
         let blue = style(gpui::rgba(0x0000ffcc));
         let translucent = style(gpui::rgba(0x0000ff80));
+
         assert_eq!(red, blue);
+
         assert_eq!(
             red.foreground_dependency,
             gpui::ForegroundDependency::AlphaOnly
         );
+
         assert_ne!(red, translucent);
     }
 
@@ -4823,6 +5206,7 @@ mod tests {
     fn automatic_optical_sizing_tracks_logical_default_and_inline_sizes() {
         let system = ParleyTextSystem::new_with_system_font(SystemFonts::Skip, SOURCE_SERIF.family)
             .with_automatic_optical_sizing();
+
         system
             .add_fonts(vec![Cow::Borrowed(SOURCE_SERIF.data)])
             .unwrap();
@@ -4843,6 +5227,7 @@ mod tests {
         for font_size in [px(12.0), px(48.0)] {
             let layout = layout_line(&system, "A", font_size, &[text_run("A", "Source Serif 4")]);
             let fragment = &layout.paint_fragments[0];
+
             assert_eq!(optical_value(fragment.font_id), f32::from(font_size));
 
             for scale_factor in [1.0, 2.0] {
@@ -4854,18 +5239,22 @@ mod tests {
                     scale_factor,
                     raster_style: PreparedRasterStyle::independent(GlyphRenderMode::Grayscale),
                 };
+
                 system.rasterize_glyph(&params).unwrap();
+
                 assert_eq!(optical_value(fragment.font_id), f32::from(font_size));
             }
         }
 
         let text = "small large";
         let runs = [text_run(text, "Source Serif 4")];
+
         let text_styles = [InlineTextStyle {
             range: 6..text.len(),
             font_size: px(48.0),
             line_height: px(52.0),
         }];
+
         let inline = system.layout_inline(InlineLayoutRequest {
             text,
             runs: &runs,
@@ -4880,18 +5269,21 @@ mod tests {
             },
             bidi_scopes: &[],
         });
+
         let small = inline
             .layout
             .paint_fragments
             .iter()
             .find(|fragment| fragment.font_size == px(12.0))
             .unwrap();
+
         let large = inline
             .layout
             .paint_fragments
             .iter()
             .find(|fragment| fragment.font_size == px(48.0))
             .unwrap();
+
         assert_ne!(small.font_id, large.font_id);
         assert_eq!(optical_value(small.font_id), 12.0);
         assert_eq!(optical_value(large.font_id), 48.0);
@@ -4900,17 +5292,20 @@ mod tests {
     #[test]
     fn native_backend_receives_the_face_instance_selected_during_shaping() {
         let seen = Arc::new(Mutex::new(None));
+
         let system = ParleyTextSystem::new_with_rasterizer(
             SystemFonts::Skip,
             SOURCE_SERIF.family,
             RecordingRasterizer { seen: seen.clone() },
         )
         .with_automatic_optical_sizing();
+
         system
             .add_fonts(vec![Cow::Borrowed(SOURCE_SERIF.data)])
             .unwrap();
 
         let text = "A";
+
         let layout = layout_line(
             &system,
             text,
@@ -4921,8 +5316,10 @@ mod tests {
                 ..Default::default()
             }],
         );
+
         let fragment = &layout.paint_fragments[0];
         let font_id = fragment.font_id;
+
         let params = RenderGlyphParams {
             font_id,
             glyph_id: fragment.glyphs[0].id,
@@ -4933,28 +5330,34 @@ mod tests {
         };
 
         let raster = system.rasterize_glyph(&params).unwrap();
+
         assert_eq!(raster.format, RasterizedGlyphFormat::AlphaMask);
         assert_eq!(raster.size, Size::default());
         assert!(raster.pixels.is_empty());
 
         let seen = seen.lock().clone().expect("rasterizer saw a face");
+
         assert_eq!(seen.font_id, font_id);
         assert_eq!(seen.face_index, 0);
         assert!(seen.data_matches);
         assert!(!seen.has_color_glyphs);
         assert_eq!(seen.synthesis.embolden, false);
         assert_eq!(seen.synthesis.skew_degrees, Some(14.0));
+
         let weight = seen
             .variations
             .iter()
             .find(|variation| variation.tag == skrifa::Tag::new(b"wght"))
             .expect("weight design coordinate");
+
         assert!((weight.value - 700.0).abs() < 0.05, "{weight:?}");
+
         let optical_size = seen
             .variations
             .iter()
             .find(|variation| variation.tag == skrifa::Tag::new(b"opsz"))
             .expect("optical-size design coordinate");
+
         assert_eq!(optical_size.value, 22.0);
     }
 
@@ -5007,6 +5410,7 @@ mod tests {
         }
 
         struct CachedDirectionChild;
+
         struct CachedArabicChild {
             text: gpui::SharedString,
         }
@@ -5151,12 +5555,15 @@ mod tests {
         #[test]
         fn direction_updates_logical_and_flex_relative_alignment() {
             let mut cx = HeadlessAppContext::new(test_system());
+
             let window = cx
                 .open_window(size(px(320.0), px(160.0)), |_window, cx| {
                     let cached_child = cx.new(|_| CachedDirectionChild);
+
                     let cached_arabic = cx.new(|_| CachedArabicChild {
                         text: "مرحبا".into(),
                     });
+
                     cx.new(|_| DirectionFlexView {
                         direction: gpui::LayoutDirection::RightToLeft,
                         cached_child,
@@ -5164,6 +5571,7 @@ mod tests {
                     })
                 })
                 .unwrap();
+
             cx.run_until_parked();
 
             let any_window = window.into();
@@ -5179,6 +5587,7 @@ mod tests {
             let auto_cached_item = bounds(&mut cx, any_window, "auto-cached-item");
             let deferred_row = bounds(&mut cx, any_window, "deferred-row");
             let deferred_first = bounds(&mut cx, any_window, "deferred-first");
+
             assert!(logical_first.origin.x > logical_row.center().x);
             assert!(flex_first.right() < flex_row.center().x);
             assert!(grid_first.origin.x > grid_row.center().x);
@@ -5189,9 +5598,11 @@ mod tests {
             window
                 .update(&mut cx, |view, _, cx| {
                     view.direction = gpui::LayoutDirection::LeftToRight;
+
                     cx.notify();
                 })
                 .unwrap();
+
             cx.run_until_parked();
 
             let logical_first = bounds(&mut cx, any_window, "logical-first");
@@ -5200,6 +5611,7 @@ mod tests {
             let cached_first = bounds(&mut cx, any_window, "cached-first");
             let auto_cached_item = bounds(&mut cx, any_window, "auto-cached-item");
             let deferred_first = bounds(&mut cx, any_window, "deferred-first");
+
             assert!(logical_first.right() < logical_row.center().x);
             assert!(flex_first.origin.x > flex_row.center().x);
             assert!(grid_first.right() < grid_row.center().x);
@@ -5211,13 +5623,16 @@ mod tests {
                 .update(&mut cx, |view, _, cx| {
                     view.cached_arabic.update(cx, |child, cx| {
                         child.text = "English".into();
+
                         cx.notify();
                     });
                 })
                 .unwrap();
+
             cx.run_until_parked();
 
             let auto_cached_item = bounds(&mut cx, any_window, "auto-cached-item");
+
             assert!(auto_cached_item.right() < auto_cached_row.center().x);
         }
     }

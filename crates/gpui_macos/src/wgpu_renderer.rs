@@ -7,10 +7,12 @@ use std::sync::Arc;
 use foreign_types::ForeignType as _;
 use gpui::{DevicePixels, GpuSpecs, Scene, Size};
 use gpui_apple::metal_renderer::new_window_layer;
+
 use gpui_wgpu::{
     GpuContext, WgpuAtlas, WgpuContextHandle, WgpuDeviceRequirements, WgpuRenderer,
     WgpuSurfaceConfig, wgpu,
 };
+
 use metal::{CAMetalLayer, MetalLayer, MetalLayerRef};
 
 /// The device every window shares, and what the application requires of it.
@@ -44,6 +46,7 @@ pub struct MacWgpuRenderer {
 impl MacWgpuRenderer {
     fn new(context: Context, bounds: gpui::Size<f32>, transparent: bool) -> anyhow::Result<Self> {
         let layer = new_window_layer(transparent);
+
         let config = WgpuSurfaceConfig {
             // The view resizes this to device pixels once it knows its scale factor.
             size: Size {
@@ -53,8 +56,10 @@ impl MacWgpuRenderer {
             transparent,
             preferred_present_mode: None,
         };
+
         let renderer =
             WgpuRenderer::new_for_metal_layer(context.gpu, &layer, config, context.requirements)?;
+
         Ok(Self { renderer, layer })
     }
 
@@ -96,8 +101,10 @@ impl MacWgpuRenderer {
             if let Err(error) = self.renderer.recover_metal_layer(&self.layer) {
                 log::warn!("GPU recovery failed, will retry on next frame: {error}");
             }
+
             return true;
         }
+
         self.renderer.draw(scene);
         self.renderer.needs_redraw()
     }
@@ -139,15 +146,20 @@ mod tests {
     fn transparency_survives_resizing() {
         let mut renderer =
             MacWgpuRenderer::new(Context::default(), gpui::size(64.0, 64.0), false).unwrap();
+
         assert!(renderer.layer.is_opaque());
 
         renderer.update_transparency(true);
+
         assert!(!renderer.layer.is_opaque());
+
         renderer.update_drawable_size(gpui::size(DevicePixels(128), DevicePixels(96)));
+
         assert!(!renderer.layer.is_opaque());
 
         renderer.update_transparency(false);
         renderer.update_drawable_size(gpui::size(DevicePixels(64), DevicePixels(64)));
+
         assert!(renderer.layer.is_opaque());
     }
 
@@ -156,12 +168,15 @@ mod tests {
     fn renders_scenes_to_images() {
         let mut renderer =
             MacWgpuRenderer::new(Context::default(), gpui::size(32.0, 16.0), false).unwrap();
+
         // A red quad over the left half.
         let bounds = |width| gpui::Bounds {
             origin: gpui::point(gpui::ScaledPixels(0.0), gpui::ScaledPixels(0.0)),
             size: gpui::size(gpui::ScaledPixels(width), gpui::ScaledPixels(16.0)),
         };
+
         let mut scene = Scene::default();
+
         scene.insert_primitive(gpui::Quad {
             bounds: bounds(16.0),
             content_mask: gpui::ContentMask {
@@ -170,6 +185,7 @@ mod tests {
             background: gpui::solid_background(gpui::red()),
             ..Default::default()
         });
+
         scene.finish();
 
         let image = renderer.render_to_image(&scene).unwrap();

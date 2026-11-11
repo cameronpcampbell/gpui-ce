@@ -10,6 +10,7 @@ use std::{
 
 use anyhow::{Context as _, Result, ensure};
 use collections::HashMap;
+
 use gpui::{
     Bounds, DevicePixels, Font, FontId, FontMetrics, GlyphId, GlyphRenderMode, InlineLayout,
     InlineLayoutRequest, LineLayout, Pixels, PlatformTextSystem, PreparedRasterStyle,
@@ -17,11 +18,14 @@ use gpui::{
     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, Size, TextLayoutRequest, TextRenderingMode, point,
     size,
 };
+
 use gpui_parley::{
     BitmapFallbackGlyphRasterizer, ColorGlyphKind, FontDataBlob, GlyphRasterizer, ParleyTextSystem,
     RasterFace, SystemFonts,
 };
+
 use parking_lot::RwLock;
+
 use windows::{
     Win32::{
         Foundation::*,
@@ -36,6 +40,7 @@ use windows::{
     },
     core::*,
 };
+
 use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::*;
@@ -86,6 +91,7 @@ impl DirectWriteTextSystem {
 
     fn new_inner(directx_devices: Option<&DirectXDevices>) -> Result<Self> {
         let renderer = Arc::new(RwLock::new(DirectWriteGlyphRenderer::new(directx_devices)?));
+
         let parley = ParleyTextSystem::new_with_rasterizer(
             SystemFonts::Load,
             "Segoe UI",
@@ -185,11 +191,15 @@ impl DirectWriteGlyphRenderer {
     fn new(_directx_devices: Option<&DirectXDevices>) -> Result<Self> {
         let factory: IDWriteFactory5 = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }
             .context("creating the DirectWrite factory")?;
+
         let variable_factory = factory.cast().ok();
+
         let in_memory_loader = unsafe { factory.CreateInMemoryFontFileLoader() }
             .context("creating the DirectWrite in-memory font loader")?;
+
         unsafe { factory.RegisterFontFileLoader(&in_memory_loader) }
             .context("registering the DirectWrite in-memory font loader")?;
+
         let rendering_params = unsafe { factory.CreateRenderingParams() }
             .context("reading DirectWrite rendering parameters")?;
 
@@ -210,9 +220,11 @@ impl DirectWriteGlyphRenderer {
         let Entry::Vacant(entry) = self.faces.entry(face.font_id) else {
             return Ok(());
         };
+
         let factory = &self.components.factory;
         let loader = &self.components.in_memory_loader;
         let variable_factory = self.variable_factory.as_ref();
+
         let use_default_axes = face.variations.is_empty()
             || (variable_factory.is_none() && face.has_default_variations()?);
 
@@ -223,11 +235,13 @@ impl DirectWriteGlyphRenderer {
 
         let source = match self.sources.entry(face.source_id) {
             Entry::Occupied(entry) => entry.into_mut(),
+
             Entry::Vacant(entry) => entry.insert(
                 NativeSource::new(factory, loader, face.source)
                     .context("DirectWrite could not retain the font source")?,
             ),
         };
+
         let native = NativeFace::new(
             factory,
             variable_factory,
@@ -241,6 +255,7 @@ impl DirectWriteGlyphRenderer {
                 face.font_id, face.face_index, face.variations
             )
         })?;
+
         entry.insert(native);
 
         Ok(())
@@ -254,6 +269,7 @@ impl DirectWriteGlyphRenderer {
         let glyph_id = [params.glyph_id.0 as u16];
         let advance = [0.0];
         let offset = [DWRITE_GLYPH_OFFSET::default()];
+
         let glyph_run = DWRITE_GLYPH_RUN {
             fontFace: ManuallyDrop::new(Some(unsafe { std::ptr::read(&***font.face) })),
             fontEmSize: params.font_size.as_f32(),
@@ -264,6 +280,7 @@ impl DirectWriteGlyphRenderer {
             isSideways: BOOL(0),
             bidiLevel: 0,
         };
+
         let transform = DWRITE_MATRIX {
             m11: params.scale_factor,
             m12: 0.0,
@@ -272,14 +289,17 @@ impl DirectWriteGlyphRenderer {
             dx: 0.0,
             dy: 0.0,
         };
+
         let baseline_origin_x =
             params.subpixel_variant.x as f32 / SUBPIXEL_VARIANTS_X as f32 / params.scale_factor;
+
         let baseline_origin_y = params.subpixel_variant.y as f32
             / gpui::SUBPIXEL_VARIANTS_Y as f32
             / params.scale_factor;
 
         let mut rendering_mode = DWRITE_RENDERING_MODE1::default();
         let mut grid_fit_mode = DWRITE_GRID_FIT_MODE::default();
+
         unsafe {
             font.face.GetRecommendedRenderingMode(
                 params.font_size.as_f32(),
@@ -295,6 +315,7 @@ impl DirectWriteGlyphRenderer {
                 &mut grid_fit_mode,
             )?;
         }
+
         let rendering_mode = match rendering_mode {
             DWRITE_RENDERING_MODE1_OUTLINE => DWRITE_RENDERING_MODE1_NATURAL_SYMMETRIC,
             m => m,
@@ -318,6 +339,7 @@ impl DirectWriteGlyphRenderer {
                 baseline_origin_y,
             )
         }?;
+
         Ok(glyph_analysis)
     }
 
@@ -351,6 +373,7 @@ impl DirectWriteGlyphRenderer {
         for pixel_ix in (0..pixel_count).rev() {
             let src = pixel_ix * 3;
             let dst = pixel_ix * 4;
+
             (
                 bitmap_data[dst + 2],
                 bitmap_data[dst + 1],
@@ -429,6 +452,7 @@ impl DirectWriteGlyphRenderer {
             format,
             pixels,
         };
+
         rasterized.validate()?;
 
         Ok(rasterized)
@@ -442,6 +466,7 @@ impl DirectWriteGlyphRenderer {
         let glyph_id = [params.glyph_id.0 as u16];
         let advance = [0.0];
         let offset = [DWRITE_GLYPH_OFFSET::default()];
+
         let glyph_run = DWRITE_GLYPH_RUN {
             fontFace: ManuallyDrop::new(Some(unsafe { std::ptr::read(&***font.face) })),
             fontEmSize: params.font_size.as_f32(),
@@ -452,7 +477,9 @@ impl DirectWriteGlyphRenderer {
             isSideways: BOOL(0),
             bidiLevel: 0,
         };
+
         let transform = color_glyph_transform(params.scale_factor);
+
         let baseline = Vector2::new(
             params.subpixel_variant.x as f32 / SUBPIXEL_VARIANTS_X as f32 / params.scale_factor,
             params.subpixel_variant.y as f32 / SUBPIXEL_VARIANTS_Y as f32 / params.scale_factor,
@@ -483,6 +510,7 @@ impl DirectWriteGlyphRenderer {
         let _apartment = ColorRasterApartment::new()?;
         let enumerator = self.translate_color_glyph(params)?;
         let transform = color_glyph_transform(params.scale_factor);
+
         let mut ink_bounds = RECT {
             left: glyph_bounds.origin.x.0,
             top: glyph_bounds.origin.y.0,
@@ -492,6 +520,7 @@ impl DirectWriteGlyphRenderer {
 
         while unsafe { enumerator.MoveNext()? }.as_bool() {
             let color_run = unsafe { &*enumerator.GetCurrentRun()? };
+
             ensure!(
                 (color_run.glyphImageFormat
                     & (DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE | DWRITE_GLYPH_IMAGE_FORMATS_CFF))
@@ -499,7 +528,9 @@ impl DirectWriteGlyphRenderer {
                     != 0,
                 "DirectWrite returned an unsupported color layer format"
             );
+
             let layer = &color_run.Base;
+
             let analysis = unsafe {
                 self.components.factory.CreateGlyphRunAnalysis(
                     &layer.glyphRun,
@@ -512,8 +543,10 @@ impl DirectWriteGlyphRenderer {
                     layer.baselineOriginY,
                 )?
             };
+
             let layer_bounds =
                 unsafe { analysis.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1)? };
+
             union_ink_bounds(&mut ink_bounds, layer_bounds);
         }
 
@@ -527,14 +560,17 @@ impl DirectWriteGlyphRenderer {
             .right
             .checked_sub(ink_bounds.left)
             .context("color glyph width overflow")?;
+
         let height = ink_bounds
             .bottom
             .checked_sub(ink_bounds.top)
             .context("color glyph height overflow")?;
+
         let byte_count = (width as usize)
             .checked_mul(height as usize)
             .and_then(|pixels| pixels.checked_mul(4))
             .context("color glyph byte count overflow")?;
+
         ensure!(
             u32::try_from(byte_count).is_ok(),
             "color glyph exceeds WIC's buffer limit"
@@ -542,6 +578,7 @@ impl DirectWriteGlyphRenderer {
 
         let wic: IWICImagingFactory =
             unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
+
         let bitmap = unsafe {
             wic.CreateBitmap(
                 width as u32,
@@ -550,8 +587,10 @@ impl DirectWriteGlyphRenderer {
                 WICBitmapCacheOnLoad,
             )?
         };
+
         let factory: ID2D1Factory =
             unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
+
         let properties = D2D1_RENDER_TARGET_PROPERTIES {
             r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
             pixelFormat: D2D1_PIXEL_FORMAT {
@@ -563,6 +602,7 @@ impl DirectWriteGlyphRenderer {
             usage: D2D1_RENDER_TARGET_USAGE_NONE,
             minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
         };
+
         let target = unsafe { factory.CreateWicBitmapRenderTarget(&bitmap, &properties)? };
         let brush = unsafe { target.CreateSolidColorBrush(&D2D1_COLOR_F::default(), None)? };
         let foreground = raster_foreground(params.raster_style);
@@ -573,6 +613,7 @@ impl DirectWriteGlyphRenderer {
         unsafe {
             target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             target.SetTextRenderingParams(&self.rendering_params);
+
             target.SetTransform(&Matrix3x2 {
                 M11: params.scale_factor,
                 M12: 0.0,
@@ -581,6 +622,7 @@ impl DirectWriteGlyphRenderer {
                 M31: -(ink_bounds.left as f32),
                 M32: -(ink_bounds.top as f32),
             });
+
             target.BeginDraw();
             target.Clear(Some(&D2D1_COLOR_F::default()));
         }
@@ -589,6 +631,7 @@ impl DirectWriteGlyphRenderer {
             while unsafe { enumerator.MoveNext()? }.as_bool() {
                 let color_run = unsafe { &*enumerator.GetCurrentRun()? };
                 let layer = &color_run.Base;
+
                 let color = if layer.paletteIndex == 0xffff {
                     D2D1_COLOR_F {
                         r: foreground.red as f32 / 255.0,
@@ -596,6 +639,7 @@ impl DirectWriteGlyphRenderer {
                         b: foreground.blue as f32 / 255.0,
                         a: 1.0,
                     }
+
                 } else {
                     D2D1_COLOR_F {
                         r: layer.runColor.r,
@@ -607,6 +651,7 @@ impl DirectWriteGlyphRenderer {
 
                 unsafe {
                     brush.SetColor(&color);
+
                     target.DrawGlyphRun(
                         Vector2::new(layer.baselineOriginX, layer.baselineOriginY),
                         &layer.glyphRun,
@@ -618,9 +663,12 @@ impl DirectWriteGlyphRenderer {
 
             Ok(())
         })();
+
         let end_result = unsafe { target.EndDraw(None, None) };
+
         draw_result?;
         end_result.context("drawing Direct2D color glyph layers")?;
+
         drop(brush);
         drop(target);
 
@@ -631,6 +679,7 @@ impl DirectWriteGlyphRenderer {
         }
 
         let bitmap_size = size(width.into(), height.into());
+
         let rasterized = RasterizedGlyph {
             bounds: Bounds {
                 origin: point(ink_bounds.left.into(), ink_bounds.top.into()),
@@ -640,6 +689,7 @@ impl DirectWriteGlyphRenderer {
             format,
             pixels,
         };
+
         rasterized.validate()?;
 
         Ok(rasterized)
@@ -695,15 +745,19 @@ impl GlyphRasterizer for DirectWriteGlyphRenderer {
         }
 
         self.load_face(face)?;
+
         debug_assert!(
             !matches!(params.raster_style.color_effect, RasterColorEffect::Dilation(value) if value != 0)
         );
+
         let glyph_analysis = self.create_glyph_run_analysis(params)?;
+
         let texture_type = if params.raster_style.mode == GlyphRenderMode::Subpixel {
             DWRITE_TEXTURE_CLEARTYPE_3x1
         } else {
             DWRITE_TEXTURE_ALIASED_1x1
         };
+
         let native_bounds = unsafe { glyph_analysis.GetAlphaTextureBounds(texture_type)? };
 
         self.rasterize_glyph(params, &glyph_analysis, texture_type, native_bounds)
@@ -741,9 +795,11 @@ impl NativeFace {
                 unsafe { factory.CreateFontFaceReference(file, face.face_index, simulations) }?;
 
             unsafe { reference.CreateFontFace() }?
+
         } else {
             let variable_factory = variable_factory
                 .context("this DirectWrite version cannot instantiate variable-font coordinates")?;
+
             let variations = face
                 .variations
                 .iter()
@@ -752,6 +808,7 @@ impl NativeFace {
                     value: variation.value,
                 })
                 .collect::<Vec<_>>();
+
             let reference = unsafe {
                 variable_factory.CreateFontFaceReference(
                     file,
@@ -760,6 +817,7 @@ impl NativeFace {
                     &variations,
                 )
             }?;
+
             let variable_face = unsafe { reference.CreateFontFace() }?;
 
             variable_face.cast()?
@@ -776,12 +834,15 @@ impl NativeSource {
         source: &FontDataBlob<u8>,
     ) -> Result<Self> {
         let bytes = source.as_ref();
+
         let data_len =
             u32::try_from(bytes.len()).context("font data exceeds DirectWrite limits")?;
+
         let owner: windows::core::IUnknown = FontDataOwner {
             _data: source.clone(),
         }
         .into();
+
         let file = unsafe {
             loader.CreateInMemoryFontFileReference(factory, bytes.as_ptr().cast(), data_len, &owner)
         }?;
@@ -792,6 +853,7 @@ impl NativeSource {
 
 fn get_system_subpixel_rendering() -> bool {
     let mut smoothing_enabled = BOOL::default();
+
     let enabled_result = unsafe {
         SystemParametersInfoW(
             SPI_GETFONTSMOOTHING,
@@ -802,6 +864,7 @@ fn get_system_subpixel_rendering() -> bool {
     };
 
     let mut smoothing_type = c_uint::default();
+
     let type_result = unsafe {
         SystemParametersInfoW(
             SPI_GETFONTSMOOTHINGTYPE,
@@ -898,18 +961,22 @@ fn read_color_bitmap(bitmap: &IWICBitmap, width: i32, height: i32, alpha: u8) ->
             WICBitmapLockRead.0 as u32,
         )?
     };
+
     let stride = unsafe { lock.GetStride()? } as usize;
     let mut buffer_size = 0;
     let mut buffer = std::ptr::null_mut();
+
     unsafe { lock.GetDataPointer(&mut buffer_size, &mut buffer)? };
 
     let row_bytes = (width as usize)
         .checked_mul(4)
         .context("color bitmap row size overflow")?;
+
     let required_bytes = (height as usize - 1)
         .checked_mul(stride)
         .and_then(|offset| offset.checked_add(row_bytes))
         .context("color bitmap buffer size overflow")?;
+
     ensure!(
         !buffer.is_null() && stride >= row_bytes && buffer_size as usize >= required_bytes,
         "WIC returned an invalid color bitmap buffer"
@@ -917,13 +984,16 @@ fn read_color_bitmap(bitmap: &IWICBitmap, width: i32, height: i32, alpha: u8) ->
 
     // The lock owns the mapping until all rows have been copied.
     let source = unsafe { std::slice::from_raw_parts(buffer, buffer_size as usize) };
+
     let byte_count = row_bytes
         .checked_mul(height as usize)
         .context("color bitmap byte count overflow")?;
+
     let mut pixels = vec![0; byte_count];
 
     for (row_index, row) in pixels.chunks_exact_mut(row_bytes).enumerate() {
         let offset = row_index * stride;
+
         row.copy_from_slice(&source[offset..offset + row_bytes]);
     }
 
@@ -952,16 +1022,19 @@ fn read_color_bitmap(bitmap: &IWICBitmap, width: i32, height: i32, alpha: u8) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use gpui::{
         FontStyle, FontWeight, FontWidth, ForegroundDependency, Point, RasterizedGlyphFormat, Rgba,
         font, px, rgba,
     };
+
     use gpui_parley::FontSynthesis;
     use std::collections::BTreeMap;
 
     #[test]
     fn fixed_fonts_cover_native_modes_instances_and_empty_glyphs() -> Result<()> {
         let system = DirectWriteTextSystem::new_headless()?;
+
         system.add_fonts(vec![
             Cow::Borrowed(*gpui_fonts::IBM_PLEX),
             Cow::Borrowed(*gpui_fonts::SOURCE_SERIF),
@@ -969,6 +1042,7 @@ mod tests {
         ])?;
 
         let regular_id = system.font_id(&font("IBM Plex Sans"))?;
+
         let regular_glyph = system
             .glyph_for_char(regular_id, 'A')
             .context("IBM Plex Sans has no A glyph")?;
@@ -982,7 +1056,9 @@ mod tests {
                 point(0, 0),
                 scale_factor,
             )?;
+
             assert_eq!(grayscale.format, RasterizedGlyphFormat::AlphaMask);
+
             grayscale.validate()?;
 
             for subpixel_x in 0..SUBPIXEL_VARIANTS_X {
@@ -995,7 +1071,9 @@ mod tests {
                         point(subpixel_x, subpixel_y),
                         scale_factor,
                     )?;
+
                     assert_eq!(subpixel.format, RasterizedGlyphFormat::BgraSubpixelMask);
+
                     subpixel.validate()?;
                 }
             }
@@ -1004,6 +1082,7 @@ mod tests {
         let space = system
             .glyph_for_char(regular_id, ' ')
             .context("IBM Plex Sans has no space glyph")?;
+
         let empty = rasterize(
             &system,
             regular_id,
@@ -1012,6 +1091,7 @@ mod tests {
             point(0, 0),
             1.0,
         )?;
+
         assert_eq!(empty.size, Size::default());
         assert!(empty.pixels.is_empty());
 
@@ -1023,7 +1103,9 @@ mod tests {
             point(0, 0),
             1.0,
         )?;
+
         assert_eq!(monochrome_color.format, RasterizedGlyphFormat::BgraColor);
+
         assert!(
             monochrome_color
                 .pixels
@@ -1031,12 +1113,15 @@ mod tests {
                 .filter(|pixel| pixel[3] != 0)
                 .all(|pixel| pixel[..3] == [255, 255, 255])
         );
+
         monochrome_color.validate()?;
 
         let synthesized_id = system.font_id(&font("IBM Plex Sans").bold().italic())?;
+
         let synthesized_glyph = system
             .glyph_for_char(synthesized_id, 'A')
             .context("synthesized IBM Plex Sans has no A glyph")?;
+
         let synthesized = rasterize(
             &system,
             synthesized_id,
@@ -1045,16 +1130,23 @@ mod tests {
             point(0, 0),
             2.0,
         )?;
+
         assert!(!synthesized.pixels.is_empty());
+
         synthesized.validate()?;
 
         let mut light = font("Source Serif 4");
+
         light.weight = FontWeight::LIGHT;
+
         let mut bold = light.clone();
+
         bold.weight = FontWeight::BOLD;
         bold.style = FontStyle::Normal;
+
         let rasterize_font = |descriptor: &gpui::Font| {
             let font_id = system.font_id(descriptor)?;
+
             let glyph_id = system
                 .glyph_for_char(font_id, 'A')
                 .context("fixture has no A glyph")?;
@@ -1081,8 +1173,10 @@ mod tests {
         ] {
             let first = rasterize_font(&first)?;
             let second = rasterize_font(&second)?;
+
             first.validate()?;
             second.validate()?;
+
             assert_ne!((first.bounds, first.pixels), (second.bounds, second.pixels));
         }
 
@@ -1096,8 +1190,10 @@ mod tests {
             *gpui_fonts::IBM_PLEX,
             *gpui_fonts::IBM_PLEX_ITALIC,
         ]);
+
         let source = FontDataBlob::from(collection);
         let mut renderer = DirectWriteGlyphRenderer::new(None)?;
+
         renderer.load_face(RasterFace {
             font_id: FontId(1),
             source_id: source.id(),
@@ -1108,8 +1204,10 @@ mod tests {
             synthesis: FontSynthesis::default(),
             has_color_glyphs: false,
         })?;
+
         let codepoint = 'A' as u32;
         let mut glyph_id = 0;
+
         unsafe {
             renderer.faces[&FontId(1)].face.GetGlyphIndices(
                 &raw const codepoint,
@@ -1117,6 +1215,7 @@ mod tests {
                 &raw mut glyph_id,
             )?;
         }
+
         assert_ne!(glyph_id, 0);
 
         Ok(())
@@ -1127,9 +1226,11 @@ mod tests {
         let devices = DirectXDevices::new()?;
         let system = DirectWriteTextSystem::new(&devices)?;
         let font_id = system.font_id(&font("Segoe UI Emoji"))?;
+
         let glyph_id = system
             .glyph_for_char(font_id, '😀')
             .context("Segoe UI Emoji has no grinning-face glyph")?;
+
         let before = rasterize(
             &system,
             font_id,
@@ -1138,17 +1239,22 @@ mod tests {
             point(0, 0),
             2.0,
         )?;
+
         assert_eq!(before.format, RasterizedGlyphFormat::BgraColor);
+
         assert!(before.pixels.chunks_exact(4).any(|pixel| {
             pixel[3] > 128
                 && (pixel[0].abs_diff(pixel[1]) > 20
                     || pixel[1].abs_diff(pixel[2]) > 20
                     || pixel[0].abs_diff(pixel[2]) > 20)
         }));
+
         before.validate()?;
 
         let replacement_devices = DirectXDevices::new()?;
+
         system.handle_gpu_lost(&replacement_devices)?;
+
         let after = rasterize(
             &system,
             font_id,
@@ -1157,7 +1263,9 @@ mod tests {
             point(0, 0),
             2.0,
         )?;
+
         after.validate()?;
+
         assert_eq!(before.bounds, after.bounds);
         assert_eq!(before.format, after.format);
         assert_eq!(before.pixels, after.pixels);
@@ -1171,6 +1279,7 @@ mod tests {
 
         for character in ['A', 'B'] {
             let glyph_id = system.glyph_for_char(font_id, character).unwrap();
+
             let red = color_params(
                 &system,
                 font_id,
@@ -1179,6 +1288,7 @@ mod tests {
                 point(0, 0),
                 2.0,
             );
+
             let green = color_params(
                 &system,
                 font_id,
@@ -1187,13 +1297,17 @@ mod tests {
                 point(0, 0),
                 2.0,
             );
+
             let red_pixels = system.rasterize_glyph(&red)?;
             let green_pixels = system.rasterize_glyph(&green)?;
+
             red_pixels.validate()?;
             green_pixels.validate()?;
+
             assert!(!red_pixels.pixels.is_empty());
             assert_eq!(red_pixels.format, RasterizedGlyphFormat::BgraColor);
             assert!(red_pixels.pixels.chunks_exact(4).any(|pixel| pixel[3] == 0));
+
             assert!(red_pixels.pixels.chunks_exact(4).any(|pixel| {
                 pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 128
             }));
@@ -1203,21 +1317,26 @@ mod tests {
                     red.raster_style.foreground_dependency,
                     ForegroundDependency::AlphaOnly
                 );
+
                 assert_eq!(red.raster_style, green.raster_style);
                 assert_eq!(red_pixels.pixels, green_pixels.pixels);
+
                 assert!(red_pixels.pixels.chunks_exact(4).any(|pixel| {
                     pixel[3] == 255
                         && pixel[0].abs_diff(128) <= 2
                         && pixel[1] == 0
                         && pixel[2].abs_diff(127) <= 2
                 }));
+
             } else {
                 assert_eq!(
                     red.raster_style.foreground_dependency,
                     ForegroundDependency::Full
                 );
+
                 assert_ne!(red.raster_style, green.raster_style);
                 assert_ne!(red_pixels.pixels, green_pixels.pixels);
+
                 assert!(
                     red_pixels
                         .pixels
@@ -1228,6 +1347,7 @@ mod tests {
 
             for alpha in [0, 64, 128, 255] {
                 let foreground = Rgba8::new(224, 32, 16, alpha);
+
                 let params = color_params(
                     &system,
                     font_id,
@@ -1236,7 +1356,9 @@ mod tests {
                     point(0, 0),
                     2.0,
                 );
+
                 let rasterized = system.rasterize_glyph(&params)?;
+
                 rasterized.validate()?;
 
                 assert_foreground_alpha(&rasterized, &red_pixels, alpha);
@@ -1263,6 +1385,7 @@ mod tests {
                         subpixel_variant,
                         scale_factor,
                     );
+
                     assert_color_bounds(&system, character, &params)?;
                 }
             }
@@ -1285,6 +1408,7 @@ mod tests {
 
             std::thread::spawn(move || -> Result<()> {
                 assert_eq!(explicit_calling_apartment()?, None);
+
                 let caller = apartment
                     .map(|mode| -> Result<ColorRasterApartment> {
                         assert_eq!(unsafe { CoInitializeEx(None, mode) }, S_OK);
@@ -1295,9 +1419,11 @@ mod tests {
                         })
                     })
                     .transpose()?;
+
                 let before = explicit_calling_apartment()?;
                 let (system, font_id) = color_test_system()?;
                 let glyph_id = system.glyph_for_char(font_id, 'B').unwrap();
+
                 let params = color_params(
                     &system,
                     font_id,
@@ -1309,13 +1435,16 @@ mod tests {
 
                 for iteration in 0..3 {
                     let rasterized = system.rasterize_glyph(&params)?;
+
                     rasterized.validate()?;
+
                     assert!(
                         rasterized
                             .pixels
                             .chunks_exact(4)
                             .any(|pixel| pixel[..3] == [128, 192, 32])
                     );
+
                     assert_eq!(
                         explicit_calling_apartment()?,
                         before,
@@ -1325,6 +1454,7 @@ mod tests {
 
                 drop(system);
                 drop(caller);
+
                 assert_eq!(explicit_calling_apartment()?, None);
 
                 Ok(())
@@ -1339,7 +1469,9 @@ mod tests {
     #[test]
     fn color_fallback_bakes_foreground_and_bitmap_fonts_keep_portable_routing() -> Result<()> {
         let system = DirectWriteTextSystem::new_headless()?;
+
         system.add_fonts(vec![Cow::Borrowed(*gpui_fonts::IBM_PLEX)])?;
+
         let font_id = system.font_id(&font("IBM Plex Sans"))?;
         let glyph_id = system.glyph_for_char(font_id, 'A').unwrap();
 
@@ -1352,15 +1484,20 @@ mod tests {
                 point(1, 1),
                 1.5,
             );
+
             let rasterized = system.rasterize_glyph(&params)?;
+
             rasterized.validate()?;
+
             assert_eq!(rasterized.format, RasterizedGlyphFormat::BgraColor);
+
             assert!(rasterized.pixels.chunks_exact(4).all(|pixel| {
                 pixel[3] <= alpha && (pixel[3] == 0 || pixel[..3] == [16, 32, 224])
             }));
 
             let renderer = system.renderer.read();
             let error = renderer.translate_color_glyph(&params).unwrap_err();
+
             assert_eq!(
                 error.downcast_ref::<windows::core::Error>().unwrap().code(),
                 DWRITE_E_NOCOLOR
@@ -1368,9 +1505,12 @@ mod tests {
         }
 
         let bitmap_system = DirectWriteTextSystem::new_headless()?;
+
         bitmap_system.add_fonts(vec![Cow::Borrowed(*gpui_fonts::NOTO_COLOR_EMOJI)])?;
+
         let font_id = bitmap_system.font_id(&font("Noto Color Emoji"))?;
         let glyph_id = bitmap_system.glyph_for_char(font_id, '😀').unwrap();
+
         let params = color_params(
             &bitmap_system,
             font_id,
@@ -1379,8 +1519,11 @@ mod tests {
             point(0, 0),
             1.0,
         );
+
         let rasterized = bitmap_system.rasterize_glyph(&params)?;
+
         rasterized.validate()?;
+
         assert_eq!(rasterized.format, RasterizedGlyphFormat::BgraColor);
         assert!(!rasterized.pixels.is_empty());
         assert!(bitmap_system.renderer.read().faces.is_empty());
@@ -1391,13 +1534,17 @@ mod tests {
     #[test]
     fn native_color_target_failure_uses_monochrome_foreground() -> Result<()> {
         let _apartment = ColorRasterApartment::new()?;
+
         let wic: IWICImagingFactory =
             unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
+
         let bitmap = unsafe {
             wic.CreateBitmap(1, 1, &GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad)?
         };
+
         let factory: ID2D1Factory =
             unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
+
         let properties = D2D1_RENDER_TARGET_PROPERTIES {
             r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
             pixelFormat: D2D1_PIXEL_FORMAT {
@@ -1408,16 +1555,20 @@ mod tests {
             dpiY: 96.0,
             ..Default::default()
         };
+
         let target = unsafe { factory.CreateWicBitmapRenderTarget(&bitmap, &properties)? };
         let maximum_width = unsafe { target.GetMaximumBitmapSize() };
+
         let width: i32 = maximum_width
             .checked_add(1)
             .context("Direct2D bitmap limit overflow")?
             .try_into()?;
+
         drop(target);
 
         let (system, font_id) = color_test_system()?;
         let glyph_id = system.glyph_for_char(font_id, 'B').unwrap();
+
         let params = color_params(
             &system,
             font_id,
@@ -1426,14 +1577,17 @@ mod tests {
             point(0, 0),
             1.0,
         );
+
         system.rasterize_glyph(&params)?;
 
         let renderer = system.renderer.read();
         let glyph_analysis = renderer.create_glyph_run_analysis(&params)?;
+
         let oversized = Bounds {
             origin: point(0.into(), (-10).into()),
             size: size(width.into(), 1.into()),
         };
+
         assert!(renderer.rasterize_color(&params, oversized).is_err());
 
         let native_bounds = RECT {
@@ -1442,18 +1596,22 @@ mod tests {
             right: oversized.origin.x.0 + oversized.size.width.0,
             bottom: oversized.origin.y.0 + oversized.size.height.0,
         };
+
         let coverage = renderer.rasterize_monochrome(
             &glyph_analysis,
             DWRITE_TEXTURE_ALIASED_1x1,
             native_bounds,
         )?;
+
         let fallback = renderer.rasterize_glyph(
             &params,
             &glyph_analysis,
             DWRITE_TEXTURE_ALIASED_1x1,
             native_bounds,
         )?;
+
         fallback.validate()?;
+
         assert_eq!(fallback.format, RasterizedGlyphFormat::BgraColor);
         assert_eq!(fallback.bounds, oversized);
         assert!(fallback.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
@@ -1474,18 +1632,22 @@ mod tests {
     #[test]
     fn wic_readback_preserves_rows_and_converts_premultiplied_alpha() -> Result<()> {
         let _apartment = ColorRasterApartment::new()?;
+
         let factory: IWICImagingFactory =
             unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
+
         let source = [
             0, 0, 0, 0, 32, 64, 128, 128, 17, 18, 19, 20, 255, 0, 0, 255, 9, 8, 7, 0, 21, 22, 23,
             24,
         ];
+
         let bitmap = unsafe {
             factory.CreateBitmapFromMemory(2, 2, &GUID_WICPixelFormat32bppPBGRA, 12, &source)?
         };
 
         for (alpha, expected_alpha) in [(255, 128), (128, 64), (64, 32)] {
             let pixels = read_color_bitmap(&bitmap, 2, 2, alpha)?;
+
             assert_eq!(
                 pixels,
                 [
@@ -1545,10 +1707,12 @@ mod tests {
         match unsafe { CoGetApartmentType(&mut apartment, &mut qualifier) } {
             Err(error) if error.code() == CO_E_NOTINITIALIZED => Ok(None),
             Err(error) => Err(error),
+
             // Other tests can keep the process MTA alive without initializing this thread.
             Ok(()) if apartment == APTTYPE_MTA && qualifier == APTTYPEQUALIFIER_IMPLICIT_MTA => {
                 Ok(None)
             }
+
             Ok(()) => Ok(Some((apartment, qualifier))),
         }
     }
@@ -1594,11 +1758,14 @@ mod tests {
     ) -> Result<()> {
         // Load the native face through Parley's selected instance first.
         let actual = system.rasterize_glyph(params)?;
+
         actual.validate()?;
+
         assert!(!actual.pixels.is_empty());
 
         let renderer = system.renderer.read();
         let glyph_analysis = renderer.create_glyph_run_analysis(params)?;
+
         let base_bounds =
             unsafe { glyph_analysis.GetAlphaTextureBounds(DWRITE_TEXTURE_ALIASED_1x1)? };
 
@@ -1606,6 +1773,7 @@ mod tests {
             // Empty bounds can retain the glyph run's translated origin.
             assert_eq!(base_bounds.right, base_bounds.left);
             assert_eq!(base_bounds.bottom, base_bounds.top);
+
         } else {
             assert!(actual.size.width.0 > base_bounds.right - base_bounds.left);
         }
@@ -1621,8 +1789,11 @@ mod tests {
                 (actual.size.height.0 + 8).into(),
             ),
         };
+
         let padded = renderer.rasterize_color(params, padded_bounds)?;
+
         padded.validate()?;
+
         assert_padded_color_matches(&actual, &padded);
 
         Ok(())
@@ -1649,13 +1820,16 @@ mod tests {
             }
 
             let offset = (actual_y as usize * actual_width + actual_x as usize) * 4;
+
             assert_eq!(pixel, &actual.pixels[offset..offset + 4]);
         }
     }
 
     fn color_test_system() -> Result<(DirectWriteTextSystem, FontId)> {
         let outline_system = DirectWriteTextSystem::new_headless()?;
+
         outline_system.add_fonts(vec![Cow::Borrowed(*gpui_fonts::IBM_PLEX)])?;
+
         let font_id = outline_system.font_id(&font("IBM Plex Sans"))?;
         let mut glyphs = [0; 6];
 
@@ -1664,7 +1838,9 @@ mod tests {
         }
 
         let system = DirectWriteTextSystem::new_headless()?;
+
         system.add_fonts(vec![Cow::Owned(test_color_font(glyphs))])?;
+
         let font_id = system.font_id(&font("IBM Plex Sans"))?;
 
         Ok((system, font_id))
@@ -1679,15 +1855,18 @@ mod tests {
             first_layer,
             second_layer,
         ] = glyphs;
+
         let mut base_records: [(u16, Vec<(u16, u16)>); 4] = [
             (palette, vec![(first_layer, 0), (second_layer, 1)]),
             (foreground, vec![(first_layer, 0xffff), (second_layer, 1)]),
             (small_base, vec![(first_layer, 0), (second_layer, 1)]),
             (empty_base, vec![(first_layer, 0)]),
         ];
+
         base_records.sort_by_key(|record| record.0);
 
         let mut colr = Vec::new();
+
         colr.extend_from_slice(&0u16.to_be_bytes());
         colr.extend_from_slice(&(base_records.len() as u16).to_be_bytes());
         colr.extend_from_slice(&14u32.to_be_bytes());
@@ -1700,6 +1879,7 @@ mod tests {
             colr.extend_from_slice(&glyph_id.to_be_bytes());
             colr.extend_from_slice(&layer_index.to_be_bytes());
             colr.extend_from_slice(&(layers.len() as u16).to_be_bytes());
+
             layer_index += layers.len() as u16;
         }
 
@@ -1714,6 +1894,7 @@ mod tests {
         let cpal = vec![
             0, 0, 0, 2, 0, 1, 0, 2, 0, 0, 0, 14, 0, 0, 0, 0, 255, 255, 255, 0, 0, 128,
         ];
+
         let table_count = read_u16(*gpui_fonts::IBM_PLEX, 4).unwrap() as usize;
         let mut tables = BTreeMap::new();
 
@@ -1722,6 +1903,7 @@ mod tests {
             let tag: [u8; 4] = gpui_fonts::IBM_PLEX[record..record + 4].try_into().unwrap();
             let offset = read_u32(*gpui_fonts::IBM_PLEX, record + 8).unwrap() as usize;
             let length = read_u32(*gpui_fonts::IBM_PLEX, record + 12).unwrap() as usize;
+
             tables.insert(tag, gpui_fonts::IBM_PLEX[offset..offset + length].to_vec());
         }
 
@@ -1732,6 +1914,7 @@ mod tests {
         let table_count = tables.len() as u16;
         let search_range = (1u16 << table_count.ilog2()) * 16;
         let mut font = vec![0; 12 + tables.len() * 16];
+
         font[..4].copy_from_slice(&gpui_fonts::IBM_PLEX[..4]);
         font[4..6].copy_from_slice(&table_count.to_be_bytes());
         font[6..8].copy_from_slice(&search_range.to_be_bytes());
@@ -1743,6 +1926,7 @@ mod tests {
         for (table_index, (tag, data)) in tables.into_iter().enumerate() {
             let offset = font.len();
             let record = 12 + table_index * 16;
+
             font[record..record + 4].copy_from_slice(&tag);
             font[record + 4..record + 8].copy_from_slice(&sfnt_checksum(&data).to_be_bytes());
             font[record + 8..record + 12].copy_from_slice(&(offset as u32).to_be_bytes());
@@ -1760,6 +1944,7 @@ mod tests {
         }
 
         let adjustment = 0xb1b0_afbau32.wrapping_sub(sfnt_checksum(&font));
+
         font[head_offset + 8..head_offset + 12].copy_from_slice(&adjustment.to_be_bytes());
 
         font
@@ -1768,6 +1953,7 @@ mod tests {
     fn sfnt_checksum(data: &[u8]) -> u32 {
         data.chunks(4).fold(0u32, |checksum, chunk| {
             let mut word = [0; 4];
+
             word[..chunk.len()].copy_from_slice(chunk);
 
             checksum.wrapping_add(u32::from_be_bytes(word))
@@ -1803,6 +1989,7 @@ mod tests {
     fn test_collection(faces: &[&[u8]]) -> Vec<u8> {
         let header_len = 12 + faces.len() * 4;
         let mut collection = vec![0; header_len];
+
         collection[..4].copy_from_slice(b"ttcf");
         collection[4..8].copy_from_slice(&0x0001_0000u32.to_be_bytes());
         collection[8..12].copy_from_slice(&(faces.len() as u32).to_be_bytes());
@@ -1814,16 +2001,22 @@ mod tests {
 
             let face_offset = collection.len();
             let offset_position = 12 + face_idx * 4;
+
             collection[offset_position..offset_position + 4]
                 .copy_from_slice(&(face_offset as u32).to_be_bytes());
+
             collection.extend_from_slice(face);
 
             let table_count = read_u16(face, 4).expect("font has an SFNT table count") as usize;
+
             for table_idx in 0..table_count {
                 let table_offset_position = face_offset + 12 + table_idx * 16 + 8;
+
                 let table_offset = read_u32(&collection, table_offset_position)
                     .expect("font has an SFNT table offset");
+
                 let collection_offset = table_offset + face_offset as u32;
+
                 collection[table_offset_position..table_offset_position + 4]
                     .copy_from_slice(&collection_offset.to_be_bytes());
             }

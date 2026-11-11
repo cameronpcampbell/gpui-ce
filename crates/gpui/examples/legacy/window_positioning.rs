@@ -7,10 +7,12 @@ mod example_support;
 use gpui::LinuxWindowBackground;
 #[cfg(target_os = "macos")]
 use gpui::MacosWindowBackground;
+
 use gpui::{
     App, Bounds, Context, DisplayId, Hsla, Pixels, SharedString, Size, Window, WindowBounds,
     WindowKind, WindowOptions, div, point, prelude::*, px, rgb,
 };
+
 use gpui_platform::application;
 
 struct WindowContent {
@@ -67,12 +69,14 @@ fn build_window_options(display_id: DisplayId, bounds: Bounds<Pixels>) -> Window
         .show(true)
         .kind(WindowKind::PopUp)
         .is_movable(false);
+
     #[cfg(target_os = "macos")]
     let options = options.macos_window_background(MacosWindowBackground::Transparent);
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     let options = options.linux_window_background(LinuxWindowBackground::Transparent);
     #[cfg(not(any(target_os = "macos", any(target_os = "linux", target_os = "freebsd"))))]
     let options = options;
+
     options
 }
 
@@ -81,11 +85,13 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         // Create several new windows, positioned in the top right corner of each screen
         let size = Size {
             width: px(350.),
             height: px(75.),
         };
+
         let margin_offset = px(150.);
 
         for screen in cx.displays() {

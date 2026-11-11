@@ -1,5 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote, quote_spanned};
+
 use syn::{
     Expr, FnArg, Ident, ItemFn, MetaNameValue, Token, Type,
     parse::{Parse, ParseStream},
@@ -11,6 +12,7 @@ use syn::{
 
 pub fn test(args: TokenStream, item: TokenStream) -> TokenStream {
     let item_span = item.span();
+
     let Ok(func) = parse2::<ItemFn>(item) else {
         return quote_spanned! { item_span =>
             compile_error!("#[gpui::property_test] must be placed on a function");
@@ -55,6 +57,7 @@ pub fn test(args: TokenStream, item: TokenStream) -> TokenStream {
             #cx_teardowns
             result
         },
+
         Some(_) => quote! {
             let foreground_executor = gpui::ForegroundExecutor::new(std::sync::Arc::new(dispatcher.clone()));
             #cx_vars
@@ -126,9 +129,11 @@ impl Parse for Args {
         for pair in pairs {
             match pair.path.get_ident().map(Ident::to_string).as_deref() {
                 Some("config") => config = Some(pair.value),
+
                 Some("proptest_path") => errors.extend(quote_spanned! {pair.span() =>
                     compile_error!("`gpui::property_test` overrides the `proptest_path` parameter")
                 }),
+
                 _ => remaining_args.push(pair),
             }
         }
@@ -150,6 +155,7 @@ struct ParsedArgs {
 
     // exprs passed at the call-site
     inner_fn_args: TokenStream,
+
     // args in the declaration
     inner_fn_decl_args: TokenStream,
 }
@@ -170,12 +176,14 @@ fn parse_args(args: Punctuated<FnArg, Comma>, test_name: &Ident) -> ParsedArgs {
 
 fn remove_cxs(parsed: &mut ParsedArgs, args: &mut Vec<FnArg>, test_name: &Ident) {
     let mut ix = 0;
+
     args.retain_mut(|arg| {
         if !is_test_cx(arg) {
             return true;
         }
 
         let cx_varname = format_ident!("cx_{ix}");
+
         ix += 1;
 
         parsed.cx_vars.extend(quote!(
@@ -184,6 +192,7 @@ fn remove_cxs(parsed: &mut ParsedArgs, args: &mut Vec<FnArg>, test_name: &Ident)
                 Some(stringify!(#test_name)),
             );
         ));
+
         parsed.cx_teardowns.extend(quote!(
             dispatcher.run_until_parked();
             #cx_varname.executor().forbid_parking();
@@ -219,6 +228,7 @@ fn remove_background_executor(parsed: &mut ParsedArgs, args: &mut Vec<FnArg>) {
         }
 
         parsed.inner_fn_decl_args.extend(quote!(#arg,));
+
         parsed
             .inner_fn_args
             .extend(quote!(gpui::BackgroundExecutor::new(std::sync::Arc::new(

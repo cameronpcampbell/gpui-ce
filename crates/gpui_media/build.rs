@@ -12,8 +12,10 @@ fn main() {
     // An explicit SDKROOT (a cross build, or a pinned SDK) wins over asking
     // Xcode, which a non-Apple host does not have.
     println!("cargo:rerun-if-env-changed=SDKROOT");
+
     let sdk_path = match env::var("SDKROOT") {
         Ok(root) if !root.is_empty() => root,
+
         _ => String::from_utf8(
             Command::new("xcrun")
                 .args(["--sdk", "macosx", "--show-sdk-path"])
@@ -23,9 +25,11 @@ fn main() {
         )
         .unwrap(),
     };
+
     let sdk_path = sdk_path.trim_end();
 
     println!("cargo:rerun-if-changed=src/bindings.h");
+
     let bindings = bindgen::Builder::default()
         .header("src/bindings.h")
         .clang_arg(format!("-isysroot{}", sdk_path))
@@ -47,6 +51,7 @@ fn main() {
         .expect("unable to generate bindings");
 
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("couldn't write dispatch bindings");

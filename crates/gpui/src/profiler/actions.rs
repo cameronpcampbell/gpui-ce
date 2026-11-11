@@ -31,6 +31,7 @@ impl std::fmt::Debug for ActionStatistics {
 impl std::fmt::Display for ActionStatistics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Actions that blocked the longest\n")?;
+
         for action in self
             .longest_runtimes(true)
             .sorted_by_key(|action| action.runtime())
@@ -41,8 +42,10 @@ impl std::fmt::Display for ActionStatistics {
                 format!("{:?}", action.runtime()), // impl dbg does not support alignment
                 action.name
             ))?;
+
             writeln!(f)?;
         }
+
         Ok(())
     }
 }
@@ -66,7 +69,9 @@ impl ActionStatistics {
 
     pub fn take(&mut self) -> Self {
         let taken = std::mem::take(self);
+
         self.running = taken.running;
+
         taken
     }
 
@@ -78,6 +83,7 @@ impl ActionStatistics {
     pub fn update_running_action(&mut self, action: &'static str, started: Instant) {
         self.running = Some((action, started));
     }
+
     #[cfg(not(feature = "profiler"))]
     pub fn update_running_action(&mut self, _action: &'static str, _started: Instant) {}
 
@@ -93,6 +99,7 @@ impl ActionStatistics {
             // concurrently that is no longer true. But that is fine, we do not
             // need to track action timings in tests.
             super::cold_path();
+
             return;
         };
 
@@ -103,6 +110,7 @@ impl ActionStatistics {
         };
 
         let runtime = now.duration_since(started);
+
         if runtime >= self.runtime_to_beat {
             super::cold_path(); // most actions are not the worst, optimize for that
 
@@ -127,6 +135,7 @@ impl ActionStatistics {
                 .expect("never empty");
         }
     }
+
     #[cfg(not(feature = "profiler"))]
     pub fn save_action_timing(&mut self) {}
 
@@ -190,7 +199,9 @@ pub(crate) fn update_running_action(
     let now = Instant::now();
     let action = action.type_id();
     let action = cx.actions.try_resolve_action(&action).unwrap_or("un-named");
+
     ACTION_STATISTICS.lock().update_running_action(action, now);
+
     action
 }
 

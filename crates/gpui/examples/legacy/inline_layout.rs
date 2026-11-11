@@ -77,6 +77,7 @@ impl Render for InlineLayoutExample {
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(720.), px(440.)), cx);
+
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -85,6 +86,7 @@ fn main() {
             |_, cx| cx.new(|_| InlineLayoutExample),
         )
         .unwrap();
+
         cx.activate(true);
     });
 }

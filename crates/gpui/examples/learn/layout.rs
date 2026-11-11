@@ -11,10 +11,12 @@ mod example_prelude;
 
 use example_prelude::init_example;
 use gpui::colors::Colors;
+
 use gpui::{
     Bounds, ColorExt, Context, Div, Hsla, Render, Rgba, Window, WindowBounds, WindowOptions, div,
     prelude::*, px, size,
 };
+
 use palette::{IntoColor, WithAlpha};
 
 // Helper: Colored block for visualization
@@ -487,6 +489,7 @@ fn section(colors: &Colors, title: &'static str, content: impl IntoElement) -> i
 fn main() {
     gpui_platform::application().run(|cx| {
         let bounds = Bounds::centered(None, size(px(650.), px(700.)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(|_| LayoutExample),

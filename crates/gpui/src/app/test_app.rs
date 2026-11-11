@@ -49,6 +49,7 @@ use crate::{
     Platform, PlatformTextSystem, Point, Render, Size, Task, TestDispatcher, TestPlatform,
     TextSystem, Window, WindowBounds, WindowHandle, WindowOptions, app::GpuiMode,
 };
+
 use std::{future::Future, rc::Rc, sync::Arc, time::Duration};
 
 /// A headless app for tests.
@@ -64,8 +65,10 @@ pub struct TestApp {
     platform: Rc<TestPlatform>,
     background_executor: BackgroundExecutor,
     foreground_executor: ForegroundExecutor,
+
     #[allow(dead_code)]
     dispatcher: TestDispatcher,
+
     text_system: Arc<TextSystem>,
 }
 
@@ -113,15 +116,19 @@ impl TestApp {
         let arc_dispatcher = Arc::new(dispatcher.clone());
         let background_executor = BackgroundExecutor::new(arc_dispatcher.clone());
         let foreground_executor = ForegroundExecutor::new(arc_dispatcher);
+
         let platform = match platform_text_system.clone() {
             Some(ts) => TestPlatform::with_text_system(
                 background_executor.clone(),
                 foreground_executor.clone(),
                 ts,
             ),
+
             None => TestPlatform::new(background_executor.clone(), foreground_executor.clone()),
         };
+
         let http_client = crate::http_client::FakeHttpClient::with_404_response();
+
         let text_system = Arc::new(TextSystem::new(
             platform_text_system.unwrap_or_else(|| platform.text_system.clone()),
         ));
@@ -131,6 +138,7 @@ impl TestApp {
             AssetRegistry::from(asset_source).into(),
             http_client,
         );
+
         app.borrow_mut().mode = GpuiMode::test();
 
         Self {
@@ -167,9 +175,12 @@ impl TestApp {
     pub fn update<R>(&mut self, f: impl FnOnce(&mut App) -> R) -> R {
         let result = {
             let mut app = self.app.borrow_mut();
+
             app.update(f)
         };
+
         self.run_until_parked();
+
         result
     }
 
@@ -179,6 +190,7 @@ impl TestApp {
     /// run before `f` is called.
     pub fn read<R>(&self, f: impl FnOnce(&App) -> R) -> R {
         let app = self.app.borrow();
+
         f(&app)
     }
 
@@ -223,6 +235,7 @@ impl TestApp {
         build_view: impl FnOnce(&mut Window, &mut Context<V>) -> V,
     ) -> TestAppWindow<V> {
         let bounds = self.read(|cx| Bounds::maximized(None, cx));
+
         let handle = self.update(|cx| {
             cx.open_window(
                 WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
@@ -491,6 +504,7 @@ impl<V: 'static + Render> TestAppWindow<V> {
     pub fn root(&self) -> Entity<V> {
         let mut app = self.app.borrow_mut();
         let any_handle: AnyWindowHandle = self.handle.into();
+
         app.update_window(any_handle, |root_view, _, _| {
             root_view.downcast::<V>().expect("root view type mismatch")
         })
@@ -506,13 +520,17 @@ impl<V: 'static + Render> TestAppWindow<V> {
         let result = {
             let mut app = self.app.borrow_mut();
             let any_handle: AnyWindowHandle = self.handle.into();
+
             app.update_window(any_handle, |root_view, window, cx| {
                 let view = root_view.downcast::<V>().expect("root view type mismatch");
+
                 view.update(cx, |view, cx| f(view, window, cx))
             })
             .expect("window not found")
         };
+
         self.background_executor.run_until_parked();
+
         result
     }
 
@@ -523,6 +541,7 @@ impl<V: 'static + Render> TestAppWindow<V> {
     /// Panics if the window has been closed.
     pub fn read<R>(&self, f: impl FnOnce(&V, &App) -> R) -> R {
         let app = self.app.borrow();
+
         let view = self
             .app
             .borrow()
@@ -532,6 +551,7 @@ impl<V: 'static + Render> TestAppWindow<V> {
             .and_then(|w| w.root.clone())
             .and_then(|r| r.downcast::<V>().ok())
             .expect("window or root view not found");
+
         f(view.read(&app), &app)
     }
 
@@ -555,6 +575,7 @@ impl<V: 'static + Render> TestAppWindow<V> {
     /// ```
     pub fn title(&self) -> Option<String> {
         let app = self.app.borrow();
+
         app.read_window(&self.handle, |_, _cx| {
             // TODO: expose title through Window API
             None
@@ -596,14 +617,17 @@ impl<V: 'static + Render> TestAppWindow<V> {
     /// ```
     pub fn simulate_keystroke(&mut self, keystroke: &str) {
         let keystroke = Keystroke::parse(keystroke).unwrap();
+
         {
             let mut app = self.app.borrow_mut();
             let any_handle: AnyWindowHandle = self.handle.into();
+
             app.update_window(any_handle, |_, window, cx| {
                 window.dispatch_keystroke(keystroke, cx);
             })
             .unwrap();
         }
+
         self.background_executor.run_until_parked();
     }
 
@@ -741,14 +765,17 @@ impl<V: 'static + Render> TestAppWindow<V> {
     /// Use this for input events that have no dedicated method on [`TestAppWindow`].
     pub fn simulate_event<E: InputEvent>(&mut self, event: E) {
         let platform_input = event.to_platform_input();
+
         {
             let mut app = self.app.borrow_mut();
             let any_handle: AnyWindowHandle = self.handle.into();
+
             app.update_window(any_handle, |_, window, cx| {
                 window.dispatch_event(platform_input, cx);
             })
             .unwrap();
         }
+
         self.background_executor.run_until_parked();
     }
 
@@ -759,17 +786,21 @@ impl<V: 'static + Render> TestAppWindow<V> {
     /// [`TestAppWindow::draw`] to paint at the new size.
     pub fn simulate_resize(&mut self, size: Size<Pixels>) {
         let window_id = self.handle.window_id();
+
         // The window's resize callback updates the app, so it can't run while the app is borrowed.
         let test_window = {
             let mut app = self.app.borrow_mut();
+
             match app.windows.get_mut(window_id) {
                 Some(Some(window)) => window.platform_window.as_test().cloned(),
                 _ => None,
             }
         };
+
         if let Some(mut test_window) = test_window {
             test_window.simulate_resize(size);
         }
+
         self.background_executor.run_until_parked();
     }
 
@@ -779,10 +810,12 @@ impl<V: 'static + Render> TestAppWindow<V> {
     /// [`Context::on_focus`] only run in the active window, so activate it before testing them.
     pub fn activate(&mut self) {
         let window_id = self.handle.window_id();
+
         let test_window = match self.app.borrow_mut().windows.get_mut(window_id) {
             Some(Some(window)) => window.platform_window.as_test().cloned(),
             _ => None,
         };
+
         self.platform.set_active_window(test_window);
         self.background_executor.run_until_parked();
     }
@@ -795,6 +828,7 @@ impl<V: 'static + Render> TestAppWindow<V> {
     pub fn draw(&mut self) {
         let mut app = self.app.borrow_mut();
         let any_handle: AnyWindowHandle = self.handle.into();
+
         app.update_window(any_handle, |_, window, cx| {
             window.draw(cx).clear(cx);
         })
@@ -826,6 +860,7 @@ mod tests {
     impl Counter {
         fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
             let focus_handle = cx.focus_handle();
+
             Self {
                 count: 0,
                 focus_handle,
@@ -864,6 +899,7 @@ mod tests {
         });
 
         drop(window);
+
         app.update(|cx| cx.shutdown());
     }
 
@@ -906,6 +942,7 @@ mod tests {
         let mut app = TestApp::new();
 
         struct MyGlobal(String);
+
         impl Global for MyGlobal {}
 
         assert!(!app.has_global::<MyGlobal>());

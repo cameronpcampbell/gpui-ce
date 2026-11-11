@@ -77,6 +77,7 @@ mod tests {
     #[test]
     fn test_selection_serial_ignores_unrelated_serial_kinds() {
         let mut serial_tracker = SerialTracker::new();
+
         serial_tracker.update(SerialKind::MousePress, 3783);
         serial_tracker.update(SerialKind::InputMethod, 5011);
         serial_tracker.update(SerialKind::KeyPress, 3787);
@@ -89,6 +90,7 @@ mod tests {
     #[test]
     fn test_selection_serial_uses_mouse_press_without_key_press() {
         let mut serial_tracker = SerialTracker::new();
+
         serial_tracker.update(SerialKind::MousePress, 3783);
 
         assert_eq!(raw_selection_serial(&serial_tracker), Some(3783));
@@ -97,6 +99,7 @@ mod tests {
     #[test]
     fn test_selection_serial_uses_event_arrival_order_across_rollover() {
         let mut serial_tracker = SerialTracker::new();
+
         serial_tracker.update(SerialKind::KeyPress, 0xffff_fff0);
         serial_tracker.update(SerialKind::MousePress, 0x0000_0010);
 
@@ -119,6 +122,7 @@ mod tests {
     #[test]
     fn test_zero_is_a_valid_selection_serial() {
         let mut serial_tracker = SerialTracker::new();
+
         serial_tracker.update(SerialKind::KeyPress, 0);
 
         assert_eq!(raw_selection_serial(&serial_tracker), Some(0));

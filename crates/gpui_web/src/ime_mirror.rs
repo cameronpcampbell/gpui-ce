@@ -55,26 +55,31 @@ const MIN_EDGE_CHARS: usize = 64;
 /// read-only control, and [`ImeMirror::schedule_sync`].
 pub(crate) struct ImeMirror {
     element: web_sys::HtmlTextAreaElement,
+
     /// The mirror text most recently synced to (or observed in) the hidden
     /// element. `input` events diff the element's new value against this to
     /// recover what edit the IME performed.
     text: RefCell<String>,
+
     /// The element's selection (in element-local UTF-16 offsets) as of the
     /// last sync or imported edit. Gives IME edits their position relative
     /// to the caret; deliberately element-local, never document
     /// coordinates, which go stale in a collaborative document.
     selection: Cell<(u32, u32)>,
+
     /// Document offset where the mirror window starts — as a *hint only*.
     /// It is never trusted for edits: every use first re-verifies the
     /// stored window text against the document at this alignment, so a
     /// stale hint costs a window rebuild instead of a misplaced edit.
     window_hint: Cell<usize>,
+
     /// Whether a coalesced sync is already scheduled for the next task.
     /// Multiple sync requests within one gesture must collapse into a
     /// single element write after the gesture: keyboards sample the field
     /// between writes, and a mid-gesture barrage desynchronizes their word
     /// model.
     sync_scheduled: Cell<bool>,
+
     /// Whether the `selectionchange` import saw an element selection move
     /// it could not apply (the app selection changed underneath). Sync
     /// normally defers to a pending import when the element's live
@@ -105,7 +110,9 @@ impl ImeMirror {
             .map_err(|e| anyhow::anyhow!("Failed to create textarea element: {e:?}"))?
             .dyn_into()
             .map_err(|e| anyhow::anyhow!("Created element is not a textarea: {e:?}"))?;
+
         let style = element.style();
+
         style.set_property("position", "fixed").ok();
         style.set_property("top", "0").ok();
         style.set_property("left", "0").ok();
@@ -116,9 +123,12 @@ impl ImeMirror {
         // whose font is smaller than 16px; with page zoom disabled the user
         // can never zoom back out, so keep the hidden IME input at 16px.
         style.set_property("font-size", "16px").ok();
+
         body.append_child(&element)
             .map_err(|e| anyhow::anyhow!("Failed to append input to body: {e:?}"))?;
+
         element.focus().ok();
+
         // The element must stay focused to receive hardware-key and IME
         // events, but on touch-first devices a focused *editable* element
         // invites the browser to summon the virtual keyboard on the next
@@ -136,10 +146,12 @@ impl ImeMirror {
             sync_scheduled: Cell::new(false),
             selection_import_rejected: Cell::new(false),
         };
+
         // Until an input handler asks otherwise, the element is an IME
         // conduit, not a form field: browser-side text assistance would
         // mutate it behind the app's back.
         this.apply_configuration(&TextInputConfiguration::default());
+
         Ok(this)
     }
 
@@ -149,14 +161,19 @@ impl ImeMirror {
     /// can restart the IME's input connection.
     pub(crate) fn apply_configuration(&self, configuration: &TextInputConfiguration) {
         let element: &web_sys::Element = self.element.as_ref();
+
         self.element.set_spellcheck(configuration.suggestions);
+
         let on_off = |enabled: bool| if enabled { "on" } else { "off" };
+
         element
             .set_attribute("autocomplete", on_off(configuration.suggestions))
             .ok();
+
         element
             .set_attribute("autocorrect", on_off(configuration.autocorrect))
             .ok();
+
         element
             .set_attribute(
                 "autocapitalize",
@@ -168,6 +185,7 @@ impl ImeMirror {
                 },
             )
             .ok();
+
         let enter_key_hint = match configuration.input_action {
             TextInputAction::Unspecified => None,
             TextInputAction::Enter => Some("enter"),
@@ -178,6 +196,7 @@ impl ImeMirror {
             TextInputAction::Search => Some("search"),
             TextInputAction::Send => Some("send"),
         };
+
         match enter_key_hint {
             Some(hint) => element.set_attribute("enterkeyhint", hint).ok(),
             None => element.remove_attribute("enterkeyhint").ok(),
@@ -194,6 +213,7 @@ impl ImeMirror {
 
     pub(crate) fn is_focused(&self) -> bool {
         let element: &web_sys::Element = self.element.as_ref();
+
         web_sys::window()
             .and_then(|window| window.document())
             .and_then(|document| document.active_element())
@@ -214,6 +234,7 @@ impl ImeMirror {
 
     pub(crate) fn remove(&self) {
         let element: &web_sys::Element = self.element.as_ref();
+
         element.remove();
     }
 
@@ -244,13 +265,16 @@ impl ImeMirror {
     /// back would restart the IME mid-gesture.
     pub(crate) fn adopt_element_state(&self) {
         *self.text.borrow_mut() = self.element.value();
+
         let selection_start = self.selection_start().unwrap_or(0);
+
         let selection_end = self
             .element
             .selection_end()
             .ok()
             .flatten()
             .unwrap_or(selection_start);
+
         self.selection.set((selection_start, selection_end));
     }
 
@@ -279,13 +303,17 @@ impl ImeMirror {
         if window.ime_mirror.sync_scheduled.replace(true) {
             return;
         }
+
         let closure = wasm_bindgen::closure::Closure::once_into_js({
             let window = Rc::clone(window);
+
             move || {
                 window.ime_mirror.sync_scheduled.set(false);
+
                 sync(&window);
             }
         });
+
         window
             .browser_window
             .set_timeout_with_callback(closure.unchecked_ref())
@@ -320,7 +348,9 @@ impl ImeMirror {
             if window.is_composing.get() {
                 return;
             }
+
             let mirror = &window.ime_mirror;
+
             // A live element selection that differs from the stored baseline
             // while the value still matches is an IME-driven selection move
             // whose `selectionchange` import hasn't dispatched yet (the event
@@ -334,21 +364,27 @@ impl ImeMirror {
             {
                 let live_start = mirror.selection_start().unwrap_or(0);
                 let live_end = mirror.element_selection_end().unwrap_or(live_start);
+
                 if (live_start, live_end) != mirror.selection.get() {
                     return;
                 }
             }
+
             let selection = window
                 .with_input_handler(|handler| handler.selected_text_range(false))
                 .flatten();
+
             let Some(selection) = selection else {
                 if !mirror.text.borrow().is_empty() {
                     mirror.element.set_value("");
                     mirror.text.borrow_mut().clear();
                 }
+
                 mirror.selection.set((0, 0));
+
                 return;
             };
+
             // The mirrored window never crosses the handler's editable
             // range: everything in the element is reachable by multi-step
             // IME edit gestures (word deletion, autocorrect rewrites), so
@@ -383,30 +419,38 @@ impl ImeMirror {
 
             let mut window_range = selection.range.start.saturating_sub(CONTEXT_CHARS)
                 ..selection.range.end + CONTEXT_CHARS;
+
             if let Some(editable_range) = &editable_range {
                 window_range.start = window_range.start.max(editable_range.start);
+
                 window_range.end = window_range
                     .end
                     .min(editable_range.end)
                     .max(window_range.start);
             }
+
             let mut adjusted = None;
+
             let text = window
                 .with_input_handler(|handler| {
                     handler.text_for_range(window_range.clone(), &mut adjusted)
                 })
                 .flatten()
                 .unwrap_or_default();
+
             let window_start = adjusted.unwrap_or(window_range).start;
 
             if *mirror.text.borrow() != text || mirror.element.value() != text {
                 mirror.element.set_value(&text);
+
                 *mirror.text.borrow_mut() = text;
             }
 
             mirror.window_hint.set(window_start);
+
             let selection_start = selection.range.start.saturating_sub(window_start) as u32;
             let selection_end = selection.range.end.saturating_sub(window_start) as u32;
+
             if mirror.element.selection_start().ok().flatten() != Some(selection_start)
                 || mirror.element.selection_end().ok().flatten() != Some(selection_end)
             {
@@ -415,12 +459,14 @@ impl ImeMirror {
                     .set_selection_range(selection_start, selection_end)
                     .ok();
             }
+
             // Read the selection back rather than trusting the computed
             // values: the browser clamps out-of-bounds positions, and a
             // stored selection the element doesn't actually have would
             // corrupt the next diff.
             let actual_start = mirror.element.selection_start().ok().flatten();
             let actual_end = mirror.element.selection_end().ok().flatten();
+
             mirror.selection.set((
                 actual_start.unwrap_or(selection_start),
                 actual_end.unwrap_or(selection_end),
@@ -445,9 +491,11 @@ fn move_selection_within_window(
     let mirror = &window.ime_mirror;
     let stored_text = mirror.text.borrow().clone();
     let stored_length = stored_text.encode_utf16().count();
+
     if stored_length == 0 || mirror.element.value() != stored_text {
         return false;
     }
+
     let window_start = mirror.window_hint.get();
 
     // The new selection must sit inside the window with enough context
@@ -463,14 +511,19 @@ fn move_selection_within_window(
     {
         return false;
     }
+
     let left_boundary = editable_range.map_or(0, |range| range.start);
+
     let Some(selection_start) = app_selection.start.checked_sub(window_start) else {
         return false;
     };
+
     let selection_end = selection_start + (app_selection.end - app_selection.start);
+
     if selection_end > stored_length {
         return false;
     }
+
     if selection_start < min_edge && window_start > left_boundary {
         return false;
     }
@@ -481,6 +534,7 @@ fn move_selection_within_window(
     // excuses a missing right margin, as does reaching the editable
     // range's end.
     let mut adjusted = None;
+
     let document_text = window
         .with_input_handler(|handler| {
             handler.text_for_range(
@@ -490,12 +544,16 @@ fn move_selection_within_window(
         })
         .flatten()
         .unwrap_or_default();
+
     let document_text_length = document_text.encode_utf16().count();
+
     let window_at_right_boundary = document_text_length == stored_length
         || editable_range.is_some_and(|range| window_start + stored_length >= range.end);
+
     if selection_end + min_edge > stored_length && !window_at_right_boundary {
         return false;
     }
+
     if !document_text.starts_with(stored_text.as_str()) || document_text_length > stored_length + 1
     {
         return false;
@@ -505,14 +563,18 @@ fn move_selection_within_window(
         .element
         .set_selection_range(selection_start as u32, selection_end as u32)
         .ok();
+
     let actual_start = mirror.element.selection_start().ok().flatten();
     let actual_end = mirror.element.selection_end().ok().flatten();
+
     if actual_start != Some(selection_start as u32) || actual_end != Some(selection_end as u32) {
         return false;
     }
+
     mirror
         .selection
         .set((selection_start as u32, selection_end as u32));
+
     true
 }
 
@@ -536,12 +598,14 @@ fn is_consistent(
     if stored_length == 0 {
         return false;
     }
+
     // The element's real selection must match what we believe it is.
     if mirror.element.selection_start().ok().flatten() != Some(element_selection_start as u32)
         || mirror.element.selection_end().ok().flatten() != Some(element_selection_end as u32)
     {
         return false;
     }
+
     // Enough context on both sides of the selection, unless the window
     // is pinned to a boundary of the document or of the editable range
     // (start of window at the left boundary, or window end at the right
@@ -551,6 +615,7 @@ fn is_consistent(
         Some(start) => start,
         None => return false,
     };
+
     // A window that leaks outside the editable range mirrors text the IME
     // must not reach, however consistent it is.
     if let Some(range) = editable_range
@@ -558,17 +623,21 @@ fn is_consistent(
     {
         return false;
     }
+
     let left_boundary = editable_range.map_or(0, |range| range.start);
     let has_left_context = element_selection_start >= min_edge || app_window_start <= left_boundary;
     let right_context = stored_length.saturating_sub(element_selection_end);
+
     if !has_left_context || right_context < min_edge {
         let window_end = app_window_start + stored_length;
+
         let at_right_boundary = if let Some(range) = editable_range {
             window_end >= range.end
         } else {
             // Verify the window genuinely reaches the end of the document
             // by asking for one unit past the stored window.
             let mut adjusted = None;
+
             window
                 .with_input_handler(|handler| {
                     handler.text_for_range(window_end..window_end + 1, &mut adjusted)
@@ -577,14 +646,17 @@ fn is_consistent(
                 .unwrap_or_default()
                 .is_empty()
         };
+
         if !has_left_context || !at_right_boundary {
             return false;
         }
     }
+
     // The stored window must still equal the document at this alignment
     // (a remote edit inside the window invalidates it), and the element
     // must still hold exactly the stored text.
     let mut adjusted = None;
+
     let document_text = window
         .with_input_handler(|handler| {
             handler.text_for_range(
@@ -594,12 +666,15 @@ fn is_consistent(
         })
         .flatten()
         .unwrap_or_default();
+
     if document_text != stored_text {
         return false;
     }
+
     if mirror.element.value() != stored_text {
         return false;
     }
+
     // The element selection corresponds to the app selection end too?
     app_selection.end.checked_sub(app_window_start) == Some(element_selection_end)
 }

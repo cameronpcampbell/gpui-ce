@@ -13,7 +13,9 @@ pub fn marked_text_offsets_by(
     for char in marked_text.chars() {
         if markers.contains(&char) {
             let char_offsets = extracted_markers.entry(char).or_default();
+
             char_offsets.push(unmarked_text.len());
+
         } else {
             unmarked_text.push(char);
         }
@@ -35,6 +37,7 @@ pub fn marked_text_ranges_by(
     let all_markers = markers.iter().flat_map(|m| m.markers()).collect();
 
     let (unmarked_text, mut marker_offsets) = marked_text_offsets_by(marked_text, all_markers);
+
     let range_lookup = markers
         .into_iter()
         .map(|marker| {
@@ -47,28 +50,36 @@ pub fn marked_text_ranges_by(
                         .into_iter()
                         .map(|empty_index| empty_index..empty_index)
                         .collect::<Vec<Range<usize>>>(),
+
                     TextRangeMarker::Range(start_marker, end_marker) => {
                         let starts = marker_offsets.remove(&start_marker).unwrap_or_default();
                         let ends = marker_offsets.remove(&end_marker).unwrap_or_default();
+
                         assert_eq!(starts.len(), ends.len(), "marked ranges are unbalanced");
+
                         starts
                             .into_iter()
                             .zip(ends)
                             .map(|(start, end)| {
                                 assert!(end >= start, "marked ranges must be disjoint");
+
                                 start..end
                             })
                             .collect::<Vec<Range<usize>>>()
                     }
+
                     TextRangeMarker::ReverseRange(start_marker, end_marker) => {
                         let starts = marker_offsets.remove(&start_marker).unwrap_or_default();
                         let ends = marker_offsets.remove(&end_marker).unwrap_or_default();
+
                         assert_eq!(starts.len(), ends.len(), "marked ranges are unbalanced");
+
                         starts
                             .into_iter()
                             .zip(ends)
                             .map(|(start, end)| {
                                 assert!(end >= start, "marked ranges must be disjoint");
+
                                 end..start
                             })
                             .collect::<Vec<Range<usize>>>()
@@ -121,10 +132,13 @@ pub fn marked_text_ranges(
     let mut current_range_cursor = None;
 
     let marked_text = marked_text.replace('•', " ");
+
     for (marked_ix, marker) in marked_text.match_indices(&['«', '»', 'ˇ']) {
         unmarked_text.push_str(&marked_text[prev_marked_ix..marked_ix]);
+
         let unmarked_len = unmarked_text.len();
         let len = marker.len();
+
         prev_marked_ix = marked_ix + len;
 
         match marker {
@@ -135,16 +149,20 @@ pub fn marked_text_ranges(
                     }
 
                     current_range_cursor = Some(unmarked_len);
+
                 } else {
                     ranges.push(unmarked_len..unmarked_len);
                 }
             }
+
             "«" => {
                 if current_range_start.is_some() {
                     panic!("unexpected range start marker '«' at index {marked_ix}");
                 }
+
                 current_range_start = Some(unmarked_len);
             }
+
             "»" => {
                 let current_range_start = if let Some(start) = current_range_start.take() {
                     start
@@ -153,12 +171,14 @@ pub fn marked_text_ranges(
                 };
 
                 let mut reversed = false;
+
                 if let Some(current_range_cursor) = current_range_cursor.take() {
                     if current_range_cursor == current_range_start {
                         reversed = true;
                     } else if current_range_cursor != unmarked_len {
                         panic!("unexpected 'ˇ' marker in the middle of a range");
                     }
+
                 } else if ranges_are_directed {
                     panic!("missing 'ˇ' marker to indicate range direction");
                 }
@@ -169,23 +189,27 @@ pub fn marked_text_ranges(
                     current_range_start..unmarked_len
                 });
             }
+
             _ => unreachable!(),
         }
     }
 
     unmarked_text.push_str(&marked_text[prev_marked_ix..]);
+
     (unmarked_text, ranges)
 }
 
 #[track_caller]
 pub fn marked_text_offsets(marked_text: &str) -> (String, Vec<usize>) {
     let (text, ranges) = marked_text_ranges(marked_text, false);
+
     (
         text,
         ranges
             .into_iter()
             .map(|range| {
                 assert_eq!(range.start, range.end);
+
                 range.start
             })
             .collect(),
@@ -198,6 +222,7 @@ pub fn generate_marked_text(
     indicate_cursors: bool,
 ) -> String {
     let mut marked_text = unmarked_text.to_string();
+
     for range in ranges.iter().rev() {
         if indicate_cursors {
             match range.start.cmp(&range.end) {
@@ -205,19 +230,23 @@ pub fn generate_marked_text(
                     marked_text.insert_str(range.end, "ˇ»");
                     marked_text.insert(range.start, '«');
                 }
+
                 Ordering::Equal => {
                     marked_text.insert(range.start, 'ˇ');
                 }
+
                 Ordering::Greater => {
                     marked_text.insert(range.start, '»');
                     marked_text.insert_str(range.end, "«ˇ");
                 }
             }
+
         } else {
             match range.start.cmp(&range.end) {
                 Ordering::Equal => {
                     marked_text.insert(range.start, 'ˇ');
                 }
+
                 _ => {
                     marked_text.insert(range.end, '»');
                     marked_text.insert(range.start, '«');
@@ -225,6 +254,7 @@ pub fn generate_marked_text(
             }
         }
     }
+
     marked_text
 }
 

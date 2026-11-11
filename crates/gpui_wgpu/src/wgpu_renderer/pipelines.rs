@@ -1,4 +1,5 @@
 use crate::RendererTier;
+
 use gpui_render::{
     artifacts::{
         BASE_DOWNLEVEL_WGSL, BASE_WGSL, BLUR_BINDINGS, DOWNLEVEL_BLUR_BINDINGS,
@@ -10,6 +11,7 @@ use gpui_render::{
     },
     shaders::interface as shader,
 };
+
 use std::num::NonZeroU64;
 
 /// Group-1 payload: a storage buffer on modern tiers, a data texture plus per-batch
@@ -30,6 +32,7 @@ fn instance_binding_entries(source: InstanceBindingSource<'_>) -> Vec<wgpu::Bind
                 resource: wgpu::BindingResource::Buffer(instances),
             }]
         }
+
         InstanceBindingSource::DataTexture {
             texture,
             range_uniforms,
@@ -60,6 +63,7 @@ pub(super) struct WgpuPipelines {
     pub(super) subpixel_sprites: Option<WgpuRenderPipeline>,
     pub(super) polychrome_sprites: WgpuRenderPipeline,
     pub(super) smoothed_polychrome_sprites: WgpuRenderPipeline,
+
     #[cfg_attr(
         not(any(
             all(target_family = "wasm", feature = "custom-gpu"),
@@ -71,6 +75,7 @@ pub(super) struct WgpuPipelines {
         allow(dead_code)
     )]
     pub(super) surfaces: WgpuRenderPipeline,
+
     pub(super) blur_downsample: WgpuRenderPipeline,
     pub(super) blur: WgpuRenderPipeline,
     pub(super) blur_composite: WgpuRenderPipeline,
@@ -135,6 +140,7 @@ impl WgpuBindGroupLayouts {
                 BLUR_BINDINGS,
                 None,
             ),
+
             RendererTier::WebGl2 => (
                 DOWNLEVEL_INSTANCE_BINDINGS,
                 DOWNLEVEL_TEXTURED_INSTANCE_BINDINGS,
@@ -145,43 +151,51 @@ impl WgpuBindGroupLayouts {
                 Some(DOWNLEVEL_RANGE_BINDING),
             ),
         };
+
         let globals = generated_bind_group_layout(device, "globals_layout", GLOBAL_BINDINGS, None);
+
         let instances = generated_bind_group_layout(
             device,
             "instances_layout",
             instance_table,
             instance_dynamic,
         );
+
         let monochrome_sprites = generated_bind_group_layout(
             device,
             "monochrome_sprites_layout",
             monochrome_table,
             instance_dynamic,
         );
+
         let subpixel_sprites = generated_bind_group_layout(
             device,
             "subpixel_sprites_layout",
             subpixel_table,
             instance_dynamic,
         );
+
         let textured_instances = generated_bind_group_layout(
             device,
             "textured_instances_layout",
             textured_table,
             instance_dynamic,
         );
+
         let surfaces = generated_bind_group_layout(
             device,
             "surfaces_layout",
             surface_table,
             Some(shader::DATA_BUFFER_BINDING),
         );
+
         let blur = generated_bind_group_layout(
             device,
             "blur_layout",
             blur_table,
             Some(shader::DATA_BUFFER_BINDING),
         );
+
         Self {
             globals,
             instances,
@@ -223,6 +237,7 @@ impl WgpuBindGroupLayouts {
         source: InstanceBindingSource<'_>,
     ) -> wgpu::BindGroup {
         let entries = instance_binding_entries(source);
+
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("instances"),
             layout: &self.instances,
@@ -239,14 +254,17 @@ impl WgpuBindGroupLayouts {
         sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
         let mut entries = instance_binding_entries(source);
+
         entries.push(wgpu::BindGroupEntry {
             binding: shader::PRIMARY_TEXTURE_BINDING,
             resource: wgpu::BindingResource::TextureView(texture),
         });
+
         entries.push(wgpu::BindGroupEntry {
             binding: shader::PRIMARY_SAMPLER_BINDING,
             resource: wgpu::BindingResource::Sampler(sampler),
         });
+
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("textured_instances"),
             layout: match data_layout {
@@ -338,12 +356,15 @@ impl WgpuPipelines {
     ) -> Self {
         let dual_source_blending = tier == RendererTier::Modern
             && supported_dual_source_blending(device, dual_source_blending);
+
         let base_source = match tier {
             RendererTier::Modern => BASE_WGSL,
             // GLES lacks vertex-stage storage; the dialect reads the data texture.
             RendererTier::WebGl2 => BASE_DOWNLEVEL_WGSL,
         };
+
         let shader_module = create_shader_module(device, "gpui_shaders", base_source);
+
         let subpixel_shader_module = dual_source_blending.then(|| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("gpui_subpixel_shaders"),
@@ -359,30 +380,35 @@ impl WgpuPipelines {
             bind_group_layouts,
             &bind_group_layouts.instances,
         );
+
         let monochrome_layout = create_pipeline_layout(
             device,
             "monochrome_pipeline_layout",
             bind_group_layouts,
             &bind_group_layouts.monochrome_sprites,
         );
+
         let subpixel_layout = create_pipeline_layout(
             device,
             "subpixel_pipeline_layout",
             bind_group_layouts,
             &bind_group_layouts.subpixel_sprites,
         );
+
         let textured_layout = create_pipeline_layout(
             device,
             "textured_pipeline_layout",
             bind_group_layouts,
             &bind_group_layouts.textured_instances,
         );
+
         let surface_layout = create_pipeline_layout(
             device,
             "surface_pipeline_layout",
             bind_group_layouts,
             &bind_group_layouts.surfaces,
         );
+
         let blur_layout = create_pipeline_layout(
             device,
             "blur_pipeline_layout",
@@ -391,12 +417,15 @@ impl WgpuPipelines {
         );
 
         let scene_target = color_target(surface_format, Some(scene_blend_state(alpha_mode)));
+
         let path_rasterization_target = color_target(
             surface_format,
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
+
         let path_target = color_target(surface_format, Some(path_blend_state()));
         let overwrite_target = color_target(surface_format, None);
+
         let composite_target =
             color_target(surface_format, Some(premultiplied_composite_blend_state()));
 
@@ -405,12 +434,15 @@ impl WgpuPipelines {
             shader::DataLayout::TexturedInstances => &textured_layout,
             shader::DataLayout::MonochromeSprites => &monochrome_layout,
             shader::DataLayout::SubpixelSprites => &subpixel_layout,
+
             shader::DataLayout::NativeOnly => {
                 panic!("native-only shader pipeline cannot be created by wgpu")
             }
+
             shader::DataLayout::Surface => &surface_layout,
             shader::DataLayout::Blur => &blur_layout,
         };
+
         let create =
             |specification: shader::Pipeline, target: &wgpu::ColorTargetState, samples, module| {
                 create_render_pipeline(
@@ -501,24 +533,29 @@ fn generated_bind_group_layout(
                     has_dynamic_offset: dynamic_uniform_binding == Some(binding.binding),
                     min_binding_size: NonZeroU64::new(min_size),
                 },
+
                 GeneratedBindingKind::StorageRead(min_size) => wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
                     min_binding_size: NonZeroU64::new(min_size),
                 },
+
                 GeneratedBindingKind::Texture2dFloat => wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
+
                 GeneratedBindingKind::FilteringSampler => {
                     wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
                 }
+
                 GeneratedBindingKind::DataTexture => wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Uint,
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
+
                 GeneratedBindingKind::RangeUniform => wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
@@ -599,6 +636,7 @@ fn create_render_pipeline(
         multiview_mask: None,
         cache: None,
     });
+
     WgpuRenderPipeline { raw, specification }
 }
 
@@ -617,6 +655,7 @@ fn supported_dual_source_blending(device: &wgpu::Device, requested: bool) -> boo
     let supported = device
         .features()
         .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
+
     if requested && !supported {
         log::error!(
             "dual-source blending was requested but is absent from device features {:?}; falling \
@@ -624,6 +663,7 @@ fn supported_dual_source_blending(device: &wgpu::Device, requested: bool) -> boo
             device.features(),
         );
     }
+
     requested && supported
 }
 
@@ -633,6 +673,7 @@ fn scene_blend_state(alpha_mode: wgpu::CompositeAlphaMode) -> wgpu::BlendState {
     } else {
         wgpu::BlendFactor::SrcAlpha
     };
+
     source_over_blend_state(source_color_factor)
 }
 
@@ -690,6 +731,7 @@ mod tests {
         let device = &context.device;
         let tier = context.renderer_tier();
         let layouts = WgpuBindGroupLayouts::new(device, tier);
+
         let _pipelines = WgpuPipelines::new(
             device,
             &layouts,
@@ -706,6 +748,7 @@ mod tests {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("shader_interface_test_texture"),
             size: wgpu::Extent3d {
@@ -720,8 +763,10 @@ mod tests {
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
+
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+
         let binding = || wgpu::BufferBinding {
             buffer: &buffer,
             offset: 0,
@@ -730,6 +775,7 @@ mod tests {
 
         let _globals = layouts.create_globals(device, "test_globals", binding(), binding());
         let _instances = layouts.create_instances(device, InstanceBindingSource::Buffer(binding()));
+
         let _textured = layouts.create_textured_instances(
             device,
             shader::DataLayout::MonochromeSprites,
@@ -737,6 +783,7 @@ mod tests {
             &view,
             &sampler,
         );
+
         #[cfg(any(
             all(target_family = "wasm", feature = "custom-gpu"),
             target_os = "macos",
@@ -746,6 +793,7 @@ mod tests {
         ))]
         let _surface = layouts.create_surface(device, binding(), &view, &view, &sampler);
         let _blur = layouts.create_blur(device, binding(), &view, &sampler);
+
         Ok(())
     }
 
@@ -759,6 +807,7 @@ mod tests {
         let device = &context.device;
         let tier = crate::RendererTier::WebGl2;
         let layouts = WgpuBindGroupLayouts::new(device, tier);
+
         let pipelines = WgpuPipelines::new(
             device,
             &layouts,
@@ -768,14 +817,18 @@ mod tests {
             false,
             tier,
         );
+
         assert!(pipelines.quads.fixed_vertex_count() > 0);
 
         let mut arena = InstanceBufferArena::new(device, &layouts, tier);
+
         assert_eq!(arena.transport(), InstanceTransport::DataTexture);
+
         arena
             .ensure_capacity(device, &layouts, 4096, 8)
             .then_some(())
             .expect("small downlevel capacities must always be available");
+
         let mut upload = arena
             .begin_upload(&context.queue, 4096, 8)
             .expect("mapped downlevel staging");
@@ -785,9 +838,11 @@ mod tests {
             border_dashed_gap: 0.5,
             ..Quad::default()
         };
+
         let slice = upload
             .write(&[custom_dash, Quad::default()])
             .expect("small batch must fit");
+
         // Downlevel draws start at instance zero; the base travels in the range offset.
         assert_eq!(slice.range(), 0..2);
 
@@ -805,8 +860,10 @@ mod tests {
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
+
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+
         let _textured = layouts.create_textured_instances(
             device,
             shader::DataLayout::MonochromeSprites,
@@ -817,8 +874,11 @@ mod tests {
 
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
         upload.finish(&mut encoder);
+
         let _commands = encoder.finish();
+
         Ok(())
     }
 }

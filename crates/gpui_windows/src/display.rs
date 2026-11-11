@@ -3,6 +3,7 @@ use itertools::Itertools;
 use smallvec::SmallVec;
 use std::rc::Rc;
 use uuid::Uuid;
+
 use windows::{
     Win32::{
         Foundation::*,
@@ -41,6 +42,7 @@ impl WindowsDisplay {
         let work_area = info.monitorInfo.rcWork;
         let uuid = generate_uuid(&info.szDevice);
         let scale_factor = get_scale_factor_for_monitor(handle).log_err()?;
+
         let physical_size = size(
             (monitor_size.right - monitor_size.left).into(),
             (monitor_size.bottom - monitor_size.top).into(),
@@ -81,14 +83,18 @@ impl WindowsDisplay {
     pub fn primary_monitor() -> Option<Self> {
         // https://devblogs.microsoft.com/oldnewthing/20070809-00/?p=25643
         const POINT_ZERO: POINT = POINT { x: 0, y: 0 };
+
         let monitor = unsafe { MonitorFromPoint(POINT_ZERO, MONITOR_DEFAULTTOPRIMARY) };
+
         if monitor.is_invalid() {
             log::error!(
                 "can not find the primary monitor: {}",
                 std::io::Error::last_os_error()
             );
+
             return None;
         }
+
         WindowsDisplay::new(Self::display_id_for_monitor(monitor))
     }
 
@@ -101,17 +107,21 @@ impl WindowsDisplay {
     /// Check if the center point of given bounds is inside this monitor
     pub fn check_given_bounds(&self, bounds: Bounds<Pixels>) -> bool {
         let center = bounds.center();
+
         let center = POINT {
             x: (center.x.as_f32() * self.scale_factor) as i32,
             y: (center.y.as_f32() * self.scale_factor) as i32,
         };
+
         let monitor = unsafe { MonitorFromPoint(center, MONITOR_DEFAULTTONULL) };
+
         if monitor.is_invalid() {
             false
         } else {
             let Some(display) = WindowsDisplay::new(Self::display_id_for_monitor(monitor)) else {
                 return false;
             };
+
             display.uuid == self.uuid
         }
     }
@@ -153,6 +163,7 @@ impl PlatformDisplay for WindowsDisplay {
 
 fn available_monitors() -> SmallVec<[HMONITOR; 4]> {
     let mut monitors: SmallVec<[HMONITOR; 4]> = SmallVec::new();
+
     unsafe {
         EnumDisplayMonitors(
             None,
@@ -163,6 +174,7 @@ fn available_monitors() -> SmallVec<[HMONITOR; 4]> {
         .ok()
         .log_err();
     }
+
     monitors
 }
 
@@ -173,19 +185,24 @@ unsafe extern "system" fn monitor_enum_proc(
     data: LPARAM,
 ) -> BOOL {
     let monitors = data.0 as *mut SmallVec<[HMONITOR; 4]>;
+
     unsafe { (*monitors).push(hmonitor) };
+
     BOOL(1)
 }
 
 fn get_monitor_info(hmonitor: HMONITOR) -> anyhow::Result<MONITORINFOEXW> {
     let mut monitor_info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
+
     monitor_info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+
     let status = unsafe {
         GetMonitorInfoW(
             hmonitor,
             &mut monitor_info as *mut MONITORINFOEXW as *mut MONITORINFO,
         )
     };
+
     if status.as_bool() {
         Ok(monitor_info)
     } else {
@@ -198,13 +215,17 @@ fn generate_uuid(device_name: &[u16]) -> Uuid {
         .iter()
         .flat_map(|&a| a.to_be_bytes())
         .collect_vec();
+
     Uuid::new_v5(&Uuid::NAMESPACE_DNS, &name)
 }
 
 fn get_scale_factor_for_monitor(monitor: HMONITOR) -> Result<f32> {
     let mut dpi_x = 0;
     let mut dpi_y = 0;
+
     unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) }?;
+
     assert_eq!(dpi_x, dpi_y);
+
     Ok(dpi_x as f32 / USER_DEFAULT_SCREEN_DPI as f32)
 }

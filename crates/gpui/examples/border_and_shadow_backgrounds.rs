@@ -7,6 +7,7 @@ use gpui::{
     App, Background, Bounds, BoxShadow, Context, Div, FontWeight, Render, Window, WindowBounds,
     WindowOptions, div, hsla, linear_color_stop, linear_gradient, prelude::*, px, rgb, size,
 };
+
 use gpui_platform::application;
 
 struct BackgroundShowcase;
@@ -166,6 +167,7 @@ fn run_example() {
         }
 
         let bounds = Bounds::centered(None, size(px(1000.), px(760.)), cx);
+
         cx.open_window(
             WindowOptions::new()
                 .window_bounds(Some(WindowBounds::Windowed(bounds)))
@@ -173,6 +175,7 @@ fn run_example() {
             |_, cx| cx.new(|_| BackgroundShowcase),
         )
         .unwrap();
+
         cx.activate(true);
     });
 }

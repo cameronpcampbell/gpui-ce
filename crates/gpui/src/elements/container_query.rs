@@ -37,6 +37,7 @@ where
     E: IntoElement,
 {
     let mut base_style = StyleRefinement::default();
+
     base_style.size.width = Some(relative(1.).into());
     base_style.size.height = Some(relative(1.).into());
 
@@ -74,8 +75,11 @@ impl Element for ContainerQuery {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
+
         style.refine(&self.style);
+
         let layout_id = window.request_layout(style, [], cx);
+
         (layout_id, ())
     }
 
@@ -90,8 +94,10 @@ impl Element for ContainerQuery {
     ) -> Option<AnyElement> {
         let render = self.render.take()?;
         let mut child = render(bounds.size, window, cx);
+
         child.layout_as_root(bounds.size.map(AvailableSpace::Definite), window, cx);
         child.prepaint_at(bounds.origin, window, cx);
+
         Some(child)
     }
 

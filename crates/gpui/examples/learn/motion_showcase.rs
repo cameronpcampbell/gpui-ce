@@ -135,16 +135,21 @@ impl Timeline {
         };
 
         self.elapsed += now.saturating_duration_since(last_tick);
+
         let sample = motion.sample(self.elapsed);
+
         self.value = sample.progress.get();
         self.last_sample = Some(sample);
         self.last_tick = sample.is_active.then_some(now);
+
         sample.is_active
     }
 
     fn retime(&mut self, motion: &Motion, elapsed: Duration, now: Instant) {
         self.elapsed = elapsed;
+
         let sample = motion.sample(elapsed);
+
         self.value = sample.progress.get();
         self.last_sample = Some(sample);
         self.last_tick = sample.is_active.then_some(now);
@@ -153,12 +158,14 @@ impl Timeline {
 
 fn scale_elapsed(elapsed: Duration, old: Duration, new: Duration) -> Duration {
     let nanos = elapsed.as_nanos().saturating_mul(new.as_nanos()) / old.as_nanos();
+
     Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
 
 impl MotionShowcase {
     fn new() -> Self {
         let settings = Settings::default();
+
         Self {
             settings,
             motions: Motions::new(settings),
@@ -176,6 +183,7 @@ impl MotionShowcase {
 
     fn change_setting(&mut self, setting: Setting, direction: i32, cx: &mut Context<Self>) {
         let previous = self.settings;
+
         let adjust = |value: &mut u64, step: i64, min: u64, max: u64| {
             *value =
                 (*value as i64 + step * i64::from(direction)).clamp(min as i64, max as i64) as u64;
@@ -183,14 +191,18 @@ impl MotionShowcase {
 
         match setting {
             Setting::Progress => adjust(&mut self.settings.progress_ms, 200, 500, 3_000),
+
             Setting::Notification => {
                 adjust(&mut self.settings.notification_reverse_ms, 300, 800, 3_200)
             }
+
             Setting::Stagger => adjust(&mut self.settings.stagger_gap_ms, 60, 60, 360),
+
             Setting::Attention => {
                 self.settings.attention_count =
                     (self.settings.attention_count as i32 + direction).clamp(1, 5) as u32;
             }
+
             Setting::Pulse => adjust(&mut self.settings.pulse_pass_ms, 100, 300, 1_200),
         }
 
@@ -206,12 +218,15 @@ impl MotionShowcase {
                             millis(previous.progress_ms),
                             millis(self.settings.progress_ms),
                         );
+
                         self.progress.retime(&updated.progress, elapsed, now);
                     }
                 }
+
                 Setting::Notification => {
                     if self.notification.advance(&self.motions.notification, now) {
                         let forward = millis(280);
+
                         let elapsed = if self.notification.elapsed <= forward {
                             self.notification.elapsed
                         } else {
@@ -222,39 +237,49 @@ impl MotionShowcase {
                                     millis(self.settings.notification_reverse_ms),
                                 )
                         };
+
                         self.notification
                             .retime(&updated.notification, elapsed, now);
                     }
                 }
+
                 Setting::Stagger => {
                     for (index, item) in self.items.iter_mut().enumerate() {
                         if item.advance(&self.motions.items[index], now) {
                             let old_delay = millis(120 + index as u64 * previous.stagger_gap_ms);
+
                             let new_delay =
                                 millis(120 + index as u64 * self.settings.stagger_gap_ms);
+
                             let elapsed = if item.elapsed < old_delay {
                                 scale_elapsed(item.elapsed, old_delay, new_delay)
                             } else {
                                 new_delay + (item.elapsed - old_delay)
                             };
+
                             item.retime(&updated.items[index], elapsed, now);
                         }
                     }
                 }
+
                 Setting::Attention => {
                     if self.attention.advance(&self.motions.attention, now) {
                         // Reducing the count never cuts off the current pass.
                         let current_pass =
                             (self.attention.elapsed.as_nanos() / millis(500).as_nanos()) as u32;
+
                         self.attention_run_count =
                             self.settings.attention_count.max(current_pass + 1);
+
                         updated.attention = Motion::new(millis(500))
                             .iterations(self.attention_run_count)
                             .with_easing(attention_nudge);
+
                         self.attention
                             .retime(&updated.attention, self.attention.elapsed, now);
                     }
                 }
+
                 Setting::Pulse => {
                     if self.pulse.advance(&self.motions.pulse, now) {
                         let elapsed = scale_elapsed(
@@ -262,6 +287,7 @@ impl MotionShowcase {
                             millis(previous.pulse_pass_ms),
                             millis(self.settings.pulse_pass_ms),
                         );
+
                         self.pulse.retime(&updated.pulse, elapsed, now);
                     }
                 }
@@ -272,7 +298,9 @@ impl MotionShowcase {
                     .iterations(self.attention_run_count)
                     .with_easing(attention_nudge);
             }
+
             self.motions = updated;
+
             cx.notify();
         }
     }
@@ -288,11 +316,13 @@ fn attention_nudge(progress: f32) -> f32 {
 
 fn hold_then_exit(progress: f32) -> f32 {
     let exit = ((progress - 0.6) / 0.4).clamp(0., 1.);
+
     exit * exit * (3. - 2. * exit)
 }
 
 fn button(id: &'static str, label: &'static str, primary: bool) -> gpui::Stateful<gpui::Div> {
     let fill = if primary { ACCENT } else { SURFACE };
+
     div()
         .id(id)
         .px(px(14.))
@@ -365,19 +395,25 @@ impl Render for MotionShowcase {
         let compact = f32::from(window.viewport_size().width) < 700.;
         let now = Instant::now();
         let mut active = self.progress.advance(&self.motions.progress, now);
+
         active |= self.notification.advance(&self.motions.notification, now);
+
         for (index, item) in self.items.iter_mut().enumerate() {
             active |= item.advance(&self.motions.items[index], now);
         }
+
         active |= self.attention.advance(&self.motions.attention, now);
         active |= self.pulse.advance(&self.motions.pulse, now);
+
         if active {
             window.request_animation_frame();
         }
 
         let progress_value =
             self.progress_from + (self.progress_to - self.progress_from) * self.progress.value;
+
         let notification_value = self.notification.value;
+
         let notification_sample = self.notification.last_sample.map_or_else(
             || "Press Play to inspect the sample".to_string(),
             |sample| {
@@ -392,6 +428,7 @@ impl Render for MotionShowcase {
                 )
             },
         );
+
         let item_values: [f32; 3] = std::array::from_fn(|index| self.items[index].value);
         let attention_value = self.attention.value;
         let pulse_value = self.pulse.value;
@@ -404,6 +441,7 @@ impl Render for MotionShowcase {
             "progress-less",
             "progress-more",
         );
+
         let notification_stepper = setting_stepper(
             cx,
             Setting::Notification,
@@ -412,6 +450,7 @@ impl Render for MotionShowcase {
             "notification-less",
             "notification-more",
         );
+
         let stagger_stepper = setting_stepper(
             cx,
             Setting::Stagger,
@@ -420,6 +459,7 @@ impl Render for MotionShowcase {
             "stagger-less",
             "stagger-more",
         );
+
         let attention_stepper = setting_stepper(
             cx,
             Setting::Attention,
@@ -428,6 +468,7 @@ impl Render for MotionShowcase {
             "attention-less",
             "attention-more",
         );
+
         let pulse_stepper = setting_stepper(
             cx,
             Setting::Pulse,
@@ -482,6 +523,7 @@ impl Render for MotionShowcase {
                                 this.progress_from = 0.;
                                 this.progress_to = 1.;
                                 this.progress_played = true;
+
                                 this.progress.play(Instant::now());
                                 cx.notify();
                             },
@@ -495,13 +537,18 @@ impl Render for MotionShowcase {
                                     if !this.progress_played {
                                         return;
                                     }
+
                                     let now = Instant::now();
+
                                     this.progress.advance(&this.motions.progress, now);
+
                                     let current = this.progress_from
                                         + (this.progress_to - this.progress_from)
                                             * this.progress.value;
+
                                     this.progress_from = current;
                                     this.progress_to = if this.progress_to < 0.5 { 1. } else { 0. };
+
                                     this.progress.play(now);
                                     cx.notify();
                                 })),
@@ -532,9 +579,11 @@ impl Render for MotionShowcase {
                 .child(button("items-play", "Play", true).on_click(cx.listener(
                     move |this, _, _, cx| {
                         let now = Instant::now();
+
                         for item in &mut this.items {
                             item.play(now);
                         }
+
                         cx.notify();
                     },
                 ))),
@@ -609,9 +658,11 @@ impl Render for MotionShowcase {
                 .child(button("attention-play", "Play", true).on_click(cx.listener(
                     move |this, _, _, cx| {
                         this.attention_run_count = this.settings.attention_count;
+
                         this.motions.attention = Motion::new(Duration::from_millis(500))
                             .iterations(this.attention_run_count)
                             .with_easing(attention_nudge);
+
                         this.attention.play(Instant::now());
                         cx.notify();
                     },
@@ -726,20 +777,27 @@ mod tests {
     #[test]
     fn changing_pass_duration_preserves_an_active_pulse_phase() {
         let now = Instant::now();
+
         let old = Motion::new(millis(700))
             .repeat_forever()
             .alternate()
             .with_easing(ease_in_out);
+
         let new = Motion::new(millis(900))
             .repeat_forever()
             .alternate()
             .with_easing(ease_in_out);
+
         let mut pulse = Timeline::default();
+
         pulse.play(now);
+
         assert!(pulse.advance(&old, now + millis(1_750)));
+
         let before = pulse.value;
 
         let elapsed = scale_elapsed(pulse.elapsed, millis(700), millis(900));
+
         pulse.retime(&new, elapsed, now + millis(1_750));
 
         assert!(pulse.is_active());
@@ -749,16 +807,19 @@ mod tests {
     #[test]
     fn changing_reverse_duration_preserves_notification_phase() {
         let old = Motions::new(Settings::default());
+
         let new = Motions::new(Settings {
             notification_reverse_ms: 2_300,
             ..Settings::default()
         });
+
         let forward = millis(280);
         let old_elapsed = forward + millis(850);
         let new_elapsed = forward + scale_elapsed(millis(850), millis(1_700), millis(2_300));
 
         let before = old.notification.sample(old_elapsed);
         let after = new.notification.sample(new_elapsed);
+
         assert!(before.is_active && after.is_active);
         assert!((before.progress.get() - after.progress.get()).abs() < 0.000_001);
     }
@@ -767,9 +828,11 @@ mod tests {
     fn changing_stagger_preserves_delay_or_forward_phase() {
         let old_delay = millis(300);
         let new_delay = millis(420);
+
         let old = Motion::new(millis(420))
             .with_delay(old_delay)
             .with_easing(ease_out_cubic);
+
         let new = Motion::new(millis(420))
             .with_delay(new_delay)
             .with_easing(ease_out_cubic);
@@ -780,8 +843,10 @@ mod tests {
             } else {
                 new_delay + (elapsed - old_delay)
             };
+
             let before = old.sample(elapsed);
             let after = new.sample(remapped);
+
             assert!(before.is_active && after.is_active);
             assert!((before.progress.get() - after.progress.get()).abs() < 0.000_001);
         }
@@ -791,6 +856,7 @@ mod tests {
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(960.), px(820.)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |window, cx| {

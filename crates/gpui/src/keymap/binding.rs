@@ -4,6 +4,7 @@ use crate::{
     Action, AsKeystroke, DummyKeyboardMapper, InvalidKeystrokeError, KeyBindingContextPredicate,
     KeybindingKeystroke, Keystroke, PlatformKeyboardMapper, SharedString,
 };
+
 use smallvec::SmallVec;
 
 /// A keybinding and its associated metadata, from the keymap.
@@ -12,6 +13,7 @@ pub struct KeyBinding {
     pub(crate) keystrokes: SmallVec<[KeybindingKeystroke; 2]>,
     pub(crate) context_predicate: Option<Rc<KeyBindingContextPredicate>>,
     pub(crate) meta: Option<KeyBindingMetaIndex>,
+
     /// The json input string used when building the keybinding, if any
     pub(crate) action_input: Option<SharedString>,
 }
@@ -33,6 +35,7 @@ impl KeyBinding {
     pub fn new<A: Action>(keystrokes: &str, action: A, context: Option<&str>) -> Self {
         let context_predicate =
             context.map(|context| KeyBindingContextPredicate::parse(context).unwrap().into());
+
         Self::load(
             keystrokes,
             Box::new(action),
@@ -57,6 +60,7 @@ impl KeyBinding {
             .split_whitespace()
             .map(|source| {
                 let keystroke = Keystroke::parse(source)?;
+
                 Ok(KeybindingKeystroke::new_with_mapper(
                     keystroke,
                     use_key_equivalents,
@@ -77,6 +81,7 @@ impl KeyBinding {
     /// Set the metadata for this binding.
     pub fn with_meta(mut self, meta: KeyBindingMetaIndex) -> Self {
         self.meta = Some(meta);
+
         self
     }
 

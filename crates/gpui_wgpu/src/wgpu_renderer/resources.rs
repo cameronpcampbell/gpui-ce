@@ -9,6 +9,7 @@ use gpui::ScenePlanRequirements;
 
 use crate::WgpuContext;
 use gpui_render::blur::downsampled_dimension;
+
 use gpui_render::shaders::{
     blur::BlurUniforms,
     common::{FontRasterizationUniforms, GlobalUniforms},
@@ -38,6 +39,7 @@ pub(super) struct WgpuResources {
     pub(super) atlas_sampler: wgpu::Sampler,
     pub(super) surface_sampler: wgpu::Sampler,
     pub(super) surface_uniforms: DynamicUniformBuffer<SurfaceUniforms>,
+
     #[cfg_attr(
         not(any(
             all(target_family = "wasm", feature = "custom-gpu"),
@@ -49,6 +51,7 @@ pub(super) struct WgpuResources {
         allow(dead_code)
     )]
     pub(super) surface_cache: RefCell<SurfaceCache>,
+
     pub(super) filter_uniforms: DynamicUniformBuffer<BlurUniforms>,
     blur_bind_groups: RefCell<BlurBindGroups>,
     pub(super) globals_buffer: wgpu::Buffer,
@@ -100,6 +103,7 @@ impl WgpuResources {
         let queue = Arc::clone(&context.queue);
         let renderer_tier = context.renderer_tier();
         let bind_group_layouts = WgpuBindGroupLayouts::new(&device, renderer_tier);
+
         let pipelines = WgpuPipelines::new(
             &device,
             &bind_group_layouts,
@@ -109,6 +113,7 @@ impl WgpuResources {
             dual_source_blending,
             renderer_tier,
         );
+
         let linear_sampler = |label| {
             device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some(label),
@@ -117,32 +122,38 @@ impl WgpuResources {
                 ..Default::default()
             })
         };
+
         let atlas_sampler = linear_sampler("atlas_sampler");
         let surface_sampler = linear_sampler("surface_sampler");
 
         let uniform_alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
+
         let surface_uniforms = DynamicUniformBuffer::new(
             &device,
             "surface_uniforms",
             INITIAL_SURFACE_UNIFORM_CAPACITY,
             uniform_alignment,
         );
+
         let filter_uniforms = DynamicUniformBuffer::new(
             &device,
             "filter_uniforms",
             INITIAL_FILTER_UNIFORM_CAPACITY,
             uniform_alignment,
         );
+
         let globals_size = std::mem::size_of::<GlobalUniforms>() as u64;
         let gamma_size = std::mem::size_of::<FontRasterizationUniforms>() as u64;
         let path_globals_offset = globals_size.next_multiple_of(uniform_alignment);
         let gamma_offset = (path_globals_offset + globals_size).next_multiple_of(uniform_alignment);
+
         let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals_buffer"),
             size: gamma_offset + gamma_size,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+
         let create_globals = |label, offset| {
             bind_group_layouts.create_globals(
                 &device,
@@ -159,9 +170,12 @@ impl WgpuResources {
                 },
             )
         };
+
         let globals_bind_group = create_globals("globals_bind_group", 0);
+
         let path_globals_bind_group =
             create_globals("path_globals_bind_group", path_globals_offset);
+
         let last_error = context.uncaptured_error_slot();
         let surface_cache = SurfaceCache::new(&device)?;
 
@@ -173,6 +187,7 @@ impl WgpuResources {
             },
             last_error,
         };
+
         let resources = Self {
             instances: InstanceBufferArena::new(&device, &bind_group_layouts, renderer_tier),
             renderer_tier,
@@ -205,12 +220,14 @@ impl WgpuResources {
             filter_group_textures: Vec::new(),
             filter_group_views: Vec::new(),
         };
+
         Ok((resources, metadata))
     }
 
     pub(super) fn invalidate_intermediate_textures(&mut self) {
         self.instances.invalidate_texture_bindings();
         self.blur_bind_groups.get_mut().groups.clear();
+
         self.path_intermediate_texture = None;
         self.path_intermediate_view = None;
         self.path_msaa_texture = None;
@@ -223,6 +240,7 @@ impl WgpuResources {
         self.blur_ping_view = None;
         self.blur_pong_texture = None;
         self.blur_pong_view = None;
+
         self.filter_group_textures.clear();
         self.filter_group_views.clear();
     }
@@ -235,10 +253,13 @@ impl WgpuResources {
     pub(super) fn blur_bind_group(&self, source: &wgpu::TextureView) -> wgpu::BindGroup {
         let mut cache = self.blur_bind_groups.borrow_mut();
         let uniform_generation = self.filter_uniforms.generation();
+
         if cache.uniform_generation != uniform_generation {
             cache.groups.clear();
+
             cache.uniform_generation = uniform_generation;
         }
+
         cache
             .groups
             .entry(source.clone())
@@ -263,14 +284,17 @@ impl WgpuRenderer {
         if self.resources().path_intermediate_texture.is_some() {
             return;
         }
+
         let format = self.target.format();
         let width = self.target.width();
         let height = self.target.height();
         let sample_count = self.rendering_params.path_sample_count;
         let resources = self.resources_mut();
         let (texture, view) = sampled_render_texture(&resources.device, format, width, height);
+
         resources.path_intermediate_texture = Some(texture);
         resources.path_intermediate_view = Some(view);
+
         if let Some((texture, view)) =
             msaa_texture(&resources.device, format, width, height, sample_count)
         {
@@ -289,6 +313,7 @@ impl WgpuRenderer {
 
         if resources.scene_color_texture.is_none() {
             let (texture, view) = sampled_render_texture(&resources.device, format, width, height);
+
             resources.scene_color_texture = Some(texture);
             resources.scene_color_view = Some(view);
         }
@@ -296,10 +321,13 @@ impl WgpuRenderer {
         if requirements.uses_blur_target && resources.blur_ping_texture.is_none() {
             let (texture, view) =
                 sampled_render_texture(&resources.device, format, blur_width, blur_height);
+
             resources.blur_ping_texture = Some(texture);
             resources.blur_ping_view = Some(view);
+
             let (texture, view) =
                 sampled_render_texture(&resources.device, format, blur_width, blur_height);
+
             resources.blur_pong_texture = Some(texture);
             resources.blur_pong_view = Some(view);
         }
@@ -309,12 +337,14 @@ impl WgpuRenderer {
             && resources.backdrop_snapshot_texture.is_none()
         {
             let (texture, view) = sampled_render_texture(&resources.device, format, width, height);
+
             resources.backdrop_snapshot_texture = Some(texture);
             resources.backdrop_snapshot_view = Some(view);
         }
 
         while resources.filter_group_views.len() < requirements.isolated_target_count {
             let (texture, view) = sampled_render_texture(&resources.device, format, width, height);
+
             resources.filter_group_textures.push(texture);
             resources.filter_group_views.push(view);
         }
@@ -326,36 +356,47 @@ impl WgpuRenderer {
     ) -> bool {
         let maximum_buffer_size = self.globals.maximum_uniform_buffer_size;
         let resources = self.resources_mut();
+
         let filters = resources.filter_uniforms.ensure_capacity(
             &resources.device,
             requirements.filter_count,
             maximum_buffer_size,
         );
+
         let surfaces = resources.surface_uniforms.ensure_capacity(
             &resources.device,
             requirements.surface_count,
             maximum_buffer_size,
         );
+
         let capacity_available = filters && surfaces;
+
         if !capacity_available {
             log::error!(
                 "scene uniform data exceeds the GPU buffer limit: {} filter uniforms and {} surface uniforms",
                 requirements.filter_count,
                 requirements.surface_count,
             );
+
             return false;
         }
+
         let filters = resources
             .filter_uniforms
             .begin_upload(&resources.queue, requirements.filter_count);
+
         let surfaces = resources
             .surface_uniforms
             .begin_upload(&resources.queue, requirements.surface_count);
+
         if !(filters && surfaces) {
             resources.finish_frame_uploads();
+
             log::error!("failed to map frame uniform staging memory");
+
             return false;
         }
+
         true
     }
 }
@@ -380,7 +421,9 @@ fn sampled_render_texture(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
+
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
     (texture, view)
 }
 
@@ -394,6 +437,7 @@ fn msaa_texture(
     if sample_count <= 1 {
         return None;
     }
+
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("path_msaa"),
         size: wgpu::Extent3d {
@@ -408,6 +452,8 @@ fn msaa_texture(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
+
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
     Some((texture, view))
 }

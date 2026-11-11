@@ -92,7 +92,9 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
     /// progress, which may be non-monotonic or overshoot zero through one.
     pub fn with_easing(mut self, easing: impl Fn(f32) -> f32 + 'static) -> Self {
         self.motion = self.motion.with_easing(easing);
+
         self.clear_cache();
+
         self
     }
 
@@ -102,6 +104,7 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
     /// If `continuous` is set to false, the transition will restart from its initial value.
     pub fn continuous(mut self, continuous: bool) -> Self {
         self.continuous = continuous;
+
         self
     }
 
@@ -135,6 +138,7 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
     /// redundant calculations when called multiple times.
     pub fn evaluate(&self, window: &mut Window, cx: &mut App) -> Ref<'_, T> {
         let sample = self.sample(cx);
+
         if sample.is_active {
             window.request_animation_frame();
         }
@@ -184,7 +188,9 @@ impl<T: Lerp + Clone + PartialEq + 'static> Transition<T> {
 
         self.state.update(cx, |state, cx| {
             let mut value = state.value().clone();
+
             update(&mut value, cx);
+
             was_updated = if self.continuous {
                 state.set(value, &self.motion, Instant::now())
             } else {
@@ -264,6 +270,7 @@ mod tests {
     ) -> Transition<T> {
         let motion = motion.into();
         let state = cx.new(|_| TransitionState::new(initial, motion.clone()));
+
         Transition::new(state, motion)
     }
 
@@ -276,6 +283,7 @@ mod tests {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let transition = self.transition.clone();
             let rendered_values = self.rendered_values.clone();
+
             canvas(
                 move |_, window, cx| {
                     rendered_values
@@ -296,11 +304,14 @@ mod tests {
             assert!(transition.read_cache().is_none());
             assert!(transition.update(cx, |value, _| *value = 100.0));
             assert_eq!(*transition.read_goal(cx), 100.0);
+
             let entity_id = transition.entity_id();
+
             assert_eq!(entity_id, transition.entity_id());
 
             let value1 = *transition.sample(cx).value.as_ref().unwrap();
             let value2 = *transition.sample(cx).value.as_ref().unwrap();
+
             assert_eq!((value1, value2), (50.0, 50.0));
             assert_eq!(transition.evaluate_delta(cx), 0.5);
 
@@ -310,6 +321,7 @@ mod tests {
             assert!(transition.read_cache().is_none());
 
             let transition = transition.with_easing(|_| 0.75);
+
             assert!(transition.read_cache().is_none());
             assert_eq!(*transition.sample(cx).value.as_ref().unwrap(), 125.0);
             assert_eq!(transition.evaluate_delta(cx), 0.5);
@@ -336,14 +348,17 @@ mod tests {
             assert_eq!(*mutators.sample(cx).value.as_ref().unwrap(), 6.0);
 
             mutators.scale_by(2.0, cx);
+
             assert_eq!(*mutators.read_goal(cx), 20.0);
             assert_eq!(*mutators.sample(cx).value.as_ref().unwrap(), 12.0);
 
             mutators.jump_to(7.0, cx);
+
             assert_eq!(*mutators.read_goal(cx), 7.0);
             assert_eq!(*mutators.sample(cx).value.as_ref().unwrap(), 7.0);
 
             mutators.reset(cx);
+
             assert_eq!(*mutators.read_goal(cx), 2.0);
             assert!(mutators.read_cache().is_none());
 
@@ -352,12 +367,17 @@ mod tests {
                 Motion::new(Duration::ZERO).iterations(2).alternate(),
                 0.0_f32,
             );
+
             assert!(alternating.update(cx, |value, _| *value = 100.0));
+
             let sample = alternating.sample(cx);
+
             assert_eq!(sample.value, Some(0.0));
             assert_eq!(sample.progress, Progress::START);
             assert!(!sample.is_active);
+
             drop(sample);
+
             assert_eq!(alternating.evaluate_delta(cx), 0.0);
         });
     }
@@ -371,31 +391,40 @@ mod tests {
                 0.0_f32,
             )
         });
+
         cx.update(|cx| {
             assert!(transition.update(cx, |value, _| *value = 100.0));
         });
+
         let rendered_values = Rc::new(RefCell::new(Vec::new()));
+
         let window = cx.open_window(size(px(100.0), px(100.0)), {
             let transition = transition.clone();
             let rendered_values = rendered_values.clone();
+
             move |_, _| TransitionTestView {
                 transition,
                 rendered_values,
             }
         });
+
         cx.run_until_parked();
 
         assert_eq!(*rendered_values.borrow(), vec![50.0]);
+
         cx.update(|cx| transition.jump_to(100.0, cx));
+
         assert_eq!(
             window
                 .update(cx, |_, window, cx| window.simulate_next_frame(cx))
                 .unwrap(),
             1
         );
+
         cx.run_until_parked();
 
         assert_eq!(*rendered_values.borrow(), vec![50.0, 100.0]);
+
         assert_eq!(
             window
                 .update(cx, |_, window, cx| window.simulate_next_frame(cx))

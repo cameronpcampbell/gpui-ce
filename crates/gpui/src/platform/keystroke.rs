@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
 use std::{
     error::Error,
     fmt::{Display, Write},
@@ -37,9 +38,11 @@ pub struct Keystroke {
 pub struct KeybindingKeystroke {
     /// The GPUI representation of the keystroke.
     inner: Keystroke,
+
     /// The modifiers to display.
     #[cfg(target_os = "windows")]
     display_modifiers: Modifiers,
+
     /// The key to display.
     #[cfg(target_os = "windows")]
     display_key: String,
@@ -123,29 +126,39 @@ impl Keystroke {
         let mut key_char = None;
 
         let mut components = source.split('-').peekable();
+
         while let Some(component) = components.next() {
             if component.eq_ignore_ascii_case("ctrl") {
                 modifiers.control = true;
+
                 continue;
             }
+
             if component.eq_ignore_ascii_case("alt") {
                 modifiers.alt = true;
+
                 continue;
             }
+
             if component.eq_ignore_ascii_case("shift") {
                 modifiers.shift = true;
+
                 continue;
             }
+
             if component.eq_ignore_ascii_case("fn") {
                 modifiers.function = true;
+
                 continue;
             }
+
             if component.eq_ignore_ascii_case("secondary") {
                 if cfg!(target_os = "macos") {
                     modifiers.platform = true;
                 } else {
                     modifiers.control = true;
                 };
+
                 continue;
             }
 
@@ -155,6 +168,7 @@ impl Keystroke {
 
             if is_platform {
                 modifiers.platform = true;
+
                 continue;
             }
 
@@ -163,28 +177,36 @@ impl Keystroke {
             if let Some(next) = components.peek() {
                 if next.is_empty() && source.ends_with('-') {
                     key = Some(String::from("-"));
+
                     break;
+
                 } else if next.len() > 1 && next.starts_with('>') {
                     key = Some(key_str);
                     key_char = Some(String::from(&next[1..]));
+
                     components.next();
+
                 } else {
                     return Err(InvalidKeystrokeError {
                         keystroke: source.to_owned(),
                     });
                 }
+
                 continue;
             }
 
             if component.len() == 1 && component.as_bytes()[0].is_ascii_uppercase() {
                 // Convert to shift + lowercase char
                 modifiers.shift = true;
+
                 key_str.make_ascii_lowercase();
+
             } else {
                 // convert ascii chars to lowercase so that named keys like "tab" and "enter"
                 // are accepted case insensitively and stored how we expect so they are matched properly
                 key_str.make_ascii_lowercase()
             }
+
             key = Some(key_str);
         }
 
@@ -192,6 +214,7 @@ impl Keystroke {
         // This sets the `key` to the modifier, and disables the modifier
         key = key.or_else(|| {
             use std::mem;
+
             // std::mem::take clears bool incase its true
             if mem::take(&mut modifiers.shift) {
                 Some("shift".to_string())
@@ -250,6 +273,7 @@ impl Keystroke {
                 "tab" => Some("\t".into()),
                 "enter" => Some("\n".into()),
                 key if !is_printable_key(key) || key.is_empty() => None,
+
                 key => {
                     if self.modifiers.shift {
                         Some(key.to_uppercase())
@@ -259,6 +283,7 @@ impl Keystroke {
                 }
             }
         }
+
         self
     }
 }
@@ -289,12 +314,14 @@ impl KeybindingKeystroke {
         {
             let key = keystroke.key.clone();
             let modifiers = keystroke.modifiers;
+
             KeybindingKeystroke {
                 inner: keystroke,
                 display_modifiers: modifiers,
                 display_key: key,
             }
         }
+
         #[cfg(not(target_os = "windows"))]
         {
             KeybindingKeystroke { inner: keystroke }
@@ -317,6 +344,7 @@ impl KeybindingKeystroke {
         {
             &self.display_modifiers
         }
+
         #[cfg(not(target_os = "windows"))]
         {
             &self.inner.modifiers
@@ -333,6 +361,7 @@ impl KeybindingKeystroke {
         {
             &self.display_key
         }
+
         #[cfg(not(target_os = "windows"))]
         {
             &self.inner.key
@@ -342,6 +371,7 @@ impl KeybindingKeystroke {
     /// Sets the modifiers. On Windows this modifies both `inner.modifiers` and `display_modifiers`.
     pub fn set_modifiers(&mut self, modifiers: Modifiers) {
         self.inner.modifiers = modifiers;
+
         #[cfg(target_os = "windows")]
         {
             self.display_modifiers = modifiers;
@@ -354,6 +384,7 @@ impl KeybindingKeystroke {
         {
             self.display_key = key.clone();
         }
+
         self.inner.key = key;
     }
 
@@ -363,6 +394,7 @@ impl KeybindingKeystroke {
         {
             unparse(&self.display_modifiers, &self.display_key)
         }
+
         #[cfg(not(target_os = "windows"))]
         {
             unparse(&self.inner.modifiers, &self.inner.key)
@@ -432,6 +464,7 @@ fn is_printable_key(key: &str) -> bool {
 impl std::fmt::Display for Keystroke {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         display_modifiers(&self.modifiers, f)?;
+
         display_key(&self.key, f)
     }
 }
@@ -439,6 +472,7 @@ impl std::fmt::Display for Keystroke {
 impl std::fmt::Display for KeybindingKeystroke {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         display_modifiers(self.modifiers(), f)?;
+
         display_key(self.key(), f)
     }
 }
@@ -610,6 +644,7 @@ impl std::ops::BitOr for Modifiers {
 
     fn bitor(mut self, other: Self) -> Self::Output {
         self |= other;
+
         self
     }
 }
@@ -626,8 +661,10 @@ impl std::ops::BitOrAssign for Modifiers {
 
 impl std::ops::BitXor for Modifiers {
     type Output = Self;
+
     fn bitxor(mut self, rhs: Self) -> Self::Output {
         self ^= rhs;
+
         self
     }
 }
@@ -644,8 +681,10 @@ impl std::ops::BitXorAssign for Modifiers {
 
 impl std::ops::BitAnd for Modifiers {
     type Output = Self;
+
     fn bitand(mut self, rhs: Self) -> Self::Output {
         self &= rhs;
+
         self
     }
 }
@@ -688,6 +727,7 @@ fn display_modifiers(modifiers: &Modifiers, f: &mut std::fmt::Formatter<'_>) -> 
         #[cfg(not(target_os = "macos"))]
         write!(f, "ctrl-")?;
     }
+
     if modifiers.alt {
         #[cfg(target_os = "macos")]
         f.write_char('⌥')?;
@@ -695,6 +735,7 @@ fn display_modifiers(modifiers: &Modifiers, f: &mut std::fmt::Formatter<'_>) -> 
         #[cfg(not(target_os = "macos"))]
         write!(f, "alt-")?;
     }
+
     if modifiers.platform {
         #[cfg(target_os = "macos")]
         f.write_char('⌘')?;
@@ -705,6 +746,7 @@ fn display_modifiers(modifiers: &Modifiers, f: &mut std::fmt::Formatter<'_>) -> 
         #[cfg(target_os = "windows")]
         f.write_char('⊞')?;
     }
+
     if modifiers.shift {
         #[cfg(target_os = "macos")]
         f.write_char('⇧')?;
@@ -712,6 +754,7 @@ fn display_modifiers(modifiers: &Modifiers, f: &mut std::fmt::Formatter<'_>) -> 
         #[cfg(not(target_os = "macos"))]
         write!(f, "shift-")?;
     }
+
     Ok(())
 }
 
@@ -743,21 +786,26 @@ fn display_key(key: &str, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         key if key.len() == 1 => key.chars().next().unwrap().to_ascii_uppercase(),
         key => return f.write_str(key),
     };
+
     f.write_char(key)
 }
 
 #[inline]
 fn unparse(modifiers: &Modifiers, key: &str) -> String {
     let mut result = String::new();
+
     if modifiers.function {
         result.push_str("fn-");
     }
+
     if modifiers.control {
         result.push_str("ctrl-");
     }
+
     if modifiers.alt {
         result.push_str("alt-");
     }
+
     if modifiers.platform {
         #[cfg(target_os = "macos")]
         result.push_str("cmd-");
@@ -768,9 +816,12 @@ fn unparse(modifiers: &Modifiers, key: &str) -> String {
         #[cfg(target_os = "windows")]
         result.push_str("win-");
     }
+
     if modifiers.shift {
         result.push_str("shift-");
     }
+
     result.push_str(&key);
+
     result
 }

@@ -21,6 +21,7 @@ mod tests {
     #[test]
     fn test_duration_alt_display() {
         use duration_alt_display as f;
+
         assert_eq!("0s", f(Duration::from_secs(0)));
         assert_eq!("59s", f(Duration::from_secs(59)));
         assert_eq!("1m 0s", f(Duration::from_secs(60)));

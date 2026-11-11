@@ -22,6 +22,7 @@ mod example {
             cx.spawn(async move |this, cx| {
                 loop {
                     let _ = this.update(cx, |_, cx| cx.notify());
+
                     cx.background_executor()
                         .timer(Duration::from_millis(500))
                         .await;
@@ -74,8 +75,10 @@ mod example {
                     keyboard_interactivity: KeyboardInteractivity::None,
                     ..Default::default()
                 }));
+
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             let options = options.linux_window_background(LinuxWindowBackground::Transparent);
+
             cx.open_window(options, |_, cx| cx.new(LayerShellExample::new))
                 .unwrap();
         });

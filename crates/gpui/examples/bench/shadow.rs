@@ -7,6 +7,7 @@ use gpui::{
     App, Bounds, BoxShadow, Context, Div, SharedString, Window, WindowBounds, WindowOptions, div,
     hsla, linear_color_stop, linear_gradient, prelude::*, px, relative, rgb, size,
 };
+
 use gpui_platform::application;
 
 struct Shadow {}
@@ -614,7 +615,9 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         let bounds = Bounds::centered(None, size(px(1000.0), px(800.0)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_, cx| cx.new(|_| Shadow {}),

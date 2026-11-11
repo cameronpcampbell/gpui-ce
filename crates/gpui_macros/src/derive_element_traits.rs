@@ -43,8 +43,10 @@ fn marked_field(input: &DeriveInput, attribute: &str) -> syn::Result<Member> {
 
 pub fn derive_styled(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+
     let field = match marked_field(&input, "style") {
         Ok(field) => field,
+
         Err(error) => {
             return error.to_compile_error().into();
         }
@@ -65,8 +67,10 @@ pub fn derive_styled(input: TokenStream) -> TokenStream {
 
 pub fn derive_parent_element(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+
     let field = match marked_field(&input, "children") {
         Ok(field) => field,
+
         Err(error) => {
             return error.to_compile_error().into();
         }
@@ -87,8 +91,10 @@ pub fn derive_parent_element(input: TokenStream) -> TokenStream {
 
 pub fn derive_interactive_element(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
+
     let field = match marked_field(&input, "interactivity") {
         Ok(field) => field,
+
         Err(error) => {
             return error.to_compile_error().into();
         }

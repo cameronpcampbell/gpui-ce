@@ -7,6 +7,7 @@ use gpui::{
     App, Bounds, Context, FocusHandle, Window, WindowBounds, WindowOptions, div, prelude::*, px,
     rgb, size,
 };
+
 use gpui::{SharedString, TitlebarOptions};
 use gpui_platform::application;
 
@@ -66,7 +67,9 @@ fn open_test_window(
         |window, cx| {
             cx.new(|cx| {
                 let focus_handle = cx.focus_handle();
+
                 focus_handle.focus(window, cx);
+
                 ExampleWindow {
                     label,
                     focus_handle,
@@ -82,6 +85,7 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         let window_size = size(px(420.), px(280.0));
         let base = Bounds::centered(None, window_size, cx);
 
@@ -102,8 +106,10 @@ fn run_example() {
 
         for (label, is_movable, appears_transparent, app_owns_titlebar_drag, col, row) in windows {
             let mut bounds = base;
+
             bounds.origin.x += window_size.width * col;
             bounds.origin.y += window_size.height * row;
+
             open_test_window(
                 cx,
                 bounds,

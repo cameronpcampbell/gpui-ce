@@ -2,15 +2,19 @@ use crate::{
     BackgroundExecutor, Clock, Instant, LocalExecutor, Priority, RunnableMeta, Scheduler,
     SessionId, Task, TestClock, Timer,
 };
+
 use async_task::Runnable;
 use backtrace::{Backtrace, BacktraceFrame};
 use futures::channel::oneshot;
 use parking_lot::{Mutex, MutexGuard};
+
 use rand::{
     distr::{StandardUniform, uniform::SampleRange, uniform::SampleUniform},
     prelude::*,
 };
+
 use std::any::Any;
+
 use std::{
     any::type_name_of_val,
     collections::{BTreeMap, HashSet, VecDeque},
@@ -62,13 +66,17 @@ impl TestScheduler {
         (seed..seed + num_iterations as u64)
             .map(|seed| {
                 let mut unwind_safe_f = std::panic::AssertUnwindSafe(&mut f);
+
                 if interactive {
                     eprintln!("Running seed: {seed}");
                 }
+
                 match std::panic::catch_unwind(move || Self::with_seed(seed, &mut *unwind_safe_f)) {
                     Ok(result) => result,
+
                     Err(error) => {
                         eprintln!("\x1b[31mFailing Seed: {seed}\x1b[0m");
+
                         std::panic::resume_unwind(error);
                     }
                 }
@@ -80,13 +88,19 @@ impl TestScheduler {
         let scheduler = Arc::new(TestScheduler::new(TestSchedulerConfig::with_seed(seed)));
         let output = std::cell::Cell::new(None);
         let future = f(scheduler.clone());
+
         let future = async {
             output.set(Some(future.await));
         };
+
         let mut future = std::pin::pin!(future);
+
         scheduler.block_until(None, future.as_mut(), None);
+
         let result = output.take().expect("test future did not complete");
+
         scheduler.run(); // Ensure spawned tasks finish up before returning in tests
+
         result
     }
 
@@ -102,35 +116,45 @@ impl TestScheduler {
 
         let deadline = timeout.map(|timeout| Instant::now() + timeout);
         let awoken = Arc::new(AtomicBool::new(false));
+
         let waker = Box::new(TracingWaker {
             id: None,
             awoken: awoken.clone(),
             thread: self.thread.clone(),
             state: self.state.clone(),
         });
+
         let waker = unsafe { Waker::new(Box::into_raw(waker) as *const (), &WAKER_VTABLE) };
+
         let max_ticks = if timeout.is_some() {
             self.rng
                 .lock()
                 .random_range(self.state.lock().timeout_ticks.clone())
+
         } else {
             usize::MAX
         };
+
         let mut cx = Context::from_waker(&waker);
 
         let mut completed = false;
+
         for _ in 0..max_ticks {
             match future.as_mut().poll(&mut cx) {
                 Poll::Ready(()) => {
                     completed = true;
+
                     break;
                 }
+
                 Poll::Pending => {}
             }
 
             let mut stepped = None;
+
             while self.rng.lock().random() {
                 let stepped = stepped.get_or_insert(false);
+
                 if self.step() {
                     *stepped = true;
                 } else {
@@ -140,11 +164,13 @@ impl TestScheduler {
 
             let stepped = stepped.unwrap_or(true);
             let awoken = awoken.swap(false, SeqCst);
+
             if !stepped && !awoken {
                 let parking_allowed = self.state.lock().allow_parking;
                 // In deterministic mode (parking forbidden), instantly jump to the next timer.
                 // In non-deterministic mode (parking allowed), let real time pass instead.
                 let advanced_to_timer = !parking_allowed && self.advance_clock_to_next_timer();
+
                 if !advanced_to_timer && !self.park(deadline) {
                     break;
                 }
@@ -185,14 +211,17 @@ impl TestScheduler {
 
     pub fn end_test(&self) {
         let mut state = self.state.lock();
+
         if let Some((message, backtrace)) = &state.non_determinism_error {
             if cfg!(miri) {
                 // miri cannot debug print backtraces with `miri-disable-isolation` enabled
                 panic!("{}", message)
+
             } else {
                 panic!("{}\n{:?}", message, backtrace)
             }
         }
+
         state.finished = true;
     }
 
@@ -210,6 +239,7 @@ impl TestScheduler {
 
     pub fn allow_parking(&self) {
         let mut state = self.state.lock();
+
         state.allow_parking = true;
         state.parking_allowed_once = true;
     }
@@ -228,13 +258,16 @@ impl TestScheduler {
 
     pub fn allocate_session_id(&self) -> SessionId {
         let mut state = self.state.lock();
+
         state.next_session_id.0 += 1;
+
         state.next_session_id
     }
 
     /// Create a local executor for this scheduler.
     pub fn foreground(self: &Arc<Self>) -> LocalExecutor {
         let session_id = self.allocate_session_id();
+
         LocalExecutor::new(
             session_id,
             self.clone(),
@@ -249,6 +282,7 @@ impl TestScheduler {
 
     pub fn yield_random(&self) -> Yield {
         let rng = &mut *self.rng.lock();
+
         if rng.random_bool(0.1) {
             Yield(rng.random_range(10..20))
         } else {
@@ -285,6 +319,7 @@ impl TestScheduler {
     /// Check if there are any pending tasks or timers that could run.
     pub fn has_pending_tasks(&self) -> bool {
         let state = self.state.lock();
+
         !state.runnables.is_empty() || !state.timers.is_empty()
     }
 
@@ -292,16 +327,19 @@ impl TestScheduler {
     /// Foreground tasks are those with a session_id, background tasks have none.
     pub fn pending_task_counts(&self) -> (usize, usize) {
         let state = self.state.lock();
+
         let foreground = state
             .runnables
             .iter()
             .filter(|r| r.session_id.is_some())
             .count();
+
         let background = state
             .runnables
             .iter()
             .filter(|r| r.session_id.is_none())
             .count();
+
         (foreground, background)
     }
 
@@ -312,20 +350,25 @@ impl TestScheduler {
     fn step_filtered(&self, background_only: bool) -> bool {
         let (elapsed_count, runnables_before) = {
             let mut state = self.state.lock();
+
             let end_ix = state
                 .timers
                 .partition_point(|timer| timer.expiration <= self.clock.now());
+
             let elapsed: Vec<_> = state.timers.drain(..end_ix).collect();
             let count = elapsed.len();
             let runnables = state.runnables.len();
+
             drop(state);
             // Dropping elapsed timers here wakes the waiting futures
             drop(elapsed);
+
             (count, runnables)
         };
 
         if elapsed_count > 0 {
             let runnables_after = self.state.lock().runnables.len();
+
             if std::env::var("DEBUG_SCHEDULER").is_ok() {
                 eprintln!(
                     "[scheduler] Expired {} timers at {:?}, runnables: {} -> {}",
@@ -335,6 +378,7 @@ impl TestScheduler {
                     runnables_after
                 );
             }
+
             return true;
         }
 
@@ -348,6 +392,7 @@ impl TestScheduler {
             // - Tasks from blocked sessions are excluded
             // - If background_only is true, skip foreground tasks entirely
             let mut seen_sessions = HashSet::new();
+
             let candidate_indices: Vec<usize> = state
                 .runnables
                 .iter()
@@ -358,12 +403,15 @@ impl TestScheduler {
                         if background_only {
                             return false;
                         }
+
                         // Exclude tasks from blocked sessions
                         if state.blocked_sessions.contains(&session_id) {
                             return false;
                         }
+
                         // Only include first task from each session (insert returns true if new)
                         seen_sessions.insert(session_id)
+
                     } else {
                         // Background tasks are always candidates
                         true
@@ -380,24 +428,32 @@ impl TestScheduler {
                     .iter()
                     .map(|&ix| state.runnables[ix].priority.weight())
                     .collect();
+
                 let total_weight: u32 = weights.iter().sum();
 
                 if total_weight == 0 {
                     // Fallback to uniform random if all weights are zero
                     let choice = self.rng.lock().random_range(0..candidate_indices.len());
+
                     state.runnables.remove(candidate_indices[choice])
+
                 } else {
                     let mut target = self.rng.lock().random_range(0..total_weight);
                     let mut selected_idx = 0;
+
                     for (i, &weight) in weights.iter().enumerate() {
                         if target < weight {
                             selected_idx = i;
+
                             break;
                         }
+
                         target -= weight;
                     }
+
                     state.runnables.remove(candidate_indices[selected_idx])
                 }
+
             } else {
                 // Non-randomized: just take the first candidate task
                 state.runnables.remove(candidate_indices[0])
@@ -407,9 +463,13 @@ impl TestScheduler {
         if let Some(runnable) = runnable {
             let is_foreground = runnable.session_id.is_some();
             let was_main_thread = self.state.lock().is_main_thread;
+
             self.state.lock().is_main_thread = is_foreground;
+
             runnable.run();
+
             self.state.lock().is_main_thread = was_main_thread;
+
             return true;
         }
 
@@ -427,11 +487,14 @@ impl TestScheduler {
         // so drop until we reach a fixpoint
         loop {
             let mut state = self.state.lock();
+
             if state.runnables.is_empty() && state.timers.is_empty() {
                 break;
             }
+
             let runnables = std::mem::take(&mut state.runnables);
             let timers = std::mem::take(&mut state.timers);
+
             drop(state);
             drop(timers);
             drop(runnables);
@@ -441,7 +504,9 @@ impl TestScheduler {
     pub fn advance_clock_to_next_timer(&self) -> bool {
         if let Some(timer) = self.state.lock().timers.first() {
             self.clock.advance(timer.expiration - self.clock.now());
+
             true
+
         } else {
             false
         }
@@ -451,19 +516,24 @@ impl TestScheduler {
         let debug = std::env::var("DEBUG_SCHEDULER").is_ok();
         let start = self.clock.now();
         let next_now = start + duration;
+
         if debug {
             let timer_count = self.state.lock().timers.len();
+
             eprintln!(
                 "[scheduler] advance_clock({:?}) from {:?}, {} pending timers",
                 duration, start, timer_count
             );
         }
+
         loop {
             self.run();
+
             if let Some(timer) = self.state.lock().timers.first()
                 && timer.expiration <= next_now
             {
                 let advance_to = timer.expiration;
+
                 if debug {
                     eprintln!(
                         "[scheduler] Advancing clock {:?} -> {:?} for timer",
@@ -471,12 +541,16 @@ impl TestScheduler {
                         advance_to
                     );
                 }
+
                 self.clock.advance(advance_to - self.clock.now());
+
             } else {
                 break;
             }
         }
+
         self.clock.advance(next_now - self.clock.now());
+
         if debug {
             eprintln!(
                 "[scheduler] advance_clock done, now at {:?}",
@@ -498,8 +572,10 @@ impl TestScheduler {
 
             // Park in small intervals to allow checking both deadlines
             const PARK_INTERVAL: Duration = Duration::from_millis(100);
+
             loop {
                 let now = Instant::now();
+
                 if now >= effective_deadline {
                     // Check if we hit the hard timeout
                     if now >= hard_deadline {
@@ -508,6 +584,7 @@ impl TestScheduler {
                             This may indicate a deadlock or missing waker.",
                         );
                     }
+
                     // Hit the provided deadline
                     return false;
                 }
@@ -515,7 +592,9 @@ impl TestScheduler {
                 let remaining = effective_deadline.saturating_duration_since(now);
                 let park_duration = remaining.min(PARK_INTERVAL);
                 let before_park = Instant::now();
+
                 thread::park_timeout(park_duration);
+
                 let elapsed = before_park.elapsed();
 
                 // Advance the test clock by the real elapsed time while parking
@@ -541,17 +620,22 @@ impl TestScheduler {
                     return true;
                 }
             }
+
         } else if deadline.is_some() {
             false
         } else if cfg!(miri) {
             // miri cannot debug print backtraces with `miri-disable-isolation` enabled
             panic!("Parking forbidden.");
+
         } else if self.state.lock().capture_pending_traces {
             let mut pending_traces = String::new();
+
             for (_, trace) in mem::take(&mut self.state.lock().pending_traces) {
                 writeln!(pending_traces, "{:?}", exclude_wakers_from_trace(trace)).unwrap();
             }
+
             panic!("Parking forbidden. Pending traces:\n{}", pending_traces);
+
         } else {
             panic!(
                 "Parking forbidden. Re-run with {PENDING_TRACES_VAR_NAME}=1 to show pending traces"
@@ -563,9 +647,11 @@ impl TestScheduler {
 fn assert_correct_thread(expected: &Thread, state: &Arc<Mutex<SchedulerState>>) {
     let current_thread = thread::current();
     let mut state = state.lock();
+
     if state.parking_allowed_once {
         return;
     }
+
     if current_thread.id() == expected.id() {
         return;
     }
@@ -577,7 +663,9 @@ fn assert_correct_thread(expected: &Thread, state: &Arc<Mutex<SchedulerState>>) 
         expected.name(),
         expected.id(),
     );
+
     let backtrace = Backtrace::new();
+
     if state.finished {
         panic!("{}", message);
     } else {
@@ -605,19 +693,24 @@ impl Scheduler for TestScheduler {
 
     fn schedule_local(&self, session_id: SessionId, runnable: Runnable<RunnableMeta>) {
         assert_correct_thread(&self.thread, &self.state);
+
         let mut state = self.state.lock();
+
         let ix = if state.randomize_order {
             let start_ix = state
                 .runnables
                 .iter()
                 .rposition(|task| task.session_id == Some(session_id))
                 .map_or(0, |ix| ix + 1);
+
             self.rng
                 .lock()
                 .random_range(start_ix..=state.runnables.len())
+
         } else {
             state.runnables.len()
         };
+
         state.runnables.insert(
             ix,
             ScheduledRunnable {
@@ -626,8 +719,11 @@ impl Scheduler for TestScheduler {
                 runnable,
             },
         );
+
         state.unparked = true;
+
         drop(state);
+
         self.thread.unpark();
     }
 
@@ -637,12 +733,15 @@ impl Scheduler for TestScheduler {
         priority: Priority,
     ) {
         assert_correct_thread(&self.thread, &self.state);
+
         let mut state = self.state.lock();
+
         let ix = if state.randomize_order {
             self.rng.lock().random_range(0..=state.runnables.len())
         } else {
             state.runnables.len()
         };
+
         state.runnables.insert(
             ix,
             ScheduledRunnable {
@@ -651,8 +750,11 @@ impl Scheduler for TestScheduler {
                 runnable,
             },
         );
+
         state.unparked = true;
+
         drop(state);
+
         self.thread.unpark();
     }
 
@@ -666,11 +768,14 @@ impl Scheduler for TestScheduler {
     fn timer(&self, duration: Duration) -> Timer {
         let (tx, rx) = oneshot::channel();
         let state = &mut *self.state.lock();
+
         state.timers.push(ScheduledTimer {
             expiration: self.clock.now() + duration,
             _notify: tx,
         });
+
         state.timers.sort_by_key(|timer| timer.expiration);
+
         Timer(rx)
     }
 
@@ -695,11 +800,13 @@ impl Scheduler for TestScheduler {
     ) -> Task<Box<dyn Any + Send + Sync>> {
         let session_id = self.allocate_session_id();
         let weak_scheduler = Arc::downgrade(&self);
+
         let spawner = LocalExecutor::new(
             session_id,
             self,
             schedule_local_dispatch(weak_scheduler.clone(), session_id),
         );
+
         // The dedicated future sits in this scheduler's own queue until its
         // first poll. A `LocalExecutor` holds the scheduler strongly, so
         // capturing one here would create a reference cycle
@@ -711,11 +818,13 @@ impl Scheduler for TestScheduler {
             let scheduler = weak_scheduler
                 .upgrade()
                 .expect("dedicated tasks are only polled by their scheduler, which is still alive when polled");
+
             let executor = LocalExecutor::new(
                 session_id,
                 scheduler,
                 schedule_local_dispatch(weak_scheduler, session_id),
             );
+
             f(executor).await
         })
     }
@@ -824,14 +933,20 @@ struct TracingWaker {
 impl Clone for TracingWaker {
     fn clone(&self) -> Self {
         let mut state = self.state.lock();
+
         let id = if state.capture_pending_traces {
             let id = state.next_trace_id;
+
             state.next_trace_id.0 += 1;
+
             state.pending_traces.insert(id, Backtrace::new_unresolved());
+
             Some(id)
+
         } else {
             None
         };
+
         Self {
             id,
             awoken: self.awoken.clone(),
@@ -860,11 +975,15 @@ impl TracingWaker {
         assert_correct_thread(&self.thread, &self.state);
 
         let mut state = self.state.lock();
+
         if let Some(id) = self.id {
             state.pending_traces.remove(&id);
         }
+
         state.unparked = true;
+
         drop(state);
+
         self.awoken.store(true, SeqCst);
         self.thread.unpark();
     }
@@ -872,6 +991,7 @@ impl TracingWaker {
     fn clone_raw(waker: *const ()) -> RawWaker {
         let waker = waker as *const TracingWaker;
         let waker = unsafe { &*waker };
+
         RawWaker::new(
             Box::into_raw(Box::new(waker.clone())) as *const (),
             &WAKER_VTABLE,
@@ -880,17 +1000,20 @@ impl TracingWaker {
 
     fn wake_raw(waker: *const ()) {
         let waker = unsafe { Box::from_raw(waker as *mut TracingWaker) };
+
         waker.wake();
     }
 
     fn wake_by_ref_raw(waker: *const ()) {
         let waker = waker as *const TracingWaker;
         let waker = unsafe { &*waker };
+
         waker.wake_by_ref();
     }
 
     fn drop_raw(waker: *const ()) {
         let waker = unsafe { Box::from_raw(waker as *mut TracingWaker) };
+
         drop(waker);
     }
 }
@@ -945,7 +1068,9 @@ impl Future for Yield {
             Poll::Ready(())
         } else {
             self.0 -= 1;
+
             cx.waker().wake_by_ref();
+
             Poll::Pending
         }
     }
@@ -953,7 +1078,9 @@ impl Future for Yield {
 
 fn exclude_wakers_from_trace(mut trace: Backtrace) -> Backtrace {
     trace.resolve();
+
     let mut frames: Vec<BacktraceFrame> = trace.into();
+
     let waker_clone_frame_ix = frames.iter().position(|frame| {
         frame.symbols().iter().any(|symbol| {
             symbol

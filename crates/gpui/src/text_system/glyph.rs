@@ -2,6 +2,7 @@ use crate::{
     Bounds, DevicePixels, FontId, ForegroundDependency, Pixels, Point, PreparedRasterStyle,
     RasterColorExt, Rgba8, Size,
 };
+
 use derive_more::Deref;
 use std::hash::{Hash, Hasher};
 
@@ -53,12 +54,16 @@ impl GlyphRenderMode {
 pub struct RasterStyleRequest {
     /// The canonical font instance containing the glyph.
     pub font_id: FontId,
+
     /// The glyph whose artwork will be rasterized.
     pub glyph_id: GlyphId,
+
     /// The exact application color. Rasterizers may only retain a normalized derivative of it.
     pub scene_color: crate::Rgba,
+
     /// The requested kind of glyph image.
     pub requested_mode: GlyphRenderMode,
+
     /// Which foreground channels can alter the selected artwork.
     pub foreground_dependency: ForegroundDependency,
 }
@@ -67,6 +72,7 @@ impl RasterStyleRequest {
     /// Quantizes the foreground after removing channels unused by the artwork.
     pub fn normalized_color(self) -> Rgba8 {
         let color = self.scene_color.quantize_raster_color();
+
         if self.foreground_dependency == ForegroundDependency::AlphaOnly {
             return Rgba8::new(0, 0, 0, color.alpha);
         }
@@ -91,10 +97,13 @@ pub enum RasterizedGlyphFormat {
 pub struct RasterizedGlyph {
     /// Placement relative to the glyph's baseline origin.
     pub bounds: Bounds<DevicePixels>,
+
     /// Pixel dimensions of the supplied buffer.
     pub size: Size<DevicePixels>,
+
     /// Byte layout of `pixels`.
     pub format: RasterizedGlyphFormat,
+
     /// Pixel bytes. Color pixels use straight alpha.
     pub pixels: Vec<u8>,
 }
@@ -138,6 +147,7 @@ impl RasterizedGlyph {
                 width == 0 && height == 0 && self.pixels.is_empty(),
                 "empty glyph raster must have zero size and no pixels"
             );
+
             return Ok(());
         }
 
@@ -145,6 +155,7 @@ impl RasterizedGlyph {
             RasterizedGlyphFormat::AlphaMask => 1,
             RasterizedGlyphFormat::BgraSubpixelMask | RasterizedGlyphFormat::BgraColor => 4,
         };
+
         let expected_len = width
             .checked_mul(height)
             .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
@@ -181,8 +192,10 @@ impl ValidatedRasterizedGlyph {
 pub struct GlyphAtlasEntry {
     /// The GPU tile, or `None` for a successfully empty glyph.
     pub tile: Option<crate::AtlasTile>,
+
     /// Placement relative to the glyph's baseline origin.
     pub bounds: Bounds<DevicePixels>,
+
     /// Byte layout of the cached pixels.
     pub format: RasterizedGlyphFormat,
 }

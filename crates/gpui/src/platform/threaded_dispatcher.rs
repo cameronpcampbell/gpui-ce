@@ -49,7 +49,9 @@ impl IdleTracker {
 
     fn decrement(&self) {
         let mut inflight = self.inflight.lock();
+
         *inflight -= 1;
+
         if *inflight == 0 {
             self.condvar.notify_all();
         }
@@ -66,6 +68,7 @@ impl IdleTracker {
     /// notification can't slip between its check and its wait and be lost.
     fn notify_under_lock(&self) {
         let _inflight = self.inflight.lock();
+
         self.condvar.notify_all();
     }
 }
@@ -129,9 +132,11 @@ impl ThreadedDispatcher {
 
         let thread_count =
             thread::available_parallelism().map_or(MIN_THREADS, |i| i.get().max(MIN_THREADS));
+
         for i in 0..thread_count {
             let mut receiver: PriorityQueueReceiver<RunnableVariant> = background_receiver.clone();
             let idle = idle.clone();
+
             thread::Builder::new()
                 .name(format!("ThreadedDispatcherWorker-{i}"))
                 .spawn(move || {
@@ -139,13 +144,17 @@ impl ThreadedDispatcher {
                         let _decrement = idle.decrement_on_drop();
                         let location = runnable.metadata().location;
                         let spawned = runnable.metadata().spawned;
+
                         profiler::update_running_task(spawned, location);
+
                         runnable.run();
+
                         profiler::save_task_timing();
                     }
                 })
                 .expect("failed to spawn threaded dispatcher worker");
         }
+
         drop(background_receiver);
 
         let timers = Arc::new(TimerQueue {
@@ -155,40 +164,53 @@ impl ThreadedDispatcher {
             }),
             condvar: Condvar::new(),
         });
+
         {
             let timers = timers.clone();
             let idle = idle.clone();
+
             thread::Builder::new()
                 .name("ThreadedDispatcherTimer".to_owned())
                 .spawn(move || {
                     let mut state = timers.state.lock();
+
                     loop {
                         let Some(entry) = state.heap.peek() else {
                             timers.condvar.wait(&mut state);
+
                             continue;
                         };
+
                         let due = entry.due;
+
                         if due > Instant::now() {
                             timers.condvar.wait_until(&mut state, due);
+
                             continue;
                         }
+
                         let Some(entry) = state.heap.pop() else {
                             continue;
                         };
+
                         // Count the firing timer as in-flight before releasing
                         // the lock so it can spawn follow-up work that
                         // `run_until_idle` will wait for. Lock order is always
                         // timer state, then in-flight count; `run_until_idle`
                         // never takes them in the opposite order.
                         idle.increment();
+
                         drop(state);
 
                         {
                             let _decrement = idle.decrement_on_drop();
                             let location = entry.runnable.metadata().location;
                             let spawned = entry.runnable.metadata().spawned;
+
                             profiler::update_running_task(spawned, location);
+
                             entry.runnable.run();
+
                             profiler::save_task_timing();
                         }
 
@@ -222,6 +244,7 @@ impl ThreadedDispatcher {
             self.is_main_thread(),
             "run_until_idle must be called on the threaded dispatcher's main thread"
         );
+
         loop {
             if self.drain_main_queue() {
                 continue;
@@ -233,24 +256,29 @@ impl ThreadedDispatcher {
                 // Poll briefly: a firing timer leaves the heap just before it
                 // registers as in-flight.
                 let mut inflight = self.idle.inflight.lock();
+
                 self.idle
                     .condvar
                     .wait_for(&mut inflight, Duration::from_millis(1));
+
                 continue;
             }
 
             let mut inflight = self.idle.inflight.lock();
+
             // Re-checked under the lock that `dispatch_on_main_thread`
             // notifies under, so the notification can't be lost.
             if self.main_queue_has_work() {
                 continue;
             }
+
             if *inflight == 0 {
                 // Main-thread sends happen before in-flight decrements, and
                 // decrements happen under this lock, so the check above
                 // observed all completed work.
                 return;
             }
+
             // Woken when main-thread work arrives or the in-flight count
             // reaches zero; both notify under this lock.
             self.idle.condvar.wait(&mut inflight);
@@ -274,18 +302,22 @@ impl ThreadedDispatcher {
             self.is_main_thread(),
             "run_until must be called on the threaded dispatcher's main thread"
         );
+
         loop {
             if let Some(result) = ready() {
                 return result;
             }
+
             if self.run_one_main_task() {
                 continue;
             }
 
             let mut inflight = self.idle.inflight.lock();
+
             if self.main_queue_has_work() {
                 continue;
             }
+
             self.idle.condvar.wait(&mut inflight);
         }
     }
@@ -299,15 +331,21 @@ impl ThreadedDispatcher {
     #[cfg(any(test, feature = "bench-support"))]
     fn run_one_main_task(&self) -> bool {
         let runnable = self.main_receiver.lock().try_pop();
+
         match runnable {
             Ok(Some(runnable)) => {
                 let location = runnable.metadata().location;
                 let spawned = runnable.metadata().spawned;
+
                 profiler::update_running_task(spawned, location);
+
                 runnable.run();
+
                 profiler::save_task_timing();
+
                 true
             }
+
             Ok(None) | Err(_) => false,
         }
     }
@@ -321,22 +359,31 @@ impl ThreadedDispatcher {
             self.is_main_thread(),
             "run_ready_main_tasks must be called on the threaded dispatcher's main thread"
         );
+
         let pending = self.main_receiver.lock().len();
         let mut ran_any = false;
+
         for _ in 0..pending {
             let runnable = self.main_receiver.lock().try_pop();
+
             match runnable {
                 Ok(Some(runnable)) => {
                     let location = runnable.metadata().location;
                     let spawned = runnable.metadata().spawned;
+
                     profiler::update_running_task(spawned, location);
+
                     runnable.run();
+
                     profiler::save_task_timing();
+
                     ran_any = true;
                 }
+
                 Ok(None) | Err(_) => break,
             }
         }
+
         ran_any
     }
 
@@ -350,11 +397,16 @@ impl ThreadedDispatcher {
         let timers = {
             let mut state = self.timers.state.lock();
             let timers: Vec<_> = state.heap.drain().collect();
+
             self.timers.condvar.notify_all();
+
             timers
         };
+
         let canceled = timers.len();
+
         drop(timers);
+
         canceled
     }
 
@@ -364,6 +416,7 @@ impl ThreadedDispatcher {
         let inflight = *self.idle.inflight.lock();
         let timers = self.timers.state.lock().heap.len();
         let main_queue_has_work = self.main_queue_has_work();
+
         format!(
             "ThreadedDispatcher {{ inflight: {inflight}, pending_timers: {timers}, \
              main_queue_has_work: {main_queue_has_work} }}"
@@ -380,6 +433,7 @@ impl ThreadedDispatcher {
 
     fn has_due_timer(&self) -> bool {
         let state = self.timers.state.lock();
+
         state
             .heap
             .peek()
@@ -392,19 +446,26 @@ impl ThreadedDispatcher {
 
     fn drain_main_queue(&self) -> bool {
         let mut ran_any = false;
+
         loop {
             // Lock only around the pop so runnables can re-entrantly dispatch
             // more main-thread work through the sender while they run.
             let runnable = self.main_receiver.lock().try_pop();
+
             match runnable {
                 Ok(Some(runnable)) => {
                     let location = runnable.metadata().location;
                     let spawned = runnable.metadata().spawned;
+
                     profiler::update_running_task(spawned, location);
+
                     runnable.run();
+
                     profiler::save_task_timing();
+
                     ran_any = true;
                 }
+
                 Ok(None) | Err(_) => return ran_any,
             }
         }
@@ -418,6 +479,7 @@ impl PlatformDispatcher for ThreadedDispatcher {
 
     fn dispatch(&self, runnable: RunnableVariant, priority: Priority) {
         self.idle.increment();
+
         self.background_sender
             .send(priority, runnable)
             .unwrap_or_else(|_| panic!("threaded dispatcher workers are no longer running"));
@@ -430,8 +492,10 @@ impl PlatformDispatcher for ThreadedDispatcher {
             // future, so forget it rather than dropping it on this thread
             // (mirrors LinuxDispatcher).
             std::mem::forget(error);
+
             return;
         }
+
         // Wake `run_until_idle` if it's waiting for main-thread work.
         self.idle.notify_under_lock();
     }
@@ -439,12 +503,15 @@ impl PlatformDispatcher for ThreadedDispatcher {
     fn dispatch_after(&self, duration: Duration, runnable: RunnableVariant) {
         let mut state = self.timers.state.lock();
         let seq = state.next_seq;
+
         state.next_seq += 1;
+
         state.heap.push(TimerEntry {
             due: Instant::now() + duration,
             seq,
             runnable,
         });
+
         self.timers.condvar.notify_one();
     }
 
@@ -474,25 +541,34 @@ mod tests {
     fn is_idle_tracks_queued_work_but_ignores_undue_timers() {
         let dispatcher = Arc::new(ThreadedDispatcher::new());
         let foreground = ForegroundExecutor::new(dispatcher.clone());
+
         assert!(dispatcher.is_idle());
 
         foreground.spawn(async {}).detach();
+
         assert!(!dispatcher.is_idle());
+
         dispatcher.run_until_idle();
+
         assert!(dispatcher.is_idle());
 
         let background = BackgroundExecutor::new(dispatcher.clone());
         let timer = background.timer(Duration::from_secs(60));
+
         // The timer future's initial poll runs on a worker thread; wait for
         // it so only the armed, not-yet-due timer remains.
         dispatcher.run_until_idle();
+
         assert!(
             dispatcher.is_idle(),
             "a timer that is not due yet should not count as pending work"
         );
+
         drop(timer);
+
         dispatcher.cancel_pending_timers();
         dispatcher.run_until_idle();
+
         assert!(dispatcher.is_idle());
     }
 
@@ -503,17 +579,21 @@ mod tests {
         let foreground = ForegroundExecutor::new(dispatcher.clone());
 
         let (sender, receiver) = futures::channel::oneshot::channel();
+
         background
             .spawn(async move {
                 thread::sleep(Duration::from_millis(10));
+
                 sender.send(()).ok();
             })
             .detach();
 
         let completed = Arc::new(AtomicBool::new(false));
+
         foreground
             .spawn({
                 let completed = completed.clone();
+
                 async move {
                     receiver.await.ok();
                     completed.store(true, Ordering::SeqCst);
@@ -525,6 +605,7 @@ mod tests {
         assert!(!completed.load(Ordering::SeqCst));
 
         dispatcher.run_until_idle();
+
         assert!(completed.load(Ordering::SeqCst));
     }
 
@@ -535,17 +616,21 @@ mod tests {
         let foreground = ForegroundExecutor::new(dispatcher.clone());
 
         let (sender, receiver) = futures::channel::oneshot::channel();
+
         background
             .spawn(async move {
                 thread::sleep(Duration::from_millis(10));
+
                 sender.send(()).ok();
             })
             .detach();
 
         let completed = Arc::new(AtomicBool::new(false));
+
         foreground
             .spawn({
                 let completed = completed.clone();
+
                 async move {
                     receiver.await.ok();
                     completed.store(true, Ordering::SeqCst);
@@ -554,6 +639,7 @@ mod tests {
             .detach();
 
         dispatcher.run_until_idle();
+
         assert!(completed.load(Ordering::SeqCst));
     }
 
@@ -562,21 +648,26 @@ mod tests {
         let dispatcher = Arc::new(ThreadedDispatcher::new());
         let foreground = ForegroundExecutor::new(dispatcher.clone());
         let (sender, receiver) = futures::channel::oneshot::channel();
+
         let sender_thread = thread::spawn(move || {
             thread::sleep(Duration::from_millis(10));
+
             sender
                 .send(())
                 .expect("foreground receiver should remain alive");
         });
 
         let completed = Arc::new(AtomicBool::new(false));
+
         foreground
             .spawn({
                 let completed = completed.clone();
+
                 async move {
                     receiver
                         .await
                         .expect("external sender should deliver its wake");
+
                     completed.store(true, Ordering::SeqCst);
                 }
             })
@@ -584,6 +675,7 @@ mod tests {
 
         dispatcher.run_until(|| completed.load(Ordering::SeqCst).then_some(()));
         sender_thread.join().expect("sender thread should finish");
+
         assert!(completed.load(Ordering::SeqCst));
     }
 
@@ -599,12 +691,15 @@ mod tests {
         // such work finishes every iteration, so readiness must be observed
         // between runnables rather than only at quiescence.
         let iterations = Arc::new(AtomicUsize::new(0));
+
         foreground
             .spawn({
                 let iterations = iterations.clone();
+
                 async move {
                     for _ in 0..REQUEUE_LIMIT {
                         iterations.fetch_add(1, Ordering::SeqCst);
+
                         yield_once().await;
                     }
                 }
@@ -612,9 +707,11 @@ mod tests {
             .detach();
 
         let completed = Arc::new(AtomicBool::new(false));
+
         foreground
             .spawn({
                 let completed = completed.clone();
+
                 async move {
                     completed.store(true, Ordering::SeqCst);
                 }
@@ -622,6 +719,7 @@ mod tests {
             .detach();
 
         dispatcher.run_until(|| completed.load(Ordering::SeqCst).then_some(()));
+
         assert!(
             iterations.load(Ordering::SeqCst) < REQUEUE_LIMIT,
             "run_until should return at readiness instead of draining re-queued main work"
@@ -632,12 +730,15 @@ mod tests {
     /// immediately, so the runnable re-enters the main queue.
     fn yield_once() -> impl Future<Output = ()> {
         let mut yielded = false;
+
         std::future::poll_fn(move |poll_context| {
             if yielded {
                 std::task::Poll::Ready(())
             } else {
                 yielded = true;
+
                 poll_context.waker().wake_by_ref();
+
                 std::task::Poll::Pending
             }
         })
@@ -651,12 +752,15 @@ mod tests {
         let foreground = ForegroundExecutor::new(dispatcher.clone());
 
         let iterations = Arc::new(AtomicUsize::new(0));
+
         foreground
             .spawn({
                 let iterations = iterations.clone();
+
                 async move {
                     for _ in 0..REQUEUE_LIMIT {
                         iterations.fetch_add(1, Ordering::SeqCst);
+
                         yield_once().await;
                     }
                 }
@@ -676,20 +780,25 @@ mod tests {
 
         let fired = Arc::new(AtomicBool::new(false));
         let timer = background.timer(Duration::from_millis(10));
+
         background
             .spawn({
                 let fired = fired.clone();
+
                 async move {
                     timer.await;
+
                     fired.store(true, Ordering::SeqCst);
                 }
             })
             .detach();
 
         let deadline = Instant::now() + Duration::from_secs(10);
+
         while !fired.load(Ordering::SeqCst) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(1));
         }
+
         assert!(fired.load(Ordering::SeqCst));
     }
 
@@ -700,18 +809,23 @@ mod tests {
 
         let fired = Arc::new(AtomicBool::new(false));
         let timer = background.timer(Duration::from_secs(10));
+
         background
             .spawn({
                 let fired = fired.clone();
+
                 async move {
                     timer.await;
+
                     fired.store(true, Ordering::SeqCst);
                 }
             })
             .detach();
 
         dispatcher.run_until_idle();
+
         assert_eq!(dispatcher.cancel_pending_timers(), 1);
+
         dispatcher.run_until_idle();
 
         assert!(fired.load(Ordering::SeqCst));

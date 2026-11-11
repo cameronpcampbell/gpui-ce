@@ -4,6 +4,7 @@ use collections::FxHashSet;
 use derive_more::{Deref, DerefMut};
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use slotmap::{KeyData, SecondaryMap, SlotMap};
+
 use std::{
     any::{Any, TypeId, type_name},
     cell::RefCell,
@@ -71,6 +72,7 @@ pub(crate) struct EntityMap {
 pub(crate) struct EntityRefCounts {
     counts: SlotMap<EntityId, AtomicUsize>,
     dropped_entity_ids: Vec<EntityId>,
+
     #[cfg(any(test, feature = "leak-detection"))]
     leak_detector: LeakDetector,
 }
@@ -121,6 +123,7 @@ impl EntityMap {
     /// Reserve a slot for an entity, which you can subsequently use with `insert`.
     pub fn reserve<T: 'static>(&self) -> Slot<T> {
         let id = self.ref_counts.write().counts.insert(1.into());
+
         Slot(Entity::new(id, Arc::downgrade(&self.ref_counts)))
     }
 
@@ -130,10 +133,13 @@ impl EntityMap {
         T: 'static,
     {
         let mut accessed_entities = self.accessed_entities.get_mut();
+
         accessed_entities.insert(slot.entity_id);
 
         let handle = slot.0;
+
         self.entities.insert(handle.entity_id, Box::new(entity));
+
         handle
     }
 
@@ -141,7 +147,9 @@ impl EntityMap {
     #[track_caller]
     pub fn lease<T>(&mut self, pointer: &Entity<T>) -> Lease<T> {
         self.assert_valid_context(pointer);
+
         let mut accessed_entities = self.accessed_entities.get_mut();
+
         accessed_entities.insert(pointer.entity_id);
 
         let entity = Some(
@@ -149,6 +157,7 @@ impl EntityMap {
                 .remove(pointer.entity_id)
                 .unwrap_or_else(|| double_lease_panic::<T>("update")),
         );
+
         Lease {
             entity,
             id: pointer.entity_id,
@@ -163,7 +172,9 @@ impl EntityMap {
 
     pub fn read<T: 'static>(&self, entity: &Entity<T>) -> &T {
         self.assert_valid_context(entity);
+
         let mut accessed_entities = self.accessed_entities.borrow_mut();
+
         accessed_entities.insert(entity.entity_id);
 
         self.entities
@@ -197,12 +208,15 @@ impl EntityMap {
         dropped_entity_ids
             .filter_map(|entity_id| {
                 let count = ref_counts.counts.remove(entity_id).unwrap();
+
                 debug_assert_eq!(
                     count.load(SeqCst),
                     0,
                     "dropped an entity that was referenced"
                 );
+
                 accessed_entities.remove(&entity_id);
+
                 // If the EntityId was allocated with `Context::reserve`,
                 // the entity may not have been inserted.
                 Some((entity_id, self.entities.remove(entity_id)?))
@@ -274,6 +288,7 @@ pub struct AnyEntity {
     pub(crate) entity_id: EntityId,
     pub(crate) entity_type: TypeId,
     entity_map: Weak<RwLock<EntityRefCounts>>,
+
     #[cfg(any(test, feature = "leak-detection"))]
     handle_id: HandleId,
 }
@@ -330,6 +345,7 @@ impl AnyEntity {
                 any_entity: self,
                 entity_type: PhantomData,
             })
+
         } else {
             Err(self)
         }
@@ -340,11 +356,14 @@ impl Clone for AnyEntity {
     fn clone(&self) -> Self {
         if let Some(entity_map) = self.entity_map.upgrade() {
             let entity_map = entity_map.read();
+
             let count = entity_map
                 .counts
                 .get(self.entity_id)
                 .expect("detected over-release of a entity");
+
             let prev_count = count.fetch_add(1, SeqCst);
+
             assert_ne!(prev_count, 0, "Detected over-release of a entity.");
         }
 
@@ -368,15 +387,20 @@ impl Drop for AnyEntity {
     fn drop(&mut self) {
         if let Some(entity_map) = self.entity_map.upgrade() {
             let entity_map = entity_map.upgradable_read();
+
             let count = entity_map
                 .counts
                 .get(self.entity_id)
                 .expect("detected over-release of a handle.");
+
             let prev_count = count.fetch_sub(1, SeqCst);
+
             assert_ne!(prev_count, 0, "Detected over-release of a entity.");
+
             if prev_count == 1 {
                 // We were the last reference to this entity, so we can remove it.
                 let mut entity_map = RwLockUpgradableReadGuard::upgrade(entity_map);
+
                 entity_map.dropped_entity_ids.push(self.entity_id);
             }
         }
@@ -470,6 +494,7 @@ pub struct Entity<T> {
     #[deref]
     #[deref_mut]
     pub(crate) any_entity: AnyEntity,
+
     pub(crate) entity_type: PhantomData<fn(T) -> T>,
 }
 
@@ -629,6 +654,7 @@ impl<T: 'static> Entity<T> {
     pub fn write<C: AppContext>(&self, cx: &mut C, value: T) {
         self.update(cx, |entity, cx| {
             *entity = value;
+
             cx.notify();
         })
     }
@@ -730,6 +756,7 @@ impl AnyWeakEntity {
             .upgrade()
             .and_then(|ref_counts| Some(ref_counts.read().counts.get(self.entity_id)?.load(SeqCst)))
             .unwrap_or(0);
+
         ref_count > 0
     }
 
@@ -745,6 +772,7 @@ impl AnyWeakEntity {
             // entity_id is in dropped_entity_ids
             return None;
         }
+
         drop(ref_counts);
 
         Some(AnyEntity {
@@ -827,6 +855,7 @@ impl AnyWeakEntity {
         /// increases their IDs from `0`, we can decrease ours from `u64::MAX` so these
         /// two will never conflict (u64 is way too large).
         static UNIQUE_NON_CONFLICTING_ID_GENERATOR: AtomicU64 = AtomicU64::new(u64::MAX);
+
         let entity_id = UNIQUE_NON_CONFLICTING_ID_GENERATOR.fetch_sub(1, SeqCst);
 
         Self {
@@ -903,6 +932,7 @@ pub struct WeakEntity<T> {
     #[deref]
     #[deref_mut]
     any_entity: AnyWeakEntity,
+
     entity_type: PhantomData<fn(T) -> T>,
 }
 
@@ -975,6 +1005,7 @@ impl<T: 'static> WeakEntity<T> {
         C: AppContext,
     {
         let entity = self.upgrade().context("entity released")?;
+
         Ok(cx.update_entity(&entity, update))
     }
 
@@ -991,6 +1022,7 @@ impl<T: 'static> WeakEntity<T> {
         C: AppContext,
     {
         let entity = self.upgrade().context("entity released")?;
+
         cx.with_window(entity.entity_id(), |window, app| {
             entity.update(app, |entity, cx| update(entity, window, cx))
         })
@@ -1005,6 +1037,7 @@ impl<T: 'static> WeakEntity<T> {
         C: AppContext,
     {
         let entity = self.upgrade().context("entity released")?;
+
         Ok(cx.read_entity(&entity, read))
     }
 
@@ -1150,6 +1183,7 @@ impl LeakDetector {
     ) -> HandleId {
         let id = gpui_util::post_inc(&mut self.next_handle_id);
         let handle_id = HandleId { id };
+
         let handles = self
             .entity_handles
             .entry(entity_id)
@@ -1157,10 +1191,12 @@ impl LeakDetector {
                 handles: HashMap::default(),
                 type_name: type_name.unwrap_or("<unknown>"),
             });
+
         handles.handles.insert(
             handle_id,
             LEAK_BACKTRACE.then(backtrace::Backtrace::new_unresolved),
         );
+
         handle_id
     }
 
@@ -1173,6 +1209,7 @@ impl LeakDetector {
             self.entity_handles.entry(entity_id)
         {
             data.get_mut().handles.remove(&handle_id);
+
             if data.get().handles.is_empty() {
                 data.remove();
             }
@@ -1191,11 +1228,15 @@ impl LeakDetector {
 
         if let Some(data) = self.entity_handles.remove(&entity_id) {
             let mut out = String::new();
+
             for (_, backtrace) in data.handles {
                 if let Some(mut backtrace) = backtrace {
                     backtrace.resolve();
+
                     let backtrace = BacktraceFormatter(backtrace);
+
                     writeln!(out, "Leaked handle:\n{:?}", backtrace).unwrap();
+
                 } else {
                     writeln!(
                         out,
@@ -1204,6 +1245,7 @@ impl LeakDetector {
                     .unwrap();
                 }
             }
+
             panic!("Handles for {} leaked:\n{out}", data.type_name);
         }
     }
@@ -1234,21 +1276,27 @@ impl LeakDetector {
         use std::fmt::Write as _;
 
         let mut out = String::new();
+
         for (entity_id, data) in &self.entity_handles {
             if snapshot.entity_ids.contains(entity_id) {
                 continue;
             }
+
             for (_, backtrace) in &data.handles {
                 if let Some(backtrace) = backtrace {
                     let mut backtrace = backtrace.clone();
+
                     backtrace.resolve();
+
                     let backtrace = BacktraceFormatter(backtrace);
+
                     writeln!(
                         out,
                         "Leaked handle for entity {} ({entity_id:?}):\n{:?}",
                         data.type_name, backtrace
                     )
                     .unwrap();
+
                 } else {
                     writeln!(
                         out,
@@ -1276,17 +1324,21 @@ impl Drop for LeakDetector {
         }
 
         let mut out = String::new();
+
         for (entity_id, data) in self.entity_handles.drain() {
             for (_handle, backtrace) in data.handles {
                 if let Some(mut backtrace) = backtrace {
                     backtrace.resolve();
+
                     let backtrace = BacktraceFormatter(backtrace);
+
                     writeln!(
                         out,
                         "Leaked handle for entity {} ({entity_id:?}):\n{:?}",
                         data.type_name, backtrace
                     )
                     .unwrap();
+
                 } else {
                     writeln!(
                         out,
@@ -1297,6 +1349,7 @@ impl Drop for LeakDetector {
                 }
             }
         }
+
         panic!("Exited with leaked handles:\n{out}");
     }
 }
@@ -1320,8 +1373,10 @@ impl fmt::Debug for BacktraceFormatter {
         // short format, because if it's full we presumably want to print
         // everything.
         let cwd = std::env::current_dir();
+
         let mut print_path = move |fmt: &mut fmt::Formatter<'_>, path: BytesOrWideString<'_>| {
             let path = path.into_path_buf();
+
             if style != PrintFmt::Full {
                 if let Ok(cwd) = &cwd {
                     if let Ok(suffix) = path.strip_prefix(cwd) {
@@ -1329,12 +1384,16 @@ impl fmt::Debug for BacktraceFormatter {
                     }
                 }
             }
+
             fmt::Display::fmt(&path.display(), fmt)
         };
 
         let mut f = BacktraceFmt::new(fmt, style, &mut print_path);
+
         f.add_context()?;
+
         let mut strip = true;
+
         for frame in self.0.frames() {
             if let [symbol, ..] = frame.symbols()
                 && let Some(name) = symbol.name()
@@ -1345,23 +1404,32 @@ impl fmt::Debug for BacktraceFormatter {
                     | "scheduler::executor::spawn_local_with_source_location::impl$1::poll<core::pin::Pin<alloc::boxed::Box<dyn$<core::future::future::Future<assoc$<Output,enum2$<core::result::Result<workspace::OpenResult,anyhow::Error> > > > >,alloc::alloc::Global> > >" => {
                         strip = true
                     }
+
                     "gpui::app::entity_map::LeakDetector::handle_created" => {
                         strip = false;
+
                         continue;
                     }
+
                     "zed::main" => {
                         strip = true;
+
                         f.frame().backtrace_frame(frame)?;
                     }
+
                     _ => {}
                 }
             }
+
             if strip {
                 continue;
             }
+
             f.frame().backtrace_frame(frame)?;
         }
+
         f.finish()?;
+
         Ok(())
     }
 }
@@ -1380,12 +1448,15 @@ mod test {
         let mut entity_map = EntityMap::new();
 
         let slot = entity_map.reserve::<TestEntity>();
+
         entity_map.insert(slot, TestEntity { i: 1 });
 
         let slot = entity_map.reserve::<TestEntity>();
+
         entity_map.insert(slot, TestEntity { i: 2 });
 
         let dropped = entity_map.take_dropped();
+
         assert_eq!(dropped.len(), 2);
 
         assert_eq!(
@@ -1405,12 +1476,15 @@ mod test {
         let slot = entity_map.reserve::<TestEntity>();
         let handle = entity_map.insert(slot, TestEntity { i: 1 });
         let weak = handle.downgrade();
+
         drop(handle);
 
         let strong = weak.upgrade();
+
         assert_eq!(strong, None);
 
         let dropped = entity_map.take_dropped();
+
         assert_eq!(dropped.len(), 1);
 
         assert_eq!(
@@ -1433,6 +1507,7 @@ mod test {
 
         let slot = entity_map.reserve::<TestEntity>();
         let temporary = entity_map.insert(slot, TestEntity { i: 2 });
+
         drop(temporary);
 
         entity_map.assert_no_new_leaks(&snapshot);

@@ -1,8 +1,10 @@
 use objc2::rc::Retained;
+
 use objc2_app_kit::{
     NSPasteboard, NSPasteboardNameFind, NSPasteboardType, NSPasteboardTypeFileURL,
     NSPasteboardTypeString,
 };
+
 use objc2_foundation::{NSData, NSString};
 use smallvec::SmallVec;
 use strum::IntoEnumIterator as _;
@@ -55,6 +57,7 @@ impl Pasteboard {
                 .filter_map(|url| url::Url::parse(&url.to_string()).ok())
                 .filter_map(|url| url.to_file_path().ok())
                 .collect::<SmallVec<_>>();
+
             if !paths.is_empty() {
                 let mut entries = vec![ClipboardEntry::ExternalPaths(ExternalPaths(paths))];
 
@@ -100,6 +103,7 @@ impl Pasteboard {
                     entries: vec![ClipboardEntry::Image(Image { format, bytes, id })],
                 }
             })
+
         } else {
             None
         }
@@ -107,6 +111,7 @@ impl Pasteboard {
 
     fn read_string_from_pasteboard(&self) -> Option<ClipboardEntry> {
         let string_type = NSString::from_str("public.utf8-plain-text");
+
         if !self
             .inner
             .types()
@@ -117,6 +122,7 @@ impl Pasteboard {
 
         let text_bytes = self.data_for_type(&string_type)?;
         let text = String::from_utf8_lossy(&text_bytes).to_string();
+
         let metadata = self
             .data_for_type(&self.text_hash_type)
             .and_then(|hash_bytes| {
@@ -144,13 +150,17 @@ impl Pasteboard {
                 // Writing an empty list of entries just clears the clipboard.
                 self.inner.clearContents();
             }
+
             [ClipboardEntry::String(string)] => {
                 self.write_plaintext(string);
             }
+
             [ClipboardEntry::Image(image)] => {
                 self.write_image(image);
             }
+
             [ClipboardEntry::ExternalPaths(_)] => {}
+
             _ => {
                 // Agus NB: We're currently only writing string entries to the clipboard when we have more than one.
                 //
@@ -168,10 +178,12 @@ impl Pasteboard {
                     match entry {
                         ClipboardEntry::String(text) => {
                             combined.text.push_str(&text.text());
+
                             if combined.metadata.is_none() {
                                 combined.metadata = text.metadata;
                             }
                         }
+
                         _ => {}
                     }
                 }
@@ -185,16 +197,19 @@ impl Pasteboard {
         self.inner.clearContents();
 
         let text_bytes = NSData::with_bytes(string.text.as_bytes());
+
         self.inner
             .setData_forType(Some(&text_bytes), unsafe { NSPasteboardTypeString });
 
         if let Some(metadata) = string.metadata.as_ref() {
             let hash_bytes =
                 NSData::with_bytes(&ClipboardString::text_hash(&string.text).to_be_bytes());
+
             self.inner
                 .setData_forType(Some(&hash_bytes), &self.text_hash_type);
 
             let metadata_bytes = NSData::with_bytes(metadata.as_bytes());
+
             self.inner
                 .setData_forType(Some(&metadata_bytes), &self.metadata_type);
         }
@@ -204,6 +219,7 @@ impl Pasteboard {
         self.inner.clearContents();
 
         let bytes = NSData::with_bytes(&image.bytes);
+
         self.inner
             .setData_forType(Some(&bytes), Into::<UTType>::into(image.format).inner());
     }
@@ -285,10 +301,12 @@ mod tests {
     use std::sync::{Mutex, MutexGuard};
 
     use objc2::runtime::ProtocolObject;
+
     use objc2_app_kit::{
         NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString,
         NSPasteboardWriting,
     };
+
     use objc2_foundation::{NSArray, NSData, NSString};
 
     use gpui::{ClipboardEntry, ClipboardItem, ClipboardString, ImageFormat};
@@ -310,6 +328,7 @@ mod tests {
         let guard = PASTEBOARD_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         Pasteboard::unique().map(|pasteboard| (guard, pasteboard))
     }
 
@@ -320,15 +339,21 @@ mod tests {
                 let item = NSPasteboardItem::new();
                 let file_url = url::Url::from_file_path(path).expect("absolute test path");
                 let file_url = NSString::from_str(file_url.as_str());
+
                 assert!(item.setString_forType(&file_url, unsafe { NSPasteboardTypeFileURL }));
+
                 ProtocolObject::<dyn NSPasteboardWriting>::from_retained(item)
             })
             .collect::<Vec<_>>();
+
         let items = NSArray::from_retained_slice(&items);
+
         pasteboard.inner.clearContents();
+
         assert!(pasteboard.inner.writeObjects(&items));
 
         let joined = NSString::from_str(&paths.join("\n"));
+
         assert!(
             pasteboard
                 .inner
@@ -339,10 +364,13 @@ mod tests {
     #[test]
     fn test_string() {
         let (_guard, pasteboard) = unique_pasteboard!();
+
         assert_eq!(pasteboard.read(), None);
 
         let item = ClipboardItem::new_string("1".to_string());
+
         pasteboard.write(item.clone());
+
         assert_eq!(pasteboard.read(), Some(item));
 
         let item = ClipboardItem {
@@ -350,14 +378,18 @@ mod tests {
                 ClipboardString::new("2".to_string()).with_json_metadata(vec![3, 4]),
             )],
         };
+
         pasteboard.write(item.clone());
+
         assert_eq!(pasteboard.read(), Some(item));
 
         let text_from_other_app = "text from other app";
         let bytes = NSData::with_bytes(text_from_other_app.as_bytes());
+
         pasteboard
             .inner
             .setData_forType(Some(&bytes), unsafe { NSPasteboardTypeString });
+
         assert_eq!(
             pasteboard.read(),
             Some(ClipboardItem::new_string(text_from_other_app.to_string()))
@@ -388,6 +420,7 @@ mod tests {
             ClipboardEntry::ExternalPaths(ep) => {
                 assert_eq!(ep.paths(), &[PathBuf::from("/test.txt")]);
             }
+
             other => panic!("expected ExternalPaths, got {:?}", other),
         }
 
@@ -396,6 +429,7 @@ mod tests {
             ClipboardEntry::String(s) => {
                 assert_eq!(s.text(), "/test.txt");
             }
+
             other => panic!("expected String, got {:?}", other),
         }
     }
@@ -413,6 +447,7 @@ mod tests {
             ClipboardEntry::ExternalPaths(ep) => {
                 assert_eq!(ep.paths(), &[PathBuf::from("/some file with spaces.txt")]);
             }
+
             other => panic!("expected ExternalPaths, got {:?}", other),
         }
     }
@@ -425,6 +460,7 @@ mod tests {
         simulate_external_file_copy(&pasteboard, &paths);
 
         let item = pasteboard.read().expect("should read clipboard item");
+
         assert_eq!(item.entries.len(), 2);
 
         // Test both ExternalPaths and String entries exist
@@ -435,6 +471,7 @@ mod tests {
                     &[PathBuf::from("/file.txt"), PathBuf::from("/image.png"),]
                 );
             }
+
             other => panic!("expected ExternalPaths, got {:?}", other),
         }
 
@@ -443,6 +480,7 @@ mod tests {
                 assert_eq!(s.text(), "/file.txt\n/image.png");
                 assert_eq!(s.metadata, None);
             }
+
             other => panic!("expected String, got {:?}", other),
         }
     }
@@ -461,6 +499,7 @@ mod tests {
         ];
 
         let data = NSData::with_bytes(png_bytes);
+
         pasteboard
             .inner
             .setData_forType(Some(&data), unsafe { NSPasteboardTypePNG });
@@ -469,11 +508,13 @@ mod tests {
 
         // Test Image entry exists
         assert_eq!(item.entries.len(), 1);
+
         match &item.entries[0] {
             ClipboardEntry::Image(img) => {
                 assert_eq!(img.format, ImageFormat::Png);
                 assert_eq!(img.bytes, png_bytes);
             }
+
             other => panic!("expected Image, got {:?}", other),
         }
     }

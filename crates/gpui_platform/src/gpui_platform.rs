@@ -33,7 +33,9 @@ pub fn application_with_web_backend(backend_preference: WebBackendPreference) ->
         true,
         backend_preference,
     ));
+
     let http_client = std::sync::Arc::new(platform.fetch_http_client());
+
     gpui::Application::with_platform(platform).with_http_client(http_client)
 }
 
@@ -42,6 +44,7 @@ pub fn application_with_web_backend(backend_preference: WebBackendPreference) ->
 pub fn single_threaded_web() -> gpui::Application {
     let platform = Rc::new(gpui_web::WebPlatform::new(false));
     let http_client = std::sync::Arc::new(platform.fetch_http_client());
+
     gpui::Application::with_platform(platform).with_http_client(http_client)
 }
 
@@ -76,6 +79,7 @@ pub fn current_platform(headless: bool) -> Rc<dyn Platform> {
     #[cfg(target_family = "wasm")]
     {
         let _ = headless;
+
         Rc::new(gpui_web::WebPlatform::new(true))
     }
 }
@@ -122,6 +126,7 @@ mod tests {
         // This should use our TestDispatcher, not the MacDispatcher
         {
             let task_ran = task_ran.clone();
+
             cx.update(|cx| {
                 cx.spawn(async move |_| {
                     *task_ran.borrow_mut() = true;
@@ -151,9 +156,11 @@ mod tests {
         {
             let task_ran = task_ran.clone();
             let executor = cx.background_executor.clone();
+
             cx.update(|cx| {
                 cx.spawn(async move |_| {
                     executor.timer(Duration::from_millis(500)).await;
+
                     *task_ran.borrow_mut() = true;
                 })
                 .detach();
@@ -162,6 +169,7 @@ mod tests {
 
         // Run until parked - the task should be waiting on the timer
         cx.run_until_parked();
+
         assert!(!*task_ran.borrow());
 
         // Advance clock past the timer duration
@@ -186,6 +194,7 @@ mod tests {
         // for tooltip behavior, as tooltips use window.spawn for delayed show
         {
             let task_ran = task_ran.clone();
+
             cx.update_window(window.into(), |_, window, cx| {
                 window
                     .spawn(cx, async move |_| {

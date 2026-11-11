@@ -7,6 +7,7 @@ use gpui::{
     App, AppContext, Bounds, Context, Window, WindowBounds, WindowOptions, div, linear_color_stop,
     linear_gradient, pattern_slash, prelude::*, px, rgb, size,
 };
+
 use gpui_platform::application;
 use palette::WithAlpha;
 
@@ -110,7 +111,9 @@ fn run_example() {
         if !example_support::load_fonts(cx) {
             return;
         }
+
         let bounds = Bounds::centered(None, size(px(600.0), px(600.0)), cx);
+
         cx.open_window(
             WindowOptions::new().window_bounds(Some(WindowBounds::Windowed(bounds))),
             |_window, cx| cx.new(|_cx| PatternExample),
