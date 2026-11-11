@@ -38,6 +38,21 @@
 
         craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
 
+        nitpick = craneLib.buildPackage {
+          pname = "nitpick";
+          version = "0.1.0";
+          src = builtins.fetchGit {
+            url = "https://github.com/cameronpcampbell/nitpick";
+            rev = "819ab8836292b96441b8b336f1f7ff6fa4b4578d";
+          };
+          # Upstream tests generate shell scripts, which need a Nix store interpreter.
+          postPatch = ''
+            substituteInPlace src/format.rs src/rustfmt.rs \
+              --replace-fail '/bin/sh' '${pkgs.runtimeShell}'
+          '';
+          NITPICK_RUSTFMT = "${toolchain}/bin/rustfmt";
+        };
+
         src = lib.cleanSourceWith {
           src = craneLib.path ./.;
           filter =
@@ -111,6 +126,7 @@
           # Provide rustup's cargo/rustc proxy (so `cargo +toolchain` works for
           # the MSRV and WASM-atomics CI checks) plus all the native build deps.
           packages = [
+            nitpick
             pkgs.rustup
             pkgs.cargo-machete
             pkgs.taplo

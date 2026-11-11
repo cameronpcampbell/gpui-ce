@@ -50,7 +50,7 @@ jobs:
           }
 
           check_pattern "run_tests" '^(docs/|\.github/(ISSUE_TEMPLATE|workflows/)|README\.md|CHANGELOG\.md)' true
-          check_pattern "run_style" '\.(rs|toml)$|rust-toolchain\.toml|\.cargo/|clippy\.toml|typos\.toml'
+          check_pattern "run_style" '\.(rs|toml)$|^\.cargo/|^justfile$|^flake\.(nix|lock)$|^\.github/workflows/(ci|release)\.yml$'
 
   # Formatting
   fmt:
@@ -64,6 +64,7 @@ jobs:
           components: rustfmt
       - uses: hustcer/setup-nu@v3
       - uses: extractions/setup-just@v2
+      - run: cargo install --git https://github.com/cameronpcampbell/nitpick --rev 819ab8836292b96441b8b336f1f7ff6fa4b4578d --locked nitpick
       - run: just fmt-check
 
   # Clippy

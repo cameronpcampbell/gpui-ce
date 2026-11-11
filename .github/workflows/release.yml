@@ -65,6 +65,7 @@ jobs:
             libsoup-3.0-dev
       - uses: hustcer/setup-nu@v3
       - uses: extractions/setup-just@v2
+      - run: cargo install --git https://github.com/cameronpcampbell/nitpick --rev 819ab8836292b96441b8b336f1f7ff6fa4b4578d --locked nitpick
       - run: just fmt-check
       - run: just clippy
       - run: just build

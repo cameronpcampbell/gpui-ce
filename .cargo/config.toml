@@ -8,7 +8,6 @@ check-all = "check --workspace --all-targets"
 test-all = "test --workspace --no-fail-fast"
 test-doc = "test --workspace --doc"
 build-all = "build --workspace --all-targets"
-ci-fmt = "fmt --all -- --check"
 xtask = "run --package xtask --"
 perf-test = [
   "test",

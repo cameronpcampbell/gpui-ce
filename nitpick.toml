@@ -1,0 +1,5 @@
+[whitespace]
+blank_lines_around_multiline = true
+blank_line_at_end_of_if = true
+blank_lines_between_trait_methods = true
+blank_lines_between_node_types = true

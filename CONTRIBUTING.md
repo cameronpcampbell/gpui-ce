@@ -75,6 +75,12 @@ It is strongly recommended that authors contribute smaller patches first, to bui
 
 ## Authoring Guidelines
 
+### Formatting
+
+Install Nitpick as described in [development setup](SETUP.md#formatting), run `just fmt` after editing Rust, and run `just fmt-check` before submitting a change. Both commands cover the root workspace and the independent web example. Nitpick uses the settings in `nitpick.toml` and `rustfmt.toml`.
+
+Use Nitpick's output for automatic whitespace. Keep declarations grouped by purpose where that requires judgment. Editors can invoke `nitpick --edition 2024 -` to format a buffer. Running `cargo fmt` directly can undo Nitpick's spacing. Keep formatter upgrades and broad formatting changes separate from functional changes.
+
 ### Commits
 
 The maintainer team cares more about the contents of commits than the total sum of contents in a pull request. We review each commit separately, and we don't squash-merge the PR (so please manually squash any fixup commits before sending for review). Additionally, Github Stacked Pull Requests can only be created from branches in the target repository, so keeping clean commits is the closest approach we have for stacked changes.

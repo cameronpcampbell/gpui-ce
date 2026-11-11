@@ -6,6 +6,33 @@ Install Git, then install Rust through [rustup](https://rustup.rs). GPUI-CE requ
 rustup component add rustfmt clippy
 ```
 
+## Formatting
+
+Install [Nitpick](https://github.com/cameronpcampbell/nitpick):
+
+```sh
+cargo install --git https://github.com/cameronpcampbell/nitpick --rev 819ab8836292b96441b8b336f1f7ff6fa4b4578d --locked nitpick
+```
+
+Run `nitpick` to format the current workspace or `nitpick --check` to check it without writing files. With [Just](https://just.systems/man/en/packages.html) and [Nushell](https://www.nushell.sh/book/installation.html) installed, `just fmt` and `just fmt-check` also cover the independent `hello_web` example. Use `just fmt-check` in place of the former `cargo ci-fmt` alias.
+
+Keep base Rust settings in `rustfmt.toml` and blank-line rules in `nitpick.toml`. Running `cargo fmt` directly can remove Nitpick's spacing. Use Nitpick's output for automatic whitespace, and group declarations by purpose where that requires judgment.
+
+For editor formatting, send the buffer to `nitpick --edition 2024 -` and use stdout as the formatted buffer. For VS Code with rust-analyzer:
+
+```json
+{
+  "rust-analyzer.rustfmt.overrideCommand": ["nitpick", "--edition", "2024", "-"],
+  "[rust]": {
+    "editor.formatOnSave": true
+  }
+}
+```
+
+Run the editor command from this repository or one of its subdirectories so Nitpick discovers the project configuration.
+
+The Nix development shell provides Nitpick, so the Cargo install step is unnecessary there.
+
 ## macOS
 
 GPUI uses Metal on macOS and needs Xcode's developer tools.

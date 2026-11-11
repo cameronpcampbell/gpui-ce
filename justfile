@@ -118,17 +118,19 @@ test-with +args:
     cargo test --workspace -- {{ args }}
 
 
-[doc('Format all Rust code in the workspace')]
+[doc('Format both Rust workspaces with Nitpick')]
 [group('quality')]
 fmt:
     @echo "💅 Formatting Rust code..."
-    cargo fmt --all
+    nitpick
+    nitpick crates/gpui_web/examples/hello_web/main.rs
 
 [doc('Check Rust code formatting without modifying files')]
 [group('quality')]
 fmt-check:
     @echo "💅 Checking Rust code formatting..."
-    cargo fmt --all -- --check
+    nitpick --check
+    nitpick --check crates/gpui_web/examples/hello_web/main.rs
 
 [doc('Lint with Clippy (all targets, deny warnings)')]
 [group('quality')]
@@ -205,7 +207,7 @@ ci:
     let msrv = '{{ msrv }}'
 
     let results = [
-        (run-check "cargo fmt" { cargo fmt --all -- --check })
+        (run-check "Nitpick" { just fmt-check })
         (run-check "cargo clippy" { cargo clippy --workspace --all-targets -- -D warnings })
         (run-check "cargo build" { cargo build --workspace --all-targets })
         (run-check "cargo test" { cargo test --workspace --no-fail-fast })
@@ -271,7 +273,7 @@ ci-tidy:
     let msrv = '{{ msrv }}'
 
     let results = [
-        (run-check "cargo fmt" { cargo fmt --all -- --check })
+        (run-check "Nitpick" { just fmt-check })
         (run-check "cargo clippy" { cargo clippy --workspace --all-targets -- -D warnings })
         (if (available "typos") { run-check "typos" { typos } } else { skip "typos" "not installed" })
         (if (available "cargo-machete") { run-check "cargo machete" { cargo machete } } else { skip "cargo machete" "install: cargo install cargo-machete" })
