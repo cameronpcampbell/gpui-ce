@@ -505,7 +505,10 @@ mod source {
         let cone_root = OKLAB_TO_CONE_RESPONSE * color.rgb();
         let cone_response = cone_root * cone_root * cone_root;
         let linear_srgb = CONE_RESPONSE_TO_LINEAR_SRGB * cone_response;
-        let srgb = pow(linear_srgb, vec3f(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2));
+        let srgb = pow(
+            max(linear_srgb, vec3f(0.0, 0.0, 0.0)),
+            vec3f(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2),
+        );
         vec4f(srgb.x, srgb.y, srgb.z, color.w)
     }
     pub fn over(below: Vec4f, above: Vec4f) -> Vec4f {
@@ -772,3 +775,38 @@ mod source {
 }
 
 pub use source::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wgsl_rs::std::{mix, vec4f};
+
+    #[test]
+    fn oklab_primary_gradients_remain_finite_at_transparent_and_gamut_edges() {
+        let colors = [
+            vec4f(0.0, 0.0, 1.0, 0.5),
+            vec4f(0.0, 1.0, 0.0, 0.0),
+            vec4f(1.0, 0.0, 0.0, 1.0),
+        ];
+
+        for first in colors {
+            for second in colors {
+                for step_idx in 0..=20 {
+                    let ratio = step_idx as f32 / 20.0;
+                    let mixed = mix(
+                        linear_srgb_to_oklab(first),
+                        linear_srgb_to_oklab(second),
+                        vec4f(ratio, ratio, ratio, ratio),
+                    );
+                    let actual = oklab_to_linear_srgb(mixed);
+                    assert!(
+                        [actual.x, actual.y, actual.z, actual.w]
+                            .iter()
+                            .all(|value| value.is_finite() && *value >= 0.0)
+                    );
+                    assert!((actual.w - (first.w + (second.w - first.w) * ratio)).abs() < 0.00001);
+                }
+            }
+        }
+    }
+}

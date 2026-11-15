@@ -49,6 +49,8 @@ fn instance_binding_entries(source: InstanceBindingSource<'_>) -> Vec<wgpu::Bind
 }
 
 pub(super) struct WgpuPipelines {
+    pub(super) liquid_fill: WgpuRenderPipeline,
+    pub(super) liquid_border: WgpuRenderPipeline,
     pub(super) quads: WgpuRenderPipeline,
     pub(super) smoothed_quads: WgpuRenderPipeline,
     pub(super) shadows: WgpuRenderPipeline,
@@ -424,6 +426,8 @@ impl WgpuPipelines {
             };
 
         Self {
+            liquid_fill: create(shader::LIQUID_FILL, &scene_target, 1, &shader_module),
+            liquid_border: create(shader::LIQUID_BORDER, &scene_target, 1, &shader_module),
             quads: create(shader::QUADS, &scene_target, 1, &shader_module),
             smoothed_quads: create(shader::SMOOTHED_QUADS, &scene_target, 1, &shader_module),
             shadows: create(shader::SHADOWS, &scene_target, 1, &shader_module),

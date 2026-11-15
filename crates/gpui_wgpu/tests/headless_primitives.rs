@@ -580,3 +580,497 @@ fn content_mask_fades_quad_edges() {
     // The unfaded right edge still clips hard at the mask boundary.
     assert_eq!(pixel(101, 50)[0], 0);
 }
+
+#[cfg(test)]
+mod liquid_tests {
+    use super::*;
+    use gpui::{FilterBoundary, LiquidMemberId, LiquidPhase, ScaledLiquidBox, pattern_slash};
+    use gpui_render::liquid::testing::PreparedLiquidComponent;
+    use gpui_render::shaders::liquid::contour_coverages;
+    use wgsl_rs::std::{abs, vec2f, vec4f};
+
+    fn review_image(image: &image::RgbaImage, case_idx: usize) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("liquid-material-{case_idx}.ppm"));
+        let mut bytes = format!("P6\n{} {}\n255\n", image.width(), image.height()).into_bytes();
+
+        for pixel in image.pixels() {
+            bytes.extend_from_slice(&pixel.0[..3]);
+        }
+
+        std::fs::write(&path, bytes).unwrap();
+
+        path
+    }
+
+    fn register(scene: &mut Scene, quad: Quad, group: Option<&str>, radius: f32) -> LiquidMemberId {
+        scene
+            .register_liquid_box(ScaledLiquidBox {
+                quad,
+                group: group.map(Into::into),
+                blend_radius: ScaledPixels(radius),
+                reach: ScaledPixels(24.0),
+            })
+            .unwrap()
+    }
+
+    fn paint(scene: &mut Scene, quad: Quad, group: Option<&str>) {
+        let member = register(scene, quad, group, 8.0);
+        scene.paint_liquid_phase(member, LiquidPhase::Fill);
+        scene.paint_liquid_phase(member, LiquidPhase::Border);
+    }
+
+    fn render(renderer: &mut WgpuHeadlessRenderer, scene: &mut Scene) -> image::RgbaImage {
+        scene.finish();
+
+        renderer.render_scene_to_image(scene, TARGET).unwrap()
+    }
+
+    fn ordinary_scene(liquid: &Scene) -> Scene {
+        let mut scene = Scene::default();
+
+        for draw in &liquid.liquid_draws {
+            scene.insert_primitive(draw.quad);
+        }
+
+        scene
+    }
+
+    fn source(x: f32) -> Quad {
+        Quad {
+            bounds: bounds(x, 20.0, 30.0, 40.0),
+            content_mask: full_mask(),
+            background: gpui::rgba(0xff000080).into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn bridges_and_overlaps_emit_one_translucent_material_per_domain() {
+        let mut renderer = WgpuHeadlessRenderer::new().unwrap();
+        let mut scene = Scene::default();
+        paint(&mut scene, source(20.0), None);
+        // Interleave another domain so source indices differ from draw positions.
+        paint(&mut scene, source(200.0), Some("separate"));
+        paint(&mut scene, source(60.0), None);
+        paint(&mut scene, source(25.0), None);
+        let image = render(&mut renderer, &mut scene);
+        let inside = image.get_pixel(35, 40).0;
+        let bridge = image.get_pixel(55, 40).0;
+        assert!((inside[0] as i32 - 128).abs() <= 2, "overlap {inside:?}");
+        assert!((bridge[0] as i32 - 128).abs() <= 2, "bridge {bridge:?}");
+        assert_eq!(image.get_pixel(100, 40).0, [0, 0, 0, 255]);
+
+        let mut separate = Scene::default();
+        paint(&mut separate, source(20.0), None);
+        paint(&mut separate, source(25.0), Some("other"));
+        let image = render(&mut renderer, &mut separate);
+        assert!(image.get_pixel(35, 40).0[0] > inside[0] + 40);
+    }
+
+    #[test]
+    fn isolated_liquid_uses_the_active_opacity_target() {
+        let mut renderer = WgpuHeadlessRenderer::new().unwrap();
+        let mut scene = Scene::default();
+        let boundary = FilterBoundary {
+            order: 0,
+            bounds: full_mask().bounds,
+            content_mask: full_mask(),
+            corner_radii: Default::default(),
+            corner_smoothing: 0.0,
+            filters: Default::default(),
+            opacity: 0.5,
+            is_start: true,
+        };
+
+        scene.insert_primitive(boundary.clone());
+        paint(&mut scene, source(20.0), None);
+        paint(&mut scene, source(60.0), None);
+        scene.insert_primitive(FilterBoundary {
+            is_start: false,
+            ..boundary
+        });
+
+        let image = render(&mut renderer, &mut scene);
+        let bridge = image.get_pixel(55, 40).0;
+        assert!(
+            (bridge[0] as i32 - 64).abs() <= 3,
+            "isolated bridge {bridge:?}"
+        );
+    }
+
+    #[test]
+    fn singletons_match_ordinary_two_phase_corner_and_border_coverage() {
+        let mut renderer = WgpuHeadlessRenderer::new().unwrap();
+
+        for smoothing in [0.0, 0.6] {
+            let quad = Quad {
+                bounds: bounds(20.0, 20.0, 42.0, 36.0),
+                corner_smoothing: smoothing,
+                corner_radii: Corners::all(ScaledPixels(10.0)),
+                border_widths: Edges {
+                    top: ScaledPixels(0.4),
+                    right: ScaledPixels(4.0),
+                    bottom: ScaledPixels(2.0),
+                    left: ScaledPixels(0.0),
+                },
+                border_color: gpui::rgba(0x0080ff80).into(),
+                ..source(20.0)
+            };
+
+            let mut liquid = Scene::default();
+            paint(&mut liquid, quad, None);
+            let actual = render(&mut renderer, &mut liquid);
+            let expected = render(&mut renderer, &mut ordinary_scene(&liquid));
+
+            for y in 20..56 {
+                for x in 20..62 {
+                    let actual_pixel = actual.get_pixel(x, y).0;
+                    let expected_pixel = expected.get_pixel(x, y).0;
+
+                    for channel_idx in 0..4 {
+                        assert!(
+                            (actual_pixel[channel_idx] as i32 - expected_pixel[channel_idx] as i32)
+                                .abs()
+                                <= 3,
+                            "smoothing {smoothing}, ({x}, {y}): {actual_pixel:?} versus {expected_pixel:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn joined_materials_and_borders_match_reference_samples() {
+        let mut renderer = WgpuHeadlessRenderer::new().unwrap();
+        let mut oklab = None;
+
+        for case_idx in 0..13 {
+            let mut scene = Scene::default();
+            let mut first = source(20.0);
+            first.corner_radii = Corners {
+                top_left: ScaledPixels(12.0),
+                top_right: ScaledPixels(0.0),
+                bottom_right: ScaledPixels(8.0),
+                bottom_left: ScaledPixels(3.0),
+            };
+            first.border_widths = Edges::all(ScaledPixels(1.0));
+            first.border_color = gpui::rgba(0x00ff00b0).into();
+            first.corner_smoothing = [0.0, 0.6, 1.0][case_idx % 3];
+            let mut second = Quad {
+                bounds: bounds(58.0, 24.0, 36.0, 40.0),
+                background: gpui::rgba(0x0088ff80).into(),
+                border_widths: Edges::all(ScaledPixels(8.0)),
+                corner_radii: Corners::all(ScaledPixels(10.0)),
+                ..first
+            };
+
+            match case_idx {
+                1 => first.border_widths = Default::default(),
+                2 => second.border_color = second.border_color.opacity(0.0),
+                3 => first.background = first.background.opacity(0.0),
+                4 | 12 => {
+                    first.background = checkerboard(gpui::rgba(0xff000080), 5.0);
+                    second.background = pattern_slash(gpui::rgba(0x0088ff80), 2.0, 6.0);
+
+                    if case_idx == 12 {
+                        first.border_color = first.background;
+                        second.border_color = second.background;
+                    }
+                }
+                5 => {
+                    second.bounds = bounds(28.0, 28.0, 12.0, 20.0);
+                    second.corner_radii = Corners::all(ScaledPixels(4.0));
+                    second.border_widths = Edges::all(ScaledPixels(1.0));
+                }
+                6 | 11 => {
+                    first.corner_smoothing = 0.0;
+                    second.corner_smoothing = 0.0;
+                    first.border_widths = Edges {
+                        top: ScaledPixels(0.0),
+                        right: ScaledPixels(8.0),
+                        bottom: ScaledPixels(2.0),
+                        left: ScaledPixels(1.0),
+                    };
+                    second.background = linear_gradient(
+                        90.0,
+                        linear_color_stop(gpui::rgba(0x0000ff80), 0.0),
+                        linear_color_stop(gpui::rgba(0x00ff0000), 1.0),
+                    )
+                    .color_space(if case_idx == 6 {
+                        ColorSpace::Oklab
+                    } else {
+                        ColorSpace::Srgb
+                    });
+                }
+                7 => second.border_widths = Edges::all(ScaledPixels(40.0)),
+                8 => {
+                    first.corner_smoothing = 0.0;
+                    second.corner_smoothing = 0.0;
+                    first.corner_radii = Corners::all(ScaledPixels(10.0));
+                }
+                9 | 10 => {
+                    first.bounds = bounds(20.0, 20.0, 40.0, 40.0);
+                    second.bounds = bounds(56.0, 20.0, 40.0, 40.0);
+                    first.corner_radii = Corners::all(ScaledPixels(16.0));
+                    second.corner_radii = first.corner_radii;
+                    first.corner_smoothing = if case_idx == 9 { 0.6 } else { 1.0 };
+                    second.corner_smoothing = first.corner_smoothing;
+                }
+                _else => {}
+            }
+
+            for (source_idx, quad) in [first, second].into_iter().enumerate() {
+                let radius = if case_idx == 0 {
+                    0.0
+                } else {
+                    source_idx as f32 * 16.0
+                };
+
+                let member = register(&mut scene, quad, None, radius);
+                scene.paint_liquid_phase(member, LiquidPhase::Fill);
+                scene.paint_liquid_phase(member, LiquidPhase::Border);
+            }
+
+            if case_idx == 0 {
+                paint(
+                    &mut scene,
+                    Quad {
+                        bounds: bounds(40.0, 64.0, 30.0, 24.0),
+                        ..first
+                    },
+                    None,
+                );
+            }
+
+            let image = render(&mut renderer, &mut scene);
+            let prepared = PreparedLiquidComponent::new(&scene);
+
+            if case_idx == 6 {
+                oklab = Some(image.get_pixel(80, 40).0);
+            }
+
+            if case_idx == 11 {
+                assert_ne!(Some(image.get_pixel(80, 40).0), oklab);
+            }
+
+            if std::env::var_os("GPUI_LIQUID_REVIEW").is_some() {
+                review_image(&image, case_idx);
+            }
+
+            for y in (6..94).step_by(3) {
+                for x in (6..118).step_by(3) {
+                    let position = vec2f(x as f32 + 0.5, y as f32 + 0.5);
+                    let mut sample = prepared.sample(0, position);
+
+                    for channel_idx in 0usize..4 {
+                        assert!(sample.fill[channel_idx].is_finite());
+                        assert!(sample.border[channel_idx].is_finite());
+                    }
+
+                    if sample.active_count > 1 {
+                        let horizontal = prepared.fields(
+                            0,
+                            position + vec2f(if x % 2 == 0 { 1.0 } else { -1.0 }, 0.0),
+                        );
+                        let vertical = prepared.fields(
+                            0,
+                            position + vec2f(0.0, if y % 2 == 0 { 1.0 } else { -1.0 }),
+                        );
+                        let derivative =
+                            abs(horizontal - sample.fields) + abs(vertical - sample.fields);
+                        sample.coverage = contour_coverages(
+                            sample.fields.x,
+                            sample.fields.y,
+                            derivative.x,
+                            derivative.y,
+                        );
+                    }
+
+                    let mut expected = vec4f(0.0, 0.0, 0.0, 1.0);
+
+                    for draw in &scene.liquid_draws {
+                        let record = &scene.liquid_records[draw.record_index];
+                        let above = sample.phase(record, position, draw.phase);
+                        expected = above + expected * (1.0 - above.w);
+                    }
+
+                    let expected = [expected.x, expected.y, expected.z, expected.w]
+                        .map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8);
+                    let actual = image.get_pixel(x, y).0;
+                    let tolerance = 4;
+
+                    if actual
+                        .iter()
+                        .zip(expected)
+                        .any(|(actual, expected)| actual.abs_diff(expected) > tolerance)
+                    {
+                        let path = review_image(&image, case_idx);
+                        panic!(
+                            "case {case_idx} at ({x}, {y}): {actual:?} versus {expected:?}, fields {:?}, coverage {:?}, border {:?}, review {}",
+                            sample.fields,
+                            sample.coverage,
+                            sample.border,
+                            path.display()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn moving_cached_sources_join_separate_and_cross_ownership_without_alpha_popping() {
+        let mut renderer = WgpuHeadlessRenderer::new().unwrap();
+        let mut cached = Scene::default();
+        paint(&mut cached, source(30.0), None);
+        cached.finish();
+        let mut previous: Option<u8> = None;
+        let mut maximum = 0;
+        let mut minimum = 255;
+
+        for frame_idx in 0..2401 {
+            let x = 92.0 - frame_idx as f32 * 0.02;
+            let mut scene = Scene::default();
+            scene.replay(0..cached.len(), &cached);
+            paint(&mut scene, source(x), None);
+            let image = render(&mut renderer, &mut scene);
+            let pixel = image.get_pixel(69, 40).0;
+            maximum = maximum.max(pixel[0]);
+            minimum = minimum.min(pixel[0]);
+
+            if let Some(previous) = previous {
+                assert!(
+                    pixel[0].abs_diff(previous) <= 20,
+                    "frame {frame_idx}: {previous} -> {pixel:?}"
+                );
+            }
+
+            assert!(
+                pixel[0] <= 130,
+                "repeated alpha at frame {frame_idx}: {pixel:?}"
+            );
+            previous = Some(pixel[0]);
+        }
+
+        assert_eq!(minimum, 0);
+        assert!((maximum as i32 - 128).abs() <= 2);
+    }
+
+    #[test]
+    fn clip_fades_overlay_domains_and_dashed_fallback_preserve_ordinary_output() {
+        let mut renderer = WgpuHeadlessRenderer::new().unwrap();
+        let mut clipped = Scene::default();
+        let mut quad = source(-24.0);
+        quad.content_mask.bounds = bounds(10.0, 0.0, 90.0, 100.0);
+        quad.content_mask.fade_out.left = ScaledPixels(8.0);
+        paint(&mut clipped, quad, None);
+        paint(
+            &mut clipped,
+            Quad {
+                bounds: bounds(14.0, 20.0, 30.0, 40.0),
+                ..quad
+            },
+            None,
+        );
+        let image = render(&mut renderer, &mut clipped);
+        assert_eq!(image.get_pixel(9, 40).0, [0, 0, 0, 255]);
+        assert!(image.get_pixel(11, 40).0[0] > 0);
+        assert!(image.get_pixel(11, 40).0[0] < image.get_pixel(18, 40).0[0]);
+
+        let mut overlay = Scene::default();
+        paint(&mut overlay, source(20.0), None);
+        overlay.advance_liquid_overlay_epoch();
+        paint(&mut overlay, source(25.0), None);
+        let image = render(&mut renderer, &mut overlay);
+        assert!((image.get_pixel(35, 40).0[0] as i32 - 192).abs() <= 2);
+
+        let mut fallback = Scene::default();
+        let dashed = Quad {
+            border_style: BorderStyle::Dashed,
+            border_widths: Edges::all(ScaledPixels(2.0)),
+            border_color: gpui::white().into(),
+            border_dashed_length: 3.0,
+            border_dashed_gap: 2.0,
+            ..source(20.0)
+        };
+        paint(&mut fallback, dashed, None);
+        paint(&mut fallback, source(60.0), None);
+        fallback.finish();
+        assert!(fallback.liquid_components[0].fallback);
+        let expected = render(&mut renderer, &mut ordinary_scene(&fallback));
+        let actual = renderer.render_scene_to_image(&fallback, TARGET).unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(actual.get_pixel(55, 40).0, [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn nested_fill_and_content_survive_while_contained_borders_disappear() {
+        let mut renderer = WgpuHeadlessRenderer::new().unwrap();
+        let mut scene = Scene::default();
+        let parent = register(
+            &mut scene,
+            Quad {
+                bounds: bounds(20.0, 10.0, 90.0, 75.0),
+                background: gpui::rgb(0xff0000).into(),
+                border_widths: Edges::all(ScaledPixels(2.0)),
+                border_color: gpui::white().into(),
+                ..source(20.0)
+            },
+            None,
+            0.0,
+        );
+
+        scene.paint_liquid_phase(parent, LiquidPhase::Fill);
+
+        let child = register(
+            &mut scene,
+            Quad {
+                bounds: bounds(40.0, 25.0, 45.0, 40.0),
+                background: gpui::rgb(0x0000ff).into(),
+                border_widths: Edges::all(ScaledPixels(8.0)),
+                border_color: gpui::rgb(0x00ff00).into(),
+                ..source(20.0)
+            },
+            None,
+            0.0,
+        );
+
+        scene.paint_liquid_phase(child, LiquidPhase::Fill);
+        scene.insert_primitive(Quad {
+            bounds: bounds(52.0, 36.0, 10.0, 10.0),
+            background: gpui::white().into(),
+            ..source(20.0)
+        });
+        scene.paint_liquid_phase(child, LiquidPhase::Border);
+        scene.paint_liquid_phase(parent, LiquidPhase::Border);
+        let image = render(&mut renderer, &mut scene);
+        assert_eq!(image.get_pixel(57, 41).0, [255, 255, 255, 255]);
+        assert_eq!(image.get_pixel(42, 40).0, [0, 0, 255, 255]);
+        assert_eq!(image.get_pixel(30, 40).0, [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn ordinary_frames_stay_identical_after_liquid_clear_and_reuse() {
+        let mut renderer = WgpuHeadlessRenderer::new().unwrap();
+        let mut ordinary = Scene::default();
+        ordinary.insert_primitive(Quad {
+            bounds: full_mask().bounds,
+            content_mask: full_mask(),
+            background: checkerboard(gpui::rgb(0x445588), 8.0),
+            ..Default::default()
+        });
+        ordinary.insert_primitive(source(20.0));
+        let expected = render(&mut renderer, &mut ordinary);
+        let mut reused = Scene::default();
+        paint(&mut reused, source(20.0), None);
+        paint(&mut reused, source(60.0), None);
+        render(&mut renderer, &mut reused);
+        reused.clear();
+        reused.replay(0..ordinary.len(), &ordinary);
+        reused.finish();
+        assert_eq!(reused.render_plan().requirements().liquid_record_count, 0);
+        let actual = renderer.render_scene_to_image(&reused, TARGET).unwrap();
+        assert_eq!(actual, expected);
+    }
+}

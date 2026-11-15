@@ -91,6 +91,36 @@ pub(super) struct InstanceUpload {
 }
 
 impl InstanceUpload {
+    /// Select a source without rebasing the whole table or its component indices.
+    /// The liquid table is the first arena upload and therefore starts at zero.
+    pub(super) fn liquid_source_slice<T>(
+        &mut self,
+        table: &InstanceSlice<T>,
+        source_idx: usize,
+    ) -> Option<InstanceSlice<T>> {
+        debug_assert_eq!(table.range().start, 0);
+        let source_idx = u32::try_from(source_idx).ok()?;
+        let (first, range_offset) = match self.transport {
+            InstanceTransport::StorageBuffer => (source_idx as usize, 0),
+            InstanceTransport::DataTexture => {
+                let range_offset = self.range_upload.as_mut()?.write_with_first_instance(
+                    0,
+                    table.instances.count(),
+                    source_idx,
+                )?;
+
+                (0, range_offset)
+            }
+        };
+
+        Some(InstanceSlice {
+            instances: InstanceRange::new(first..first + 1)?,
+            transport: self.transport,
+            range_offset,
+            value: PhantomData,
+        })
+    }
+
     pub(super) fn write<T: BufferData>(&mut self, values: &[T]) -> Option<InstanceSlice<T>> {
         if values.is_empty() {
             return Some(self.empty_batch());
@@ -216,10 +246,9 @@ impl InstanceUpload {
     }
 }
 
-/// Mapped per-batch `DATA_RANGE` slots: batch base in texels plus element count.
+/// Mapped per-draw `DATA_RANGE` slots: table base, element count, and instance base.
 ///
-/// The shader reads only the first two fields, but browser/WebGL downlevel
-/// backends require uniform binding sizes to be 16-byte aligned.
+/// Browser/WebGL downlevel backends require 16-byte uniform binding sizes.
 struct RangeUpload {
     staging: wgpu::QueueWriteBufferView,
     stride: u64,
@@ -229,6 +258,15 @@ struct RangeUpload {
 
 impl RangeUpload {
     fn write(&mut self, base_texel: u32, elements: u32) -> Option<u32> {
+        self.write_with_first_instance(base_texel, elements, 0)
+    }
+
+    fn write_with_first_instance(
+        &mut self,
+        base_texel: u32,
+        elements: u32,
+        first_instance: u32,
+    ) -> Option<u32> {
         let slot = self.next_slot;
         if slot >= self.slots {
             return None;
@@ -238,6 +276,7 @@ impl RangeUpload {
         let mut bytes = [0u8; 16];
         bytes[..4].copy_from_slice(&base_texel.to_le_bytes());
         bytes[4..8].copy_from_slice(&elements.to_le_bytes());
+        bytes[8..12].copy_from_slice(&first_instance.to_le_bytes());
         self.staging
             .slice(offset as usize..(offset + 16) as usize)
             .copy_from_slice(&bytes);
@@ -448,6 +487,10 @@ struct TexturedBindGroups {
 }
 
 impl InstanceBufferArena {
+    pub(super) fn maximum_size(&self) -> u64 {
+        self.maximum_size
+    }
+
     // Large scenes grow geometrically; ordinary UI frames skip a permanent floor.
     const INITIAL_CAPACITY: u64 = 64 * 1024;
 

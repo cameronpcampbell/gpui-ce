@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use gpui::{DevicePixels, Scene, Size};
 
@@ -152,8 +152,13 @@ pub struct WgpuHeadlessRenderer {
 impl WgpuHeadlessRenderer {
     pub fn new() -> anyhow::Result<Self> {
         let context = WgpuContext::new_headless(None)?;
+
+        Self::with_context(&context)
+    }
+
+    pub fn with_context(context: &WgpuContext) -> anyhow::Result<Self> {
         let renderer = WgpuRenderer::new_headless(
-            &context,
+            context,
             Size {
                 width: DevicePixels(1),
                 height: DevicePixels(1),
@@ -163,6 +168,82 @@ impl WgpuHeadlessRenderer {
             renderer,
             target: None,
         })
+    }
+
+    pub fn measure_gpu_time(
+        &mut self,
+        scene: &Scene,
+        size: Size<DevicePixels>,
+    ) -> anyhow::Result<Duration> {
+        self.ensure_target(size)?;
+        let resources = self.renderer.resources();
+        let device = &resources.device;
+        anyhow::ensure!(
+            device.features().contains(wgpu::Features::TIMESTAMP_QUERY),
+            "GPU timing requires TIMESTAMP_QUERY"
+        );
+        let requirements = scene.render_plan().requirements();
+        anyhow::ensure!(
+            !requirements.uses_path_target && !requirements.uses_offscreen_target,
+            "GPU timing requires a scene rendered in one pass"
+        );
+        let timestamps = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("headless_frame_timestamps"),
+            ty: wgpu::QueryType::Timestamp,
+            count: 2,
+        });
+        let resolve = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("headless_timestamp_resolve"),
+            size: 16,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let target = self.target.as_ref().expect("target was just ensured");
+        let submission = super::frame::render_to_view_with_timestamps(
+            &mut self.renderer,
+            scene,
+            &target.view,
+            None,
+            Some(&timestamps),
+        )
+        .ok_or_else(|| anyhow::anyhow!("failed to render timed frame"))?;
+        let resources = self.renderer.resources();
+        resources.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: None,
+        })?;
+        let mut encoder =
+            resources
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("headless_timestamp_readback"),
+                });
+        encoder.resolve_query_set(&timestamps, 0..2, &resolve, 0);
+        resources.queue.submit([encoder.finish()]);
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        wgpu::util::DownloadBuffer::read_buffer(
+            &resources.device,
+            &resources.queue,
+            &resolve.slice(..),
+            move |result| {
+                let _send_result = sender.send(result);
+            },
+        );
+        resources.device.poll(wgpu::PollType::wait_indefinitely())?;
+        let mapped = receiver.recv()??;
+
+        let start = u64::from_ne_bytes(mapped[..8].try_into()?);
+        let end = u64::from_ne_bytes(mapped[8..].try_into()?);
+        let nanoseconds =
+            end.saturating_sub(start) as f64 * f64::from(resources.queue.get_timestamp_period());
+
+        anyhow::ensure!(
+            nanoseconds > 0.0,
+            "GPU returned an empty timestamp interval: {start} -> {end}"
+        );
+
+        Ok(Duration::from_secs_f64(nanoseconds * 1e-9))
     }
 
     fn ensure_target(&mut self, size: Size<DevicePixels>) -> anyhow::Result<()> {
@@ -232,5 +313,130 @@ impl gpui::PlatformHeadlessRenderer for WgpuHeadlessRenderer {
 
     fn sprite_atlas(&self) -> Arc<dyn gpui::PlatformAtlas> {
         self.renderer.sprite_atlas().clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{RendererTier, WgpuDeviceRequirements};
+    use gpui::{
+        Bounds, ContentMask, Corners, Edges, FilterBoundary, PlatformHeadlessRenderer, Quad,
+        ScaledPixels, interleaved_liquid_scene, point, size,
+    };
+
+    #[test]
+    fn gpu_timing_uses_executed_queries_and_requires_the_device_feature() {
+        let mut scene = Scene::default();
+        let bounds = Bounds::new(
+            point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size(ScaledPixels(32.0), ScaledPixels(32.0)),
+        );
+        scene.insert_primitive(Quad {
+            bounds,
+            content_mask: ContentMask {
+                bounds,
+                ..Default::default()
+            },
+            background: gpui::white().into(),
+            ..Default::default()
+        });
+        scene.finish();
+        let target = size(DevicePixels(32), DevicePixels(32));
+        let mut renderer = WgpuHeadlessRenderer::new().unwrap();
+        assert!(renderer.measure_gpu_time(&scene, target).is_err());
+        let context = WgpuContext::new_headless(Some(&WgpuDeviceRequirements {
+            features: wgpu::Features::TIMESTAMP_QUERY,
+            ..Default::default()
+        }))
+        .unwrap();
+        let mut renderer = WgpuHeadlessRenderer::with_context(&context).unwrap();
+
+        for _sample in 0..3 {
+            let elapsed = renderer.measure_gpu_time(&scene, target).unwrap();
+            assert!(elapsed > Duration::ZERO && elapsed < Duration::from_secs(1));
+        }
+
+        let mut filtered = Scene::default();
+        let boundary = FilterBoundary {
+            order: 0,
+            bounds,
+            content_mask: scene.quads[0].content_mask,
+            corner_radii: Default::default(),
+            corner_smoothing: 0.0,
+            filters: Default::default(),
+            opacity: 0.5,
+            is_start: true,
+        };
+        filtered.insert_primitive(boundary.clone());
+        filtered.insert_primitive(scene.quads[0]);
+        filtered.insert_primitive(FilterBoundary {
+            is_start: false,
+            ..boundary
+        });
+        filtered.finish();
+        assert!(renderer.measure_gpu_time(&filtered, target).is_err());
+    }
+
+    #[test]
+    fn liquid_data_texture_matches_storage_with_interleaved_component_draws() {
+        let scene = interleaved_liquid_scene(
+            Quad {
+                bounds: Bounds::new(
+                    point(ScaledPixels(10.0), ScaledPixels(20.0)),
+                    size(ScaledPixels(30.0), ScaledPixels(36.0)),
+                ),
+                content_mask: ContentMask {
+                    bounds: Bounds::new(
+                        point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                        size(ScaledPixels(300.0), ScaledPixels(80.0)),
+                    ),
+                    ..Default::default()
+                },
+                background: gpui::rgba(0xff000080).into(),
+                border_color: gpui::rgba(0x0080ff80).into(),
+                border_widths: Edges::all(ScaledPixels(2.0)),
+                corner_radii: Corners::all(ScaledPixels(8.0)),
+                corner_smoothing: 0.6,
+                ..Default::default()
+            },
+            100.0,
+            38.0,
+            gpui::rgb(0x101010).into(),
+            None,
+        );
+        let mut images = Vec::new();
+
+        for tier in [RendererTier::Modern, RendererTier::WebGl2] {
+            let mut context = WgpuContext::new_headless(None).unwrap();
+            context.force_renderer_tier_for_test(tier);
+            let mut renderer = WgpuHeadlessRenderer {
+                renderer: WgpuRenderer::new_headless(
+                    &context,
+                    size(DevicePixels(300), DevicePixels(80)),
+                )
+                .unwrap(),
+                target: None,
+            };
+
+            images.push(
+                renderer
+                    .render_scene_to_image(&scene, size(DevicePixels(300), DevicePixels(80)))
+                    .unwrap(),
+            );
+        }
+
+        for (modern, downlevel) in images[0].pixels().zip(images[1].pixels()) {
+            for channel_idx in 0..4 {
+                assert!(
+                    modern.0[channel_idx].abs_diff(downlevel.0[channel_idx]) <= 1,
+                    "{modern:?} versus {downlevel:?}"
+                );
+            }
+        }
+
+        assert!(images[1].get_pixel(44, 38).0[0] > 100);
+        assert!(images[1].get_pixel(144, 38).0[0] > 100);
+        assert!(images[1].get_pixel(244, 38).0[0] > 100);
     }
 }

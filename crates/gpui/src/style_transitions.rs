@@ -188,6 +188,7 @@ pub(crate) struct StyleTransitionState {
     gap: SizeTransitionState<DefiniteLength>,
     corner_radii: CornersTransitionState<AbsoluteLength>,
     corner_smoothing: Option<StyleTransitionPropertyState<f32>>,
+    liquid_blend_radius: Option<StyleTransitionPropertyState<Pixels>>,
     scrollbar_width: Option<StyleTransitionPropertyState<AbsoluteLength>>,
     aspect_ratio: Option<StyleTransitionPropertyState<f32>>,
     flex_basis: Option<StyleTransitionPropertyState<Length>>,
@@ -542,6 +543,40 @@ mod tests {
         MouseUpEvent, Pixels, SpringConfig, Style, TestAppContext, Window, blue, canvas, div,
         ease_in_out, point, prelude::*, px, red, relative, rems, size,
     };
+
+    #[test]
+    fn liquid_material_radius_transitions_while_enable_and_group_change_discretely() {
+        let started_at = Instant::now();
+        let context = StyleTransitionContext::new(None, px(16.));
+        let transitions = StyleTransitions::new().liquid_blend_radius(Duration::from_secs(1));
+        let mut state = StyleTransitionState::default();
+        let mut style = Style::default();
+        assert!(!transitions.apply(&mut style, &mut state, context, started_at, false));
+
+        for (millis, enabled, group, radius, active) in [
+            (0, true, Some("toolbar"), 8., true),
+            (500, false, None, 16., true),
+            (1_000, false, None, 24., false),
+        ] {
+            style.liquid_enabled = enabled;
+            style.liquid_group = group.map(Into::into);
+            style.liquid_blend_radius = px(24.);
+            assert_eq!(
+                transitions.apply(
+                    &mut style,
+                    &mut state,
+                    context,
+                    started_at + Duration::from_millis(millis),
+                    false,
+                ),
+                active,
+                "at {millis} ms"
+            );
+            assert_eq!(style.liquid_enabled, enabled);
+            assert_eq!(style.liquid_group.as_deref(), group);
+            assert_eq!(style.liquid_blend_radius, px(radius));
+        }
+    }
 
     #[derive(Clone, Debug, Default, PartialEq)]
     struct EndpointBiased(f32);

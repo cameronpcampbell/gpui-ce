@@ -2,6 +2,7 @@
 **/target
 **/cargo-target
 *.wasm
+/liquid-fields.ppm
 
 # IDEs & Editors
 .idea/       # JetBrains (CLion, IntelliJ, etc.)

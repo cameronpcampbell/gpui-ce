@@ -45,3 +45,72 @@ impl From<gpui::Corners<gpui::ScaledPixels>> for common::Corners {
         }
     }
 }
+
+impl From<gpui::SceneHsla> for common::Hsla {
+    fn from(color: gpui::SceneHsla) -> Self {
+        let color: gpui::Hsla = color.into();
+
+        Self {
+            h: color.hue.into_positive_degrees() / 360.0,
+            s: color.saturation,
+            l: color.lightness,
+            a: color.alpha,
+        }
+    }
+}
+
+impl From<gpui::Background> for common::Background {
+    fn from(background: gpui::Background) -> Self {
+        let empty = common::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.0,
+            a: 0.0,
+        };
+        let mut result = Self {
+            tag: common::BackgroundTag::Solid,
+            color_space: match background.interpolation_space() {
+                gpui::ColorSpace::Srgb => common::ColorSpace::Srgb,
+                gpui::ColorSpace::Oklab => common::ColorSpace::Oklab,
+            },
+            solid: empty,
+            gradient_angle_or_pattern_height: 0.0,
+            colors: [common::LinearColorStop {
+                color: empty,
+                percentage: 0.0,
+            }; 2],
+            padding: 0,
+        };
+
+        match background.kind() {
+            gpui::BackgroundKind::Solid(color) => {
+                result.solid = gpui::SceneHsla::from(color).into();
+            }
+            gpui::BackgroundKind::LinearGradient { angle, stops } => {
+                result.tag = common::BackgroundTag::LinearGradient;
+                result.gradient_angle_or_pattern_height = angle;
+                result.colors = stops.map(|stop| common::LinearColorStop {
+                    color: stop.color.into(),
+                    percentage: stop.percentage,
+                });
+            }
+            gpui::BackgroundKind::PatternSlash {
+                color,
+                width,
+                interval,
+            } => {
+                result.tag = common::BackgroundTag::PatternSlash;
+                result.solid = gpui::SceneHsla::from(color).into();
+                result.gradient_angle_or_pattern_height =
+                    (width * 255.0).round() * 65535.0 + (interval * 255.0).round();
+            }
+            gpui::BackgroundKind::Checkerboard { color, size } => {
+                result.tag = common::BackgroundTag::Checkerboard;
+                result.solid = gpui::SceneHsla::from(color).into();
+                result.gradient_angle_or_pattern_height = size;
+            }
+        }
+
+        result
+    }
+}

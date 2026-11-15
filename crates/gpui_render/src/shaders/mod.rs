@@ -8,10 +8,11 @@
 pub mod common;
 pub mod interface;
 
-mod corner_smoothing;
+pub(crate) mod corner_smoothing;
 mod emoji;
 mod filters;
 mod linkage;
+pub mod liquid;
 mod paths;
 mod quads;
 mod shadows;

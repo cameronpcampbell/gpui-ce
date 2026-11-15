@@ -96,6 +96,8 @@ macro_rules! define_pipelines {
     }
 
 define_pipelines! {
+    LIQUID_FILL: "liquid_fill", vertex_liquid, fragment_liquid_fill, TriangleStrip, Instances, Rectangle;
+    LIQUID_BORDER: "liquid_border", vertex_liquid, fragment_liquid_border, TriangleStrip, Instances, Rectangle;
     QUADS: "quads", vertex_quad, fragment_quad, TriangleStrip, Instances, Rectangle;
     SMOOTHED_QUADS: "smoothed_quads", vertex_smoothed_quad, fragment_smoothed_quad, TriangleStrip, Instances, Rectangle;
     SHADOWS: "shadows", vertex_shadow, fragment_shadow, TriangleStrip, Instances, Rectangle;
@@ -153,7 +155,9 @@ buffer_data! {
     super::common::FontRasterizationUniforms => "FontRasterizationUniforms",
     super::surface::SurfaceUniforms => "SurfaceUniforms",
     super::blur::BlurUniforms => "BlurUniforms",
+    super::liquid::LiquidCell => "LiquidCell",
     gpui::Quad => "Quad",
+    gpui::LiquidGpuRecord => "LiquidGpuRecord",
     gpui::Shadow => "Shadow",
     gpui::Underline => "Underline",
     gpui::MonochromeSprite => "MonochromeSprite",
@@ -162,6 +166,7 @@ buffer_data! {
 }
 
 pub const SCENE_STORAGE_ABI: &[StorageAbi] = &[
+    storage_abi::<gpui::LiquidGpuRecord>(),
     storage_abi::<gpui::Quad>(),
     storage_abi::<gpui::Shadow>(),
     storage_abi::<gpui::Underline>(),
@@ -182,6 +187,7 @@ macro_rules! render_layout {
 
 #[doc(hidden)]
 pub const RENDER_BUFFER_LAYOUTS: &[gpui::SceneBufferLayout] = &[
+    render_layout!(super::liquid::LiquidCell, "LiquidCell", words),
     render_layout!(
         super::common::GlobalUniforms,
         "GlobalUniforms",

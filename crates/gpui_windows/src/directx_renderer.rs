@@ -90,6 +90,8 @@ pub(crate) struct DirectXRenderer {
     active_render_target: Option<ID3D11RenderTargetView>,
     path_rasterization_vertices: Vec<PathRasterizationVertex>,
     path_sprites: Vec<PathSprite>,
+    liquid_quad_upload: Vec<Quad>,
+    liquid: gpui_render::liquid::LiquidTable,
 }
 
 /// Direct3D objects
@@ -168,6 +170,7 @@ struct BlurResources {
 struct DirectXRenderPipelines {
     shadow_pipeline: PipelineState<Shadow>,
     quad_pipeline: PipelineState<Quad>,
+    liquid_pipeline: PipelineState<gpui_render::shaders::liquid::LiquidCell>,
     path_rasterization_pipeline: PipelineState<PathRasterizationVertex>,
     path_sprite_pipeline: PipelineState<PathSprite>,
     underline_pipeline: PipelineState<Underline>,
@@ -317,6 +320,8 @@ impl DirectXRenderer {
             active_render_target: None,
             path_rasterization_vertices: Vec::new(),
             path_sprites: Vec::new(),
+            liquid_quad_upload: Vec::new(),
+            liquid: Default::default(),
         })
     }
 
@@ -567,6 +572,34 @@ impl DirectXRenderer {
                 RenderCommand::Batch(PrimitiveBatch::Quads { range, smoothed }) => {
                     self.draw_quads(instance_range(range)?, *smoothed)
                 }
+
+                RenderCommand::Batch(PrimitiveBatch::Liquid { range, smoothed }) => {
+                    for draw_idx in range.clone() {
+                        let draw = &scene.liquid_draws[draw_idx];
+
+                        if self.liquid.falls_back(draw.record_index) {
+                            let quad_idx = scene
+                                .quads
+                                .len()
+                                .checked_add(draw_idx)
+                                .context("liquid fallback index overflow")?;
+
+                            self.draw_quads(instance_range(&(quad_idx..quad_idx + 1))?, *smoothed)?;
+
+                            continue;
+                        }
+
+                        self.pipelines.liquid_pipeline.draw_instances_variant(
+                            &self.frame_bindings()?,
+                            None,
+                            instance_range(&(draw.record_index..draw.record_index + 1))?,
+                            draw.phase == gpui::LiquidPhase::Border,
+                        )?;
+                    }
+
+                    Ok(())
+                }
+
                 RenderCommand::Batch(PrimitiveBatch::Paths {
                     range,
                     rasterization_vertex_count,
@@ -848,11 +881,33 @@ impl DirectXRenderer {
             )?;
         }
 
-        if !scene.quads.is_empty() {
+        self.liquid.prepare(scene, MAX_INSTANCE_BUFFER_SIZE);
+
+        if !self.liquid.cells.is_empty() {
+            self.pipelines.liquid_pipeline.update_buffer(
+                &devices.device,
+                &devices.device_context,
+                &self.liquid.cells,
+            )?;
+        }
+
+        self.liquid_quad_upload.clear();
+
+        let quads = if scene.liquid_draws.is_empty() {
+            &scene.quads
+        } else {
+            self.liquid_quad_upload.extend_from_slice(&scene.quads);
+            self.liquid_quad_upload
+                .extend(scene.liquid_draws.iter().map(|draw| draw.quad));
+
+            &self.liquid_quad_upload
+        };
+
+        if !quads.is_empty() {
             self.pipelines.quad_pipeline.update_buffer(
                 &devices.device,
                 &devices.device_context,
-                &scene.quads,
+                quads,
             )?;
         }
 
@@ -1617,6 +1672,14 @@ impl DirectXRenderPipelines {
             create_blend_state(device)?,
         )?
         .with_variant(device, ShaderModule::SmoothedShadow)?;
+        let liquid_pipeline = PipelineState::new(
+            device,
+            "liquid_pipeline",
+            ShaderModule::LiquidFill,
+            1,
+            create_blend_state(device)?,
+        )?
+        .with_variant(device, ShaderModule::LiquidBorder)?;
         let quad_pipeline = PipelineState::new(
             device,
             "quad_pipeline",
@@ -1701,6 +1764,7 @@ impl DirectXRenderPipelines {
         Ok(Self {
             shadow_pipeline,
             quad_pipeline,
+            liquid_pipeline,
             path_rasterization_pipeline,
             path_sprite_pipeline,
             underline_pipeline,
@@ -2499,6 +2563,8 @@ pub(crate) mod shader_resources {
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
     pub(crate) enum ShaderModule {
         Quad,
+        LiquidFill,
+        LiquidBorder,
         SmoothedQuad,
         Shadow,
         SmoothedShadow,
@@ -2520,6 +2586,8 @@ pub(crate) mod shader_resources {
         pub(crate) fn shader(self) -> &'static NativeShader {
             let label = match self {
                 Self::Quad => "quads",
+                Self::LiquidFill => "liquid_fill",
+                Self::LiquidBorder => "liquid_border",
                 Self::SmoothedQuad => "smoothed_quads",
                 Self::Shadow => "shadows",
                 Self::SmoothedShadow => "smoothed_shadows",
@@ -2805,8 +2873,8 @@ mod tests {
         AtlasKey, AtlasTile, BackdropFilter, BorderStyle, Bounds, ContentMask, Corners,
         DevicePixels, Edges, FilterBoundary, ImageId, MonochromeSprite, PlatformAtlas, Point,
         PolychromeSprite, PrimitiveBatch, Quad, RenderCommand, RenderImageParams, RenderSvgParams,
-        ScaledFilter, ScaledPixels, Scene, ShaderBool, Size, WindowBackgroundAppearance, hsla, rgb,
-        rgb_to_hsla, solid_background, white,
+        ScaledFilter, ScaledPixels, Scene, ShaderBool, Size, WindowBackgroundAppearance, hsla,
+        interleaved_liquid_scene, rgb, rgb_to_hsla, solid_background, white,
     };
     use smallvec::{SmallVec, smallvec};
     use std::borrow::Cow;
@@ -2971,6 +3039,44 @@ mod tests {
             images_differ_in_region(&default_image, &custom_image, 24, 36),
             "custom dash length and gap must change the smoothed quad pipeline"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn liquid_component_offsets_survive_opacity_and_filter_targets() -> Result<()> {
+        let window = HiddenWindow::new()?;
+        let devices = DirectXDevices::new()?;
+        let mut renderer = DirectXRenderer::new(window.0, &devices, true)?;
+        renderer.resize(Size {
+            width: DevicePixels(200),
+            height: DevicePixels(100),
+        })?;
+
+        for blur in [0.0, 2.0] {
+            let scene = interleaved_liquid_scene(
+                Quad {
+                    bounds: scaled(10.0, 20.0, 18.0, 40.0),
+                    content_mask: full_mask(),
+                    background: gpui::rgba(0xff000080).into(),
+                    border_widths: Edges::all(ScaledPixels(2.0)),
+                    corner_radii: Corners::all(ScaledPixels(4.0)),
+                    corner_smoothing: 0.6,
+                    ..Default::default()
+                },
+                62.0,
+                26.0,
+                gpui::black().into(),
+                Some(ScaledPixels(blur)),
+            );
+            let image = renderer.render_to_image(&scene, WindowBackgroundAppearance::Opaque)?;
+
+            for x in [32, 94, 156] {
+                let pixel = image.get_pixel(x, 40).0;
+                assert!(pixel[0].abs_diff(64) <= 3, "blur {blur}, x {x}: {pixel:?}");
+                assert!(pixel[1] <= 1 && pixel[2] <= 1);
+            }
+        }
 
         Ok(())
     }

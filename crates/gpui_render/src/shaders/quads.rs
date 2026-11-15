@@ -67,18 +67,7 @@ pub mod quad {
         let corner_radius = pick_corner_radius(center_to_point, quad.corner_radii);
         let corner_to_point = abs(center_to_point) - half_size;
         let corner_center_to_point = corner_to_point + corner_radius;
-        let border = vec2f(
-            select(
-                quad.border_widths.right,
-                quad.border_widths.left,
-                center_to_point.x < 0.0,
-            ),
-            select(
-                quad.border_widths.bottom,
-                quad.border_widths.top,
-                center_to_point.y < 0.0,
-            ),
-        );
+        let border = quad_border_widths(quad, center_to_point, 4u32);
         let reduced_border = vec2f(
             select(border.x, -PIXEL_ANTIALIAS_RADIUS, border.x == 0.0),
             select(border.y, -PIXEL_ANTIALIAS_RADIUS, border.y == 0.0),
@@ -122,6 +111,208 @@ pub mod quad {
             geometry.corner_radius - geometry.reduced_border,
         );
         quarter_ellipse_signed_distance(geometry.corner_center_to_point, ellipse_radii)
+    }
+
+    /// The geometric inset value, with negative values inside and no raster early-outs.
+    /// This preserves the ordinary contour, but is not itself a unit distance.
+    pub fn inner_contour_value(quad: Quad, position: Vec2f, prepared: PreparedCorners) -> f32 {
+        let geometry = quad_geometry(quad, position);
+        let border = quad_border_widths(quad, geometry.center_to_point, 4u32);
+        let inset = abs(geometry.center_to_point) - Bounds::half_size(quad.bounds) + border;
+
+        if quad.corner_smoothing <= 0.0 {
+            let radii = max(vec2f(0.0, 0.0), geometry.corner_radius - border);
+
+            if radii.x <= 0.0 || radii.y <= 0.0 {
+                return length(max(inset, vec2f(0.0, 0.0))) + min(max(inset.x, inset.y), 0.0);
+            }
+
+            if geometry.corner_center_to_point.x <= 0.0 || geometry.corner_center_to_point.y <= 0.0
+            {
+                return max(inset.x, inset.y);
+            }
+
+            return -quarter_ellipse_signed_distance(geometry.corner_center_to_point, radii);
+        }
+
+        let sample = figma_smooth_rectangle_sample(
+            position,
+            quad.bounds,
+            quad.corner_radii,
+            prepared.horizontal_reaches,
+            prepared.vertical_reaches,
+            prepared.smoothing_factors,
+        );
+
+        if sample.signed_distance.segment == FIGMA_SEGMENT_STRAIGHT {
+            return max(inset.x, inset.y);
+        }
+
+        let corner_border = quad_border_widths(quad, geometry.center_to_point, sample.corner);
+
+        return sample.signed_distance.distance
+            + length(corner_border * abs(sample.signed_distance.normal));
+    }
+
+    pub fn has_inner_contour(quad: Quad) -> bool {
+        quad.border_widths.left + quad.border_widths.right < quad.bounds.size.x
+            && quad.border_widths.top + quad.border_widths.bottom < quad.bounds.size.y
+    }
+
+    pub fn segment_distance(point: Vec2f, start: Vec2f, end: Vec2f) -> f32 {
+        let delta = end - start;
+        let ratio = clamp(
+            dot(point - start, delta) / max(dot(delta, delta), 0.000001),
+            0.0,
+            1.0,
+        );
+
+        return length(point - start - delta * ratio);
+    }
+
+    #[derive(Clone, Copy, Wgsl)]
+    pub struct InsetSegment {
+        pub start: Vec2f,
+        pub end: Vec2f,
+    }
+
+    #[derive(Clone, Copy, Wgsl)]
+    pub struct InsetDistance {
+        pub distance: f32,
+        pub inside: bool,
+    }
+
+    /// Fold prepared contour segments without allocating a fragment-local array.
+    pub fn inset_segment_sample(
+        sample: InsetDistance,
+        position: Vec2f,
+        start: Vec2f,
+        end: Vec2f,
+    ) -> InsetDistance {
+        let mut inside = sample.inside;
+
+        if (start.y > position.y) != (end.y > position.y) {
+            let crossing = start.x + (position.y - start.y) * (end.x - start.x) / (end.y - start.y);
+
+            if position.x < crossing {
+                inside = !inside;
+            }
+        }
+
+        return InsetDistance {
+            distance: min(sample.distance, segment_distance(position, start, end)),
+            inside,
+        };
+    }
+
+    /// Finalize a genuine inset distance after folding its prepared segments.
+    /// Empty contours have no field contribution and are skipped by the caller.
+    pub fn field_safe_inner_border_signed_distance(sample: InsetDistance) -> f32 {
+        return select(sample.distance, -sample.distance, sample.inside);
+    }
+
+    pub fn quad_border_widths(quad: Quad, center_to_point: Vec2f, corner: u32) -> Vec2f {
+        let left = select(
+            center_to_point.x < 0.0,
+            corner == 0u32 || corner == 3u32,
+            corner < 4u32,
+        );
+        let top = select(center_to_point.y < 0.0, corner < 2u32, corner < 4u32);
+
+        return vec2f(
+            select(quad.border_widths.right, quad.border_widths.left, left),
+            select(quad.border_widths.bottom, quad.border_widths.top, top),
+        );
+    }
+
+    pub fn straight_inner_corner(quad: Quad, center_to_point: Vec2f, border: Vec2f) -> Vec2f {
+        let reduced = vec2f(
+            select(border.x, -PIXEL_ANTIALIAS_RADIUS, border.x == 0.0),
+            select(border.y, -PIXEL_ANTIALIAS_RADIUS, border.y == 0.0),
+        );
+
+        return abs(center_to_point) - Bounds::half_size(quad.bounds) + reduced;
+    }
+
+    pub fn smoothed_inner_border_distance(
+        sample: FigmaRectangleSample,
+        border: Vec2f,
+        inset: Vec2f,
+    ) -> f32 {
+        if sample.signed_distance.segment == FIGMA_SEGMENT_STRAIGHT {
+            return -max(inset.x, inset.y);
+        }
+
+        let normal = abs(sample.signed_distance.normal);
+        let active_sides = vec2f(
+            select(0.0, 1.0, border.x > 0.0),
+            select(0.0, 1.0, border.y > 0.0),
+        );
+        let effective_width = length(border * normal)
+            - PIXEL_ANTIALIAS_RADIUS * (1.0 - length(active_sides * normal));
+
+        return -(sample.signed_distance.distance + effective_width);
+    }
+
+    /// Coverage for the two ordinary div decoration phases, including zero-side AA.
+    pub fn ordinary_quad_coverage(quad: Quad, position: Vec2f, prepared: PreparedCorners) -> Vec2f {
+        let fill_prepared = prepare_corners(
+            quad.bounds.size,
+            quad.corner_radii,
+            quad.corner_smoothing,
+            true,
+        );
+
+        return ordinary_quad_coverage_prepared(quad, position, prepared, fill_prepared);
+    }
+
+    pub fn ordinary_quad_coverage_prepared(
+        quad: Quad,
+        position: Vec2f,
+        prepared: PreparedCorners,
+        fill_prepared: PreparedCorners,
+    ) -> Vec2f {
+        let fill_distance = prepared_corner_signed_distance(
+            position,
+            quad.bounds,
+            quad.corner_radii,
+            quad.corner_smoothing,
+            fill_prepared,
+        );
+        let fill_coverage = antialiased_coverage(fill_distance);
+        let geometry = quad_geometry(quad, position);
+        let mut distances = border_distances(geometry);
+
+        if quad.corner_smoothing > 0.0 {
+            let sample = figma_smooth_rectangle_sample(
+                position,
+                quad.bounds,
+                quad.corner_radii,
+                prepared.horizontal_reaches,
+                prepared.vertical_reaches,
+                prepared.smoothing_factors,
+            );
+            let border = quad_border_widths(quad, geometry.center_to_point, sample.corner);
+            let inset = straight_inner_corner(quad, geometry.center_to_point, border);
+            distances.outer = sample.signed_distance.distance;
+            distances.inner = smoothed_inner_border_distance(sample, border, inset);
+        }
+
+        let outer = antialiased_coverage(distances.outer);
+
+        if Edges::is_zero(quad.border_widths) {
+            let distance = prepared_corner_signed_distance(
+                position,
+                quad.bounds,
+                quad.corner_radii,
+                quad.corner_smoothing,
+                prepared,
+            );
+
+            return vec2f(antialiased_coverage(distance), 0.0);
+        }
+
+        return vec2f(fill_coverage, outer * antialiased_coverage(distances.inner));
     }
 
     pub fn border_distances(geometry: QuadGeometry) -> BorderDistances {
@@ -729,42 +920,9 @@ pub mod quad {
             prepared.vertical_reaches,
             prepared.smoothing_factors,
         );
-        let mut border = vec2f(
-            select(
-                quad.border_widths.right,
-                quad.border_widths.left,
-                geometry.center_to_point.x < 0.0,
-            ),
-            select(
-                quad.border_widths.bottom,
-                quad.border_widths.top,
-                geometry.center_to_point.y < 0.0,
-            ),
-        );
-
-        match rectangle_sample.corner {
-            0u32 => {
-                border = vec2f(quad.border_widths.left, quad.border_widths.top);
-            }
-            1u32 => {
-                border = vec2f(quad.border_widths.right, quad.border_widths.top);
-            }
-            2u32 => {
-                border = vec2f(quad.border_widths.right, quad.border_widths.bottom);
-            }
-            3u32 => {
-                border = vec2f(quad.border_widths.left, quad.border_widths.bottom);
-            }
-            _ => {}
-        }
-
-        let reduced_border = vec2f(
-            select(border.x, -PIXEL_ANTIALIAS_RADIUS, border.x == 0.0),
-            select(border.y, -PIXEL_ANTIALIAS_RADIUS, border.y == 0.0),
-        );
-        let half_size = Bounds::half_size(quad.bounds);
-        let corner_to_point = abs(geometry.center_to_point) - half_size;
-        let straight_border_inner_corner_to_point = corner_to_point + reduced_border;
+        let border = quad_border_widths(quad, geometry.center_to_point, rectangle_sample.corner);
+        let straight_border_inner_corner_to_point =
+            straight_inner_corner(quad, geometry.center_to_point, border);
         let near_curve = rectangle_sample.signed_distance.segment != FIGMA_SEGMENT_STRAIGHT;
 
         if straight_border_inner_corner_to_point.x < -PIXEL_ANTIALIAS_RADIUS
@@ -775,23 +933,11 @@ pub mod quad {
         }
 
         let outer = rectangle_sample.signed_distance.distance;
-        let mut inner = 0.0;
-
-        if near_curve {
-            let normal = abs(rectangle_sample.signed_distance.normal);
-            let active_sides = vec2f(
-                select(0.0, 1.0, border.x > 0.0),
-                select(0.0, 1.0, border.y > 0.0),
-            );
-            let effective_width = length(border * normal)
-                - PIXEL_ANTIALIAS_RADIUS * (1.0 - length(active_sides * normal));
-            inner = -(outer + effective_width);
-        } else {
-            inner = -max(
-                straight_border_inner_corner_to_point.x,
-                straight_border_inner_corner_to_point.y,
-            );
-        }
+        let inner = smoothed_inner_border_distance(
+            rectangle_sample,
+            border,
+            straight_border_inner_corner_to_point,
+        );
 
         let mut color = fill_color;
 

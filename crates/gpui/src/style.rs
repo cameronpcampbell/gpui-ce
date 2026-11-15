@@ -1,9 +1,9 @@
 use crate::{
     AbsoluteLength, App, Background, BorderStyle, Bounds, ColorExt, ContentMask, Corners,
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
-    FontFallbacks, FontFeatures, FontStyle, FontWeight, FontWidth, GridLocation, Length, PaintQuad,
-    Pixels, Point, PointRefinement, ScaledPixels, SharedString, Size, SizeRefinement, Styled,
-    TextRun, Window, black, phi, point, px, rems, size,
+    FontFallbacks, FontFeatures, FontStyle, FontWeight, FontWidth, GridLocation, Length,
+    LiquidPhase, PaintQuad, Pixels, Point, PointRefinement, ScaledPixels, SharedString, Size,
+    SizeRefinement, Styled, TextRun, Window, black, phi, point, px, rems, size, transparent_black,
 };
 use collections::HashSet;
 use palette::{Hsla, IntoColor, rgb::Rgba};
@@ -343,6 +343,16 @@ pub struct Style {
 
     /// The fill color of this element
     pub background: Option<Fill>,
+
+    /// Whether this box contributes liquid fill and border decoration.
+    pub liquid_enabled: bool,
+
+    /// The liquid group for this box. `None` uses the shared default group.
+    /// Groups do not inherit into children.
+    pub liquid_group: Option<SharedString>,
+
+    /// The distance over which neighboring liquid materials blend.
+    pub liquid_blend_radius: Pixels,
 
     /// The background painted into the border of this element
     pub border_color: Option<Background>,
@@ -1030,7 +1040,32 @@ impl Style {
         // and its children together as one group; without a filter it paints directly.
         let paint_box = |window: &mut Window, cx: &mut App| {
             let background_color = self.background.as_ref().and_then(Fill::color);
-            if background_color.is_some_and(|color| !color.is_transparent()) {
+
+            let member = if self.liquid_enabled && self.visibility == Visibility::Visible {
+                window.register_liquid_box(
+                    PaintQuad {
+                        bounds,
+                        corner_radii,
+                        corner_smoothing,
+                        background: background_color.unwrap_or_else(|| transparent_black().into()),
+                        border_color: self
+                            .border_color
+                            .unwrap_or_else(|| transparent_black().into()),
+                        border_widths: self.border_widths.to_pixels(rem_size),
+                        border_style: self.border_style,
+                        border_dashed_length: self.border_dashed_length,
+                        border_dashed_gap: self.border_dashed_gap,
+                    },
+                    self.liquid_group.clone(),
+                    self.liquid_blend_radius,
+                )
+            } else {
+                None
+            };
+
+            if let Some(member) = member {
+                window.paint_liquid_phase(member, LiquidPhase::Fill);
+            } else if background_color.is_some_and(|color| !color.is_transparent()) {
                 let background_color = background_color.unwrap_or_default();
                 window.paint_quad(
                     PaintQuad::new(bounds)
@@ -1054,7 +1089,9 @@ impl Style {
 
             continuation(window, cx);
 
-            if self.is_border_visible() {
+            if let Some(member) = member {
+                window.paint_liquid_phase(member, LiquidPhase::Border);
+            } else if self.is_border_visible() {
                 let border_widths = self.border_widths.to_pixels(rem_size);
                 let border_color = self.border_color.unwrap_or_default();
                 window.paint_quad(
@@ -1137,6 +1174,9 @@ impl Default for Style {
             flex_shrink: 1.0,
             flex_basis: Length::Auto,
             background: None,
+            liquid_enabled: false,
+            liquid_group: None,
+            liquid_blend_radius: px(8.),
             border_color: None,
             border_style: BorderStyle::default(),
             border_dashed_length: crate::scene::DEFAULT_BORDER_DASHED_LENGTH,
@@ -1686,10 +1726,13 @@ impl From<Position> for taffy::style::Position {
 
 #[cfg(test)]
 mod tests {
-    use crate::{blue, green, hsla, linear_color_stop, linear_gradient, px, red, yellow};
-    use palette::WithAlpha;
-
     use super::*;
+    use crate::{
+        AnyElement, Context, IntoElement, ParentElement, Render, TestAppContext, blue, canvas, div,
+        green, hsla, linear_color_stop, linear_gradient, px, red, yellow,
+    };
+    use palette::WithAlpha;
+    use std::sync::Arc;
 
     fn ring_gradient() -> Background {
         linear_gradient(
@@ -1697,6 +1740,274 @@ mod tests {
             linear_color_stop(red(), 0.),
             linear_color_stop(blue(), 1.),
         )
+    }
+
+    struct LiquidPaintView {
+        element: fn() -> AnyElement,
+    }
+
+    impl Render for LiquidPaintView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            (self.element)()
+        }
+    }
+
+    fn liquid_test_bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
+        Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+    }
+
+    fn nested_liquid() -> AnyElement {
+        div()
+            .w(px(80.))
+            .h(px(60.))
+            .liquid()
+            .bg(blue())
+            .child(
+                div()
+                    .w(px(30.))
+                    .h(px(20.))
+                    .liquid()
+                    .border_2()
+                    .border_color(red())
+                    .child(div().w(px(10.)).h(px(8.)).bg(green())),
+            )
+            .into_any_element()
+    }
+
+    fn paint_fragmented_liquid(window: &mut Window, cx: &mut App) {
+        let style = Style {
+            liquid_enabled: true,
+            liquid_group: Some("inline".into()),
+            background: Some(blue().into()),
+            ..Style::default()
+        };
+        let fragments = Arc::from([
+            liquid_test_bounds(20., 30., 40., 20.),
+            liquid_test_bounds(20., 55., 60., 20.),
+        ]);
+        let previous_fragments = window.current_inline_fragments.replace(fragments);
+        style.paint(
+            liquid_test_bounds(20., 30., 60., 45.),
+            window,
+            cx,
+            |window, _cx| {
+                window.paint_quad(
+                    PaintQuad::new(liquid_test_bounds(22., 32., 10., 8.)).background(green()),
+                );
+            },
+        );
+        window.current_inline_fragments = previous_fragments;
+    }
+
+    fn inactive_liquid() -> AnyElement {
+        div()
+            .children(
+                [
+                    div().liquid(),
+                    div().liquid().border_2(),
+                    div().liquid().invisible().bg(blue()),
+                    div()
+                        .liquid()
+                        .bg(transparent_black())
+                        .border_2()
+                        .border_color(transparent_black()),
+                    div().bg(blue()),
+                    div()
+                        .opacity(0.)
+                        .child(div().size_full().liquid().bg(blue())),
+                ]
+                .map(|element| element.w(px(40.)).h(px(20.))),
+            )
+            .into_any_element()
+    }
+
+    #[gpui::test]
+    fn inactive_liquid_styles_do_not_compile_geometry(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_window, _cx| LiquidPaintView {
+            element: inactive_liquid,
+        });
+
+        window
+            .update(cx, |_view, window, _cx| {
+                let scene = &window.rendered_frame.scene;
+                assert!(scene.liquid_records.is_empty());
+                assert!(scene.liquid_draws.is_empty());
+                assert!(scene.liquid_components.is_empty());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn liquid_paint_preserves_nested_phase_positions_for_borderless_and_border_only_boxes(
+        cx: &mut TestAppContext,
+    ) {
+        let window = cx.add_window(|_window, _cx| LiquidPaintView {
+            element: nested_liquid,
+        });
+
+        window
+            .update(cx, |_view, window, _cx| {
+                let scene = &window.rendered_frame.scene;
+                assert_eq!(scene.liquid_records.len(), 2);
+                assert_eq!(scene.liquid_draws.len(), 4);
+                assert_eq!(scene.quads.len(), 1);
+                let phases = scene
+                    .liquid_draws
+                    .iter()
+                    .map(|draw| (draw.member, draw.phase))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    phases,
+                    [
+                        (0, LiquidPhase::Fill),
+                        (1, LiquidPhase::Fill),
+                        (1, LiquidPhase::Border),
+                        (0, LiquidPhase::Border),
+                    ]
+                );
+                assert!(scene.liquid_draws[0].order < scene.liquid_draws[1].order);
+                assert!(scene.liquid_draws[1].order < scene.quads[0].order);
+                assert!(scene.quads[0].order < scene.liquid_draws[2].order);
+                assert!(scene.liquid_draws[2].order < scene.liquid_draws[3].order);
+                assert_eq!(
+                    scene.liquid_records[0].source.quad.border_widths,
+                    Edges::all(ScaledPixels(0.)),
+                );
+                assert!(
+                    scene.liquid_records[1]
+                        .source
+                        .quad
+                        .background
+                        .is_transparent()
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn liquid_inline_fragments_keep_distinct_geometry_and_paint_content_once(
+        cx: &mut TestAppContext,
+    ) {
+        let window = cx.add_window(|_window, _cx| LiquidPaintView {
+            element: || {
+                canvas(
+                    |_bounds, _window, _cx| {},
+                    |_bounds, _state, window, cx| paint_fragmented_liquid(window, cx),
+                )
+                .size_full()
+                .into_any_element()
+            },
+        });
+
+        window
+            .update(cx, |_view, window, _cx| {
+                let scene = &window.rendered_frame.scene;
+                assert_eq!(scene.liquid_records.len(), 2);
+                assert_eq!(scene.liquid_draws.len(), 4);
+                assert_eq!(scene.quads.len(), 1);
+                assert_eq!(scene.liquid_components.len(), 1);
+                let geometry = scene
+                    .liquid_records
+                    .iter()
+                    .map(|record| record.source.quad.bounds)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    geometry,
+                    [
+                        liquid_test_bounds(20., 30., 40., 20.).scale(window.scale_factor()),
+                        liquid_test_bounds(20., 55., 60., 20.).scale(window.scale_factor()),
+                    ]
+                );
+                assert_ne!(scene.liquid_draws[0].member, scene.liquid_draws[2].member);
+                assert_ne!(
+                    scene.liquid_records[0].ordinal,
+                    scene.liquid_records[1].ordinal
+                );
+                assert!(
+                    scene
+                        .liquid_records
+                        .iter()
+                        .all(|record| { record.source.group == Some("inline".into()) })
+                );
+                assert!(
+                    scene
+                        .liquid_draws
+                        .iter()
+                        .all(|draw| draw.order < scene.quads[0].order)
+                );
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn liquid_builders_preserve_independent_options_and_explicit_disabling() {
+        let variants = [
+            StyleRefinement::default()
+                .liquid()
+                .liquid_group("toolbar")
+                .liquid_blend_radius(px(12.)),
+            StyleRefinement::default()
+                .liquid_blend_radius(px(12.))
+                .liquid_group("toolbar")
+                .liquid(),
+            StyleRefinement::default()
+                .liquid_group("toolbar")
+                .liquid()
+                .liquid_blend_radius(px(12.)),
+        ];
+        let mut style = Style::default();
+        assert!(!style.liquid_enabled);
+        assert_eq!(style.liquid_group, None);
+        assert_eq!(style.liquid_blend_radius, px(8.));
+
+        for refinement in variants {
+            style.refine(&refinement);
+            assert!(style.liquid_enabled);
+            assert_eq!(style.liquid_group, Some("toolbar".into()));
+            assert_eq!(style.liquid_blend_radius, px(12.));
+        }
+
+        let disabled = StyleRefinement {
+            liquid_enabled: Some(false),
+            ..StyleRefinement::default()
+        };
+        style.refine(&disabled);
+        assert!(!style.liquid_enabled);
+        assert_eq!(style.liquid_group, Some("toolbar".into()));
+        assert_eq!(style.liquid_blend_radius, px(12.));
+
+        let selection = StyleRefinement::default()
+            .liquid_group("toolbar")
+            .liquid_blend_radius(px(0.));
+        let mut unenabled = Style::default();
+        unenabled.refine(&selection);
+        assert!(!unenabled.liquid_enabled);
+    }
+
+    #[test]
+    fn liquid_group_names_compare_by_value_and_survive_serialization() {
+        let first_name = SharedString::from(String::from("toolbar"));
+        let second_name = SharedString::from(String::from("toolbar"));
+        let first = Some(first_name);
+        let second = Some(second_name);
+        assert_eq!(first, second);
+        assert_ne!(first, None);
+        assert_ne!(Some(SharedString::from("Default")), None);
+
+        let authored = StyleRefinement::default()
+            .liquid()
+            .liquid_group(String::from("toolbar"))
+            .liquid_blend_radius(px(-4.));
+        let serialized = serde_json::to_value(&authored).unwrap();
+        assert_eq!(serialized["liquid_group"], "toolbar");
+        let restored: StyleRefinement = serde_json::from_value(serialized).unwrap();
+        assert_eq!(restored, authored);
+
+        let mut style = Style::default();
+        style.refine(&restored);
+        assert!(style.liquid_enabled);
+        assert_eq!(style.liquid_group, first);
+        assert_eq!(style.liquid_blend_radius, px(-4.));
     }
 
     #[test]

@@ -14,9 +14,11 @@ path = "src/gpui_render.rs"
 
 [features]
 default = []
+test-support = []
 swash = ["dep:anyhow", "dep:skrifa", "dep:swash", "dep:thiserror"]
 
 [dependencies]
+log.workspace = true
 anyhow = { workspace = true, optional = true }
 skrifa = { workspace = true, optional = true, features = ["std"] }
 swash = { workspace = true, optional = true }

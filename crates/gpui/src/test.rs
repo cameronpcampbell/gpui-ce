@@ -25,7 +25,10 @@
 //!   assert!(true)
 //! }
 //! ```
-use crate::{Entity, Subscription, TestAppContext, TestDispatcher};
+use crate::{
+    Background, Corners, Entity, FilterBoundary, LiquidPhase, Quad, ScaledFilter, ScaledLiquidBox,
+    ScaledPixels, Scene, Subscription, TestAppContext, TestDispatcher,
+};
 use futures::StreamExt as _;
 use proptest::prelude::{Just, Strategy, any};
 use std::{
@@ -217,4 +220,81 @@ pub fn observe<T: 'static>(entity: &Entity<T>, cx: &mut TestAppContext) -> Obser
     let rx = Box::pin(rx);
 
     Observation { rx, _subscription }
+}
+
+/// Builds three liquid components whose source records interleave across draw batches.
+/// An optional blur also isolates the sources in a half-opacity filter target.
+pub fn interleaved_liquid_scene(
+    source: Quad,
+    component_spacing: f32,
+    member_spacing: f32,
+    background: Background,
+    blur: Option<ScaledPixels>,
+) -> Scene {
+    let mut scene = Scene::default();
+    scene.insert_primitive(Quad {
+        bounds: source.content_mask.bounds,
+        content_mask: source.content_mask,
+        background,
+        ..Default::default()
+    });
+
+    let boundary = blur.map(|blur| FilterBoundary {
+        order: 0,
+        bounds: source.content_mask.bounds,
+        content_mask: source.content_mask,
+        corner_radii: Corners::default(),
+        corner_smoothing: 0.0,
+        filters: (blur.0 > 0.0)
+            .then_some(ScaledFilter::Blur(blur))
+            .into_iter()
+            .collect(),
+        opacity: 0.5,
+        is_start: true,
+    });
+
+    if let Some(boundary) = &boundary {
+        scene.insert_primitive(boundary.clone());
+    }
+
+    for member_idx in 0..2 {
+        for (component_idx, group) in [None, Some("second"), Some("third")]
+            .into_iter()
+            .enumerate()
+        {
+            let mut quad = source;
+            quad.bounds.origin.x += ScaledPixels(
+                component_idx as f32 * component_spacing + member_idx as f32 * member_spacing,
+            );
+
+            if group == Some("third") {
+                quad.corner_smoothing = 0.0;
+            }
+
+            let member = scene
+                .register_liquid_box(ScaledLiquidBox {
+                    quad,
+                    group: group.map(Into::into),
+                    reach: ScaledPixels(24.0),
+                    blend_radius: ScaledPixels(8.0),
+                })
+                .unwrap();
+            scene.paint_liquid_phase(member, LiquidPhase::Fill);
+            scene.paint_liquid_phase(member, LiquidPhase::Border);
+        }
+    }
+
+    if let Some(boundary) = boundary {
+        scene.insert_primitive(FilterBoundary {
+            is_start: false,
+            ..boundary
+        });
+    }
+
+    scene.finish();
+    assert_eq!(scene.liquid_components[1].records, 2..4);
+    assert_eq!(scene.liquid_components[2].records, 4..6);
+    assert_eq!(scene.liquid_draws[2].record_index, 2);
+
+    scene
 }

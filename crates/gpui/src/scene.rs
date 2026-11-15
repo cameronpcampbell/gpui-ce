@@ -16,6 +16,9 @@ use std::{
     slice,
 };
 
+mod liquid;
+pub use liquid::*;
+
 mod plan;
 pub use plan::*;
 mod abi;
@@ -64,6 +67,10 @@ pub struct Scene {
     primitive_bounds: BoundsTree<ScaledPixels>,
     layer_stack: Vec<Option<DrawOrder>>,
     filter_depth: usize,
+    liquid: liquid::LiquidState,
+    pub liquid_records: Vec<LiquidRecord>,
+    pub liquid_components: Vec<LiquidComponent>,
+    pub liquid_draws: Vec<LiquidDraw>,
     pub shadows: Vec<Shadow>,
     pub quads: Vec<Quad>,
     pub paths: Vec<Path<ScaledPixels>>,
@@ -86,6 +93,10 @@ impl Scene {
         self.primitive_bounds.clear();
         self.layer_stack.clear();
         self.filter_depth = 0;
+        self.liquid.clear();
+        self.liquid_records.clear();
+        self.liquid_components.clear();
+        self.liquid_draws.clear();
         self.paths.clear();
         self.shadows.clear();
         self.quads.clear();
@@ -107,8 +118,12 @@ impl Scene {
 
     pub fn push_layer(&mut self, bounds: Bounds<ScaledPixels>) {
         self.is_finished = false;
-        let order = self.primitive_bounds.insert(bounds);
-        self.layer_stack.push(Some(order));
+        let order = if self.liquid.normal_ordering {
+            None
+        } else {
+            Some(self.primitive_bounds.insert(bounds))
+        };
+        self.layer_stack.push(order);
         self.paint_operations
             .push(PaintOperation::StartLayer(bounds));
     }
@@ -127,6 +142,8 @@ impl Scene {
         self.is_finished = false;
         let floor = self.primitive_bounds.max_order() + 1;
         self.primitive_bounds.set_order_floor(floor);
+        self.liquid.advance_epoch();
+        self.paint_operations.push(PaintOperation::RaiseOrderFloor);
     }
 
     pub(crate) fn is_in_filter_group(&self) -> bool {
@@ -221,6 +238,8 @@ impl Scene {
             }
             Primitive::FilterBoundary(boundary) => {
                 boundary.order = order;
+                self.liquid
+                    .filter_boundary(boundary.is_start, boundary.opacity);
                 // Every boundary breaks active layer batching and starts a new order segment.
                 self.layer_stack.fill(None);
                 self.primitive_bounds.set_order_floor(order + 1);
@@ -241,15 +260,34 @@ impl Scene {
 
     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
         for operation in &prev_scene.paint_operations[range] {
-            match operation {
-                PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
-                PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
-                PaintOperation::EndLayer => self.pop_layer(),
+            self.replay_operation(operation);
+        }
+    }
+
+    fn replay_operation(&mut self, operation: &PaintOperation) {
+        match operation {
+            PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
+            PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
+            PaintOperation::EndLayer => self.pop_layer(),
+            PaintOperation::RaiseOrderFloor => self.raise_order_floor(),
+            PaintOperation::AdvanceLiquidOverlayEpoch => self.advance_liquid_overlay_epoch(),
+            PaintOperation::RegisterLiquid { member, source } => {
+                self.replay_liquid_member(*member, source);
+            }
+            PaintOperation::LiquidPhase {
+                member,
+                source,
+                phase,
+            } => {
+                if let Some(member) = self.replay_liquid_member(*member, source) {
+                    self.paint_liquid_phase(member, *phase);
+                }
             }
         }
     }
 
     pub fn finish(&mut self) {
+        self.finish_liquid();
         self.shadows.sort_by_key(|shadow| shadow.order);
         self.quads.sort_by_key(|quad| quad.order);
         self.paths.sort_by_key(|path| path.order);
@@ -369,6 +407,7 @@ pub(crate) enum PrimitiveKind {
     Shadow,
     #[default]
     Quad,
+    Liquid,
     Path,
     Underline,
     MonochromeSprite,
@@ -385,6 +424,17 @@ pub(crate) enum PaintOperation {
     Primitive(Primitive),
     StartLayer(Bounds<ScaledPixels>),
     EndLayer,
+    RaiseOrderFloor,
+    AdvanceLiquidOverlayEpoch,
+    RegisterLiquid {
+        member: LiquidMemberId,
+        source: ScaledLiquidBox,
+    },
+    LiquidPhase {
+        member: LiquidMemberId,
+        source: ScaledLiquidBox,
+        phase: LiquidPhase,
+    },
 }
 
 #[derive(Clone)]
@@ -447,6 +497,8 @@ struct BatchIterator<'a> {
     shadows_iter: Peekable<slice::Iter<'a, Shadow>>,
     quads_start: usize,
     quads_iter: Peekable<slice::Iter<'a, Quad>>,
+    liquid_start: usize,
+    liquid_iter: Peekable<slice::Iter<'a, LiquidDraw>>,
     paths_start: usize,
     paths: &'a [Path<ScaledPixels>],
     paths_iter: Peekable<slice::Iter<'a, Path<ScaledPixels>>>,
@@ -473,6 +525,8 @@ impl<'a> BatchIterator<'a> {
             shadows_iter: scene.shadows.iter().peekable(),
             quads_start: 0,
             quads_iter: scene.quads.iter().peekable(),
+            liquid_start: 0,
+            liquid_iter: scene.liquid_draws.iter().peekable(),
             paths_start: 0,
             paths: &scene.paths,
             paths_iter: scene.paths.iter().peekable(),
@@ -506,6 +560,22 @@ fn has_corner_smoothing(corner_smoothing: f32) -> bool {
     corner_smoothing > 0.0
 }
 
+fn take_batch_range<Item>(
+    start: &mut usize,
+    iter: &mut Peekable<slice::Iter<'_, Item>>,
+    mut predicate: impl FnMut(&Item) -> bool,
+) -> Range<usize> {
+    let batch_start = *start;
+    iter.next();
+    *start += 1;
+
+    while iter.next_if(|item| predicate(item)).is_some() {
+        *start += 1;
+    }
+
+    batch_start..*start
+}
+
 impl<'a> Iterator for BatchIterator<'a> {
     type Item = PrimitiveBatch;
 
@@ -516,6 +586,10 @@ impl<'a> Iterator for BatchIterator<'a> {
                 PrimitiveKind::Shadow,
             ),
             (self.quads_iter.peek().map(|q| q.order), PrimitiveKind::Quad),
+            (
+                self.liquid_iter.peek().map(|draw| draw.order),
+                PrimitiveKind::Liquid,
+            ),
             (self.paths_iter.peek().map(|q| q.order), PrimitiveKind::Path),
             (
                 self.underlines_iter.peek().map(|u| u.order),
@@ -574,60 +648,39 @@ impl<'a> Iterator for BatchIterator<'a> {
             PrimitiveKind::Shadow => {
                 let smoothed =
                     has_corner_smoothing(self.shadows_iter.peek().unwrap().corner_smoothing);
-                let shadows_start = self.shadows_start;
-                let mut shadows_end = shadows_start + 1;
-                self.shadows_iter.next();
-                while self
-                    .shadows_iter
-                    .next_if(|shadow| {
+                let range =
+                    take_batch_range(&mut self.shadows_start, &mut self.shadows_iter, |shadow| {
                         precedes_limit(shadow.order, batch_kind, max_order_and_kind)
                             && has_corner_smoothing(shadow.corner_smoothing) == smoothed
-                    })
-                    .is_some()
-                {
-                    shadows_end += 1;
-                }
-                self.shadows_start = shadows_end;
-                Some(PrimitiveBatch::Shadows {
-                    range: shadows_start..shadows_end,
-                    smoothed,
-                })
+                    });
+
+                Some(PrimitiveBatch::Shadows { range, smoothed })
             }
             PrimitiveKind::Quad => {
                 let smoothed =
                     has_corner_smoothing(self.quads_iter.peek().unwrap().corner_smoothing);
-                let quads_start = self.quads_start;
-                let mut quads_end = quads_start + 1;
-                self.quads_iter.next();
-                while self
-                    .quads_iter
-                    .next_if(|quad| {
-                        precedes_limit(quad.order, batch_kind, max_order_and_kind)
-                            && has_corner_smoothing(quad.corner_smoothing) == smoothed
-                    })
-                    .is_some()
-                {
-                    quads_end += 1;
-                }
-                self.quads_start = quads_end;
-                Some(PrimitiveBatch::Quads {
-                    range: quads_start..quads_end,
-                    smoothed,
-                })
+                let range = take_batch_range(&mut self.quads_start, &mut self.quads_iter, |quad| {
+                    precedes_limit(quad.order, batch_kind, max_order_and_kind)
+                        && has_corner_smoothing(quad.corner_smoothing) == smoothed
+                });
+
+                Some(PrimitiveBatch::Quads { range, smoothed })
+            }
+            PrimitiveKind::Liquid => {
+                let smoothed =
+                    has_corner_smoothing(self.liquid_iter.peek().unwrap().quad.corner_smoothing);
+                let range =
+                    take_batch_range(&mut self.liquid_start, &mut self.liquid_iter, |draw| {
+                        precedes_limit(draw.order, batch_kind, max_order_and_kind)
+                            && has_corner_smoothing(draw.quad.corner_smoothing) == smoothed
+                    });
+
+                Some(PrimitiveBatch::Liquid { range, smoothed })
             }
             PrimitiveKind::Path => {
-                let paths_start = self.paths_start;
-                let mut paths_end = paths_start + 1;
-                self.paths_iter.next();
-                while self
-                    .paths_iter
-                    .next_if(|path| precedes_limit(path.order, batch_kind, max_order_and_kind))
-                    .is_some()
-                {
-                    paths_end += 1;
-                }
-                self.paths_start = paths_end;
-                let range = paths_start..paths_end;
+                let range = take_batch_range(&mut self.paths_start, &mut self.paths_iter, |path| {
+                    precedes_limit(path.order, batch_kind, max_order_and_kind)
+                });
                 let paths = &self.paths[range.clone()];
                 let rasterization_vertex_count = paths.iter().map(|path| path.vertices.len()).sum();
                 let sprite_count = if paths
@@ -638,6 +691,7 @@ impl<'a> Iterator for BatchIterator<'a> {
                 } else {
                     1
                 };
+
                 Some(PrimitiveBatch::Paths {
                     range,
                     rasterization_vertex_count,
@@ -645,119 +699,77 @@ impl<'a> Iterator for BatchIterator<'a> {
                 })
             }
             PrimitiveKind::Underline => {
-                let underlines_start = self.underlines_start;
-                let mut underlines_end = underlines_start + 1;
-                self.underlines_iter.next();
-                while self
-                    .underlines_iter
-                    .next_if(|underline| {
-                        precedes_limit(underline.order, batch_kind, max_order_and_kind)
-                    })
-                    .is_some()
-                {
-                    underlines_end += 1;
-                }
-                self.underlines_start = underlines_end;
-                Some(PrimitiveBatch::Underlines(underlines_start..underlines_end))
+                let range = take_batch_range(
+                    &mut self.underlines_start,
+                    &mut self.underlines_iter,
+                    |underline| precedes_limit(underline.order, batch_kind, max_order_and_kind),
+                );
+
+                Some(PrimitiveBatch::Underlines(range))
             }
             PrimitiveKind::MonochromeSprite => {
                 let texture_id = self.monochrome_sprites_iter.peek().unwrap().tile.texture_id;
-                let sprites_start = self.monochrome_sprites_start;
-                let mut sprites_end = sprites_start + 1;
-                self.monochrome_sprites_iter.next();
-                while self
-                    .monochrome_sprites_iter
-                    .next_if(|sprite| {
+                let range = take_batch_range(
+                    &mut self.monochrome_sprites_start,
+                    &mut self.monochrome_sprites_iter,
+                    |sprite| {
                         precedes_limit(sprite.order, batch_kind, max_order_and_kind)
                             && sprite.tile.texture_id == texture_id
-                    })
-                    .is_some()
-                {
-                    sprites_end += 1;
-                }
-                self.monochrome_sprites_start = sprites_end;
-                Some(PrimitiveBatch::MonochromeSprites {
-                    texture_id,
-                    range: sprites_start..sprites_end,
-                })
+                    },
+                );
+
+                Some(PrimitiveBatch::MonochromeSprites { texture_id, range })
             }
             PrimitiveKind::SubpixelSprite => {
                 let texture_id = self.subpixel_sprites_iter.peek().unwrap().tile.texture_id;
-                let sprites_start = self.subpixel_sprites_start;
-                let mut sprites_end = sprites_start + 1;
-                self.subpixel_sprites_iter.next();
-                while self
-                    .subpixel_sprites_iter
-                    .next_if(|sprite| {
+                let range = take_batch_range(
+                    &mut self.subpixel_sprites_start,
+                    &mut self.subpixel_sprites_iter,
+                    |sprite| {
                         precedes_limit(sprite.order, batch_kind, max_order_and_kind)
                             && sprite.tile.texture_id == texture_id
-                    })
-                    .is_some()
-                {
-                    sprites_end += 1;
-                }
-                self.subpixel_sprites_start = sprites_end;
-                Some(PrimitiveBatch::SubpixelSprites {
-                    texture_id,
-                    range: sprites_start..sprites_end,
-                })
+                    },
+                );
+
+                Some(PrimitiveBatch::SubpixelSprites { texture_id, range })
             }
             PrimitiveKind::PolychromeSprite => {
                 let first_sprite = self.polychrome_sprites_iter.peek().unwrap();
                 let texture_id = first_sprite.tile.texture_id;
                 let smoothed = has_corner_smoothing(first_sprite.corner_smoothing);
-                let sprites_start = self.polychrome_sprites_start;
-                let mut sprites_end = sprites_start + 1;
-                self.polychrome_sprites_iter.next();
-                while self
-                    .polychrome_sprites_iter
-                    .next_if(|sprite| {
+                let range = take_batch_range(
+                    &mut self.polychrome_sprites_start,
+                    &mut self.polychrome_sprites_iter,
+                    |sprite| {
                         precedes_limit(sprite.order, batch_kind, max_order_and_kind)
                             && sprite.tile.texture_id == texture_id
                             && has_corner_smoothing(sprite.corner_smoothing) == smoothed
-                    })
-                    .is_some()
-                {
-                    sprites_end += 1;
-                }
-                self.polychrome_sprites_start = sprites_end;
+                    },
+                );
+
                 Some(PrimitiveBatch::PolychromeSprites {
                     texture_id,
-                    range: sprites_start..sprites_end,
+                    range,
                     smoothed,
                 })
             }
             PrimitiveKind::Surface => {
-                let surfaces_start = self.surfaces_start;
-                let mut surfaces_end = surfaces_start + 1;
-                self.surfaces_iter.next();
-                while self
-                    .surfaces_iter
-                    .next_if(|surface| {
-                        precedes_limit(surface.order, batch_kind, max_order_and_kind)
-                    })
-                    .is_some()
-                {
-                    surfaces_end += 1;
-                }
-                self.surfaces_start = surfaces_end;
-                Some(PrimitiveBatch::Surfaces(surfaces_start..surfaces_end))
+                let range = take_batch_range(
+                    &mut self.surfaces_start,
+                    &mut self.surfaces_iter,
+                    |surface| precedes_limit(surface.order, batch_kind, max_order_and_kind),
+                );
+
+                Some(PrimitiveBatch::Surfaces(range))
             }
             PrimitiveKind::BackdropFilter => {
-                let backdrop_filters_start = self.backdrop_filters_start;
-                let mut backdrop_filters_end = backdrop_filters_start + 1;
-                self.backdrop_filters_iter.next();
-                while self
-                    .backdrop_filters_iter
-                    .next_if(|filter| precedes_limit(filter.order, batch_kind, max_order_and_kind))
-                    .is_some()
-                {
-                    backdrop_filters_end += 1;
-                }
-                self.backdrop_filters_start = backdrop_filters_end;
-                Some(PrimitiveBatch::BackdropFilters(
-                    backdrop_filters_start..backdrop_filters_end,
-                ))
+                let range = take_batch_range(
+                    &mut self.backdrop_filters_start,
+                    &mut self.backdrop_filters_iter,
+                    |filter| precedes_limit(filter.order, batch_kind, max_order_and_kind),
+                );
+
+                Some(PrimitiveBatch::BackdropFilters(range))
             }
             // Boundaries are emitted one at a time (never merged) so the renderer can switch
             // render targets at exactly the right point in the batch stream.

@@ -23,6 +23,24 @@ macro_rules! layout {
 
 #[doc(hidden)]
 pub const SCENE_BUFFER_LAYOUTS: &[SceneBufferLayout] = &[
+    layout!(
+        LiquidGpuRecord,
+        "LiquidGpuRecord",
+        quad,
+        horizontal_reaches,
+        vertical_reaches,
+        smoothing_factors,
+        superellipse_power,
+        component_start,
+        component_count,
+        reach,
+        radius,
+        inner_start,
+        inner_count,
+        outer_start,
+        outer_count,
+        fill_power
+    ),
     layout!(Bounds<ScaledPixels>, "Bounds", origin, size),
     layout!(Bounds<DevicePixels>, "AtlasBounds", origin, size),
     layout!(

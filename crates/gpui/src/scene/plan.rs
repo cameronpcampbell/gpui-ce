@@ -41,6 +41,11 @@ pub struct ScenePlanRequirements {
     pub path_sprite_count: usize,
     pub surface_count: usize,
     pub backdrop_filter_count: usize,
+    pub liquid_record_count: usize,
+    pub liquid_component_count: usize,
+    pub liquid_draw_count: usize,
+    /// Numeric source headers. The renderer adds its prepared contour bytes.
+    pub liquid_source_upload_bytes: usize,
     pub isolated_filter_count: usize,
     pub isolated_target_count: usize,
     pub uses_path_target: bool,
@@ -123,6 +128,7 @@ impl ScenePlan {
                         });
                     }
                 }
+
                 batch => {
                     if let PrimitiveBatch::BackdropFilters(range) = &batch {
                         requirements.uses_blur_target |= scene.backdrop_filters[range.clone()]
@@ -137,6 +143,13 @@ impl ScenePlan {
         }
 
         requirements.command_count = commands.len();
+        requirements.liquid_record_count = scene.liquid_records.len();
+        requirements.liquid_component_count = scene.liquid_components.len();
+        requirements.liquid_draw_count = scene.liquid_draws.len();
+        requirements.liquid_source_upload_bytes = scene
+            .liquid_records
+            .len()
+            .saturating_mul(std::mem::size_of::<super::LiquidGpuRecord>());
         Self {
             commands,
             requirements,
@@ -166,6 +179,10 @@ impl ScenePlan {
 impl ScenePlanRequirements {
     fn include_batch(&mut self, batch: &PrimitiveBatch) {
         match batch {
+            PrimitiveBatch::Liquid { range, .. } => {
+                self.instance_batch_count += range.len();
+            }
+
             PrimitiveBatch::Shadows { range, .. }
             | PrimitiveBatch::Quads { range, .. }
             | PrimitiveBatch::Underlines(range) => {
@@ -212,6 +229,9 @@ struct SceneLengths {
     surfaces: usize,
     backdrop_filters: usize,
     filter_boundaries: usize,
+    liquid_records: usize,
+    liquid_components: usize,
+    liquid_draws: usize,
 }
 
 impl SceneLengths {
@@ -227,6 +247,9 @@ impl SceneLengths {
             surfaces: scene.surfaces.len(),
             backdrop_filters: scene.backdrop_filters.len(),
             filter_boundaries: scene.filter_boundaries.len(),
+            liquid_records: scene.liquid_records.len(),
+            liquid_components: scene.liquid_components.len(),
+            liquid_draws: scene.liquid_draws.len(),
         }
     }
 }
@@ -240,6 +263,11 @@ pub enum PrimitiveBatch {
         smoothed: bool,
     },
     Quads {
+        range: Range<usize>,
+        smoothed: bool,
+    },
+    /// Liquid phase descriptors in paint order, including ordinary decoration fallback.
+    Liquid {
         range: Range<usize>,
         smoothed: bool,
     },
@@ -332,6 +360,11 @@ impl PrimitiveBatch {
             ),
             Self::Quads { range, smoothed } => format!(
                 "{}quads ({})",
+                if *smoothed { "smoothed " } else { "" },
+                range.len()
+            ),
+            Self::Liquid { range, smoothed } => format!(
+                "{}liquid phases ({})",
                 if *smoothed { "smoothed " } else { "" },
                 range.len()
             ),

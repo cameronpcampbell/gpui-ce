@@ -244,6 +244,9 @@ pub struct MetalRenderer {
     path_sprites_pipeline_state: metal::RenderPipelineState,
     shadows_pipeline_state: metal::RenderPipelineState,
     smoothed_shadows_pipeline_state: metal::RenderPipelineState,
+    liquid_fill_pipeline_state: metal::RenderPipelineState,
+    liquid_border_pipeline_state: metal::RenderPipelineState,
+    liquid: gpui_render::liquid::LiquidTable,
     quads_pipeline_state: metal::RenderPipelineState,
     smoothed_quads_pipeline_state: metal::RenderPipelineState,
     underlines_pipeline_state: metal::RenderPipelineState,
@@ -383,63 +386,24 @@ impl MetalRenderer {
             paths_shader,
             MTLPixelFormat::BGRA8Unorm,
         );
-        let (shadows_shader, shadows_library) = pipeline("shadows");
-        let shadows_pipeline_state = build_pipeline_state(
-            &device,
-            &shadows_library,
-            shadows_shader,
-            MTLPixelFormat::BGRA8Unorm,
-        );
-        let (smoothed_shadows_shader, smoothed_shadows_library) = pipeline("smoothed_shadows");
-        let smoothed_shadows_pipeline_state = build_pipeline_state(
-            &device,
-            &smoothed_shadows_library,
-            smoothed_shadows_shader,
-            MTLPixelFormat::BGRA8Unorm,
-        );
-        let (quads_shader, quads_library) = pipeline("quads");
-        let quads_pipeline_state = build_pipeline_state(
-            &device,
-            &quads_library,
-            quads_shader,
-            MTLPixelFormat::BGRA8Unorm,
-        );
-        let (smoothed_quads_shader, smoothed_quads_library) = pipeline("smoothed_quads");
-        let smoothed_quads_pipeline_state = build_pipeline_state(
-            &device,
-            &smoothed_quads_library,
-            smoothed_quads_shader,
-            MTLPixelFormat::BGRA8Unorm,
-        );
-        let (underlines_shader, underlines_library) = pipeline("underlines");
-        let underlines_pipeline_state = build_pipeline_state(
-            &device,
-            &underlines_library,
-            underlines_shader,
-            MTLPixelFormat::BGRA8Unorm,
-        );
-        let (monochrome_shader, monochrome_library) = pipeline("monochrome_sprites");
-        let monochrome_sprites_pipeline_state = build_pipeline_state(
-            &device,
-            &monochrome_library,
-            monochrome_shader,
-            MTLPixelFormat::BGRA8Unorm,
-        );
-        let (polychrome_shader, polychrome_library) = pipeline("polychrome_sprites");
-        let polychrome_sprites_pipeline_state = build_pipeline_state(
-            &device,
-            &polychrome_library,
-            polychrome_shader,
-            MTLPixelFormat::BGRA8Unorm,
-        );
-        let (smoothed_polychrome_shader, smoothed_polychrome_library) =
-            pipeline("smoothed_polychrome_sprites");
-        let smoothed_polychrome_sprites_pipeline_state = build_pipeline_state(
-            &device,
-            &smoothed_polychrome_library,
-            smoothed_polychrome_shader,
-            MTLPixelFormat::BGRA8Unorm,
-        );
+        let mut color_pipeline = |label| {
+            let (shader, library) = pipeline(label);
+
+            build_pipeline_state(&device, &library, shader, MTLPixelFormat::BGRA8Unorm)
+        };
+
+        let shadows_pipeline_state = color_pipeline("shadows");
+        let smoothed_shadows_pipeline_state = color_pipeline("smoothed_shadows");
+        let liquid_fill_pipeline_state = color_pipeline("liquid_fill");
+        let liquid_border_pipeline_state = color_pipeline("liquid_border");
+        let quads_pipeline_state = color_pipeline("quads");
+        let smoothed_quads_pipeline_state = color_pipeline("smoothed_quads");
+        let underlines_pipeline_state = color_pipeline("underlines");
+        let monochrome_sprites_pipeline_state = color_pipeline("monochrome_sprites");
+        let polychrome_sprites_pipeline_state = color_pipeline("polychrome_sprites");
+        let smoothed_polychrome_sprites_pipeline_state =
+            color_pipeline("smoothed_polychrome_sprites");
+
         let (surfaces_shader, surfaces_library) = pipeline("surfaces");
         let surfaces_pipeline_state = build_path_sprite_pipeline_state(
             &device,
@@ -501,6 +465,9 @@ impl MetalRenderer {
             path_sprites_pipeline_state,
             shadows_pipeline_state,
             smoothed_shadows_pipeline_state,
+            liquid_fill_pipeline_state,
+            liquid_border_pipeline_state,
+            liquid: Default::default(),
             quads_pipeline_state,
             smoothed_quads_pipeline_state,
             underlines_pipeline_state,
@@ -863,12 +830,20 @@ impl MetalRenderer {
         Ok(())
     }
 
-    fn acquire_instance_buffer(&self, scene: &Scene) -> InstanceBuffer {
-        self.instance_buffer_pool.lock().acquire(
-            &self.device,
-            self.is_unified_memory,
-            required_instance_buffer_size(scene),
-        )
+    fn acquire_instance_buffer(&mut self, scene: &Scene) -> InstanceBuffer {
+        let ordinary_bytes = required_instance_buffer_size(scene);
+        let maximum = (self.device.max_buffer_length() as usize).min(u32::MAX as usize);
+        self.liquid.prepare(
+            scene,
+            maximum.saturating_sub(ordinary_bytes).saturating_sub(256),
+        );
+        let liquid_bytes = self.liquid.byte_len();
+        let required = ordinary_bytes
+            .saturating_add(liquid_bytes)
+            .saturating_add(if liquid_bytes > 0 { 256 } else { 0 });
+        self.instance_buffer_pool
+            .lock()
+            .acquire(&self.device, self.is_unified_memory, required)
     }
 
     fn release_instance_buffer_when_complete(
@@ -907,7 +882,19 @@ impl MetalRenderer {
         let command_queue = self.command_queue.clone();
         let command_buffer = command_queue.new_command_buffer();
         let alpha = if self.opaque { 1. } else { 0. };
-        let mut instance_offset = 0;
+        let mut instance_offset = self.liquid.byte_len();
+
+        if instance_offset > 0 {
+            let bytes = gpui_render::shaders::interface::slice_as_bytes(&self.liquid.cells);
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    instance_buffer.metal_buffer.contents() as *mut u8,
+                    bytes.len(),
+                );
+            }
+        }
+
         let scene_uniforms = SceneUniforms::new(viewport_size);
 
         // Filters and opacity groups sample offscreen textures. Owned clones keep those
@@ -959,6 +946,48 @@ impl MetalRenderer {
                     &scene_uniforms,
                     command_encoder,
                 ),
+                RenderCommand::Batch(PrimitiveBatch::Liquid { range, smoothed }) => {
+                    let mut success = true;
+
+                    for draw in &scene.liquid_draws[range.clone()] {
+                        if self.liquid.falls_back(draw.record_index) {
+                            success &= self.draw_quads(
+                                &[draw.quad],
+                                *smoothed,
+                                instance_buffer,
+                                &mut instance_offset,
+                                &scene_uniforms,
+                                command_encoder,
+                            );
+
+                            continue;
+                        }
+
+                        let pipeline = match draw.phase {
+                            gpui::LiquidPhase::Fill => &self.liquid_fill_pipeline_state,
+                            gpui::LiquidPhase::Border => &self.liquid_border_pipeline_state,
+                        };
+
+                        command_encoder.set_render_pipeline_state(pipeline);
+                        bind_scene_uniforms(command_encoder, &scene_uniforms);
+                        bind_instance_bytes(
+                            command_encoder,
+                            &instance_buffer.metal_buffer,
+                            0,
+                            self.liquid.byte_len(),
+                        );
+                        command_encoder.draw_primitives_instanced_base_instance(
+                            metal::MTLPrimitiveType::TriangleStrip,
+                            0,
+                            4,
+                            1,
+                            draw.record_index as u64,
+                        );
+                    }
+
+                    success
+                }
+
                 RenderCommand::Batch(PrimitiveBatch::Paths {
                     range,
                     rasterization_vertex_count,
@@ -2123,6 +2152,12 @@ fn required_instance_buffer_size(scene: &Scene) -> usize {
         match batch {
             PrimitiveBatch::Shadows { range, .. } => reserve(mem::size_of::<Shadow>(), range.len()),
             PrimitiveBatch::Quads { range, .. } => reserve(mem::size_of::<Quad>(), range.len()),
+
+            PrimitiveBatch::Liquid { range, .. } => {
+                for _draw_idx in range.clone() {
+                    reserve(mem::size_of::<Quad>(), 1);
+                }
+            }
             PrimitiveBatch::Paths {
                 rasterization_vertex_count,
                 sprite_count,
@@ -2195,10 +2230,48 @@ mod tests {
     use gpui::{
         AtlasKey, BackdropFilter, BorderStyle, ContentMask, Edges, ImageId, Path, PlatformAtlas,
         PlatformHeadlessRenderer, RenderImageParams, RenderSvgParams, ScaledFilter,
-        TransformationMatrix, checkerboard, hsla, linear_color_stop, linear_gradient,
-        pattern_slash, px, solid_background, white,
+        TransformationMatrix, checkerboard, hsla, interleaved_liquid_scene, linear_color_stop,
+        linear_gradient, pattern_slash, px, solid_background, white,
     };
     use std::borrow::Cow;
+
+    #[test]
+    fn liquid_draws_keep_component_addresses_across_batches() {
+        let mut renderer = MetalHeadlessRenderer::new();
+
+        for blur in [0.0, 2.0] {
+            let scene = interleaved_liquid_scene(
+                Quad {
+                    bounds: Bounds::new(
+                        gpui::point(ScaledPixels(10.0), ScaledPixels(20.0)),
+                        gpui::size(ScaledPixels(30.0), ScaledPixels(36.0)),
+                    ),
+                    content_mask: ContentMask {
+                        bounds: Bounds::new(
+                            gpui::point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                            gpui::size(ScaledPixels(300.0), ScaledPixels(80.0)),
+                        ),
+                        ..Default::default()
+                    },
+                    background: gpui::rgba(0xff000080).into(),
+                    border_widths: Edges::all(ScaledPixels(2.0)),
+                    corner_radii: Corners::all(ScaledPixels(6.0)),
+                    corner_smoothing: 0.6,
+                    ..Default::default()
+                },
+                100.0,
+                38.0,
+                gpui::black().into(),
+                Some(ScaledPixels(blur)),
+            );
+            let image = renderer
+                .render_scene_to_image(&scene, gpui::size(DevicePixels(300), DevicePixels(80)))
+                .unwrap();
+            assert_pixel_close(&image, 44, 38, [64, 0, 0, 255], 2, "first bridge");
+            assert_pixel_close(&image, 144, 38, [64, 0, 0, 255], 2, "second bridge");
+            assert_pixel_close(&image, 244, 38, [64, 0, 0, 255], 2, "third bridge");
+        }
+    }
 
     #[test]
     fn intermediate_textures_follow_scene_requirements() {

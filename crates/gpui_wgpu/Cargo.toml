@@ -14,7 +14,7 @@ path = "src/gpui_wgpu.rs"
 
 [features]
 default = []
-test-support = ["gpui/test-support", "dep:image"]
+test-support = ["gpui/test-support", "gpui_render/test-support", "dep:image"]
 custom-gpu = ["gpui/custom-gpu"]
 wgpu-surfaces = ["gpui/wgpu-surfaces"]
 
@@ -87,5 +87,10 @@ required-features = ["custom-gpu"]
 
 [[bench]]
 name = "renderer"
+harness = false
+required-features = ["test-support"]
+
+[[bench]]
+name = "liquid"
 harness = false
 required-features = ["test-support"]

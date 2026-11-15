@@ -3,6 +3,7 @@
 #[wgsl_rs::wgsl]
 pub mod base {
     use super::super::blur::*;
+    use super::super::liquid::*;
     use super::super::monochrome_sprite::*;
     use super::super::path::*;
     use super::super::path_rasterization::*;

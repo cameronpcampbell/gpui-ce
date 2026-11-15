@@ -5,19 +5,20 @@ use crate::{
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
     EntityId, EventEmitter, FileDropEvent, Filter, FilterBoundary, FontId, Global, GlobalElementId,
     GlyphId, GlyphRenderMode, GpuSpecs, InputHandler, IntoElement, IsZero, KeyBinding, KeyContext,
-    KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId, Lerp, LineLayoutIndex, Modifiers,
-    ModifiersChangedEvent, MonochromeSprite, Motion, MouseButton, MouseEvent, MouseMoveEvent,
-    MouseUpEvent, PaintSurface, Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, Priority, PromptButton,
-    PromptLevel, Quad, RasterizedGlyphFormat, Render, RenderGlyphParams, RenderImage,
-    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, ResolvedDirection,
-    SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledFilter, ScaledPixels,
-    Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet,
-    Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
-    TextInputConfiguration, TextInputStateChange, TextRenderingMode, TextStyle,
-    TextStyleRefinement, ThermalState, TransformationMatrix, Transition, TransitionState,
-    Underline, UnderlineStyle, UnicodeBidi, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
+    KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId, Lerp, LineLayoutIndex,
+    LiquidMemberId, LiquidPhase, Modifiers, ModifiersChangedEvent, MonochromeSprite, Motion,
+    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, PaintSurface, Path, Pixels,
+    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
+    PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, RasterizedGlyphFormat, Render,
+    RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge,
+    ResolvedDirection, SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y,
+    ScaledFilter, ScaledLiquidBox, ScaledPixels, Scene, Shadow, SharedString, Size,
+    StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
+    SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextInputConfiguration,
+    TextInputStateChange, TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState,
+    TransformationMatrix, Transition, TransitionState, Underline, UnderlineStyle, UnicodeBidi,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
+    WindowOptions, WindowParams, WindowTextSystem,
     gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer},
     interactive::TouchEvent,
     point, px, rems, size, transparent_black,
@@ -3745,6 +3746,7 @@ impl Window {
         let traversal_order = self.deferred_draw_traversal_order();
         let mut deferred_draws = mem::take(&mut self.next_frame.deferred_draws);
         for deferred_draw_ix in traversal_order {
+            self.next_frame.scene.advance_liquid_overlay_epoch();
             let mut deferred_draw = &mut deferred_draws[deferred_draw_ix];
             self.element_id_stack
                 .clone_from(&deferred_draw.element_id_stack);
@@ -4686,6 +4688,51 @@ impl Window {
         }
     }
 
+    /// Register one liquid decoration at the current clip and compositing target.
+    /// Widths remain fractional device pixels, so animated borders do not step at integer widths.
+    pub(crate) fn register_liquid_box(
+        &mut self,
+        quad: PaintQuad,
+        group: Option<SharedString>,
+        blend_radius: Pixels,
+    ) -> Option<LiquidMemberId> {
+        self.invalidator.debug_assert_paint();
+        let scale_factor = self.scale_factor();
+        let border_widths = quad.border_widths.scale(scale_factor);
+        let quad = self.quad_record(quad, border_widths);
+
+        self.next_frame.scene.register_liquid_box(ScaledLiquidBox {
+            quad,
+            group,
+            blend_radius: blend_radius.scale(scale_factor),
+            reach: px(24.).scale(scale_factor),
+        })
+    }
+
+    pub(crate) fn paint_liquid_phase(&mut self, member: LiquidMemberId, phase: LiquidPhase) {
+        self.invalidator.debug_assert_paint();
+        self.next_frame.scene.paint_liquid_phase(member, phase);
+    }
+
+    fn quad_record(&self, quad: PaintQuad, border_widths: Edges<ScaledPixels>) -> Quad {
+        let snapped_bounds = self.snap_bounds(quad.bounds);
+
+        Quad {
+            order: 0,
+            bounds: snapped_bounds,
+            content_mask: self.snapped_content_mask(),
+            background: quad.background,
+            border_color: quad.border_color,
+            corner_radii: quad.corner_radii.scale(self.scale_factor()),
+            border_widths,
+            border_style: quad.border_style,
+            border_dashed_length: quad.border_dashed_length,
+            border_dashed_gap: quad.border_dashed_gap,
+            corner_smoothing: quad.corner_smoothing.clamp(0.0, 1.0),
+            padding: 0,
+        }
+    }
+
     /// Paint one or more quads into the scene for the next frame at the current stacking context.
     /// Quads are colored rectangular regions with an optional background, border, and corner radius.
     /// Use [`PaintQuad::new`] and its builder methods to construct the quad.
@@ -4699,22 +4746,8 @@ impl Window {
     pub fn paint_quad(&mut self, quad: PaintQuad) {
         self.invalidator.debug_assert_paint();
 
-        let snapped_bounds = self.snap_bounds(quad.bounds);
-        let snapped_border_widths = self.snap_border_widths(quad.border_widths);
-        let quad = Quad {
-            order: 0,
-            bounds: snapped_bounds,
-            content_mask: self.snapped_content_mask(),
-            background: quad.background,
-            border_color: quad.border_color,
-            corner_radii: quad.corner_radii.scale(self.scale_factor()),
-            border_widths: snapped_border_widths,
-            border_style: quad.border_style,
-            border_dashed_length: quad.border_dashed_length,
-            border_dashed_gap: quad.border_dashed_gap,
-            corner_smoothing: quad.corner_smoothing.clamp(0.0, 1.0),
-            padding: 0,
-        };
+        let border_widths = self.snap_border_widths(quad.border_widths);
+        let quad = self.quad_record(quad, border_widths);
 
         if !quad.background.is_transparent() {
             self.next_frame.scene.insert_primitive(quad);

@@ -2781,6 +2781,7 @@ dependencies = [
  "gpui-ce",
  "gpui-ce-fonts",
  "gpui_ce_parley",
+ "log",
  "naga 24.0.0",
  "naga 29.0.4",
  "skrifa",

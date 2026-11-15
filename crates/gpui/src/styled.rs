@@ -43,6 +43,28 @@ pub trait Styled: Sized {
     gpui_macros::border_style_methods!();
     gpui_macros::box_shadow_style_methods!();
 
+    /// Enables liquid fill and border decoration for this box.
+    fn liquid(mut self) -> Self {
+        self.style().liquid_enabled = Some(true);
+
+        self
+    }
+
+    /// Selects a liquid group without enabling the decoration.
+    fn liquid_group(mut self, group: impl Into<SharedString>) -> Self {
+        self.style().liquid_group = Some(group.into());
+
+        self
+    }
+
+    /// Sets the distance over which neighboring liquid materials blend.
+    /// Negative and non-finite values resolve to zero when painted.
+    fn liquid_blend_radius(mut self, radius: impl Into<Pixels>) -> Self {
+        self.style().liquid_blend_radius = Some(radius.into());
+
+        self
+    }
+
     /// Sets the inline direction for this element and its logical descendants.
     fn direction(mut self, direction: LayoutDirection) -> Self {
         self.style().direction = Some(direction);

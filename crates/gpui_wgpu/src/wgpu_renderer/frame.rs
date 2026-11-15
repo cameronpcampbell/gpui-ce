@@ -1,6 +1,6 @@
 use super::{
-    WgpuRenderer, begin_color_render_pass,
-    buffers::{InstanceTransport, InstanceUpload},
+    WgpuRenderer, begin_color_render_pass_with_timestamps,
+    buffers::{InstanceSlice, InstanceTransport, InstanceUpload},
     filters::{FILTER_UNIFORMS_PER_COMPOSITE, FrameUniformRequirements},
     path_types,
 };
@@ -13,6 +13,7 @@ use gpui_render::blur::{FilterCompositeClip, FilterCompositeParameters};
 use gpui_render::shaders::{
     common::{FontRasterizationUniforms, GlobalUniforms, ShaderBool},
     interface as shader_interface,
+    liquid::LiquidCell,
 };
 
 pub(super) fn render_to_view(
@@ -21,6 +22,16 @@ pub(super) fn render_to_view(
     frame_view: &wgpu::TextureView,
     readback: Option<ReadbackCopy<'_>>,
 ) -> Option<wgpu::SubmissionIndex> {
+    render_to_view_with_timestamps(renderer, scene, frame_view, readback, None)
+}
+
+pub(super) fn render_to_view_with_timestamps(
+    renderer: &mut WgpuRenderer,
+    scene: &Scene,
+    frame_view: &wgpu::TextureView,
+    readback: Option<ReadbackCopy<'_>>,
+    timestamps: Option<&wgpu::QuerySet>,
+) -> Option<wgpu::SubmissionIndex> {
     let Some(targets) = PreparedTargets::prepare(renderer, scene, frame_view) else {
         return None;
     };
@@ -28,8 +39,13 @@ pub(super) fn render_to_view(
     // texture that reappears after an intervening primitive and recreate its platform view.
     renderer.retain_surface_cache(&scene.surfaces);
 
-    match FrameEncoder::new(renderer, scene, targets).encode(readback) {
-        Ok(command_buffer) => Some(renderer.resources().queue.submit([command_buffer])),
+    match FrameEncoder::new(renderer, scene, targets).encode(readback, timestamps) {
+        Ok((upload, command_buffer)) => Some(
+            renderer
+                .resources()
+                .queue
+                .submit(upload.into_iter().chain([command_buffer])),
+        ),
         Err(DrawError::ExternalSurface) => None,
         Err(DrawError::CapacityPlanningInvariant) => {
             log::error!("frame storage exceeded its precomputed capacity");
@@ -66,10 +82,17 @@ impl PreparedTargets {
         if !begin_frame(renderer) {
             return None;
         }
-        let requirements = {
-            let transport = renderer.resources().instances.transport();
-            FrameRequirements::for_scene(scene, transport)
-        };
+
+        let transport = renderer.resources().instances.transport();
+        let baseline = FrameRequirements::for_scene(scene, transport);
+        let resources = renderer.resources_mut();
+        let overhead = baseline
+            .storage_bytes
+            .saturating_add(baseline.instance_batches.saturating_mul(256));
+        let maximum = resources.instances.maximum_size().saturating_sub(overhead);
+        resources.liquid.prepare(scene, maximum as usize);
+        let requirements =
+            FrameRequirements::with_liquid(scene, transport, resources.liquid.byte_len() as u64);
         let device = renderer.resources().device.clone();
         let resources = renderer.resources_mut();
         if !resources.instances.ensure_capacity(
@@ -242,9 +265,13 @@ pub(super) struct FrameRequirements {
 
 impl FrameRequirements {
     pub(super) fn for_scene(scene: &Scene, transport: InstanceTransport) -> Self {
+        Self::with_liquid(scene, transport, 0)
+    }
+
+    fn with_liquid(scene: &Scene, transport: InstanceTransport, liquid_bytes: u64) -> Self {
         let planned = scene.render_plan().requirements();
-        let mut storage_bytes = 0_u64;
-        let mut instance_batches = 0_u64;
+        let mut storage_bytes = liquid_bytes;
+        let mut instance_batches = u64::from(liquid_bytes > 0);
         let mut reserve = |element_size: usize, count: usize| {
             if count > 0 {
                 let stride = element_size as u64;
@@ -262,8 +289,15 @@ impl FrameRequirements {
                 PrimitiveBatch::Shadows { range, .. } => {
                     reserve(std::mem::size_of::<Shadow>(), range.len())
                 }
+
                 PrimitiveBatch::Quads { range, .. } => {
                     reserve(std::mem::size_of::<Quad>(), range.len())
+                }
+
+                PrimitiveBatch::Liquid { range, .. } => {
+                    for _draw_idx in range.clone() {
+                        reserve(std::mem::size_of::<Quad>(), 1);
+                    }
                 }
                 PrimitiveBatch::Paths {
                     rasterization_vertex_count,
@@ -294,7 +328,11 @@ impl FrameRequirements {
                 | PrimitiveBatch::FilterBoundary(_) => {}
             }
         }
-        debug_assert_eq!(instance_batches as usize, planned.instance_batch_count);
+
+        debug_assert_eq!(
+            instance_batches as usize,
+            planned.instance_batch_count + usize::from(liquid_bytes > 0)
+        );
 
         Self {
             storage_bytes,
@@ -348,8 +386,9 @@ impl<'a> FrameEncoder<'a> {
     fn encode(
         mut self,
         readback: Option<ReadbackCopy<'_>>,
-    ) -> Result<wgpu::CommandBuffer, DrawError> {
-        let result = self.encode_commands();
+        timestamps: Option<&wgpu::QuerySet>,
+    ) -> Result<(Option<wgpu::CommandBuffer>, wgpu::CommandBuffer), DrawError> {
+        let result = self.encode_commands(timestamps);
         if result.is_ok() {
             if let Some(offscreen) = &self.offscreen {
                 self.renderer
@@ -374,19 +413,42 @@ impl<'a> FrameEncoder<'a> {
                 );
             }
         }
-        self.instances.finish(&mut self.encoder);
+        // Data textures must be filled before any render pass samples them.
+        // Queue buffer writes already precede submission on the storage transport.
+        let upload =
+            if self.renderer.resources().instances.transport() == InstanceTransport::DataTexture {
+                let mut encoder = self.renderer.resources().device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor {
+                        label: Some("scene_data_upload"),
+                    },
+                );
+                self.instances.finish(&mut encoder);
+
+                Some(encoder.finish())
+            } else {
+                self.instances.finish(&mut self.encoder);
+
+                None
+            };
+
         self.renderer.resources().finish_frame_uploads();
         let command_buffer = self.encoder.finish();
-        result.map(|()| command_buffer)
+
+        result.map(|()| (upload, command_buffer))
     }
 
-    fn encode_commands(&mut self) -> DrawResult {
+    fn encode_commands(&mut self, timestamps: Option<&wgpu::QuerySet>) -> DrawResult {
+        let liquid_slice = self
+            .instances
+            .write(&self.renderer.resources().liquid.cells)
+            .ok_or(DrawError::CapacityPlanningInvariant)?;
         let mut pass = begin_scene_render_pass(
             self.renderer,
             &mut self.encoder,
             "main_pass",
             self.targets.current(),
             wgpu::LoadOp::Clear(self.renderer.target.clear_color()),
+            timestamps,
         );
 
         for command in self.scene.render_commands() {
@@ -412,6 +474,7 @@ impl<'a> FrameEncoder<'a> {
                         "after_paths",
                         self.targets.current(),
                         wgpu::LoadOp::Load,
+                        None,
                     );
                     rasterized?;
                     self.renderer.draw_paths_from_intermediate(
@@ -451,6 +514,7 @@ impl<'a> FrameEncoder<'a> {
                         "after_backdrop_filter",
                         self.targets.current(),
                         wgpu::LoadOp::Load,
+                        None,
                     );
                 }
                 RenderCommand::Batch(PrimitiveBatch::FilterBoundary(_)) => {
@@ -461,6 +525,7 @@ impl<'a> FrameEncoder<'a> {
                     self.scene,
                     batch,
                     &mut self.instances,
+                    &liquid_slice,
                     &mut pass,
                 )?,
                 RenderCommand::BeginFilter {
@@ -482,6 +547,7 @@ impl<'a> FrameEncoder<'a> {
                         "filter_group",
                         self.targets.current(),
                         wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        None,
                     );
                 }
                 RenderCommand::EndFilter {
@@ -512,6 +578,7 @@ impl<'a> FrameEncoder<'a> {
                         "after_content_filter",
                         self.targets.current(),
                         wgpu::LoadOp::Load,
+                        None,
                     );
                 }
                 RenderCommand::BeginFilter {
@@ -536,8 +603,15 @@ fn begin_scene_render_pass<'a>(
     label: &'a str,
     target: &'a wgpu::TextureView,
     load: wgpu::LoadOp<wgpu::Color>,
+    timestamps: Option<&'a wgpu::QuerySet>,
 ) -> wgpu::RenderPass<'a> {
-    let mut pass = begin_color_render_pass(encoder, label, target, load);
+    let timestamp_writes = timestamps.map(|queries| wgpu::RenderPassTimestampWrites {
+        query_set: queries,
+        beginning_of_pass_write_index: Some(0),
+        end_of_pass_write_index: Some(1),
+    });
+    let mut pass =
+        begin_color_render_pass_with_timestamps(encoder, label, target, load, timestamp_writes);
     pass.set_bind_group(
         shader_interface::GLOBAL_BIND_GROUP,
         &renderer.resources().globals_bind_group,
@@ -560,12 +634,40 @@ fn encode_inline_batch(
     scene: &Scene,
     batch: &PrimitiveBatch,
     instances: &mut InstanceUpload,
+    liquid_slice: &InstanceSlice<LiquidCell>,
     pass: &mut wgpu::RenderPass<'_>,
 ) -> DrawResult {
     match batch {
         PrimitiveBatch::Quads { range, smoothed } => {
             renderer.draw_quads(&scene.quads[range.clone()], *smoothed, instances, pass)
         }
+
+        PrimitiveBatch::Liquid { range, smoothed } => {
+            let resources = renderer.resources();
+
+            for draw in &scene.liquid_draws[range.clone()] {
+                if resources.liquid.falls_back(draw.record_index) {
+                    renderer.draw_quads(&[draw.quad], *smoothed, instances, pass)?;
+
+                    continue;
+                }
+
+                let pipeline = match draw.phase {
+                    gpui::LiquidPhase::Fill => &resources.pipelines.liquid_fill,
+                    gpui::LiquidPhase::Border => &resources.pipelines.liquid_border,
+                };
+
+                let source_slice = instances
+                    .liquid_source_slice(liquid_slice, draw.record_index)
+                    .ok_or(DrawError::CapacityPlanningInvariant)?;
+                pass.set_pipeline(pipeline);
+                source_slice.set_data_bind_group(pass, resources.instances.bind_group());
+                pass.draw(0..pipeline.fixed_vertex_count(), source_slice.range());
+            }
+
+            Ok(())
+        }
+
         PrimitiveBatch::Shadows { range, smoothed } => {
             renderer.draw_shadows(&scene.shadows[range.clone()], *smoothed, instances, pass)
         }
@@ -604,5 +706,110 @@ fn encode_inline_batch(
         | PrimitiveBatch::FilterBoundary(_) => {
             unreachable!("pass-interrupting batches are handled by FrameEncoder")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FrameRequirements, InstanceTransport};
+    use gpui::{
+        Bounds, ContentMask, LiquidPhase, PrimitiveBatch, Quad, RenderCommand, ScaledLiquidBox,
+        ScaledPixels, Scene, point, size, white,
+    };
+    use std::mem::size_of;
+
+    #[test]
+    fn liquid_phases_reserve_fallback_storage_and_preserve_phase_order() {
+        let bounds = Bounds::new(
+            point(ScaledPixels(30.0), ScaledPixels(30.0)),
+            size(ScaledPixels(40.0), ScaledPixels(40.0)),
+        );
+        let quad = Quad {
+            bounds,
+            content_mask: ContentMask {
+                bounds: bounds.dilate(ScaledPixels(30.0)),
+                ..Default::default()
+            },
+            background: white().into(),
+            ..Default::default()
+        };
+        let mut scene = Scene::default();
+        scene.insert_primitive(quad);
+
+        for corner_smoothing in [0.0, 0.6] {
+            let member = scene
+                .register_liquid_box(ScaledLiquidBox {
+                    quad: Quad {
+                        corner_smoothing,
+                        ..quad
+                    },
+                    group: None,
+                    blend_radius: ScaledPixels(8.0),
+                    reach: ScaledPixels(24.0),
+                })
+                .unwrap();
+            scene.paint_liquid_phase(member, LiquidPhase::Fill);
+            scene.paint_liquid_phase(member, LiquidPhase::Border);
+        }
+
+        scene.finish();
+        assert_eq!(scene.quads.len(), 1);
+        assert_eq!(scene.render_commands().len(), 3);
+
+        assert_eq!(
+            scene.render_commands()[1],
+            RenderCommand::Batch(PrimitiveBatch::Liquid {
+                range: 0..2,
+                smoothed: false,
+            })
+        );
+
+        assert_eq!(
+            scene.render_commands()[2],
+            RenderCommand::Batch(PrimitiveBatch::Liquid {
+                range: 2..4,
+                smoothed: true,
+            })
+        );
+
+        assert_eq!(
+            scene
+                .liquid_draws
+                .iter()
+                .map(|draw| (draw.record_index, draw.phase))
+                .collect::<Vec<_>>(),
+            [
+                (0, LiquidPhase::Fill),
+                (0, LiquidPhase::Border),
+                (1, LiquidPhase::Fill),
+                (1, LiquidPhase::Border),
+            ],
+        );
+
+        for transport in [
+            InstanceTransport::StorageBuffer,
+            InstanceTransport::DataTexture,
+        ] {
+            let requirements = FrameRequirements::for_scene(&scene, transport);
+            let quad_bytes = size_of::<Quad>() as u64;
+            let expected_bytes = match transport {
+                InstanceTransport::StorageBuffer => 5 * quad_bytes,
+                InstanceTransport::DataTexture => 4 * quad_bytes.next_multiple_of(16) + quad_bytes,
+            };
+            assert_eq!(requirements.storage_bytes, expected_bytes);
+            assert_eq!(requirements.instance_batches, 5);
+            assert_eq!(requirements.planned.instance_batch_count, 5);
+            assert_eq!(requirements.planned.liquid_record_count, 2);
+            assert_eq!(requirements.planned.liquid_component_count, 1);
+            assert_eq!(requirements.planned.liquid_draw_count, 4);
+        }
+
+        scene.clear();
+        scene.insert_primitive(quad);
+        scene.finish();
+        let requirements = FrameRequirements::for_scene(&scene, InstanceTransport::StorageBuffer);
+        assert_eq!(requirements.storage_bytes, size_of::<Quad>() as u64);
+        assert_eq!(requirements.instance_batches, 1);
+        assert_eq!(requirements.planned.liquid_draw_count, 0);
     }
 }

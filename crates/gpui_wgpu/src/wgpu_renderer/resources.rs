@@ -55,6 +55,7 @@ pub(super) struct WgpuResources {
     pub(super) globals_bind_group: wgpu::BindGroup,
     pub(super) path_globals_bind_group: wgpu::BindGroup,
     pub(super) instances: InstanceBufferArena,
+    pub(super) liquid: gpui_render::liquid::LiquidTable,
     pub(super) path_intermediate_texture: Option<wgpu::Texture>,
     pub(super) path_intermediate_view: Option<wgpu::TextureView>,
     pub(super) path_msaa_texture: Option<wgpu::Texture>,
@@ -174,6 +175,7 @@ impl WgpuResources {
             last_error,
         };
         let resources = Self {
+            liquid: Default::default(),
             instances: InstanceBufferArena::new(&device, &bind_group_layouts, renderer_tier),
             renderer_tier,
             device,

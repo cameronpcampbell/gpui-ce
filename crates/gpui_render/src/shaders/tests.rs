@@ -87,6 +87,7 @@ fn vertex_output_shape(module: &naga::Module, entry_name: &str) -> (usize, u32) 
 fn ordinary_vertex_interfaces_stay_within_compact_budgets() {
     let module = naga::front::wgsl::parse_str(&base::WGSL_SOURCE.wgsl_source().unwrap()).unwrap();
     for (entry, maximum_shape) in [
+        ("vertex_liquid", (1, 1)),
         ("vertex_quad", (8, 29)),
         ("vertex_shadow", (5, 17)),
         ("vertex_polychrome_sprite", (3, 7)),

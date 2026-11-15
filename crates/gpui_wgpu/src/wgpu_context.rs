@@ -949,6 +949,11 @@ impl WgpuContext {
         self.color_texture_format
     }
 
+    #[cfg(test)]
+    pub(crate) fn force_renderer_tier_for_test(&mut self, tier: RendererTier) {
+        self.renderer_tier = tier;
+    }
+
     pub fn renderer_tier(&self) -> RendererTier {
         self.renderer_tier
     }

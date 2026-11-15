@@ -287,9 +287,39 @@ fn downlevel_dialect(name: &str, source: &str) -> String {
         for array in &arrays {
             transformed = rewrite_array_accesses(&transformed, &array.name);
         }
+
+        transformed = lower_instance_bases(&transformed);
         transformed.push_str(&emit_downlevel_runtime(name, source, &arrays));
         transformed
     }
+}
+
+/// WebGL2 draws begin at zero. Keep their logical instance base in DATA_RANGE,
+/// independently of the table's texture offset, so neighbor indices stay absolute.
+fn lower_instance_bases(source: &str) -> String {
+    let mut output = String::with_capacity(source.len());
+    let argument = "@builtin(instance_index) instance_id: u32";
+
+    for line in source.lines() {
+        if line.trim_start().starts_with("@vertex fn ") && line.contains(argument) {
+            assert!(
+                line.ends_with('{'),
+                "generated vertex signatures must end with an opening brace"
+            );
+            output.push_str(&line.replace(
+                argument,
+                "@builtin(instance_index) transport_instance_id: u32",
+            ));
+            output.push_str(
+                "\n    let instance_id = transport_instance_id + DATA_RANGE.first_instance;\n",
+            );
+        } else {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+
+    output
 }
 
 fn parse_storage_array_decl(line: &str) -> Option<StorageArray> {
@@ -353,7 +383,7 @@ fn emit_downlevel_runtime(name: &str, base_source: &str, arrays: &[StorageArray]
         "struct DataRange {{
     base_texel: u32,
     element_count: u32,
-    padding0: u32,
+    first_instance: u32,
     padding1: u32,
 }}
 @group(1) @binding({DOWNLEVEL_RANGE_BINDING}) var<uniform> DATA_RANGE: DataRange;"
@@ -771,6 +801,18 @@ fn write_native_shaders(out_dir: &std::path::Path) {
     use shaders::interface::*;
 
     let modules = [
+        NativeShaderModule {
+            pipeline: &LIQUID_FILL,
+            pipeline_path: "LIQUID_FILL",
+            source: &shaders::liquid::WGSL_SOURCE,
+            requires_dual_source_lowering: false,
+        },
+        NativeShaderModule {
+            pipeline: &LIQUID_BORDER,
+            pipeline_path: "LIQUID_BORDER",
+            source: &shaders::liquid::WGSL_SOURCE,
+            requires_dual_source_lowering: false,
+        },
         NativeShaderModule {
             pipeline: &QUADS,
             pipeline_path: "QUADS",
